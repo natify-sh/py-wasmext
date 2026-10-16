@@ -40,7 +40,7 @@ def test_without_flags_it_writes_the_c_and_builds_nothing(project: Path, wabt: P
     assert "src/pkg/add.wasm -> pkg.add" in done.stdout
     generated = project / "src" / "pkg" / "add_wasmext"
     assert (generated / "add_glue.c").is_file() and (generated / "add_w2c.c").is_file()
-    assert not list((project / "src" / "pkg").glob("add.*.so")) and not (project / "build").exists()
+    assert not list((project / "src").rglob("add.*.so")) and not (project / "src" / "build").exists()
 
 
 def test_inplace_builds_next_to_the_wasm(project: Path, wabt: Path) -> None:
@@ -61,8 +61,8 @@ def test_inplace_builds_next_to_the_wasm(project: Path, wabt: Path) -> None:
 def test_build_goes_under_build(project: Path, wabt: Path) -> None:
     done = wasmext(project, wabt, "-q", "-b", "src/pkg/*.wasm")
     assert done.returncode == 0, done.stderr
-    assert list((project / "build").rglob("add.*.so"))
-    assert not list((project / "src").rglob("add.*.so"))
+    assert list((project / "src" / "build").rglob("add.*.so"))  # under build/ of the directory above the package
+    assert not list((project / "src" / "pkg").glob("add.*.so"))
 
 
 def test_exclude_and_build_dir(project: Path, wabt: Path) -> None:
@@ -109,3 +109,13 @@ def test_help_lists_the_flags(project: Path, wabt: Path) -> None:
     assert done.returncode == 0
     for flag in ("--inplace", "--build", "--force", "--exclude", "--build-dir"):
         assert flag in done.stdout
+
+
+def test_inplace_leaves_no_build_directory_and_handles_several_places(project: Path, wabt: Path) -> None:
+    other = project / "tools"
+    other.mkdir()
+    shutil.copy(SIMPLE, other / "calc.wasm")
+    done = wasmext(project, wabt, "-q", "-i", "src/pkg/add.wasm", "tools/calc.wasm")
+    assert done.returncode == 0, done.stderr
+    assert list((project / "src" / "pkg").glob("add.*.so")) and list(other.glob("calc.*.so"))
+    assert not list(project.rglob("build")) and not list(project.rglob("tmp*"))

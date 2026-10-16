@@ -8,13 +8,21 @@ wasmext -b ...                    ... and build them under build/ (as `setup.py 
 from __future__ import annotations
 
 import argparse
+import copy
+import os
+import shutil
 import sys
+import tempfile
 from collections.abc import Sequence
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from ._gen import GenError
 from ._wasm import WasmError
 from ._wasmize import _wasmize  # pyright: ignore[reportPrivateUsage]
+
+if TYPE_CHECKING:
+    from setuptools import Extension
 
 __all__ = ["main"]
 
@@ -63,34 +71,65 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not (args.inplace or args.build):
         return 0
 
+    # As cythonize does: the extensions are built by setuptools in the directory above the topmost package of each
+    # module (`src/` for src/pkg/x.wasm), one group at a time, so that `--inplace` puts them next to the .wasm files.
+    groups: dict[Path, list[Extension]] = {}
+    for wasm, ext in made:
+        if wasm is not None:
+            groups.setdefault(_package_root(wasm), []).append(ext)
+    status = 0
+    for base, extensions in groups.items():
+        status |= _build(base, extensions, inplace=args.inplace, force=args.force, quiet=args.quiet)
+    return status
+
+
+def _package_root(wasm: Path) -> Path:
+    """The directory above the topmost package (directory with an `__init__.py`) the file is in."""
+    folder = wasm.resolve().parent
+    while (folder / "__init__.py").is_file():
+        folder = folder.parent
+    return folder
+
+
+def _rebase(ext: Extension, base: Path) -> Extension:
+    """`ext` with its paths relative to `base` instead of the working directory."""
+
+    def rel(paths: list[str]) -> list[str]:
+        return [Path(os.path.relpath(os.path.abspath(p), base)).as_posix() for p in paths]
+
+    moved = copy.copy(ext)
+    moved.sources = rel(ext.sources)
+    moved.depends = rel(ext.depends)
+    moved.include_dirs = rel(ext.include_dirs)
+    return moved
+
+
+def _build(base: Path, extensions: list[Extension], *, inplace: bool, force: bool, quiet: bool) -> int:
     from setuptools import setup
 
-    # `--inplace` puts a module `a.b.c` in the directory of the package `a.b`: here, the one the .wasm is in.
-    package_dir: dict[str, str] = {}
-    for wasm, ext in made:
-        if wasm is None:
-            continue
-        package = ext.name.rpartition(".")[0]
-        folder = Path(wasm).parent.as_posix()
-        if package_dir.setdefault(package, folder) != folder:
-            print(f"wasmext: error: the modules of package {package!r} are in two directories", file=sys.stderr)
-            return 1
+    moved = [_rebase(ext, base) for ext in extensions]
     script_args = ["build_ext"]
-    if args.inplace:
+    if inplace:
         script_args.append("--inplace")
-    if args.force:
+    if force:
         script_args.append("--force")
-    if args.quiet:
+    if quiet:
         script_args.insert(0, "-q")
+    cwd = os.getcwd()
+    temp: str | None = None
+    leave_build = (base / "build").exists()
     try:
-        setup(
-            name="wasmext-cli",
-            ext_modules=[ext for _, ext in made],
-            package_dir=package_dir,
-            packages=[],
-            py_modules=[],
-            script_args=script_args,
-        )
+        os.chdir(base)
+        if inplace:  # nothing but the extensions is left behind (cythonize keeps its objects out of build/ too)
+            temp = tempfile.mkdtemp(dir=base)
+            script_args += ["--build-temp", temp]
+        setup(name="wasmext-cli", ext_modules=moved, packages=[], py_modules=[], script_args=script_args)
     except SystemExit as exc:
         return 1 if exc.code not in (None, 0) else 0
+    finally:
+        os.chdir(cwd)
+        if temp is not None:
+            shutil.rmtree(temp, ignore_errors=True)
+        if inplace and not leave_build:  # setuptools makes an empty build/ even when it builds in place
+            shutil.rmtree(base / "build", ignore_errors=True)
     return 0

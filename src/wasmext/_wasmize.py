@@ -149,7 +149,7 @@ def wasmize(
     force: bool = False,
     quiet: bool = False,
     stubs: bool = True,
-    limited_api: bool = False,
+    limited_api: bool | None = None,
 ) -> list[Extension]:
     """The extensions for the `.wasm` modules in `module_list`, ready for `setup(ext_modules=...)`.
 
@@ -160,7 +160,8 @@ def wasmize(
 
     `exclude` is glob patterns of files to leave out. The C is written beside each `.wasm` in `<stem>_wasmext/` or, with
     `build_dir`, in `build_dir/<module name>/`. It is not written again while the `.wasm` is the same, unless `force`,
-    and then `wasm2c` is not needed at all. `quiet` stops the notes about exports that are not exposed. With `limited_api` the extensions are built for the stable ABI (abi3). With `stubs` (the default)
+    and then `wasm2c` is not needed at all. `quiet` stops the notes about exports that are not exposed. With `limited_api=True` (or WASMEXT_LIMITED_API=1 when it is None) the extensions are built for the stable ABI (abi3): also set
+    `[tool.distutils.bdist_wheel] py-limited-api = "cp311"` so that the wheel is tagged for it. Default: one native extension per interpreter. With `stubs` (the default)
     a `<stem>.pyi` is written beside each `.wasm`: the types of the extension for editors and type checkers (ship it in the wheel with
     `package-data`).
     """
@@ -180,10 +181,15 @@ def _wasmize(
     force: bool,
     quiet: bool,
     stubs: bool,
-    limited_api: bool,
+    limited_api: bool | None,
 ) -> list[tuple[Path | None, Extension]]:
     """`wasmize()` with the `.wasm` file of each extension (None for an ordinary extension that passed through)."""
     from setuptools import Extension  # a build-time dependency of the projects that call this
+
+    if (
+        limited_api is None
+    ):  # not decided in the code: the environment may (WASMEXT_LIMITED_API=1), else a native extension
+        limited_api = os.environ.get("WASMEXT_LIMITED_API", "").lower() in ("1", "true", "yes", "on")
 
     if isinstance(module_list, (str, os.PathLike, Extension)):
         items: list[str | os.PathLike[str] | Extension] = [module_list]

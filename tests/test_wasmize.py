@@ -166,3 +166,10 @@ def test_limited_api_marks_the_extension_for_the_stable_abi(project: Path) -> No
     [abi3] = wasmize("pkg/*.wasm", quiet=True, limited_api=True)
     assert not normal.py_limited_api and ("Py_LIMITED_API", "0x030B0000") not in normal.define_macros
     assert abi3.py_limited_api and ("Py_LIMITED_API", "0x030B0000") in abi3.define_macros
+
+
+def test_limited_api_can_come_from_the_environment(project: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("WASMEXT_LIMITED_API", "1")
+    [from_env] = wasmize("pkg/*.wasm", quiet=True)
+    [explicit_off] = wasmize("pkg/*.wasm", quiet=True, limited_api=False)  # the code outranks the environment
+    assert from_env.py_limited_api and not explicit_off.py_limited_api

@@ -33,7 +33,24 @@ inst.add(2, 3)  # the exports are methods; an exported memory is a memoryview at
 The command line works in the manner of `cythonize`: `wasmext 'src/mypkg/*.wasm'` writes the C, `wasmext -i ...` also builds
 the extensions in place, `-b` under `build/` (`wasmext --help`).
 
-[`examples/coremark`](examples/coremark) is a package built that way: three lines of `setup.py`, and `cibuildwheel` builds its
+### Native or abi3 wheels
+
+By default every interpreter gets its own extension (`cp311`, `cp312`, ...). For **one wheel for all CPython from 3.11 on**
+(the stable ABI, abi3) say so in two places, which go together:
+
+```python
+setup(ext_modules=wasmize("src/mypkg/*.wasm", limited_api=True))  # or: wasmext --abi3, or WASMEXT_LIMITED_API=1
+```
+```toml
+[tool.distutils.bdist_wheel]
+py-limited-api = "cp311"   # tags the wheel cp311-abi3 (without it the extension is abi3 but the wheel says cp311-cp311)
+```
+
+`limited_api=None` (the default) takes `WASMEXT_LIMITED_API` from the environment, so `cibuildwheel` can choose without
+editing `setup.py`; `True`/`False` in the code outrank it. The glue uses only the limited API, so either kind builds from
+the same C. abi3 does not exist for PyPy or free-threaded CPython (`3.13t`): build native extensions there.
+
+[`examples/coremark`](examples/coremark) is a package built that way (abi3): three lines of `setup.py`, and `cibuildwheel` builds its
 wheels. The build needs a C compiler and `wasm2c` (the wabt-package, or `WASMEXT_WABT`: a directory with its `bin/` and
 `wasm2c/`).
 

@@ -1,0 +1,55 @@
+[build-system]
+requires = ["setuptools>=77", "setuptools-scm>=8"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wasminize"
+authors = [{ name = "o-murphy", email = "thehelixpg@gmail.com" }]
+description = "Turn WebAssembly modules into native CPython extensions (wasm2c), from setup.py or the command line"
+readme = "README.md"
+requires-python = ">=3.11"
+keywords = ["webassembly", "wasm", "wasm2c", "extension", "cibuildwheel"]
+license-files = ["NOTICE.md"]
+classifiers = [
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.15",
+    "Topic :: Software Development :: Build Tools",
+    "Typing :: Typed",
+]
+dependencies = []
+dynamic = ["version"]
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+packages = ["wasminize"]
+
+[tool.setuptools.package-data]
+wasminize = ["py.typed"]
+
+[tool.setuptools_scm]
+root = "."
+fallback_version = "0.0.0.dev0"
+
+[tool.pytest.ini_options]
+minversion = "9"
+addopts = "-rf"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+# The proof-of-concept scripts predate the package.
+extend-exclude = ["build.py", "bench", "glue", "build"]
+
+[tool.pyright]
+include = ["src", "tests"]
+pythonVersion = "3.11"
+typeCheckingMode = "strict"
+
+[dependency-groups]
+dev = ["pytest>=9.1.1", "pyright>=1.1.400", "ruff>=0.16.0", "setuptools>=77", "setuptools-scm>=8"]

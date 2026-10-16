@@ -3,3 +3,7 @@ __pycache__/
 *.so
 *.pyd
 *.dylib
+*.egg-info/
+.venv/
+.pytest_cache/
+.ruff_cache/

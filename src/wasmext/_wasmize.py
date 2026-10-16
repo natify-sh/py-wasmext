@@ -37,8 +37,6 @@ if TYPE_CHECKING:
 
 __all__ = ["wasmize"]
 
-# Bump when the generated C changes, so that a stamp of an older generator does not stop the files being rewritten.
-GENERATOR_VERSION = 3
 STAMP = "stamp.json"
 # Of the runtime, these are compiled; the rest (headers, .inc) is only included.
 RUNTIME_SOURCES = ("wasm-rt-impl.c", "wasm-rt-mem-impl.c")
@@ -103,17 +101,20 @@ def _module_name(wasm: Path) -> str:
 def _key(data: bytes, name: str) -> str:
     h = hashlib.sha256()
     h.update(data)
-    h.update(b"\0" + name.encode() + b"\0" + str(GENERATOR_VERSION).encode())
+    h.update(b"\0" + name.encode() + b"\0" + _W2C_RECIPE)
     return h.hexdigest()
 
 
 # wasm2c 1.0.42 checks the sum of 64-bit addresses with `_addcarry_u64` whenever the compiler is MSVC, an intrinsic that only
 # the x64 targets have: on ARM64 the C does not link. The `#else` branch it falls back to for other compilers is portable.
 _MSVC_ADDCARRY = re.compile(rb"#elif defined\(_MSC_VER\)(\s+if \(_addcarry_u64\()")
+_MSVC_X64_ONLY = rb"#elif defined(_MSC_VER) && defined(_M_X64)\1"
+# What wasmext does to the C of `wasm2c`: when this changes the C is made again, so no version number to bump by hand.
+_W2C_RECIPE = _MSVC_ADDCARRY.pattern + b"\0" + _MSVC_X64_ONLY + b"\0--module-name"
 
 
 def _portable_on_arm64(c_source: bytes) -> bytes:
-    return _MSVC_ADDCARRY.sub(rb"#elif defined(_MSC_VER) && defined(_M_X64)\1", c_source)
+    return _MSVC_ADDCARRY.sub(_MSVC_X64_ONLY, c_source)
 
 
 def _write_if_changed(path: Path, data: bytes) -> None:

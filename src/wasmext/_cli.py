@@ -48,8 +48,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("-q", "--quiet", action="store_true", help="say nothing about what is not exposed or built")
     parser.add_argument(
         "--abi3",
-        action="store_true",
-        help="build for the stable ABI (abi3, CPython 3.11 and later); also WASMEXT_LIMITED_API=1",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="force the stable ABI (abi3) or a native extension; default: abi3 where this Python has one",
     )
     parser.add_argument("--no-stubs", action="store_true", help="do not write a .pyi beside each .wasm")
     parser.add_argument(
@@ -71,7 +72,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             force=args.force,
             quiet=args.quiet,
             stubs=not args.no_stubs,
-            limited_api=True if args.abi3 else None,
+            limited_api=args.abi3,
         )
     except (WasmError, GenError, ValueError, RuntimeError) as exc:
         print(f"wasmext: error: {exc}", file=sys.stderr)

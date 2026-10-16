@@ -7,7 +7,9 @@ import re
 import shutil
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pytest
 from setuptools import Extension
@@ -66,7 +68,7 @@ def test_an_extension_object_keeps_its_settings_and_gives_the_name(project: Path
     ext = Extension("pkg.fast", ["pkg/add.wasm"], define_macros=[("X", "1")], libraries=["m"])
     [made] = wasmize([ext], quiet=True)
     assert made.name == "pkg.fast"
-    assert made.define_macros == [("X", "1")] and made.libraries == ["m"]
+    assert ("X", "1") in made.define_macros and made.libraries == ["m"]
     assert not any(s.endswith(".wasm") for s in made.sources)
     assert ext.sources == ["pkg/add.wasm"]  # the argument is not changed
     (project / "setup.py").write_text(
@@ -161,15 +163,61 @@ def test_stubs_can_be_turned_off(project: Path) -> None:
     assert not (project / "pkg" / "add.pyi").exists()
 
 
-def test_limited_api_marks_the_extension_for_the_stable_abi(project: Path) -> None:
-    [normal] = wasmize("pkg/*.wasm", quiet=True)
-    [abi3] = wasmize("pkg/*.wasm", quiet=True, limited_api=True)
-    assert not normal.py_limited_api and ("Py_LIMITED_API", "0x030B0000") not in normal.define_macros
-    assert abi3.py_limited_api and ("Py_LIMITED_API", "0x030B0000") in abi3.define_macros
+def test_abi3_is_the_default_where_the_interpreter_has_it(project: Path) -> None:
+    [default] = wasmize("pkg/*.wasm", quiet=True)
+    assert default.py_limited_api and ("Py_LIMITED_API", "0x030B0000") in default.define_macros
 
 
-def test_limited_api_can_come_from_the_environment(project: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("WASMEXT_LIMITED_API", "1")
+def test_native_on_request(project: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    [native] = wasmize("pkg/*.wasm", quiet=True, limited_api=False)
+    assert not native.py_limited_api and not native.define_macros
+    monkeypatch.setenv("WASMEXT_LIMITED_API", "0")
     [from_env] = wasmize("pkg/*.wasm", quiet=True)
-    [explicit_off] = wasmize("pkg/*.wasm", quiet=True, limited_api=False)  # the code outranks the environment
-    assert from_env.py_limited_api and not explicit_off.py_limited_api
+    [code_wins] = wasmize("pkg/*.wasm", quiet=True, limited_api=True)
+    assert not from_env.py_limited_api and code_wins.py_limited_api
+
+
+@pytest.mark.parametrize("why", ["free-threaded", "android", "emscripten", "ios", "pypy"])
+def test_where_there_is_no_stable_abi_the_extension_is_native(
+    project: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], why: str
+) -> None:
+    from wasmext import _wasmize  # pyright: ignore[reportPrivateUsage]
+
+    real_var: Callable[[str], Any] = _wasmize.sysconfig.get_config_var
+
+    def config_var(name: str) -> Any:
+        return 1 if why == "free-threaded" and name == "Py_GIL_DISABLED" else real_var(name)
+
+    monkeypatch.setattr(_wasmize.sysconfig, "get_config_var", config_var)
+    if why == "pypy":
+        monkeypatch.setattr(_wasmize.sys.implementation, "name", "pypy", raising=False)
+    elif why != "free-threaded":
+        monkeypatch.setattr(_wasmize.sysconfig, "get_platform", lambda: f"{why}_4_0_arm64")
+    [ext] = wasmize("pkg/*.wasm", limited_api=True)  # asked for, but impossible: native, and it says why
+    assert not ext.py_limited_api and not ext.define_macros
+    assert "building a native extension" in capsys.readouterr().err
+    [default] = wasmize("pkg/*.wasm", quiet=True)  # the default does not insist
+    assert not default.py_limited_api
+
+
+@pytest.mark.parametrize(
+    ("arg", "tag"), [('"pkg/*.wasm"', "-cp311-abi3-"), ('"pkg/*.wasm", limited_api=False', "-cp311-cp311-")]
+)
+def test_the_wheel_is_tagged_for_what_was_built(project: Path, arg: str, tag: str) -> None:
+    """Nothing but wasmize() decides: abi3 gets its tag from wasmext's setuptools hook, native keeps the interpreter's."""
+    (project / "setup.py").write_text(SETUP.format(arg=arg), encoding="utf-8")
+    run_python(project, "setup.py", "-q", "bdist_wheel", "--dist-dir", "dist")
+    [wheel] = (project / "dist").glob("*.whl")
+    assert tag in wheel.name, wheel.name
+
+
+def test_a_project_setting_outranks_the_automatic_wheel_tag(project: Path) -> None:
+    from setuptools import Distribution
+
+    from wasmext._setuptools import finalize_distribution_options  # pyright: ignore[reportPrivateUsage]
+
+    [ext] = wasmize("pkg/*.wasm", quiet=True)
+    dist = Distribution({"name": "demo", "ext_modules": [ext]})
+    dist.get_option_dict("bdist_wheel")["py_limited_api"] = ("setup.cfg", "cp312")
+    finalize_distribution_options(dist)
+    assert dist.get_option_dict("bdist_wheel")["py_limited_api"] == ("setup.cfg", "cp312")

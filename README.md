@@ -35,22 +35,22 @@ the extensions in place, `-b` under `build/` (`wasmext --help`).
 
 ### Native or abi3 wheels
 
-By default every interpreter gets its own extension (`cp311`, `cp312`, ...). For **one wheel for all CPython from 3.11 on**
-(the stable ABI, abi3) say so in two places, which go together:
+The interpreter that builds decides, as it does in Cython: where it has a stable ABI (CPython 3.11 and later) the extension is
+**abi3** and the wheel is tagged `cp311-abi3`, one wheel for every CPython from 3.11 on; where it has not (PyPy,
+free-threaded `3.14t`, Emscripten/Pyodide, Android, iOS) the extension is native. So the `cibuildwheel` selector decides what
+you get:
 
-```python
-setup(ext_modules=wasmize("src/mypkg/*.wasm", limited_api=True))  # or: wasmext --abi3, or WASMEXT_LIMITED_API=1
-```
 ```toml
-[tool.distutils.bdist_wheel]
-py-limited-api = "cp311"   # tags the wheel cp311-abi3 (without it the extension is abi3 but the wheel says cp311-cp311)
+[tool.cibuildwheel]
+build = "cp311-* cp314t-*"   # cp311: the abi3 wheel; cp314t: a native free-threaded one
 ```
 
-`limited_api=None` (the default) takes `WASMEXT_LIMITED_API` from the environment, so `cibuildwheel` can choose without
-editing `setup.py`; `True`/`False` in the code outrank it. The glue uses only the limited API, so either kind builds from
-the same C. abi3 does not exist for PyPy or free-threaded CPython (`3.13t`): build native extensions there.
+`limited_api=True`/`False` in `wasmize()` (or `--abi3` / `--no-abi3`) forces one or the other (`True` still builds native where
+abi3 is impossible, and says so); `WASMEXT_LIMITED_API=0` turns abi3 off for a `None`. The wheel is tagged by a setuptools hook of
+wasmext, so nothing else needs to be set (a `[tool.distutils.bdist_wheel] py-limited-api` of the project wins). The glue uses only
+the limited API, so either kind builds from the same C.
 
-[`examples/coremark`](examples/coremark) is a package built that way (abi3): three lines of `setup.py`, and `cibuildwheel` builds its
+[`examples/coremark`](examples/coremark) is a package built that way: three lines of `setup.py`, and `cibuildwheel` builds its
 wheels. The build needs a C compiler and `wasm2c` (the wabt-package, or `WASMEXT_WABT`: a directory with its `bin/` and
 `wasm2c/`).
 

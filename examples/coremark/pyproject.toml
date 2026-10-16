@@ -17,10 +17,8 @@ packages = ["coremark"]
 [tool.setuptools.package-data]
 coremark = ["py.typed", "*.pyi"]
 
-[tool.distutils.bdist_wheel]
-py-limited-api = "cp311" # with limited_api=True in setup.py: cp311-abi3, for every CPython from 3.11
-
 [tool.cibuildwheel]
-build = "cp311-*"  # one interpreter per platform is enough for an abi3 wheel
+# cp311-* builds the abi3 wheel (every CPython from 3.11 on); cp314t-* has no stable ABI and gets a native one.
+build = "cp311-* cp314t-*"
 test-requires = "pytest"
 test-command = "pytest {package}/tests"

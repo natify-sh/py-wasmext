@@ -22,6 +22,7 @@ import re
 import shutil
 import subprocess
 import sys
+import sysconfig
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -43,6 +44,34 @@ STAMP = "stamp.json"
 RUNTIME_SOURCES = ("wasm-rt-impl.c", "wasm-rt-mem-impl.c")
 # The oldest CPython an abi3 extension supports (3.11): the buffer protocol joined the limited API there.
 LIMITED_API_VERSION = "0x030B0000"
+
+
+def abi3_possible() -> str | None:
+    """None if the interpreter that builds can make an abi3 extension, else why not (a native one is built then)."""
+    platform = sysconfig.get_platform()
+    if sys.implementation.name != "cpython":
+        return f"{sys.implementation.name} has no stable ABI"
+    if sysconfig.get_config_var("Py_GIL_DISABLED"):
+        return "a free-threaded build cannot use the limited API"
+    for target in ("emscripten", "android", "ios"):  # each pins one CPython: nothing stable about it
+        if target in platform:
+            return f"{target} wheels are for one exact CPython"
+    return None
+
+
+def _use_limited_api(requested: bool | None, quiet: bool) -> bool:
+    """True forces abi3 where it is possible, False never; None takes WASMEXT_LIMITED_API (1/0), else abi3 where possible."""
+    if requested is None:
+        env = os.environ.get("WASMEXT_LIMITED_API", "").strip().lower()
+        if env in ("0", "false", "no", "off"):
+            return False
+        requested = True  # "1" or not set: the stable ABI wherever this interpreter has one
+    if not requested:
+        return False
+    why_not = abi3_possible()
+    if why_not and not quiet:
+        print(f"wasmext: building a native extension: {why_not}", file=sys.stderr)
+    return why_not is None
 
 
 @dataclass(frozen=True, slots=True)
@@ -160,10 +189,16 @@ def wasmize(
 
     `exclude` is glob patterns of files to leave out. The C is written beside each `.wasm` in `<stem>_wasmext/` or, with
     `build_dir`, in `build_dir/<module name>/`. It is not written again while the `.wasm` is the same, unless `force`,
-    and then `wasm2c` is not needed at all. `quiet` stops the notes about exports that are not exposed. With `limited_api=True` (or WASMEXT_LIMITED_API=1 when it is None) the extensions are built for the stable ABI (abi3): also set
-    `[tool.distutils.bdist_wheel] py-limited-api = "cp311"` so that the wheel is tagged for it. Default: one native extension per interpreter. With `stubs` (the default)
-    a `<stem>.pyi` is written beside each `.wasm`: the types of the extension for editors and type checkers (ship it in the wheel with
-    `package-data`).
+    and then `wasm2c` is not needed at all. `quiet` stops the notes about exports that are not exposed.
+
+    `limited_api` chooses between the stable ABI (abi3: one wheel for CPython 3.11 and later, tagged `cp311-abi3` by
+    wasmext itself) and one native extension per interpreter. None, the default, is abi3 wherever the interpreter that builds
+    has a stable ABI (not PyPy, free-threaded, Emscripten, Android, iOS): with `cibuildwheel`, the selector `cp311-*` makes
+    the abi3 wheel and `cp314t-*` a native one. WASMEXT_LIMITED_API=0 turns abi3 off for a None; True and False decide in
+    the code (True still builds native where abi3 is impossible, and says so).
+
+    With `stubs` (the default) a `<stem>.pyi` is written beside each `.wasm`: the types of the extension for editors and type
+    checkers (ship it in the wheel with `package-data`).
     """
     return [
         ext
@@ -186,10 +221,7 @@ def _wasmize(
     """`wasmize()` with the `.wasm` file of each extension (None for an ordinary extension that passed through)."""
     from setuptools import Extension  # a build-time dependency of the projects that call this
 
-    if (
-        limited_api is None
-    ):  # not decided in the code: the environment may (WASMEXT_LIMITED_API=1), else a native extension
-        limited_api = os.environ.get("WASMEXT_LIMITED_API", "").lower() in ("1", "true", "yes", "on")
+    use_limited_api = _use_limited_api(limited_api, quiet)
 
     if isinstance(module_list, (str, os.PathLike, Extension)):
         items: list[str | os.PathLike[str] | Extension] = [module_list]
@@ -213,9 +245,7 @@ def _wasmize(
         ext.sources = [*rest, *prepared.sources]
         ext.depends = [*ext.depends, *prepared.depends]
         ext.include_dirs = [*ext.include_dirs, prepared.include_dir]
-        if (
-            limited_api
-        ):  # one wheel for every CPython from 3.11 on: tag it with `[tool.distutils.bdist_wheel] py-limited-api`
+        if use_limited_api:  # one wheel for every CPython from 3.11 on (wasmext._setuptools tags the wheel)
             ext.py_limited_api = True
             ext.define_macros = [*ext.define_macros, ("Py_LIMITED_API", LIMITED_API_VERSION)]
         result.append((wasm, ext))

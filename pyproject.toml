@@ -31,6 +31,9 @@ dynamic = ["version"]
 [project.scripts]
 wasmext = "wasmext._cli:main"
 
+[project.entry-points."setuptools.finalize_distribution_options"]
+wasmext = "wasmext._setuptools:finalize_distribution_options"
+
 [tool.setuptools]
 package-dir = { "" = "src" }
 packages = ["wasmext"]

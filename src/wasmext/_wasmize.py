@@ -90,28 +90,33 @@ def _write_if_changed(path: Path, data: bytes) -> None:
         path.write_bytes(data)
 
 
-def _prepare(wasm: Path, name: str, out_dir: Path, *, force: bool, quiet: bool) -> _Prepared:
+def _prepare(wasm: Path, name: str, out_dir: Path, *, force: bool, quiet: bool, stubs: bool) -> _Prepared:
     last = name.rsplit(".", 1)[-1]
     data = wasm.read_bytes()
     key = _key(data, name)
     glue_c, w2c_c = out_dir / f"{last}_glue.c", out_dir / f"{last}_w2c.c"
     stamp = out_dir / STAMP
 
-    def outputs() -> _Prepared:
+    def outputs(skipped: list[str]) -> _Prepared:
         runtime = sorted(p for p in out_dir.glob("wasm-rt*") if p.suffix in (".c", ".h", ".inc"))
         sources = [glue_c, w2c_c, *(out_dir / n for n in RUNTIME_SOURCES)]
         depends = [*(p for p in runtime if p.name not in RUNTIME_SOURCES), out_dir / f"{last}_w2c.h", wasm]
-        skipped = json.loads(stamp.read_text(encoding="utf-8")).get("skipped", [])
         return _Prepared([_rel(p) for p in sources], [_rel(p) for p in depends], _rel(out_dir), skipped)
 
-    complete = stamp.is_file() and all(p.is_file() for p in (glue_c, w2c_c, out_dir / RUNTIME_SOURCES[0]))
-    if not force and complete and json.loads(stamp.read_text(encoding="utf-8")).get("key") == key:
-        return outputs()
-
+    # The glue and the stub come from the module alone (no wasm2c, no compiler), so they are always made: a module that
+    # cannot be wrapped is reported on every run, and a stub deleted from a tree that ships its C is written again.
     try:
         glue = generate(parse(data), name)
     except (WasmError, GenError) as exc:
         raise type(exc)(f"{wasm}: {exc}") from None
+    if stubs:
+        stub = wasm.with_suffix(".pyi")
+        _write_if_changed(stub, glue.stub.encode("utf-8"))
+
+    complete = stamp.is_file() and all(p.is_file() for p in (glue_c, w2c_c, out_dir / RUNTIME_SOURCES[0]))
+    if not force and complete and json.loads(stamp.read_text(encoding="utf-8")).get("key") == key:
+        return outputs(glue.skipped)
+
     toolchain: Toolchain = find_toolchain()
     out_dir.mkdir(parents=True, exist_ok=True)
     result = subprocess.run(
@@ -127,11 +132,11 @@ def _prepare(wasm: Path, name: str, out_dir: Path, *, force: bool, quiet: bool) 
     for src in toolchain.runtime.glob("wasm-rt*"):
         if src.suffix in (".c", ".h", ".inc"):
             shutil.copyfile(src, out_dir / src.name)
-    stamp.write_text(json.dumps({"key": key, "wabt": toolchain.version, "skipped": glue.skipped}), encoding="utf-8")
+    stamp.write_text(json.dumps({"key": key, "wabt": toolchain.version}), encoding="utf-8")
     if glue.skipped and not quiet:
         for item in glue.skipped:
             print(f"wasmext: {wasm}: not exposed: {item}", file=sys.stderr)
-    return outputs()
+    return outputs(glue.skipped)
 
 
 def wasmize(
@@ -141,6 +146,7 @@ def wasmize(
     build_dir: str | os.PathLike[str] | None = None,
     force: bool = False,
     quiet: bool = False,
+    stubs: bool = True,
 ) -> list[Extension]:
     """The extensions for the `.wasm` modules in `module_list`, ready for `setup(ext_modules=...)`.
 
@@ -151,9 +157,13 @@ def wasmize(
 
     `exclude` is glob patterns of files to leave out. The C is written beside each `.wasm` in `<stem>_wasmext/` or, with
     `build_dir`, in `build_dir/<module name>/`. It is not written again while the `.wasm` is the same, unless `force`,
-    and then `wasm2c` is not needed at all. `quiet` stops the notes about exports that are not exposed.
+    and then `wasm2c` is not needed at all. `quiet` stops the notes about exports that are not exposed. With `stubs` (the default)
+    a `<stem>.pyi` is written beside each `.wasm`: the types of the extension for editors and type checkers (ship it in the wheel with
+    `package-data`).
     """
-    return [ext for _, ext in _wasmize(module_list, exclude, build_dir=build_dir, force=force, quiet=quiet)]
+    return [
+        ext for _, ext in _wasmize(module_list, exclude, build_dir=build_dir, force=force, quiet=quiet, stubs=stubs)
+    ]
 
 
 def _wasmize(
@@ -163,6 +173,7 @@ def _wasmize(
     build_dir: str | os.PathLike[str] | None,
     force: bool,
     quiet: bool,
+    stubs: bool,
 ) -> list[tuple[Path | None, Extension]]:
     """`wasmize()` with the `.wasm` file of each extension (None for an ordinary extension that passed through)."""
     from setuptools import Extension  # a build-time dependency of the projects that call this
@@ -182,7 +193,7 @@ def _wasmize(
         if not name.rsplit(".", 1)[-1].isidentifier():
             raise ValueError(f"{wasm}: {name!r} is not a module name; give the module an Extension with a name")
         out_dir = Path(build_dir) / name if build_dir else wasm.parent / f"{wasm.stem}_wasmext"
-        prepared = _prepare(wasm, name, out_dir, force=force, quiet=quiet)
+        prepared = _prepare(wasm, name, out_dir, force=force, quiet=quiet, stubs=stubs)
         ext = copy.copy(template) if template else Extension(name, [])
         ext.name = name
         rest = [s for s in (template.sources if template else []) if not str(s).endswith(".wasm")]

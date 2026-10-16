@@ -9,6 +9,7 @@ import pytest
 
 from wasmext import GenError, generate, mangle, parse
 
+from .conftest import DATA
 from .test_wasm_parser import F64, I32, V128, code, functype, leb, module, name, section, vec
 
 HEADER_FUNC = section(3, vec(leb(0)))
@@ -94,3 +95,39 @@ def test_the_dotted_name_is_the_type_name_and_the_last_part_the_init_function() 
     assert "PyMODINIT_FUNC PyInit_fast(void)" in source
     assert '"pkg.sub.fast.Instance"' in source
     assert '#include "fast_w2c.h"' in source
+
+
+def test_the_stub_describes_the_extension() -> None:
+    glue = generate(parse((DATA / "features.wasm").read_bytes()), "features_ext")
+    stub = glue.stub
+    compile(stub, "features_ext.pyi", "exec")  # it is Python
+    assert "def add(self, arg0: int, arg1: int, /) -> int: ..." in stub
+    assert "def fadd(self, arg0: float, arg1: float, /) -> float: ..." in stub
+    assert "def nop(self) -> None: ..." in stub
+    assert "def mem(self) -> memoryview: ..." in stub
+    assert "'twice': Callable[[float], float]" in stub and "def __init__(self, imports: Imports) -> None: ..." in stub
+    assert "pair" not in stub and "answer" not in stub  # what the extension does not expose
+
+
+def test_the_stub_of_a_module_without_imports_needs_no_arguments_or_imports() -> None:
+    data = module(
+        section(1, vec(functype([I32], [I32]))),
+        HEADER_FUNC,
+        section(7, vec(name("f") + b"\x00" + leb(0))),
+        code(b"\x00\x20\x00\x0b"),
+    )
+    stub = generate(parse(data), "m").stub
+    assert "def __init__(self) -> None: ..." in stub and "Callable" not in stub and "TypedDict" not in stub
+
+
+def test_names_that_are_not_identifiers_are_left_out_of_the_stub_with_a_comment() -> None:
+    data = module(
+        section(1, vec(functype([], []))),
+        HEADER_FUNC,
+        section(7, vec(name("a-b") + b"\x00" + leb(0), name("class") + b"\x00" + leb(0))),
+        code(b"\x00\x0b"),
+    )
+    stub = generate(parse(data), "m").stub
+    assert "def a-b" not in stub and "def class" not in stub
+    assert "'a-b' is not an identifier" in stub and "'class' is not an identifier" in stub
+    compile(stub, "m.pyi", "exec")

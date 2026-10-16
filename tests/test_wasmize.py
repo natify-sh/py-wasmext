@@ -142,3 +142,20 @@ def test_the_msvc_only_intrinsic_is_kept_off_arm64(project: Path) -> None:
     c = (project / "pkg" / "add_wasmext" / "add_w2c.c").read_text(encoding="utf-8")
     assert "#elif defined(_MSC_VER) && defined(_M_X64)" in c
     assert not re.search(r"#elif defined\(_MSC_VER\)\s+if \(_addcarry_u64", c)
+
+
+def test_a_stub_is_written_beside_the_wasm(project: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    wasmize("pkg/*.wasm", quiet=True)
+    stub = project / "pkg" / "add.pyi"
+    assert "def add(self, arg0: int, arg1: int, /) -> int: ..." in stub.read_text(encoding="utf-8")
+    # deleted from a tree that ships its C: written again, and wasm2c is not needed for that
+    stub.unlink()
+    monkeypatch.delenv("WASMEXT_WABT")
+    monkeypatch.setitem(sys.modules, "wabt_package", None)
+    wasmize("pkg/*.wasm", quiet=True)
+    assert stub.is_file()
+
+
+def test_stubs_can_be_turned_off(project: Path) -> None:
+    wasmize("pkg/*.wasm", quiet=True, stubs=False)
+    assert not (project / "pkg" / "add.pyi").exists()

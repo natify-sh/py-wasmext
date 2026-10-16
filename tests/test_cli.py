@@ -125,3 +125,11 @@ def test_inplace_leaves_no_build_directory_and_handles_several_places(project: P
     assert done.returncode == 0, done.stderr
     assert built(project / "src" / "pkg", "add") and built(other, "calc")
     assert not list(project.rglob("build")) and not list(project.rglob("tmp*"))
+
+
+def test_stubs_are_written_unless_asked_not_to(project: Path, wabt: Path) -> None:
+    assert wasmext(project, wabt, "-q", "src/pkg/add.wasm").returncode == 0
+    assert (project / "src" / "pkg" / "add.pyi").is_file()
+    (project / "src" / "pkg" / "add.pyi").unlink()
+    assert wasmext(project, wabt, "-q", "--no-stubs", "src/pkg/add.wasm").returncode == 0
+    assert not (project / "src" / "pkg" / "add.pyi").exists()

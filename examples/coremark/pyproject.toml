@@ -15,7 +15,7 @@ package-dir = { "" = "src" }
 packages = ["coremark"]
 
 [tool.setuptools.package-data]
-coremark = ["py.typed"]
+coremark = ["py.typed", "*.pyi"]
 
 [tool.cibuildwheel]
 build = "cp311-* cp312-* cp313-* cp314-*"

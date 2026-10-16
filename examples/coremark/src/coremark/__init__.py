@@ -11,7 +11,7 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 
-from . import _core  # type: ignore[attr-defined]  # an extension module: it has no source to type-check
+from . import _core  # the extension made from _core.wasm; _core.pyi (written by wasmext) types it
 
 __all__ = ["run"]
 

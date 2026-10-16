@@ -22,7 +22,9 @@ classifiers = [
     "Topic :: Software Development :: Build Tools",
     "Typing :: Typed",
 ]
-dependencies = []
+dependencies = [
+    "wabt-package>=1.0.42.0b1",
+]
 dynamic = ["version"]
 
 [project.scripts]

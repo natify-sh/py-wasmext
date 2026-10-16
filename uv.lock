@@ -155,8 +155,27 @@ wheels = [
 ]
 
 [[package]]
+name = "wabt-package"
+version = "1.0.42.0b1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/90/73/b5a90ba1589be25ca4b6ff92476d6b64ba6adaf00cb3398d237297ad767c/wabt_package-1.0.42.0b1.tar.gz", hash = "sha256:169032523442526449eacd72079019f4b929228b3488b4ce58fc547401edf84c", size = 2030290, upload-time = "2026-10-16T20:25:23.613Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/df/bd/a2680ee2b6a1e0907ac5802b15514f694376dcdac537298c77b9b49a867f/wabt_package-1.0.42.0b1-py3-none-macosx_11_0_arm64.whl", hash = "sha256:c3ab14ffa44c85194c97dccbacf7ae9379592891a7f51fec3220382192de435d", size = 2709600, upload-time = "2026-10-16T20:25:09.931Z" },
+    { url = "https://files.pythonhosted.org/packages/1c/75/3c6b998fca23417d8c46157b6b2a1d4c77ff12a6d9e6e7cf095fa5e92cf0/wabt_package-1.0.42.0b1-py3-none-macosx_11_0_x86_64.whl", hash = "sha256:4b1f51bcc665deb005e381bddc30edb07bbc4ef1e3779baebe800f9a4ccea75b", size = 2925966, upload-time = "2026-10-16T20:25:11.571Z" },
+    { url = "https://files.pythonhosted.org/packages/e5/b0/9460a4f3938f0eca7a305f6d4ac89ab7bd4ca23a7ea9a978a087f9cd2041/wabt_package-1.0.42.0b1-py3-none-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:efe6e3a4386e8aee68b7311fa541d3b1860420d0ed71c31f404b70ffadbc7613", size = 3916453, upload-time = "2026-10-16T20:25:13.199Z" },
+    { url = "https://files.pythonhosted.org/packages/49/7d/4d74ffc59d9b5dbced5484dac24a3b4c0f528836ebcfc6374827bed4d98c/wabt_package-1.0.42.0b1-py3-none-manylinux_2_26_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:b3c314fd380b2b73d73b993e8c2caadd221710d8e939d018f93ea12742ca3e56", size = 4025607, upload-time = "2026-10-16T20:25:14.977Z" },
+    { url = "https://files.pythonhosted.org/packages/66/18/ee70cc3c43f1e1f4d98a4302be3050eb6a11a98561e0ae26505336fbb44d/wabt_package-1.0.42.0b1-py3-none-musllinux_1_2_aarch64.whl", hash = "sha256:1a35a96157af58cba4179158c8a629d27b079b75da5821521961e41f5832aafb", size = 4140600, upload-time = "2026-10-16T20:25:17.001Z" },
+    { url = "https://files.pythonhosted.org/packages/d4/4e/cc9c2141f2ae3b1a032bd1ceb9d9505872660e3a720d5ab71549fb926642/wabt_package-1.0.42.0b1-py3-none-musllinux_1_2_x86_64.whl", hash = "sha256:6142db2b5220c91df6c09163bc5b2a676f5e0c29191789721976c38b2197ab23", size = 4275946, upload-time = "2026-10-16T20:25:18.496Z" },
+    { url = "https://files.pythonhosted.org/packages/ca/7d/a9a7188e88e1357c36192f203730f098f4ee137c03a162beab49800404f9/wabt_package-1.0.42.0b1-py3-none-win_amd64.whl", hash = "sha256:965f72eff8fa1284740e8ea93733ab93b6f0e09c999f0d7a1e1c951144361015", size = 3943202, upload-time = "2026-10-16T20:25:20.143Z" },
+    { url = "https://files.pythonhosted.org/packages/16/da/0d4ded113ddc9a625fe7af884dcb5d1f72f08be04b8b0c971f5f858d7b70/wabt_package-1.0.42.0b1-py3-none-win_arm64.whl", hash = "sha256:c3321323dde6a37f2e16274fdf3c3d7b2583d607f25c0071126b128e81d7e694", size = 3649036, upload-time = "2026-10-16T20:25:22.039Z" },
+]
+
+[[package]]
 name = "wasmext"
 source = { editable = "." }
+dependencies = [
+    { name = "wabt-package" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -168,6 +187,7 @@ dev = [
 ]
 
 [package.metadata]
+requires-dist = [{ name = "wabt-package", specifier = ">=1.0.42.0b1" }]
 
 [package.metadata.requires-dev]
 dev = [

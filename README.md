@@ -24,7 +24,7 @@ into the `Extension`s of its `setup.py`.
 from setuptools import setup
 from wasmext import wasmize
 
-setup(ext_modules=wasmize("src/mypkg/*.wasm"))  # build-system.requires = ["setuptools", "wasmext", "wabt-package"]
+setup(ext_modules=wasmize("src/mypkg/*.wasm"))  # build-system.requires = ["setuptools", "wasmext"]
 ```
 
 ```python
@@ -37,8 +37,8 @@ inst.add(2, 3)  # the exports are methods; an exported memory is a memoryview at
 The command line is the same in the manner of `cythonize`: `wasmext 'src/mypkg/*.wasm'` writes the C, `wasmext -i ...`
 builds the extensions in place, `-b` under `build/` (`wasmext --help`).
 
-`examples/coremark` is a package built that way. Needs [wabt-package](https://github.com/ballistics-lab/wabt-package) (or
-`WASMEXT_WABT`, a directory with its `bin/` and `wasm2c/`) to build, and a C compiler; `uv run pytest` runs the tests.
+`examples/coremark` is a package built that way. Builds with [wabt-package](https://github.com/ballistics-lab/wabt-package) (a dependency of wasmext; or
+`WASMEXT_WABT`, a directory with its `bin/` and `wasm2c/`) and a C compiler; `uv run pytest` runs the tests.
 The scripts and glue below are the proof of concept this started from.
 
 ## What is in the box

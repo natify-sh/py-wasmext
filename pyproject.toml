@@ -25,6 +25,9 @@ classifiers = [
 dependencies = []
 dynamic = ["version"]
 
+[project.scripts]
+wasmext = "wasmext._cli:main"
+
 [tool.setuptools]
 package-dir = { "" = "src" }
 packages = ["wasmext"]

@@ -142,6 +142,18 @@ def wasmize(
     `build_dir`, in `build_dir/<module name>/`. It is not written again while the `.wasm` is the same, unless `force`,
     and then `wasm2c` is not needed at all. `quiet` stops the notes about exports that are not exposed.
     """
+    return [ext for _, ext in _wasmize(module_list, exclude, build_dir=build_dir, force=force, quiet=quiet)]
+
+
+def _wasmize(
+    module_list: str | os.PathLike[str] | Extension | Iterable[str | os.PathLike[str] | Extension],
+    exclude: Iterable[str] | None,
+    *,
+    build_dir: str | os.PathLike[str] | None,
+    force: bool,
+    quiet: bool,
+) -> list[tuple[Path | None, Extension]]:
+    """`wasmize()` with the `.wasm` file of each extension (None for an ordinary extension that passed through)."""
     from setuptools import Extension  # a build-time dependency of the projects that call this
 
     if isinstance(module_list, (str, os.PathLike, Extension)):
@@ -149,7 +161,7 @@ def wasmize(
     else:
         items = list(module_list)
     excluded = {Path(p).resolve() for pattern in (exclude or ()) for p in glob.glob(pattern, recursive=True)}
-    result: list[Extension] = []
+    result: list[tuple[Path | None, Extension]] = []
     names: dict[str, str] = {}
 
     def convert(wasm: Path, name: str, template: Extension | None) -> None:
@@ -166,13 +178,13 @@ def wasmize(
         ext.sources = [*rest, *prepared.sources]
         ext.depends = [*ext.depends, *prepared.depends]
         ext.include_dirs = [*ext.include_dirs, prepared.include_dir]
-        result.append(ext)
+        result.append((wasm, ext))
 
     for item in items:
         if isinstance(item, Extension):
             patterns = [str(s) for s in item.sources if str(s).endswith(".wasm")]
             if not patterns:
-                result.append(item)  # an ordinary extension: not ours
+                result.append((None, item))  # an ordinary extension: not ours
                 continue
             files = sorted({Path(p) for pat in patterns for p in glob.glob(pat, recursive=True)} - excluded)
             if len(files) != 1:

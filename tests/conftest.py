@@ -39,7 +39,7 @@ def wabt() -> Path:
 
 
 @pytest.fixture(scope="session")
-def build_extension(wabt: Path, tmp_path_factory: pytest.TempPathFactory) -> Callable[[Path, str], ModuleType]:
+def build_extension(wabt: Path, tmp_path_factory: pytest.TempPathFactory) -> Callable[..., ModuleType]:
     cc = shutil.which(os.environ.get("CC", "cc")) or shutil.which("gcc") or shutil.which("clang")
     # platform.system(), not sys.platform: pyright takes a comparison with sys.platform as fixed and then does not
     # type-check what follows the skip when it runs on that platform.
@@ -50,7 +50,7 @@ def build_extension(wabt: Path, tmp_path_factory: pytest.TempPathFactory) -> Cal
     out = tmp_path_factory.mktemp("ext")
     sys.path.insert(0, str(out))
 
-    def build(source: Path, name: str) -> ModuleType:
+    def build(source: Path, name: str, *, abi3: bool = False) -> ModuleType:
         wasm = source
         if source.suffix == ".wat":
             wasm = out / f"{name}.wasm"
@@ -61,10 +61,11 @@ def build_extension(wabt: Path, tmp_path_factory: pytest.TempPathFactory) -> Cal
             [wabt / "bin" / "wasm2c", wasm, "-o", out / f"{name}_w2c.c", f"--module-name={name}"], check=True
         )
         runtime = wabt / "wasm2c"
+        limited = ["-DPy_LIMITED_API=0x030B0000"] if abi3 else []
         so = out / (name + str(sysconfig.get_config_var("EXT_SUFFIX")))
         subprocess.run(
             [
-                cc, "-O1", "-Wall", "-Wno-unused-value", "-shared", "-fPIC", *link_flags,
+                cc, "-O1", "-Wall", "-Wno-unused-value", "-shared", "-fPIC", *link_flags, *limited,
                 f"-I{runtime}", f"-I{out}", f"-I{sysconfig.get_paths()['include']}",
                 out / f"{name}_glue.c", out / f"{name}_w2c.c",
                 runtime / "wasm-rt-impl.c", runtime / "wasm-rt-mem-impl.c",

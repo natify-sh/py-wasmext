@@ -133,3 +133,19 @@ def test_stubs_are_written_unless_asked_not_to(project: Path, wabt: Path) -> Non
     (project / "src" / "pkg" / "add.pyi").unlink()
     assert wasmext(project, wabt, "-q", "--no-stubs", "src/pkg/add.wasm").returncode == 0
     assert not (project / "src" / "pkg" / "add.pyi").exists()
+
+
+def test_abi3_builds_an_extension_that_runs(project: Path, wabt: Path) -> None:
+    done = wasmext(project, wabt, "-q", "-i", "--abi3", "src/pkg/add.wasm")
+    assert done.returncode == 0, done.stderr
+    [extension] = built(project / "src" / "pkg", "add")
+    assert ".abi3." in extension.name or extension.suffix == ".pyd"
+    out = subprocess.run(
+        [sys.executable, "-c", "from pkg import add; print(add.Instance().add(40, 2))"],
+        cwd=project,
+        env={**os.environ, "PYTHONPATH": str(project / "src")},
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    assert out.strip() == "42"

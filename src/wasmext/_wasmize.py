@@ -41,6 +41,8 @@ GENERATOR_VERSION = 2
 STAMP = "stamp.json"
 # Of the runtime, these are compiled; the rest (headers, .inc) is only included.
 RUNTIME_SOURCES = ("wasm-rt-impl.c", "wasm-rt-mem-impl.c")
+# The oldest CPython an abi3 extension supports (3.11): the buffer protocol joined the limited API there.
+LIMITED_API_VERSION = "0x030B0000"
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,6 +149,7 @@ def wasmize(
     force: bool = False,
     quiet: bool = False,
     stubs: bool = True,
+    limited_api: bool = False,
 ) -> list[Extension]:
     """The extensions for the `.wasm` modules in `module_list`, ready for `setup(ext_modules=...)`.
 
@@ -157,12 +160,15 @@ def wasmize(
 
     `exclude` is glob patterns of files to leave out. The C is written beside each `.wasm` in `<stem>_wasmext/` or, with
     `build_dir`, in `build_dir/<module name>/`. It is not written again while the `.wasm` is the same, unless `force`,
-    and then `wasm2c` is not needed at all. `quiet` stops the notes about exports that are not exposed. With `stubs` (the default)
+    and then `wasm2c` is not needed at all. `quiet` stops the notes about exports that are not exposed. With `limited_api` the extensions are built for the stable ABI (abi3). With `stubs` (the default)
     a `<stem>.pyi` is written beside each `.wasm`: the types of the extension for editors and type checkers (ship it in the wheel with
     `package-data`).
     """
     return [
-        ext for _, ext in _wasmize(module_list, exclude, build_dir=build_dir, force=force, quiet=quiet, stubs=stubs)
+        ext
+        for _, ext in _wasmize(
+            module_list, exclude, build_dir=build_dir, force=force, quiet=quiet, stubs=stubs, limited_api=limited_api
+        )
     ]
 
 
@@ -174,6 +180,7 @@ def _wasmize(
     force: bool,
     quiet: bool,
     stubs: bool,
+    limited_api: bool,
 ) -> list[tuple[Path | None, Extension]]:
     """`wasmize()` with the `.wasm` file of each extension (None for an ordinary extension that passed through)."""
     from setuptools import Extension  # a build-time dependency of the projects that call this
@@ -200,6 +207,11 @@ def _wasmize(
         ext.sources = [*rest, *prepared.sources]
         ext.depends = [*ext.depends, *prepared.depends]
         ext.include_dirs = [*ext.include_dirs, prepared.include_dir]
+        if (
+            limited_api
+        ):  # one wheel for every CPython from 3.11 on: tag it with `[tool.distutils.bdist_wheel] py-limited-api`
+            ext.py_limited_api = True
+            ext.define_macros = [*ext.define_macros, ("Py_LIMITED_API", LIMITED_API_VERSION)]
         result.append((wasm, ext))
 
     for item in items:

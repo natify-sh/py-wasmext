@@ -46,6 +46,7 @@ def _parser() -> argparse.ArgumentParser:
         "-f", "--force", action="store_true", help="write the C and build again even if nothing changed"
     )
     parser.add_argument("-q", "--quiet", action="store_true", help="say nothing about what is not exposed or built")
+    parser.add_argument("--abi3", action="store_true", help="build for the stable ABI (abi3, CPython 3.11 and later)")
     parser.add_argument("--no-stubs", action="store_true", help="do not write a .pyi beside each .wasm")
     parser.add_argument(
         "-X", "--exclude", action="append", default=[], metavar="GLOB", help="leave out files matching GLOB"
@@ -66,6 +67,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             force=args.force,
             quiet=args.quiet,
             stubs=not args.no_stubs,
+            limited_api=args.abi3,
         )
     except (WasmError, GenError, ValueError, RuntimeError) as exc:
         print(f"wasmext: error: {exc}", file=sys.stderr)

@@ -9,6 +9,8 @@ callable}}`, needed only if the module imports functions), the exported function
 memory is a read-write `memoryview` attribute. A trap is `Trap` (a `RuntimeError`), a missing import `LinkError`. Integers
 are what WebAssembly has: arguments are taken modulo 2**32 / 2**64 and results are unsigned.
 
+The C uses only the limited API (PEP 384, 3.11+), so defining `Py_LIMITED_API` builds an abi3 extension.
+
 Not yet: v128, reference types and multiple results in a signature, memory64, imported memories/tables/globals.
 """
 
@@ -313,7 +315,7 @@ def generate(module: Module, name: str) -> Glue:
     add("    if (self->weakreflist != NULL) PyObject_ClearWeakRefs((PyObject *)self);")
     add(f"    if (self->instantiated) wasm2c_{prefix}_free(&self->inst);")
     add("    Instance_clear(self);")
-    add("    tp->tp_free((PyObject *)self);")
+    add("    ((freefunc)PyType_GetSlot(tp, Py_tp_free))((PyObject *)self);")
     add("    Py_DECREF(tp);")
     add("}")
     add("")
@@ -325,7 +327,7 @@ def generate(module: Module, name: str) -> Glue:
     else:
         add("    static char *kwlist[] = {NULL};")
         add('    if (!PyArg_ParseTupleAndKeywords(args, kwds, ":Instance", kwlist)) return NULL;')
-    add("    InstanceObject *self = (InstanceObject *)type->tp_alloc(type, 0);")
+    add("    InstanceObject *self = (InstanceObject *)PyType_GenericAlloc(type, 0);")
     add("    if (self == NULL) return NULL;")
     if has_imports:
         add("    if (imports == Py_None) {")
@@ -399,7 +401,7 @@ def generate(module: Module, name: str) -> Glue:
         add("static void Memory_dealloc(MemoryObject *self) {")
         add("    PyTypeObject *tp = Py_TYPE(self);")
         add("    Py_XDECREF(self->owner);")
-        add("    tp->tp_free((PyObject *)self);")
+        add("    ((freefunc)PyType_GetSlot(tp, Py_tp_free))((PyObject *)self);")
         add("    Py_DECREF(tp);")
         add("}")
         add("")

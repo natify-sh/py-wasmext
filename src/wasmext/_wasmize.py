@@ -121,6 +121,14 @@ def _write_if_changed(path: Path, data: bytes) -> None:
         path.write_bytes(data)
 
 
+def _same_wabt(written: object) -> bool:
+    """False when the C was made by another WABT than the one installed. Without a WABT (a tree that ships its C) the C is kept."""
+    try:
+        return find_toolchain().version == written
+    except RuntimeError:
+        return True
+
+
 def _prepare(wasm: Path, name: str, out_dir: Path, *, force: bool, quiet: bool, stubs: bool) -> _Prepared:
     last = name.rsplit(".", 1)[-1]
     data = wasm.read_bytes()
@@ -145,8 +153,10 @@ def _prepare(wasm: Path, name: str, out_dir: Path, *, force: bool, quiet: bool, 
         _write_if_changed(stub, glue.stub.encode("utf-8"))
 
     complete = stamp.is_file() and all(p.is_file() for p in (glue_c, w2c_c, out_dir / RUNTIME_SOURCES[0]))
-    if not force and complete and json.loads(stamp.read_text(encoding="utf-8")).get("key") == key:
-        return outputs(glue.skipped)
+    if not force and complete:
+        written = json.loads(stamp.read_text(encoding="utf-8"))
+        if written.get("key") == key and _same_wabt(written.get("wabt")):
+            return outputs(glue.skipped)
 
     toolchain: Toolchain = find_toolchain()
     out_dir.mkdir(parents=True, exist_ok=True)

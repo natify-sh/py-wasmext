@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -94,6 +95,28 @@ def test_the_c_is_not_written_again_and_then_needs_no_wasm2c(project: Path, monk
     assert glue.stat().st_mtime_ns == stamp and again.name == "pkg.add"
     with pytest.raises(RuntimeError, match="wabt-package"):
         wasmize("pkg/*.wasm", quiet=True, force=True)
+
+
+def test_another_wabt_generates_the_c_again(project: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    wasmize("pkg/*.wasm", quiet=True)
+    out = project / "pkg" / "add_wasmext"
+    glue = out / "add_glue.c"
+    stamp = out / "stamp.json"
+    data = json.loads(stamp.read_text(encoding="utf-8"))
+    data["wabt"] = "0.0.1"
+    stamp.write_text(json.dumps(data), encoding="utf-8")
+    (out / "wasm-rt.h").write_text("old", encoding="utf-8")
+    wasmize("pkg/*.wasm", quiet=True)
+    assert json.loads(stamp.read_text(encoding="utf-8"))["wabt"] != "0.0.1"
+    assert (out / "wasm-rt.h").read_text(encoding="utf-8") != "old"
+    # no WABT at all: the C stays, whatever version made it
+    data["wabt"] = "0.0.1"
+    stamp.write_text(json.dumps(data), encoding="utf-8")
+    before = glue.stat().st_mtime_ns
+    monkeypatch.delenv("WASMEXT_WABT")
+    monkeypatch.setitem(sys.modules, "wabt_package", None)
+    wasmize("pkg/*.wasm", quiet=True)
+    assert glue.stat().st_mtime_ns == before and json.loads(stamp.read_text(encoding="utf-8"))["wabt"] == "0.0.1"
 
 
 def test_a_changed_wasm_is_generated_again(project: Path) -> None:

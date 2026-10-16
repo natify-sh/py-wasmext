@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from wasminize import FuncType, GlobalType, Limits, TableType, WasmError, parse
+from wasmext import FuncType, GlobalType, Limits, TableType, WasmError, parse
 
 WASM_DIR = Path(__file__).resolve().parent.parent / "wasm"
 HEADER = b"\0asm\x01\x00\x00\x00"

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from wasminize import GenError, generate, mangle, parse
+from wasmext import GenError, generate, mangle, parse
 
 from .test_wasm_parser import F64, I32, V128, code, functype, leb, module, name, section, vec
 

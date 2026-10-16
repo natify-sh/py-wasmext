@@ -155,7 +155,7 @@ wheels = [
 ]
 
 [[package]]
-name = "wasminize"
+name = "wasmext"
 source = { editable = "." }
 
 [package.dev-dependencies]

@@ -1,4 +1,4 @@
-# wasminize
+# wasmext
 
 A proof of concept: turn a WebAssembly module into a **native CPython extension** (`.so`), so that the module runs
 without any WebAssembly engine at run time. Nothing to install next to it: no `wasmtime`, no `node`.

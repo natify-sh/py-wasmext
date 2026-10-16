@@ -1,4 +1,4 @@
-"""Builds extensions from WAT for the tests: `wat2wasm` and `wasm2c` from the wabt-package (or WASMINIZE_WABT, a
+"""Builds extensions from WAT for the tests: `wat2wasm` and `wasm2c` from the wabt-package (or WASMEXT_WABT, a
 directory with its `bin/` and `wasm2c/`) and the C compiler of the machine. Skipped where one of them is missing."""
 
 from __future__ import annotations
@@ -16,13 +16,13 @@ from types import ModuleType
 
 import pytest
 
-from wasminize import generate, parse
+from wasmext import generate, parse
 
 DATA = Path(__file__).parent / "data"
 
 
 def _wabt_dir() -> Path | None:
-    env = os.environ.get("WASMINIZE_WABT")
+    env = os.environ.get("WASMEXT_WABT")
     if env:
         return Path(env)
     spec = importlib.util.find_spec("wabt_package")
@@ -33,7 +33,7 @@ def _wabt_dir() -> Path | None:
 def wabt() -> Path:
     path = _wabt_dir()
     if path is None or not (path / "bin").is_dir():
-        pytest.skip("no wabt-package: set WASMINIZE_WABT to a directory with bin/ and wasm2c/")
+        pytest.skip("no wabt-package: set WASMEXT_WABT to a directory with bin/ and wasm2c/")
     return path
 
 

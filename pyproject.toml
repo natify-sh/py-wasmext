@@ -3,7 +3,7 @@ requires = ["setuptools>=77", "setuptools-scm>=8"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "wasminize"
+name = "wasmext"
 authors = [{ name = "o-murphy", email = "thehelixpg@gmail.com" }]
 description = "Turn WebAssembly modules into native CPython extensions (wasm2c), from setup.py or the command line"
 readme = "README.md"
@@ -27,10 +27,10 @@ dynamic = ["version"]
 
 [tool.setuptools]
 package-dir = { "" = "src" }
-packages = ["wasminize"]
+packages = ["wasmext"]
 
 [tool.setuptools.package-data]
-wasminize = ["py.typed"]
+wasmext = ["py.typed"]
 
 [tool.setuptools_scm]
 root = "."

@@ -18,6 +18,7 @@ import glob
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -36,7 +37,7 @@ if TYPE_CHECKING:
 __all__ = ["wasmize"]
 
 # Bump when the generated C changes, so that a stamp of an older generator does not stop the files being rewritten.
-GENERATOR_VERSION = 1
+GENERATOR_VERSION = 2
 STAMP = "stamp.json"
 # Of the runtime, these are compiled; the rest (headers, .inc) is only included.
 RUNTIME_SOURCES = ("wasm-rt-impl.c", "wasm-rt-mem-impl.c")
@@ -73,6 +74,15 @@ def _key(data: bytes, name: str) -> str:
     h.update(data)
     h.update(b"\0" + name.encode() + b"\0" + str(GENERATOR_VERSION).encode())
     return h.hexdigest()
+
+
+# wasm2c 1.0.42 checks the sum of 64-bit addresses with `_addcarry_u64` whenever the compiler is MSVC, an intrinsic that only
+# the x64 targets have: on ARM64 the C does not link. The `#else` branch it falls back to for other compilers is portable.
+_MSVC_ADDCARRY = re.compile(rb"#elif defined\(_MSC_VER\)(\s+if \(_addcarry_u64\()")
+
+
+def _portable_on_arm64(c_source: bytes) -> bytes:
+    return _MSVC_ADDCARRY.sub(rb"#elif defined(_MSC_VER) && defined(_M_X64)\1", c_source)
 
 
 def _write_if_changed(path: Path, data: bytes) -> None:
@@ -112,6 +122,7 @@ def _prepare(wasm: Path, name: str, out_dir: Path, *, force: bool, quiet: bool) 
     )
     if result.returncode:
         raise RuntimeError(f"wasm2c failed on {wasm}:\n{result.stderr.strip()}")
+    w2c_c.write_bytes(_portable_on_arm64(w2c_c.read_bytes()))
     _write_if_changed(glue_c, glue.source.encode("utf-8"))
     for src in toolchain.runtime.glob("wasm-rt*"):
         if src.suffix in (".c", ".h", ".inc"):

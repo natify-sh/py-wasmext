@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -133,3 +134,11 @@ def test_errors_say_which_file(project: Path) -> None:
 def test_a_pattern_without_files_is_reported(project: Path, capsys: pytest.CaptureFixture[str]) -> None:
     assert wasmize("nothing/*.wasm") == []
     assert "does not match any files" in capsys.readouterr().err
+
+
+def test_the_msvc_only_intrinsic_is_kept_off_arm64(project: Path) -> None:
+    """wasm2c's `_addcarry_u64` branch is for x64 MSVC only (the ARM64 build of the example did not link)."""
+    wasmize("pkg/*.wasm", quiet=True)
+    c = (project / "pkg" / "add_wasmext" / "add_w2c.c").read_text(encoding="utf-8")
+    assert "#elif defined(_MSC_VER) && defined(_M_X64)" in c
+    assert not re.search(r"#elif defined\(_MSC_VER\)\s+if \(_addcarry_u64", c)

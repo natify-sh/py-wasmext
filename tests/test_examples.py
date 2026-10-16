@@ -30,9 +30,7 @@ def build_example(name: str, tmp_path: Path, wabt: Path) -> Path:
 def test_coremark(tmp_path: Path, wabt: Path) -> None:
     project = build_example("coremark", tmp_path, wabt)
     # The benchmark times itself for 10 s with the clock it is given: this one runs 600 times too fast.
-    code = (
-        "import time, coremark\nout = coremark.run(lambda: int(time.monotonic() * 600_000) & 0xFFFFFFFF)\nprint(out)\n"
-    )
+    code = "import time, coremark\nout = coremark.run(lambda: int(time.perf_counter() * 600_000) & 0xFFFFFFFF)\nprint(out)\n"
     out = subprocess.run(
         [sys.executable, "-c", code],
         cwd=project,

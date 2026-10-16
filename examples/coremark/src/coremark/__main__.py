@@ -34,15 +34,18 @@ def main(argv: list[str] | None = None) -> int:
         return value
 
     output = run(clock)
+    # CoreMark scores only a timed run of >= 10 s and picks its length from a calibration run. If the CPU speeds up
+    # in between (frequency ramp, E- to P-core) the run is too short and the module prints 0.000: once more, warm.
+    for attempt in range(2, 4):
+        if args.scale != 1.0 or "Result: 0.000" not in output:
+            break
+        print(f"run too short for CoreMark's 10 s rule (CPU speed changed): attempt {attempt}/3", file=sys.stderr)
+        samples.clear()
+        output = run(clock)
     took = time.perf_counter() - t0
     print(output.rstrip("\n"))
     if args.scale == 1.0 and "Result: 0.000" in output:
-        print(
-            "\nCoreMark only reports a score for a timed run of at least 10 s; this one was shorter\n"
-            "(the module extrapolates its length from a calibration run, which is noisy on a CPU that changes speed).\n"
-            "Run it again, or use --scale to run the module's clock faster than real time.",
-            file=sys.stderr,
-        )
+        print("still no score: pin the CPU speed (performance governor) or use --scale", file=sys.stderr)
     if args.verbose:
         pairs = [(samples[i], samples[i + 1]) for i in range(0, len(samples) - 1, 2)]
         print(f"\nextension : {_core.__file__}")

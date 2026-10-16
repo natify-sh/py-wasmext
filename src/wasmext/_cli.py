@@ -98,6 +98,25 @@ def main(argv: Sequence[str] | None = None) -> int:
     return status
 
 
+def _prune_stale(base: Path, module: str) -> None:
+    """After an in-place build, leave one extension file for `module`: the newest.
+
+    Python tries `.cpython-311-<platform>.so` before `.abi3.so`, so a native file left by an earlier build would be imported
+    in place of the abi3 one just built (and the other way round after `--no-abi3`: the `.abi3.so` is tried second)."""
+    *package, stem = module.split(".")
+    folder = base.joinpath(*package)
+    files = [p for p in folder.glob(f"{stem}.*") if p.suffix in (".so", ".pyd") and p.name.split(".")[0] == stem]
+    if len(files) > 1:
+        newest = max(files, key=lambda p: p.stat().st_mtime_ns)
+        for old in files:
+            if old != newest:
+                old.unlink()
+                print(
+                    f"wasmext: removed the stale {old.name} (the {newest.name} just built would be shadowed)",
+                    file=sys.stderr,
+                )
+
+
 def _package_root(wasm: Path) -> Path:
     """The directory above the topmost package (directory with an `__init__.py`) the file is in."""
     folder = wasm.resolve().parent
@@ -141,6 +160,10 @@ def _build(base: Path, extensions: list[Extension], *, inplace: bool, force: boo
         setup(name="wasmext-cli", ext_modules=moved, packages=[], py_modules=[], script_args=script_args)
     except SystemExit as exc:
         return 1 if exc.code not in (None, 0) else 0
+    else:
+        if inplace:
+            for ext in moved:
+                _prune_stale(base, ext.name)
     finally:
         os.chdir(cwd)
         if temp is not None:

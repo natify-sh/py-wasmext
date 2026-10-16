@@ -149,3 +149,25 @@ def test_abi3_builds_an_extension_that_runs(project: Path, wabt: Path) -> None:
         check=True,
     ).stdout
     assert out.strip() == "42"
+
+
+def test_inplace_removes_the_stale_variant_that_would_shadow_the_new_one(project: Path, wabt: Path) -> None:
+    """Python tries `.cpython-3xx-<platform>.so` before `.abi3.so`: a native file left by an earlier build wins."""
+    folder = project / "src" / "pkg"
+    assert wasmext(project, wabt, "-q", "-i", "--no-abi3", "src/pkg/add.wasm").returncode == 0
+    [native] = built(folder, "add")
+    assert ".abi3." not in native.name
+    done = wasmext(project, wabt, "-q", "-i", "--abi3", "src/pkg/add.wasm")
+    assert done.returncode == 0, done.stderr
+    [only] = built(folder, "add")
+    assert only != native and not native.exists()
+    assert "removed the stale" in done.stderr
+    out = subprocess.run(
+        [sys.executable, "-c", "from pkg import add; print(add.__file__.rsplit('/', 1)[-1].rsplit(chr(92), 1)[-1])"],
+        cwd=project,
+        env={**os.environ, "PYTHONPATH": str(project / "src")},
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    assert out == only.name

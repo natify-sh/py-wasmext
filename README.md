@@ -15,6 +15,28 @@ module.wasm --wasm2c (WABT)--> module.c + glue/module.c + wasm-rt --cc--> module
 functions that the embedder defines). The *glue* is a small C file that makes the exports Python functions, the imports
 native or Python callables, and the linear memory a `memoryview`.
 
+## The package
+
+`src/wasmext` is the beginning of a tool in the manner of Cython: `wasmize()` turns the `.wasm` files of a project
+into the `Extension`s of its `setup.py`.
+
+```python
+from setuptools import setup
+from wasmext import wasmize
+
+setup(ext_modules=wasmize("src/mypkg/*.wasm"))     # build-system.requires = ["setuptools", "wasmext", "wabt-package"]
+```
+
+```python
+import mypkg.fast                       # src/mypkg/fast.wasm
+inst = mypkg.fast.Instance()            # Instance({"env": {"log": print}}) if the module imports functions
+inst.add(2, 3)                          # the exports are methods; an exported memory is a memoryview attribute
+```
+
+`examples/coremark` is a package built that way. Needs [wabt-package](https://github.com/ballistics-lab/wabt-package) (or
+`WASMEXT_WABT`, a directory with its `bin/` and `wasm2c/`) to build, and a C compiler; `uv run pytest` runs the tests.
+The scripts and glue below are the proof of concept this started from.
+
 ## What is in the box
 
 | | |

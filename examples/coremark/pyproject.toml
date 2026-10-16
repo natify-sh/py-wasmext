@@ -1,0 +1,18 @@
+[build-system]
+# wabt-package supplies wasm2c and its runtime; wasmext turns the .wasm into an extension (see setup.py).
+requires = ["setuptools>=77", "wasmext", "wabt-package"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wasmext-example-coremark"
+version = "0.1.0"
+description = "CoreMark, a WebAssembly module, as a native CPython extension built by wasmext"
+requires-python = ">=3.11"
+dependencies = []
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+packages = ["coremark"]
+
+[tool.setuptools.package-data]
+coremark = ["py.typed"]

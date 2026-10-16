@@ -3,7 +3,7 @@
 - `wasm/simple.wasm` and `wasm/coremark.wasm` are the test modules of
   [vshymanskyy/wasm2mpy](https://github.com/vshymanskyy/wasm2mpy) (`test/`), copied unchanged. wasm2mpy is MIT
   licensed; its licence text is below.
-- `build.py` expects the sources of the `wasm2c` runtime (`wasm-rt.h`, `wasm-rt-impl.c`, `wasm-rt-mem-impl.c`, ...)
+- `poc_build.py` expects the sources of the `wasm2c` runtime (`wasm-rt.h`, `wasm-rt-impl.c`, `wasm-rt-mem-impl.c`, ...)
   from [WABT](https://github.com/WebAssembly/wabt) (Apache-2.0). They are not copied here.
 
 ## wasm2mpy licence

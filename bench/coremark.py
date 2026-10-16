@@ -12,7 +12,7 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT / "build"))
+sys.path.insert(0, str(ROOT / "poc_out"))
 
 
 def main(backends: list[str]) -> None:

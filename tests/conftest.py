@@ -42,6 +42,8 @@ def build_extension(wabt: Path, tmp_path_factory: pytest.TempPathFactory) -> Cal
     cc = shutil.which(os.environ.get("CC", "cc")) or shutil.which("gcc") or shutil.which("clang")
     if cc is None or sys.platform == "win32":
         pytest.skip("no C compiler of the cc kind")
+    # a macOS extension finds the Python symbols in the interpreter that imports it
+    link_flags: list[str] = ["-undefined", "dynamic_lookup"] if sys.platform == "darwin" else []
     out = tmp_path_factory.mktemp("ext")
     sys.path.insert(0, str(out))
 
@@ -59,7 +61,7 @@ def build_extension(wabt: Path, tmp_path_factory: pytest.TempPathFactory) -> Cal
         so = out / (name + str(sysconfig.get_config_var("EXT_SUFFIX")))
         subprocess.run(
             [
-                cc, "-O1", "-Wall", "-Wno-unused-value", "-shared", "-fPIC",
+                cc, "-O1", "-Wall", "-Wno-unused-value", "-shared", "-fPIC", *link_flags,
                 f"-I{runtime}", f"-I{out}", f"-I{sysconfig.get_paths()['include']}",
                 out / f"{name}_glue.c", out / f"{name}_w2c.c",
                 runtime / "wasm-rt-impl.c", runtime / "wasm-rt-mem-impl.c",

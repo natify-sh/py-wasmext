@@ -67,7 +67,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
     if not args.quiet:
         for wasm, ext in made:
-            print(f"wasmext: {wasm} -> {ext.name} ({ext.include_dirs[-1]}/)")
+            print(f"wasmext: {Path(wasm).as_posix() if wasm else wasm} -> {ext.name} ({ext.include_dirs[-1]}/)")
     if not (args.inplace or args.build):
         return 0
 

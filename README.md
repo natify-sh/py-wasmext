@@ -48,7 +48,7 @@ The scripts and glue below are the proof of concept this started from.
 | `wasm/simple.wasm` | `add(i32, i32) -> i32`, 41 bytes |
 | `wasm/coremark.wasm` | CoreMark, 10.8 KB; imports `wiring.{millis, print, stopWdt, delay}`, exports `memory`, `setup`, `loop` |
 | `glue/simple.c`, `glue/coremark.c` | the glue, **written by hand** for these two modules (what a generator would emit) |
-| `build.py` | `.wasm` -> `wasm2c` -> C compiler -> `build/<name>_ext*.so` |
+| `poc_build.py` | `.wasm` -> `wasm2c` -> C compiler -> `poc_out/<name>_ext*.so` |
 | `bench/calls.py`, `bench/coremark.py` | the extension against [wasmhost](https://github.com/ballistics-lab/py-wasmhost) backends, if it is installed |
 
 The two `.wasm` files are copied from wasm2mpy's `test/` (MIT, see `NOTICE.md`).
@@ -61,13 +61,13 @@ You need a C compiler, the Python headers, and `wasm2c` with its runtime sources
 ```sh
 export WASM2C=/path/to/wabt/build/wasm2c
 export WABT_SRC=/path/to/wabt/wasm2c        # wasm-rt.h, wasm-rt-impl.c, wasm-rt-mem-impl.c ...
-python build.py                              # build/simple_ext*.so and build/coremark_ext*.so
+python poc_build.py                              # poc_out/simple_ext*.so and poc_out/coremark_ext*.so
 python bench/calls.py                        # the cost of one call
 python bench/coremark.py                     # ~20 s per backend
 ```
 
 ```python
->>> import sys; sys.path.insert(0, "build")
+>>> import sys; sys.path.insert(0, "poc_out")
 >>> import simple_ext
 >>> simple_ext.add(3, 4)
 7

@@ -49,7 +49,7 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 120
 # The proof-of-concept scripts predate the package.
-extend-exclude = ["build.py", "bench", "glue", "build"]
+extend-exclude = ["poc_build.py", "bench", "glue", "build", "poc_out"]
 
 [tool.pyright]
 include = ["src", "tests"]

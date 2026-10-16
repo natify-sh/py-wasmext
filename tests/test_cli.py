@@ -15,6 +15,12 @@ from .conftest import DATA
 SIMPLE = DATA.parent.parent / "wasm" / "simple.wasm"
 
 
+def built(folder: Path, stem: str, *, recursive: bool = False) -> list[Path]:
+    """The built extensions named `stem` in `folder`: .so on Linux and macOS, .pyd on Windows."""
+    found = folder.rglob(f"{stem}.*") if recursive else folder.glob(f"{stem}.*")
+    return [p for p in found if p.suffix in (".so", ".pyd")]
+
+
 def wasmext(cwd: Path, wabt: Path | None, *args: str) -> subprocess.CompletedProcess[str]:
     env = {k: v for k, v in os.environ.items() if k != "WASMEXT_WABT"}
     if wabt is not None:
@@ -40,13 +46,13 @@ def test_without_flags_it_writes_the_c_and_builds_nothing(project: Path, wabt: P
     assert "src/pkg/add.wasm -> pkg.add" in done.stdout
     generated = project / "src" / "pkg" / "add_wasmext"
     assert (generated / "add_glue.c").is_file() and (generated / "add_w2c.c").is_file()
-    assert not list((project / "src").rglob("add.*.so")) and not (project / "src" / "build").exists()
+    assert not built(project / "src", "add", recursive=True) and not (project / "src" / "build").exists()
 
 
 def test_inplace_builds_next_to_the_wasm(project: Path, wabt: Path) -> None:
     done = wasmext(project, wabt, "-q", "-i", "src/pkg/*.wasm")
     assert done.returncode == 0, done.stderr
-    [built] = [p for p in (project / "src" / "pkg").iterdir() if p.name.startswith("add.") and p.suffix == ".so"]
+    [extension] = built(project / "src" / "pkg", "add")
     out = subprocess.run(
         [sys.executable, "-c", "from pkg import add; print(add.Instance().add(40, 2))"],
         cwd=project,
@@ -55,14 +61,14 @@ def test_inplace_builds_next_to_the_wasm(project: Path, wabt: Path) -> None:
         text=True,
         check=True,
     ).stdout
-    assert out.strip() == "42" and built.parent == project / "src" / "pkg"
+    assert out.strip() == "42" and extension.parent == project / "src" / "pkg"
 
 
 def test_build_goes_under_build(project: Path, wabt: Path) -> None:
     done = wasmext(project, wabt, "-q", "-b", "src/pkg/*.wasm")
     assert done.returncode == 0, done.stderr
-    assert list((project / "src" / "build").rglob("add.*.so"))  # under build/ of the directory above the package
-    assert not list((project / "src" / "pkg").glob("add.*.so"))
+    assert built(project / "src" / "build", "add", recursive=True)  # under build/ of the directory above the package
+    assert not built(project / "src" / "pkg", "add")
 
 
 def test_exclude_and_build_dir(project: Path, wabt: Path) -> None:
@@ -117,5 +123,5 @@ def test_inplace_leaves_no_build_directory_and_handles_several_places(project: P
     shutil.copy(SIMPLE, other / "calc.wasm")
     done = wasmext(project, wabt, "-q", "-i", "src/pkg/add.wasm", "tools/calc.wasm")
     assert done.returncode == 0, done.stderr
-    assert list((project / "src" / "pkg").glob("add.*.so")) and list(other.glob("calc.*.so"))
+    assert built(project / "src" / "pkg", "add") and built(other, "calc")
     assert not list(project.rglob("build")) and not list(project.rglob("tmp*"))

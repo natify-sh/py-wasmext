@@ -1,6 +1,6 @@
 """Build the wasm2c proof of concept: .wasm -> C (wasm2c) -> a CPython extension module.
 
-    python build.py [simple|coremark ...]        (default: both)
+    python poc_build.py [simple|coremark ...]        (default: both)
 
 Needs a C compiler (CC, default `cc`), the Python headers, and WABT 1.0.x:
   WASM2C     the wasm2c executable (default: `wasm2c` on PATH)
@@ -18,7 +18,7 @@ import sysconfig
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-BUILD = HERE / "build"
+BUILD = HERE / "poc_out"  # not "build": a build/ in the working directory shadows the PyPA build package
 MODULES = ("simple", "coremark")
 
 

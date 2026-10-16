@@ -105,7 +105,7 @@ def test_a_failed_build_exits_nonzero(project: Path, wabt: Path) -> None:
     glue = project / "src" / "pkg" / "add_wasmext"
     assert wasmext(project, wabt, "src/pkg/add.wasm").returncode == 0
     (glue / "add_glue.c").write_text("this is not C;\n", encoding="utf-8")
-    # the stamp says the files are current, so they are not written again: the compiler meets the broken one
+    # the first line says the C is current, so they are not written again: the compiler meets the broken one
     done = wasmext(project, None, "-q", "-b", "src/pkg/add.wasm")
     assert done.returncode == 1
 

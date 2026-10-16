@@ -38,7 +38,7 @@ if TYPE_CHECKING:
 __all__ = ["wasmize"]
 
 # Bump when the generated C changes, so that a stamp of an older generator does not stop the files being rewritten.
-GENERATOR_VERSION = 2
+GENERATOR_VERSION = 3
 STAMP = "stamp.json"
 # Of the runtime, these are compiled; the rest (headers, .inc) is only included.
 RUNTIME_SOURCES = ("wasm-rt-impl.c", "wasm-rt-mem-impl.c")

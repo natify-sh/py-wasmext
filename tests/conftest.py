@@ -63,12 +63,24 @@ def build_extension(wabt: Path, tmp_path_factory: pytest.TempPathFactory) -> Cal
         runtime = wabt / "wasm2c"
         limited = ["-DPy_LIMITED_API=0x030B0000"] if abi3 else []
         so = out / (name + str(sysconfig.get_config_var("EXT_SUFFIX")))
+        include = [f"-I{runtime}", f"-I{out}", f"-I{sysconfig.get_paths()['include']}"]
+        glue_object = out / f"{name}_glue.o"
+        # The glue is ours, so it is built strictly: GCC 14 makes these errors (older ones warn), and the manylinux and
+        # user machines have it. The C of wasm2c and its runtime are not ours to police.
+        strict = [
+            "-Wall",
+            "-Werror=incompatible-pointer-types",
+            "-Werror=implicit-function-declaration",
+            "-Werror=int-conversion",
+        ]
+        subprocess.run(
+            [cc, "-O1", "-fPIC", *strict, *limited, *include, "-c", out / f"{name}_glue.c", "-o", glue_object],
+            check=True,
+        )
         subprocess.run(
             [
-                cc, "-O1", "-Wall", "-Wno-unused-value", "-shared", "-fPIC", *link_flags, *limited,
-                f"-I{runtime}", f"-I{out}", f"-I{sysconfig.get_paths()['include']}",
-                out / f"{name}_glue.c", out / f"{name}_w2c.c",
-                runtime / "wasm-rt-impl.c", runtime / "wasm-rt-mem-impl.c",
+                cc, "-O1", "-w", "-shared", "-fPIC", *link_flags, *limited, *include,
+                glue_object, out / f"{name}_w2c.c", runtime / "wasm-rt-impl.c", runtime / "wasm-rt-mem-impl.c",
                 "-o", so,
             ],
             check=True,

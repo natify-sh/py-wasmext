@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 
 import coremark
+import pytest
 
 
 def test_the_benchmark_runs_and_scores() -> None:
@@ -21,3 +22,11 @@ def test_the_benchmark_runs_and_scores() -> None:
     result = [line for line in out.splitlines() if line.startswith("Result:")]
     # what the clock said is in the message: a score of 0 means the module found its own results wrong or its time odd
     assert result and float(result[0].split()[1]) > 0, f"{out!r} after {took:.3f} s, clock: {seen}"
+
+
+def test_python_dash_m_runs_it(capsys: pytest.CaptureFixture[str]) -> None:
+    from coremark.__main__ import main
+
+    assert main(["--scale", "600", "-v"]) == 0
+    out = capsys.readouterr().out
+    assert "Running CoreMark" in out and "extension :" in out and "runs (ms) :" in out

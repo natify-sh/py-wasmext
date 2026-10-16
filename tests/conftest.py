@@ -55,8 +55,6 @@ def build_extension(wabt: Path, tmp_path_factory: pytest.TempPathFactory) -> Cal
         subprocess.run(
             [wabt / "bin" / "wasm2c", wasm, "-o", out / f"{name}_w2c.c", f"--module-name={name}"], check=True
         )
-        # wasm2c writes the header next to the C file, named after it: the glue includes "<name>.h"
-        (out / f"{name}.h").write_bytes((out / f"{name}_w2c.h").read_bytes())
         runtime = wabt / "wasm2c"
         so = out / (name + str(sysconfig.get_config_var("EXT_SUFFIX")))
         subprocess.run(

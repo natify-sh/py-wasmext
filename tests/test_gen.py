@@ -93,4 +93,4 @@ def test_the_dotted_name_is_the_type_name_and_the_last_part_the_init_function() 
     source = generate(parse(data), "pkg.sub.fast").source
     assert "PyMODINIT_FUNC PyInit_fast(void)" in source
     assert '"pkg.sub.fast.Instance"' in source
-    assert '#include "fast.h"' in source
+    assert '#include "fast_w2c.h"' in source

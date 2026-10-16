@@ -181,7 +181,7 @@ def generate(module: Module, name: str) -> Glue:
     add("#include <Python.h>")
     add("#include <structmember.h>")
     add("#include <string.h>")
-    add(f'#include "{last}.h"')
+    add(f'#include "{last}_w2c.h"')
     add('#include "wasm-rt-impl.h"')
     add("")
     add("/* the trap code of a Python exception that unwinds the WebAssembly frames: the exception is already set */")

@@ -1,0 +1,135 @@
+"""wasmize(): a project with `.wasm` files, built by setuptools into extensions that import and run."""
+
+from __future__ import annotations
+
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+from setuptools import Extension
+
+from wasmext import GenError, wasmize
+
+from .conftest import DATA
+
+SIMPLE = DATA.parent.parent / "wasm" / "simple.wasm"
+SETUP = """\
+from setuptools import setup
+from wasmext import wasmize
+
+setup(name="demo", version="0", packages=["pkg"], ext_modules=wasmize({arg}, quiet=True))
+"""
+
+
+@pytest.fixture
+def project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, wabt: Path) -> Path:
+    """tmp/pkg/{__init__.py, add.wasm} as the working directory, and wabt-package reachable."""
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "__init__.py").write_text("", encoding="utf-8")
+    shutil.copy(SIMPLE, tmp_path / "pkg" / "add.wasm")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("WASMEXT_WABT", str(wabt))
+    return tmp_path
+
+
+def run_python(cwd: Path, *args: str) -> str:
+    return subprocess.run([sys.executable, *args], cwd=cwd, check=True, capture_output=True, text=True).stdout
+
+
+def test_the_extensions_get_their_names_from_the_packages(project: Path) -> None:
+    (project / "top.wasm").write_bytes(SIMPLE.read_bytes())
+    [pkg_add] = wasmize("pkg/*.wasm", quiet=True)
+    [top] = wasmize("top.wasm", quiet=True)
+    assert (pkg_add.name, top.name) == ("pkg.add", "top")
+    assert pkg_add.sources[0] == "pkg/add_wasmext/add_glue.c"
+    assert "pkg/add_wasmext" in pkg_add.include_dirs
+    assert sorted(Path(s).name for s in pkg_add.sources) == [
+        "add_glue.c",
+        "add_w2c.c",
+        "wasm-rt-impl.c",
+        "wasm-rt-mem-impl.c",
+    ]
+
+
+def test_setup_py_builds_a_working_extension(project: Path) -> None:
+    (project / "setup.py").write_text(SETUP.format(arg='"pkg/*.wasm"'), encoding="utf-8")
+    run_python(project, "setup.py", "-q", "build_ext", "--inplace")
+    out = run_python(project, "-c", "from pkg import add; print(add.Instance().add(40, 2))")
+    assert out.strip() == "42"
+
+
+def test_an_extension_object_keeps_its_settings_and_gives_the_name(project: Path) -> None:
+    ext = Extension("pkg.fast", ["pkg/add.wasm"], define_macros=[("X", "1")], libraries=["m"])
+    [made] = wasmize([ext], quiet=True)
+    assert made.name == "pkg.fast"
+    assert made.define_macros == [("X", "1")] and made.libraries == ["m"]
+    assert not any(s.endswith(".wasm") for s in made.sources)
+    assert ext.sources == ["pkg/add.wasm"]  # the argument is not changed
+    (project / "setup.py").write_text(
+        SETUP.format(arg='[__import__("setuptools").Extension("pkg.fast", ["pkg/add.wasm"])]'), encoding="utf-8"
+    )
+    run_python(project, "setup.py", "-q", "build_ext", "--inplace")
+    assert run_python(project, "-c", "from pkg import fast; print(fast.Instance().add(1, 2))").strip() == "3"
+
+
+def test_an_ordinary_extension_passes_through(project: Path) -> None:
+    plain = Extension("other", ["other.c"])
+    assert wasmize([plain, "pkg/*.wasm"], quiet=True)[0] is plain
+
+
+def test_the_c_is_not_written_again_and_then_needs_no_wasm2c(project: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    wasmize("pkg/*.wasm", quiet=True)
+    glue = project / "pkg" / "add_wasmext" / "add_glue.c"
+    stamp = glue.stat().st_mtime_ns
+    # an sdist with the generated C, built where there is no wabt-package
+    monkeypatch.delenv("WASMEXT_WABT")
+    monkeypatch.setitem(sys.modules, "wabt_package", None)  # makes `import wabt_package` fail
+    [again] = wasmize("pkg/*.wasm", quiet=True)
+    assert glue.stat().st_mtime_ns == stamp and again.name == "pkg.add"
+    with pytest.raises(RuntimeError, match="wabt-package"):
+        wasmize("pkg/*.wasm", quiet=True, force=True)
+
+
+def test_a_changed_wasm_is_generated_again(project: Path) -> None:
+    wasmize("pkg/*.wasm", quiet=True)
+    stamp = project / "pkg" / "add_wasmext" / "stamp.json"
+    first = stamp.read_text(encoding="utf-8")
+    shutil.copy(DATA / "features.wasm", project / "pkg" / "add.wasm")
+    wasmize("pkg/*.wasm", quiet=True)
+    assert stamp.read_text(encoding="utf-8") != first
+
+
+def test_build_dir_and_exclude(project: Path) -> None:
+    shutil.copy(SIMPLE, project / "pkg" / "skipped.wasm")
+    [ext] = wasmize("pkg/*.wasm", exclude=["pkg/skipped.wasm"], build_dir="gen", quiet=True)
+    assert ext.name == "pkg.add"
+    assert (project / "gen" / "pkg.add" / "add_glue.c").is_file()
+    assert not (project / "pkg" / "add_wasmext").exists()
+
+
+def test_notes_about_what_is_not_exposed(project: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    shutil.copy(DATA / "features.wasm", project / "pkg" / "add.wasm")
+    wasmize("pkg/*.wasm")
+    assert "pkg/add.wasm: not exposed: global 'answer'" in capsys.readouterr().err.replace(os.sep, "/")
+
+
+def test_errors_say_which_file(project: Path) -> None:
+    with pytest.raises(ValueError, match="two modules are named"):
+        wasmize(["pkg/add.wasm", "pkg/*.wasm"], quiet=True)
+    shutil.copy(SIMPLE, project / "pkg" / "my-module.wasm")
+    with pytest.raises(ValueError, match="my-module.wasm.*not a module name"):
+        wasmize("pkg/my-module.wasm", quiet=True)
+    (project / "pkg" / "bad.wasm").write_bytes(b"not wasm")
+    with pytest.raises(ValueError, match=r"bad\.wasm: not a WebAssembly binary"):
+        wasmize("pkg/bad.wasm", quiet=True)
+    with pytest.raises(ValueError, match="one is wanted"):
+        wasmize([Extension("x", ["pkg/*.wasm"])], quiet=True)
+    assert issubclass(GenError, ValueError)
+
+
+def test_a_pattern_without_files_is_reported(project: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    assert wasmize("nothing/*.wasm") == []
+    assert "does not match any files" in capsys.readouterr().err

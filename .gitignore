@@ -8,4 +8,4 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 *_wasmext/
-poc_out/
+poc/out/

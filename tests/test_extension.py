@@ -210,7 +210,7 @@ def test_a_cycle_through_an_import_is_collected(ext: Any) -> None:
 
 
 def test_the_module_without_imports_takes_no_arguments(build_extension: Builder) -> None:
-    simple = build_extension(DATA.parent.parent / "wasm" / "simple.wasm", "simple_ext")
+    simple = build_extension(DATA / "simple.wasm", "simple_ext")
     assert simple.Instance().add(3, 4) == 7
     with pytest.raises(TypeError):
         simple.Instance({"env": {}})

@@ -12,7 +12,7 @@ import pytest
 
 from .conftest import DATA
 
-SIMPLE = DATA.parent.parent / "wasm" / "simple.wasm"
+SIMPLE = DATA / "simple.wasm"
 
 
 def built(folder: Path, stem: str, *, recursive: bool = False) -> list[Path]:

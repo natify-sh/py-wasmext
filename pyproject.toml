@@ -9,7 +9,8 @@ description = "Turn WebAssembly modules into native CPython extensions (wasm2c),
 readme = "README.md"
 requires-python = ">=3.11"
 keywords = ["webassembly", "wasm", "wasm2c", "extension", "cibuildwheel"]
-license-files = ["NOTICE.md"]
+license = "MIT"
+license-files = ["LICENSE", "NOTICE.md"]
 classifiers = [
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",
@@ -48,8 +49,8 @@ testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 120
-# The proof-of-concept scripts predate the package.
-extend-exclude = ["poc_build.py", "bench", "glue", "build", "poc_out"]
+# The proof of concept (poc/) predates the package.
+extend-exclude = ["poc", "build"]
 
 [tool.pyright]
 include = ["src", "tests"]

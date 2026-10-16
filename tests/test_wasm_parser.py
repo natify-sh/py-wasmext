@@ -8,7 +8,7 @@ import pytest
 
 from wasmext import FuncType, GlobalType, Limits, TableType, WasmError, parse
 
-WASM_DIR = Path(__file__).resolve().parent.parent / "wasm"
+WASM_DIR = Path(__file__).resolve().parent / "data"
 HEADER = b"\0asm\x01\x00\x00\x00"
 
 I32, I64, F32, F64, V128, FUNCREF, EXTERNREF = 0x7F, 0x7E, 0x7D, 0x7C, 0x7B, 0x70, 0x6F

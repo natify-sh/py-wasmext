@@ -16,7 +16,7 @@ from wasmext import GenError, wasmize
 
 from .conftest import DATA
 
-SIMPLE = DATA.parent.parent / "wasm" / "simple.wasm"
+SIMPLE = DATA / "simple.wasm"
 SETUP = """\
 from setuptools import setup
 from wasmext import wasmize

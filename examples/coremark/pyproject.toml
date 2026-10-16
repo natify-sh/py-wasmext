@@ -16,3 +16,8 @@ packages = ["coremark"]
 
 [tool.setuptools.package-data]
 coremark = ["py.typed"]
+
+[tool.cibuildwheel]
+build = "cp311-* cp312-* cp313-* cp314-*"
+test-requires = "pytest"
+test-command = "pytest {package}/tests"

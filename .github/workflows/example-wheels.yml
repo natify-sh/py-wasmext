@@ -1,0 +1,94 @@
+name: Example wheels
+
+# examples/coremark is a package whose extension is made by wasmext from a .wasm: cibuildwheel builds its wheels on
+# every platform, with the wasmext of this checkout (it is not on PyPI yet) as the build tool.
+
+on:
+  push:
+    paths-ignore:
+      - "**.md"
+  pull_request:
+    paths-ignore:
+      - "**.md"
+  workflow_dispatch:
+
+concurrency:
+  group: example-wheels-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-wasmext:
+    name: Build the wasmext wheel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # setuptools-scm
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          python-version: "3.11"
+          github-token: ${{ github.token }}
+
+      - name: Build the wheel
+        run: uv build --wheel --out-dir dist
+        shell: bash
+
+      - name: Upload the wheel
+        uses: actions/upload-artifact@v7
+        with:
+          name: wasmext-wheel
+          path: ./dist
+          retention-days: 7
+
+  build-example:
+    name: coremark on ${{ matrix.name }}
+    needs: build-wasmext
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: "Linux x64", os: ubuntu-latest, archs: "x86_64" }
+          - { name: "Linux ARM64", os: ubuntu-24.04-arm, archs: "aarch64" }
+          - { name: "Windows x64", os: windows-latest, archs: "AMD64" }
+          - { name: "Windows ARM64", os: windows-11-arm, archs: "ARM64" }
+          - { name: "macOS Apple Silicon", os: macos-26, archs: "arm64" }
+          - { name: "macOS Intel", os: macos-26-intel, archs: "x86_64" }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Download the wasmext wheel
+        uses: actions/download-artifact@v8
+        with:
+          name: wasmext-wheel
+          path: examples/coremark/deps
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          github-token: ${{ github.token }}
+
+      - name: Build the wheels
+        env:
+          # Without build isolation, so that the wasmext of the checkout (and wabt-package, its dependency, from PyPI)
+          # is what the build uses.
+          CIBW_BUILD_FRONTEND: "build; args: --no-isolation"
+          CIBW_BEFORE_BUILD: pip install --find-links {package}/deps wasmext setuptools
+        run: uvx cibuildwheel examples/coremark --output-dir wheelhouse --archs ${{ matrix.archs }}
+        shell: bash
+
+      - name: list ./wheelhouse
+        run: ls ./wheelhouse
+        shell: bash
+
+      - name: Upload the wheels
+        uses: actions/upload-artifact@v7
+        with:
+          name: coremark-wheels-${{ matrix.os }}
+          path: ./wheelhouse
+          retention-days: 7

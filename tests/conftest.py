@@ -6,6 +6,7 @@ from __future__ import annotations
 import importlib
 import importlib.util
 import os
+import platform
 import shutil
 import subprocess
 import sys
@@ -40,10 +41,12 @@ def wabt() -> Path:
 @pytest.fixture(scope="session")
 def build_extension(wabt: Path, tmp_path_factory: pytest.TempPathFactory) -> Callable[[Path, str], ModuleType]:
     cc = shutil.which(os.environ.get("CC", "cc")) or shutil.which("gcc") or shutil.which("clang")
-    if cc is None or sys.platform == "win32":
+    # platform.system(), not sys.platform: pyright takes a comparison with sys.platform as fixed and then does not
+    # type-check what follows the skip when it runs on that platform.
+    if cc is None or platform.system() == "Windows":
         pytest.skip("no C compiler of the cc kind")
     # a macOS extension finds the Python symbols in the interpreter that imports it
-    link_flags: list[str] = ["-undefined", "dynamic_lookup"] if sys.platform == "darwin" else []
+    link_flags: list[str] = ["-undefined", "dynamic_lookup"] if platform.system() == "Darwin" else []
     out = tmp_path_factory.mktemp("ext")
     sys.path.insert(0, str(out))
 

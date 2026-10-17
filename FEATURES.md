@@ -124,6 +124,9 @@ In this order (the first ones are small):
 2. **SIMD**: the wabt-package ships the simde headers of the commit WABT 1.0.42 pins (`71fd833d…`; `include_dir()`, `simde_commit()`), wasmext adds that directory to the build when the C includes `simde/` (a hook for the dependencies of the C, like the one for the runtime), then
    `v128` ↔ `bytes` of 16 in signatures. Note: simde uses native instructions only if the compiler flags allow, so wheels for the baseline
    x86-64 run SIMD in portable code.
+   **Postponed**: it waits for a release of the wabt-package that carries simde (PR #2, `ci/more-wheel-platforms`), which is not
+   possible yet. Nothing of it is implemented in wasmext. When the release is out: raise the minimum in `wabt-package>=…`,
+   write the hook, turn the strict xfail `2.0 SIMD…` into a normal test, then `v128`. Relaxed SIMD stays out (wasm2c aborts).
 3. **Shared objects**, in this order:
    1. `Global`: an object with `value` (read-write if mutable) that an instance imports, and exported globals that can be passed on.
       This is the first because the runtime of wasm2c already asks the host for a pointer to the value of an imported global, so the

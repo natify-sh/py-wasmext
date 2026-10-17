@@ -33,6 +33,10 @@ inst.add(2, 3)  # the exports are methods; an exported memory is a memoryview at
 The command line works in the manner of `cythonize`: `wasmext 'src/mypkg/*.wasm'` writes the C, `wasmext -i ...` also builds
 the extensions in place, `-b` under `build/` (`wasmext --help`).
 
+`wasmext inspect 'src/mypkg/*.wasm'` says what a module imports (what the host has to provide) and exports, which exports become
+methods of `Instance` and which are left out, and why. It writes nothing and needs no `wasm2c`; the exit status is 1 for a module
+that cannot be wrapped.
+
 ### Native or abi3 wheels
 
 The interpreter that builds decides, as it does in Cython: where it has a stable ABI (CPython 3.11 and later) the extension is

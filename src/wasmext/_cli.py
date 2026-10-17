@@ -3,12 +3,14 @@
 wasmext src/mypkg/*.wasm          write the C beside each .wasm (what setup.py's wasmize() does), build nothing
 wasmext -i src/mypkg/*.wasm       ... and build the extensions in place, next to the .wasm files
 wasmext -b ...                    ... and build them under build/ (as `setup.py build_ext`)
+wasmext inspect src/mypkg/*.wasm  say what each module imports and exports, and what wasmext makes of it
 """
 
 from __future__ import annotations
 
 import argparse
 import copy
+import glob
 import os
 import shutil
 import sys
@@ -18,6 +20,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ._gen import GenError
+from ._inspect import read
 from ._wasm import WasmError
 from ._wasmize import _wasmize  # pyright: ignore[reportPrivateUsage]
 
@@ -62,8 +65,31 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _inspect_main(argv: Sequence[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="wasmext inspect",
+        description="Say what a WebAssembly module imports and exports and what wasmext would make of it "
+        "(nothing is written; wasm2c is not needed). Exit status 1 if some module cannot be wrapped.",
+    )
+    parser.add_argument("files", nargs="+", metavar="FILE", help=".wasm file or glob pattern")
+    args = parser.parse_args(argv)
+    paths = sorted({Path(p) for pattern in args.files for p in (glob.glob(pattern, recursive=True) or [pattern])})
+    status = 0
+    for i, path in enumerate(paths):
+        try:
+            report, ok = read(path)
+        except OSError as exc:
+            report, ok = f"{path.as_posix()}: {exc.strerror or exc}\n", False
+        print(("\n" if i else "") + report, end="")
+        status |= 0 if ok else 1
+    return status
+
+
 def main(argv: Sequence[str] | None = None) -> int:
-    args = _parser().parse_args(argv)
+    given = list(sys.argv[1:] if argv is None else argv)
+    if given[:1] == ["inspect"]:  # a file called `inspect` can still be given as ./inspect
+        return _inspect_main(given[1:])
+    args = _parser().parse_args(given)
     try:
         made = _wasmize(
             args.files,

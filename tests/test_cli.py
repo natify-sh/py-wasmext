@@ -171,3 +171,28 @@ def test_inplace_removes_the_stale_variant_that_would_shadow_the_new_one(project
         check=True,
     ).stdout.strip()
     assert out == only.name
+
+
+def test_inspect_says_what_a_module_has_and_what_is_left_out(tmp_path: Path) -> None:
+    shutil.copy(DATA / "features.wasm", tmp_path / "f.wasm")
+    done = wasmext(tmp_path, None, "inspect", "f.wasm")
+    assert done.returncode == 0, done.stderr
+    text = " ".join(done.stdout.split())  # the columns are aligned with spaces: compare the words
+    assert "env.twice func (f64) -> f64 ok" in text
+    assert "add func (i32, i32) -> i32 method of Instance" in text
+    assert "pair func () -> i32, i32 not exposed: has several results" in text
+    assert "tbl table funcref, 1 element not exposed: a table" in text
+    assert "result: can be wrapped, but some exports are left out" in text
+    assert not (tmp_path / "f_wasmext").exists()  # nothing is written
+
+
+def test_inspect_exits_nonzero_for_what_cannot_be_wrapped(tmp_path: Path) -> None:
+    # (type (func (param v128))) (import "e" "f" (func (type 0)))
+    module = b"\0asm\1\0\0\0" + bytes([1, 5, 1, 0x60, 1, 0x7B, 0]) + bytes([2, 7, 1, 1, 0x65, 1, 0x66, 0, 0])
+    (tmp_path / "v.wasm").write_bytes(module)
+    (tmp_path / "junk.wasm").write_bytes(b"not wasm")
+    bad = wasmext(tmp_path, None, "inspect", "v.wasm")
+    assert bad.returncode == 1 and "e.f" in bad.stdout and "uses v128" in bad.stdout
+    assert "result: cannot be wrapped" in bad.stdout
+    junk = wasmext(tmp_path, None, "inspect", "junk.wasm", "missing.wasm")
+    assert junk.returncode == 1 and "not a module wasmext can read" in junk.stdout and "missing.wasm" in junk.stdout

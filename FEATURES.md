@@ -86,8 +86,27 @@ a call from Python and of a call back into Python was not measured.
 Run locally on Linux x86-64, Python 3.11: the whole suite with gcc 13.3 and with clang 18.1 (`pytest`), `ruff`, `pyright`.
 By hand, not in the suite: an abi3 build for a 32-bit CPython 3.12 (`gcc -m32`) of a memory64 module.
 
-**Not confirmed**: the CI matrix (cp311 abi3 and cp314t on Linux, macOS, Windows, x86-64 and ARM64) for the recent
-changes — the runners were out of minutes — and MSVC, AppleClang, free-threaded builds.
+### Platforms where a native extension was built and tested
+
+| Platform | What was built | Evidence |
+|---|---|---|
+| Linux x86-64, glibc | cp311 abi3 and cp314t, gcc 13.3 and clang 18.1 | local, whole suite; CI |
+| Linux x86-64, musl | cp311 abi3 and cp314t (`musllinux_1_2`) | CI, the coremark example |
+| Linux ARM64 | cp311 abi3 and cp314t | CI job passed (wheel list not inspected) |
+| Windows x64 (MSVC) | cp311 abi3 and cp314t | CI job passed (wheel list not inspected) |
+| Windows ARM64 (MSVC) | cp311 abi3 and cp314t | CI job passed (wheel list not inspected) |
+| macOS Apple Silicon, macOS Intel | cp311 abi3 and cp314t | CI jobs passed (wheel lists not inspected) |
+| Linux i386, CPython 3.12 | one abi3 memory64 module, by hand | local, not in the suite |
+| Pyodide 4.0.9 (CPython 3.13, wasm32) | the coremark example; its 2 tests passed | local, `cibuildwheel --platform pyodide` |
+| Android arm64-v8a (CPython 3.13, NDK 27) | the coremark example wheel is built; tests are skipped | local; **not run** |
+
+The CI rows are from the last green run of `example-wheels.yml` (commit `0e251d8`, cibuildwheel, the example's tests
+run on each wheel). Everything added after that commit (signed results, multi-value, exceptions, globals, guard pages,
+`wasmimport`, the reference CoreMark) was checked only locally on Linux x86-64 and, for the example, on Pyodide.
+
+**Not confirmed**: the CI matrix for the changes after `0e251d8` — the runners were out of minutes — and PyPy, iOS,
+Linux armv7l/ppc64le/s390x/riscv64 and Windows x86 for wasmext itself (the wabt-package wheels for some of them are
+a separate matter, see its README).
 
 ## Known gaps
 

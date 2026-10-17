@@ -113,7 +113,6 @@ CASES = [
         "3.0 exceptions",
         '(module (tag $e) (func (export "f") (result i32) try (result i32) throw $e catch $e i32.const 1 end))',
         expect=1,
-        gap="the module builds but does not load: wasm-rt-exceptions-impl.c is not compiled in",
     ),
     Case(
         "3.0 relaxed SIMD, inside the module",
@@ -154,3 +153,31 @@ def test_feature(case: Case, tmp_path: Path, wabt: Path) -> None:
     ran = subprocess.run([sys.executable, "-c", code], cwd=tmp_path, capture_output=True, text=True, check=False)
     assert ran.returncode == 0, ran.stderr[-400:]
     assert ran.stdout.strip() == repr(case.expect)
+
+
+def test_an_exception_nobody_catches_is_a_trap(tmp_path: Path, wabt: Path) -> None:
+    package = tmp_path / "pkg"
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "m.wat").write_text(
+        '(module (tag $e (param i32)) (func (export "boom") i32.const 1 throw $e)'
+        ' (func (export "ok") (result i32) try (result i32) i32.const 7 throw $e catch $e end))',
+        encoding="utf-8",
+    )
+    subprocess.run([wabt / "bin" / "wat2wasm", "m.wat", "-o", "m.wasm"], cwd=package, check=True)
+    built = wasmext(tmp_path, wabt, "-i", "-q", "pkg/m.wasm")
+    assert built.returncode == 0, built.stderr[-600:]
+    code = (
+        "import pkg.m\n"
+        "instance = pkg.m.Instance()\n"
+        "print(instance.ok())\n"  # the payload of the exception is what the handler gets: 7
+        "try:\n"
+        "    instance.boom()\n"
+        "except pkg.m.Trap as exc:\n"
+        "    print('trap:', exc)\n"
+        "print(instance.ok())\n"  # and the instance is still usable
+    )
+    ran = subprocess.run([sys.executable, "-c", code], cwd=tmp_path, capture_output=True, text=True, check=False)
+    assert ran.returncode == 0, ran.stderr[-400:]
+    lines = ran.stdout.split("\n")
+    assert lines[0] == "7" and lines[1].startswith("trap:") and lines[2] == "7"

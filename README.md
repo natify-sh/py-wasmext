@@ -31,7 +31,7 @@ To **build** an extension (`pip install` from an sdist, `wasmext`, `wasmimport`,
 - **a C compiler** for your platform: gcc or clang (Linux, macOS: the Xcode command line tools), or MSVC (Windows; the
   Build Tools for Visual Studio). The C of `wasm2c` and the glue are plain C (C99 and GNU extensions on gcc/clang);
 - **the Python development headers** (`Python.h`): `python3-dev` / `python3-devel` on Linux distributions; the python.org
-  installers, `uv` and `cibuildwheel` have them; the stable-ABI build (abi3) needs only the headers, not `libpython`;
+  installers, `uv` and `cibuildwheel` have them; on Linux and macOS an extension is not linked against `libpython`, so the headers are all it needs (on Windows the `libs` directory of the installation too);
 - **setuptools** (the extensions are built with it), and **wasm2c** with its runtime, which come from the
   [wabt-package](https://github.com/ballistics-lab/wabt-package) that `wasmext` depends on (nothing to install by hand,
   and no WABT build);

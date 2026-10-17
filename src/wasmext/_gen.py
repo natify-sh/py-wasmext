@@ -8,11 +8,11 @@ The extension has a class `Instance`: `Instance(imports)` instantiates the modul
 callable}}`, needed only if the module imports functions), the exported functions are its methods and an exported
 memory is a read-write `memoryview` attribute. A trap is `Trap` (a `RuntimeError`), a missing import `LinkError`. Integers
 are what WebAssembly has: arguments are taken modulo 2**32 / 2**64 and results are signed (as in the JavaScript API). An
-exported function with several results gives them back as a tuple.
+exported function with several results gives them back as a tuple; an imported one returns one.
 
 The C uses only the limited API (PEP 384, 3.11+), so defining `Py_LIMITED_API` builds an abi3 extension.
 
-Not yet: v128, reference types, several results of an imported function, memory64, imported memories/tables/globals.
+Not yet: v128, reference types, memory64, imported memories/tables/globals.
 """
 
 from __future__ import annotations
@@ -109,8 +109,8 @@ def _signature(func: FuncType) -> str:
 
 
 def _why_not(func: FuncType, *, several_results: bool = False) -> str | None:
-    """Why the glue cannot take a function of this type, or None. An exported function may have several results (they
-    come back as a tuple); an imported one may not (yet)."""
+    """Why the glue cannot take a function of this type, or None. A function may have several results (an exported one
+    gives them back as a tuple, an imported one is to return a tuple) when `several_results` is true."""
     bad = sorted({t for t in (*func.params, *func.results) if t not in _CTYPE})
     if bad:
         return f"uses {', '.join(bad)}"
@@ -150,7 +150,7 @@ def generate(module: Module, name: str) -> Glue:
     for imp in module.imports:
         if imp.kind != "func" or not isinstance(imp.type, FuncType):
             raise GenError(f"import {imp.module}.{imp.name}: an imported {imp.kind} is not supported yet")
-        reason = _why_not(imp.type)
+        reason = _why_not(imp.type, several_results=True)
         if reason:
             raise GenError(f"import {imp.module}.{imp.name} {reason}: not supported yet")
         if imp.module not in hosts:
@@ -252,14 +252,30 @@ def generate(module: Module, name: str) -> Glue:
     for imp in imports:
         func = imp.func
         params = "".join(f", {_CTYPE[t]} a{i}" for i, t in enumerate(func.params))
-        ret = _CTYPE[func.results[0]] if func.results else "void"
+        several = len(func.results) > 1
+        codes = "".join(_MULTI_CODE[t] for t in func.results)
+        ret = f"struct wasm_multi_{codes}" if several else _CTYPE[func.results[0]] if func.results else "void"
         mod_struct = f"struct w2c_{mangle(imp.module, module=True)}"
         add(f"{ret} {imp.symbol}({mod_struct} *h{params}) {{")
         fmt = "".join(_BUILD[t][0] for t in func.params)
         casts = "".join(f", {_BUILD[t][1].format(f'a{i}')}" for i, t in enumerate(func.params))
         add(f'    PyObject *r = PyObject_CallFunction(h->fn[{imp.slot}], "{fmt}"{casts});')
         add("    if (r == NULL) wasm_rt_trap(PY_ERROR_TRAP);")
-        if func.results:
+        if several:
+            n = len(func.results)
+            what = _c_string(f"{imp.module}.{imp.field}() must return a tuple of {n} numbers")
+            add(f"    {ret} v = {{0}};")
+            add(f"    if (!PyTuple_Check(r) || PyTuple_Size(r) != {n}) {{")
+            add("        Py_DECREF(r);")
+            add(f"        PyErr_SetString(PyExc_TypeError, {what});")
+            add("        wasm_rt_trap(PY_ERROR_TRAP);")
+            add("    }")
+            for k, rt in enumerate(func.results):
+                add(f"    v.{_MULTI_CODE[rt]}{k} = {_TO_WASM[rt].format(f'PyTuple_GetItem(r, {k})')};")
+            add("    Py_DECREF(r);")
+            add("    if (PyErr_Occurred()) wasm_rt_trap(PY_ERROR_TRAP);")
+            add("    return v;")
+        elif func.results:
             rt = func.results[0]
             add(f"    {ret} v = {_TO_WASM[rt].format('r')};")
             add("    Py_DECREF(r);")

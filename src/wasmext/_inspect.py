@@ -37,7 +37,7 @@ def _describe(kind: str, thing: FuncType | TableType | Limits | GlobalType) -> s
 def _verdict_of_import(kind: str, thing: FuncType | TableType | Limits | GlobalType) -> str:
     if kind != "func" or not isinstance(thing, FuncType):
         return f"not supported yet: an imported {kind}"
-    reason = _why_not(thing)
+    reason = _why_not(thing, several_results=True)
     return f"not supported yet: {reason}" if reason else "ok"
 
 

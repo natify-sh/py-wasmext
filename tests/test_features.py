@@ -181,3 +181,31 @@ def test_an_exception_nobody_catches_is_a_trap(tmp_path: Path, wabt: Path) -> No
     assert ran.returncode == 0, ran.stderr[-400:]
     lines = ran.stdout.split("\n")
     assert lines[0] == "7" and lines[1].startswith("trap:") and lines[2] == "7"
+
+
+def test_an_imported_function_returns_several_results_as_a_tuple(tmp_path: Path, wabt: Path) -> None:
+    package = tmp_path / "pkg"
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "m.wat").write_text(
+        '(module (import "env" "pair" (func $pair (param i32) (result i32 f64 i64)))'
+        ' (func (export "f") (param i32) (result i32 f64 i64) local.get 0 call $pair))',
+        encoding="utf-8",
+    )
+    subprocess.run([wabt / "bin" / "wat2wasm", "m.wat", "-o", "m.wasm"], cwd=package, check=True)
+    built = wasmext(tmp_path, wabt, "-i", "-q", "pkg/m.wasm")
+    assert built.returncode == 0, built.stderr[-600:]
+    code = """
+import pkg.m
+i = pkg.m.Instance({'env': {'pair': lambda n: (n + 1, 2.5, -3)}})
+print(i.f(4))
+for bad in (lambda n: (1, 2), lambda n: 7, lambda n: (1, 'x', 3)):
+    try:
+        pkg.m.Instance({'env': {'pair': bad}}).f(1)
+    except TypeError:
+        print('TypeError')
+print(i.f(5))
+"""
+    ran = subprocess.run([sys.executable, "-c", code], cwd=tmp_path, capture_output=True, text=True, check=False)
+    assert ran.returncode == 0, ran.stderr[-500:]
+    assert ran.stdout.splitlines() == ["(5, 2.5, -3)", "TypeError", "TypeError", "TypeError", "(6, 2.5, -3)"]

@@ -67,6 +67,7 @@ Status: **done** (works, tested) · **partly** (see the note) · **not yet** (pl
 | Example: CoreMark | done | reference CoreMark of EEMBC, built with `zig cc` by `examples/coremark/build_wasm.py` |
 | simde headers | not yet | see the plan |
 | Android, Pyodide wheels | not yet | not tried |
+| Import hook, like `pyximport` (`import wasmimport; wasmimport.install()`; the name is proposed, not decided) | not yet | `import mod` finds `mod.wasm`, builds it into a cache directory and loads it; a development tool (it runs a C compiler on import) |
 | Configuration in `pyproject.toml` only | not yet | |
 | Published on PyPI | not yet | until then the example is built with `--find-links` to the wheel of wasmext (see `example-wheels.yml`) |
 
@@ -104,8 +105,10 @@ In this order (the first ones are small):
    All three need a way for extensions to recognise each other's objects.
 4. **Threads**: `--enable-threads`, C11 atomics (and MSVC), a shared `Memory`, `wasm_rt_init_thread` per thread.
 5. **CI**: the matrix above, once there are minutes; MSVC and macOS problems are expected.
-6. Android and Pyodide wheels; `pyproject.toml` configuration; PyPI; reporting `_addcarry_u64` to WABT.
-7. Compatibility with the wasm3/pywasm3 examples; WASI (deferred).
+6. **Import hook** (`wasmimport`, name to be confirmed): a finder after the ordinary ones, built on `_wasmize` and `build_ext` into a cache directory
+   (the rules of regeneration are the same), no `.pyi` beside the source by default, `install()`/`uninstall()` and the options of `wasmize()`.
+7. Android and Pyodide wheels; `pyproject.toml` configuration; PyPI; reporting `_addcarry_u64` to WABT.
+8. Compatibility with the wasm3/pywasm3 examples; WASI (deferred).
 
 ## Decisions
 

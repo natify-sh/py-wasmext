@@ -54,7 +54,13 @@ CASES = [
         "2.0 multi-value, an exported function",
         '(module (func (export "f") (result i32 i32) i32.const 3 i32.const 4))',
         expect=(3, 4),
-        gap="an exported function with several results is left out",
+    ),
+    Case(
+        "2.0 multi-value, all number types and a parameter",
+        '(module (func (export "f") (param i32) (result f64 i32 i64 f32)'
+        " f64.const 1.5 local.get 0 i64.const -2 f32.const 0.5))",
+        args=(-7,),
+        expect=(1.5, -7, -2, 0.5),
     ),
     Case(
         "2.0 bulk memory",

@@ -58,7 +58,7 @@ def test_the_committed_wasm_is_the_wat(wabt: Path, tmp_path: Path) -> None:
 
 def test_the_glue_skips_what_it_cannot_expose() -> None:
     glue = generate(parse((DATA / "features.wasm").read_bytes()), "features_ext")
-    assert sorted(glue.skipped) == ["function 'pair' has several results", "global 'answer'", "table 'tbl'"]
+    assert sorted(glue.skipped) == ["global 'answer'", "table 'tbl'"]
 
 
 def test_integers_wrap_as_webassembly_does(ext: Any) -> None:
@@ -71,6 +71,10 @@ def test_integers_wrap_as_webassembly_does(ext: Any) -> None:
     assert inst.add(0xFFFFFFFF, 0) == -1
     assert inst.mul64(2**40, 2**30) == 0  # 2**70 wraps
     assert inst.mul64(-1, 3) == -3
+
+
+def test_several_results_come_back_as_a_tuple(ext: Any) -> None:
+    assert make(ext).pair() == (1, 2)
 
 
 def test_floats(ext: Any) -> None:

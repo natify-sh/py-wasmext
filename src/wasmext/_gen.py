@@ -7,11 +7,12 @@
 The extension has a class `Instance`: `Instance(imports)` instantiates the module (`imports` is `{module: {name:
 callable}}`, needed only if the module imports functions), the exported functions are its methods and an exported
 memory is a read-write `memoryview` attribute. A trap is `Trap` (a `RuntimeError`), a missing import `LinkError`. Integers
-are what WebAssembly has: arguments are taken modulo 2**32 / 2**64 and results are unsigned.
+are what WebAssembly has: arguments are taken modulo 2**32 / 2**64 and results are signed (as in the JavaScript API). An
+exported function with several results gives them back as a tuple.
 
 The C uses only the limited API (PEP 384, 3.11+), so defining `Py_LIMITED_API` builds an abi3 extension.
 
-Not yet: v128, reference types and multiple results in a signature, memory64, imported memories/tables/globals.
+Not yet: v128, reference types, several results of an imported function, memory64, imported memories/tables/globals.
 """
 
 from __future__ import annotations
@@ -107,11 +108,13 @@ def _signature(func: FuncType) -> str:
     return f"({', '.join(func.params)}) -> {', '.join(func.results) or 'None'}"
 
 
-def _why_not(func: FuncType) -> str | None:
+def _why_not(func: FuncType, *, several_results: bool = False) -> str | None:
+    """Why the glue cannot take a function of this type, or None. An exported function may have several results (they
+    come back as a tuple); an imported one may not (yet)."""
     bad = sorted({t for t in (*func.params, *func.results) if t not in _CTYPE})
     if bad:
         return f"uses {', '.join(bad)}"
-    if len(func.results) > 1:
+    if len(func.results) > 1 and not several_results:
         return "has several results"
     return None
 
@@ -164,7 +167,7 @@ def generate(module: Module, name: str) -> Glue:
     for exp in module.exports:
         if exp.kind == "func":
             func = module.all_functions[exp.index]
-            reason = _why_not(func)
+            reason = _why_not(func, several_results=True)
             if reason:
                 skipped.append(f"function {exp.name!r} {reason}")
             else:
@@ -371,7 +374,14 @@ def generate(module: Module, name: str) -> Glue:
         add("    ENTER_WASM(return NULL)")
         call_args = "".join(f", a{j}" for j in range(n))
         call = f"w2c_{prefix}_{mangle(exp_name)}(&self->inst{call_args})"
-        if func.results:
+        if len(func.results) > 1:
+            codes = "".join(_MULTI_CODE[t] for t in func.results)
+            add(f"    struct wasm_multi_{codes} r = {call};")
+            add("    LEAVE_WASM();")
+            fmt = "".join(_BUILD[t][0] for t in func.results)
+            members = "".join(f", {_BUILD[t][1].format(f'r.{_MULTI_CODE[t]}{k}')}" for k, t in enumerate(func.results))
+            add(f'    return Py_BuildValue("({fmt})"{members});')
+        elif func.results:
             add(f"    {_CTYPE[func.results[0]]} r = {call};")
             add("    LEAVE_WASM();")
             add(f"    return {_FROM_WASM[func.results[0]].format('r')};")
@@ -498,6 +508,17 @@ def generate(module: Module, name: str) -> Glue:
 
 
 _PY_TYPE: dict[ValType, str] = {"i32": "int", "i64": "int", "f32": "float", "f64": "float"}
+# wasm2c returns several results in a `struct wasm_multi_<codes>` whose members are `<code><position>`.
+_MULTI_CODE: dict[ValType, str] = {"i32": "i", "i64": "j", "f32": "f", "f64": "d"}
+
+
+def _result_type(func: FuncType) -> str:
+    """The annotation of what a function gives back in Python: None, a number, or a tuple of numbers."""
+    if not func.results:
+        return "None"
+    if len(func.results) == 1:
+        return _PY_TYPE[func.results[0]]
+    return f"tuple[{', '.join(_PY_TYPE[t] for t in func.results)}]"
 
 
 def _usable(name: str) -> bool:
@@ -507,7 +528,7 @@ def _usable(name: str) -> bool:
 
 def _callable_type(func: FuncType) -> str:
     params = ", ".join(_PY_TYPE[t] for t in func.params)
-    result = _PY_TYPE[func.results[0]] if func.results else "None"
+    result = _result_type(func)
     return f"Callable[[{params}], {result}]"
 
 
@@ -542,7 +563,7 @@ def _stub(last: str, funcs: list[tuple[str, FuncType]], memories: list[str], imp
     for name, func in funcs:
         params = "".join(f"arg{i}: {_PY_TYPE[t]}, " for i, t in enumerate(func.params))
         params = f", {params}/" if func.params else ""
-        result = _PY_TYPE[func.results[0]] if func.results else "None"
+        result = _result_type(func)
         if _usable(name):
             lines.append(f"    def {name}(self{params}) -> {result}: ...")
         else:

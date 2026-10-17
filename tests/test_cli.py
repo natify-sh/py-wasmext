@@ -180,7 +180,7 @@ def test_inspect_says_what_a_module_has_and_what_is_left_out(tmp_path: Path) -> 
     text = " ".join(done.stdout.split())  # the columns are aligned with spaces: compare the words
     assert "env.twice func (f64) -> f64 ok" in text
     assert "add func (i32, i32) -> i32 method of Instance" in text
-    assert "pair func () -> i32, i32 not exposed: has several results" in text
+    assert "pair func () -> i32, i32 method of Instance" in text
     assert "tbl table funcref, 1 element not exposed: a table" in text
     assert "result: can be wrapped, but some exports are left out" in text
     assert not (tmp_path / "f_wasmext").exists()  # nothing is written

@@ -112,7 +112,7 @@ def _export_type(module: Module, kind: str, index: int) -> FuncType | TableType 
 
 def _export_verdict(kind: str, thing: FuncType | TableType | Limits | GlobalType) -> str:
     if kind == "func" and isinstance(thing, FuncType):
-        reason = _why_not(thing)
+        reason = _why_not(thing, several_results=True)
         return f"not exposed: {reason}" if reason else "method of Instance"
     if kind == "memory" and isinstance(thing, Limits):
         return "not exposed: memory64" if thing.is64 else "Instance.memory"

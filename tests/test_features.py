@@ -4,6 +4,7 @@ one is closed the test says so and the mark goes."""
 
 from __future__ import annotations
 
+import platform
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -235,3 +236,57 @@ print(i.grow(1), len(i.mem))
     ran = subprocess.run([sys.executable, "-c", code], cwd=tmp_path, capture_output=True, text=True, check=False)
     assert ran.returncode == 0, ran.stderr[-500:]
     assert ran.stdout.splitlines() == ["b'hi' 65536", "42", "1 131072"]
+
+
+def _build_pkg(tmp_path: Path, wabt: Path, wat: str) -> None:
+    package = tmp_path / "pkg"
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "m.wat").write_text(wat, encoding="utf-8")
+    subprocess.run([wabt / "bin" / "wat2wasm", "m.wat", "-o", "m.wasm"], cwd=package, check=True)
+    built = wasmext(tmp_path, wabt, "-i", "-q", "pkg/m.wasm")
+    assert built.returncode == 0, built.stderr[-600:]
+
+
+# The memory is reserved, not touched: the test needs address space (Linux overcommits), not 4 GiB of RAM.
+@pytest.mark.skipif(platform.system() != "Linux", reason="allocates a memory of more than 4 GiB")
+def test_memory64_addresses_above_4_gib(tmp_path: Path, wabt: Path) -> None:
+    _build_pkg(
+        tmp_path,
+        wabt,
+        '(module (memory (export "mem") i64 65538 65600)'
+        ' (func (export "put") (param i64 i32) local.get 0 local.get 1 i32.store)'
+        ' (func (export "get") (param i64) (result i32) local.get 0 i32.load))',
+    )
+    code = """
+import pkg.m
+i = pkg.m.Instance()
+a = 2**32 + 12
+i.put(a, 0x12345678)
+print(len(i.mem), i.get(a), bytes(i.mem[a:a + 4]).hex())
+i.mem[a:a + 4] = bytes.fromhex('efbeadde')
+print(i.get(a))
+"""
+    ran = subprocess.run([sys.executable, "-c", code], cwd=tmp_path, capture_output=True, text=True, check=False)
+    assert ran.returncode == 0, ran.stderr[-500:]
+    assert ran.stdout.splitlines() == [f"{65538 * 65536} 305419896 78563412", "-559038737"]  # 0xDEADBEEF as an i32
+
+
+@pytest.mark.skipif(platform.system() != "Linux", reason="the memory of 64 TiB is refused by Linux")
+@pytest.mark.xfail(
+    strict=True,
+    reason="wasm_rt_allocate_memory of wasm2c calls abort() when the initial memory cannot be allocated",
+)
+def test_a_memory_that_cannot_be_allocated_is_a_memory_error(tmp_path: Path, wabt: Path) -> None:
+    _build_pkg(
+        tmp_path, wabt, '(module (memory (export "mem") i64 1073741824) (func (export "f") (result i32) i32.const 1))'
+    )
+    code = """
+import pkg.m
+try:
+    pkg.m.Instance()
+except MemoryError:
+    print('MemoryError')
+"""
+    ran = subprocess.run([sys.executable, "-c", code], cwd=tmp_path, capture_output=True, text=True, check=False)
+    assert ran.returncode == 0 and ran.stdout.strip() == "MemoryError"  # now the process dies with SIGABRT

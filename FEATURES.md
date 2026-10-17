@@ -141,6 +141,65 @@ In this order (the first ones are small):
 6. Android and Pyodide in the CI matrix of the example (they build locally, see above); `pyproject.toml` configuration; PyPI; reporting `_addcarry_u64` to WABT.
 7. Compatibility with the wasm3/pywasm3 examples; WASI (deferred).
 
+## Design: linking instances (draft, nothing of it is built)
+
+The goal is the "shared objects" of the plan: an instance uses a global, a memory, a table or a function of another instance.
+wasmext stays native: no `Global`/`Memory`/`Table` classes copied from the JavaScript API (as `wasmhost` has, because there an
+engine owns the objects), but the exports of one instance given as the imports of another.
+
+```python
+a = A.Instance()
+b = B.Instance({"env": a})        # imports of module "env" are taken, by name, from the exports of a
+```
+
+**What wasm2c gives.** The C of a module that imports a global, a memory or a table keeps a *pointer* to it (`u32 *w2c_env_g`,
+`wasm_rt_memory_t *w2c_env_mem`, `wasm_rt_funcref_table_t *w2c_env_tab`), taken at instantiation from the accessors
+`w2c_env_g(struct w2c_env *)` that the host defines; an exported one has the same shape (`u32 *w2c_m_eg(w2c_m *)`,
+`wasm_rt_memory_t *w2c_m_em(w2c_m *)`, `wasm_rt_funcref_table_t *w2c_m_et(w2c_m *)`). So linking is handing the pointer
+of the exporter to the importer: one value, one memory, one table, no copy, no Python in between. An imported function is
+`w2c_env_f(struct w2c_env *, args)`: the glue can call the exported function of the other module itself (its instance pointer is
+the first argument) instead of a Python callable.
+
+**Mixing.** `{"env": a}` takes everything the import module "env" needs from `a`; all or nothing, to begin with. A dict works
+as now (callables and numbers). Taking one name from `a` and the rest from Python needs a way to point at an export (an
+attribute `a.g` is a number, the pointer is not reachable from Python); a marker such as `a.export("g")` is the candidate, left
+open below.
+
+**Recognising an instance of another extension.** The types are not the same objects in two extensions, so `isinstance` cannot
+tell. The instance carries a capsule (a `PyCapsule`, usable in the limited API) with a tag and a version, which points to a
+table of the exports: for each export its kind, value type, mutability and the pointer, and for a function the C function and
+the instance pointer. The format is a contract between versions of wasmext, so it is versioned from the first day; an unknown
+version is a `LinkError`, not a guess.
+
+**Checks, all at instantiation, all `LinkError`**: the export exists; it has the kind the import asks for (a function is not a
+global); the types are equal (`i32` ≠ `i64`, mutable ≠ immutable, the signature of a function); for a memory, the limits of the
+import are satisfied (initial and maximum pages, memory64 equal); for a table, the element type and limits.
+
+**Lifetime.** The importer holds a strong reference to the exporter, so the pointers stay valid as long as it lives. A cycle
+(a imports from b and b from a) is not possible at instantiation, because an instance has to exist before it is given; an
+instance takes part in the cycle collector already, and the reference is visited in `tp_traverse` and cleared in `tp_clear`.
+`wasm2c_<m>_free` of the exporter must not run while an importer lives: guaranteed by the reference.
+
+**Memory.** The memory object is the same, so `a.mem` and `b.mem` are `memoryview`s of the same bytes. A `grow` by either is seen by
+both (the struct is shared); a view taken before the grow is the old size, as it is today (a new one after).
+
+**Functions between instances.** The glue of the importer calls `w2c_<provider>_<name>` of the other extension through the table of
+the capsule, so the traps cross: a trap in the callee unwinds to the call from Python, as when a Python callable calls back. The
+jump buffer is per thread and the call goes on the same stack, so the existing `ENTER_WASM`/save-and-restore applies; to be checked
+with a test of a trap two instances deep.
+
+**Not covered (and why that is fine for now)**: a global, memory or table made by the host with no module behind it (a small
+object would be needed; postponed until somebody needs it); `externref` tables; threads and `shared` memory (the pointer is shared,
+but not made atomic: that is plan item 4 and changes the layout, so this design must not rely on plain reads of a mutable global
+once threads exist); instances from different wasmext *builds* with different wasm2c runtimes (the structs of `wasm-rt.h` have to
+match: the capsule carries the version of the runtime and compares it).
+
+**Order**: 1. imported mutable globals from an exporting instance (smallest: a pointer and a type check; also removes the "refused
+when the extension is made" for them); 2. memories; 3. functions; 4. tables.
+
+**Open questions**: the name of the marker helper (or whether `{"env": a}` only, all or nothing, is enough to begin with); whether
+the format of the capsule is public API or private until the second user of it exists (proposal: private, documented, versioned).
+
 ## Decisions
 
 - **Platforms.** `wasmext` is a pure Python wheel (`py3-none-any`) that depends on the wabt-package, so it installs wherever the

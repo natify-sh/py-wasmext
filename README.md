@@ -82,6 +82,11 @@ abi3 is impossible, and says so); `WASMEXT_LIMITED_API=0` turns abi3 off for a `
 wasmext, so nothing else needs to be set (a `[tool.distutils.bdist_wheel] py-limited-api` of the project wins). The glue uses only
 the limited API, so either kind builds from the same C.
 
+The C that wasmext writes (`<name>_wasmext/`) and the `.wasm` are the sources of the extension, not part of it. setuptools puts
+the sources of an extension into the manifest, and `include-package-data` (on by default in a `pyproject.toml`) then ships them in
+the wheel: set `include-package-data = false` under `[tool.setuptools]` and name what you do ship in `package-data` (the stub,
+`py.typed`), as `examples/coremark` does. The sdist keeps them, so that it builds without `wasm2c`.
+
 [`examples/coremark`](examples/coremark) is a package built that way: three lines of `setup.py`, and `cibuildwheel` builds its
 wheels. The build needs a C compiler and `wasm2c` (the wabt-package, or `WASMEXT_WABT`: a directory with its `bin/` and
 `wasm2c/`).

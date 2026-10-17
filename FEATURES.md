@@ -71,6 +71,15 @@ Status: **done** (works, tested) · **partly** (see the note) · **not yet** (pl
 | Configuration in `pyproject.toml` only | not yet | |
 | Published on PyPI | not yet | until then the example is built with `--find-links` to the wheel of wasmext (see `example-wheels.yml`) |
 
+## Speed
+
+Compiled ahead of time (wasm2c, then the C compiler), so there is no engine and no JIT at run time. CoreMark (reference CoreMark
+of EEMBC, 2K performance run), one machine, runs alternated, gcc 13 for the native C and for the extension: the extension was
+about the same as the native C, +4% to +13% on three alternating runs (clang 18: the extension about 5% slower than the native gcc
+and 3% faster than the native clang). That the extension should be faster than the C it comes from is not explained; read it as
+"on a par with". With `--no-guard-pages` (checks in code, not by the MMU) the same benchmark was about 30% slower. The cost of
+a call from Python and of a call back into Python was not measured.
+
 ## Verified, and not
 
 Run locally on Linux x86-64, Python 3.11: the whole suite with gcc 13.3 and with clang 18.1 (`pytest`), `ruff`, `pyright`.

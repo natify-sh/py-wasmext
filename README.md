@@ -3,6 +3,16 @@
 Turn WebAssembly modules into **native CPython extensions**, in the manner of Cython: the module runs without a
 WebAssembly engine at run time (no `wasmtime`, no `node` to install next to it).
 
+This is **ahead-of-time (AOT) compilation**: the WebAssembly is translated to C and compiled to machine code when the
+extension is built, not interpreted or compiled by a JIT while the program runs. So what you get is the speed of compiled
+C with little overhead of its own: what remains is what WebAssembly itself requires (every memory access is checked, by
+guard pages by default; traps) and the cost of crossing between Python and the module (converting arguments and results
+on a call, and a call into Python for each import the module uses). The code of the module should not be called in a
+loop from Python for tiny pieces of work; give it the work in larger pieces. On CoreMark the extension was on a par with the
+same benchmark compiled as C directly (within the noise of the measurement, on one machine: see [FEATURES.md](FEATURES.md)).
+The price of AOT is that the `.wasm` is fixed when the extension is built: a module cannot be loaded at run time (that is what
+an engine, or `wasmimport` as a development tool, is for), and building needs a C compiler.
+
 ```
 module.wasm --wasm2c--> C + glue --C compiler--> module.cpython-3xx-....so | .pyd
 ```

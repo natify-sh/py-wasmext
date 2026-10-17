@@ -58,7 +58,7 @@ def test_the_committed_wasm_is_the_wat(wabt: Path, tmp_path: Path) -> None:
 
 def test_the_glue_skips_what_it_cannot_expose() -> None:
     glue = generate(parse((DATA / "features.wasm").read_bytes()), "features_ext")
-    assert sorted(glue.skipped) == ["global 'answer'", "table 'tbl'"]
+    assert sorted(glue.skipped) == ["table 'tbl'"]
 
 
 def test_integers_wrap_as_webassembly_does(ext: Any) -> None:

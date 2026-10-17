@@ -328,3 +328,48 @@ def test_a_limit_on_address_space(guard_pages: bool, tmp_path: Path, wabt: Path)
     else:
         assert ran.returncode == 0, ran.stderr[-300:]
         assert ran.stdout.split() == ["7", "65536"]
+
+
+def test_exported_globals_are_attributes(tmp_path: Path, wabt: Path) -> None:
+    _build_pkg(
+        tmp_path,
+        wabt,
+        '(module (global (export "mi") (mut i32) (i32.const 1)) (global (export "ci") i32 (i32.const 2))'
+        ' (global (export "mj") (mut i64) (i64.const 3)) (global (export "mf") (mut f32) (f32.const 1.5))'
+        ' (global (export "cd") f64 (f64.const 2.5))'
+        ' (func (export "read") (result i32) global.get 0) (func (export "bump") global.get 0 i32.const 1 i32.add global.set 0))',
+    )
+    code = """
+import pkg.m
+i = pkg.m.Instance()
+print(i.mi, i.ci, i.mj, i.mf, i.cd)
+i.mi = 40
+i.bump()
+print(i.mi, i.read())            # what Python writes the module reads, and the other way round
+i.mi = 2**32 + 5; print(i.mi)    # taken modulo 2**32, as an argument
+i.mi = 0xFFFFFFFF; print(i.mi)   # and signed when read
+i.mj = -(2**63); print(i.mj)
+i.mf = 0.1; print(i.mf)          # an f32 keeps what an f32 keeps
+for what in ('i.ci = 1', 'i.cd = 1.0', 'del i.mi', "i.mi = 'x'", 'i.mf = None'):
+    try:
+        exec(what)
+    except (AttributeError, TypeError) as exc:
+        print(type(exc).__name__)
+print(i.mi, pkg.m.Instance().mi)  # a failed set changed nothing; instances do not share globals
+"""
+    ran = subprocess.run([sys.executable, "-c", code], cwd=tmp_path, capture_output=True, text=True, check=False)
+    assert ran.returncode == 0, ran.stderr[-500:]
+    assert ran.stdout.splitlines() == [
+        "1 2 3 1.5 2.5",
+        "41 41",
+        "5",
+        "-1",
+        str(-(2**63)),
+        "0.10000000149011612",
+        "AttributeError",
+        "AttributeError",
+        "AttributeError",
+        "TypeError",
+        "TypeError",
+        "-1 1",
+    ]

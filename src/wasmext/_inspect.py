@@ -116,6 +116,10 @@ def _export_verdict(kind: str, thing: FuncType | TableType | Limits | GlobalType
         return f"not exposed: {reason}" if reason else "method of Instance"
     if kind == "memory" and isinstance(thing, Limits):
         return "Instance.memory"
+    if kind == "global" and isinstance(thing, GlobalType):
+        if thing.type not in ("i32", "i64", "f32", "f64"):
+            return f"not exposed: uses {thing.type}"
+        return "Instance attribute, read-write" if thing.mutable else "Instance attribute, read-only"
     return f"not exposed: a {kind}"
 
 

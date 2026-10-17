@@ -8,11 +8,12 @@ The extension has a class `Instance`: `Instance(imports)` instantiates the modul
 callable}}`, needed only if the module imports functions), the exported functions are its methods and an exported
 memory is a read-write `memoryview` attribute. A trap is `Trap` (a `RuntimeError`), a missing import `LinkError`. Integers
 are what WebAssembly has: arguments are taken modulo 2**32 / 2**64 and results are signed (as in the JavaScript API). An
-exported function with several results gives them back as a tuple; an imported one returns one.
+exported function with several results gives them back as a tuple; an imported one returns one. An exported global is an
+attribute (read-only if the global is immutable).
 
 The C uses only the limited API (PEP 384, 3.11+), so defining `Py_LIMITED_API` builds an abi3 extension.
 
-Not yet: v128, reference types, imported memories/tables/globals.
+Not yet: v128, reference types, imported memories/tables/globals, exported tables.
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ from __future__ import annotations
 import keyword
 from dataclasses import dataclass, field
 
-from ._wasm import FuncType, Import, Module, ValType
+from ._wasm import FuncType, GlobalType, Import, Module, ValType
 
 __all__ = ["GenError", "Glue", "generate", "mangle"]
 
@@ -163,6 +164,7 @@ def generate(module: Module, name: str) -> Glue:
     # exports: functions and memories; the rest is left out, and reported
     funcs: list[tuple[str, FuncType]] = []
     memories: list[str] = []
+    globals_: list[tuple[str, GlobalType]] = []
     for exp in module.exports:
         if exp.kind == "func":
             func = module.all_functions[exp.index]
@@ -173,6 +175,12 @@ def generate(module: Module, name: str) -> Glue:
                 funcs.append((exp.name, func))
         elif exp.kind == "memory":
             memories.append(exp.name)  # a memory64 is the same buffer: only its address type differs
+        elif exp.kind == "global":
+            glob = module.all_globals[exp.index]
+            if glob.type in _CTYPE:
+                globals_.append((exp.name, glob))
+            else:
+                skipped.append(f"global {exp.name!r} uses {glob.type}")
         else:
             skipped.append(f"{exp.kind} {exp.name!r}")
 
@@ -450,7 +458,36 @@ def generate(module: Module, name: str) -> Glue:
         add("    return view;")
         add("}")
         add("")
+    # the exported globals: attributes of the instance (read-only if the global is immutable)
+    for i, (exp_name, glob) in enumerate(globals_):
+        accessor = f"w2c_{prefix}_{mangle(exp_name)}(&self->inst)"
+        add(f"static PyObject *Instance_global_get{i}(InstanceObject *self, void *closure) {{")
+        add("    (void)closure;")
+        add(f"    return {_FROM_WASM[glob.type].format(f'*{accessor}')};")
+        add("}")
+        if glob.mutable:
+            add(f"static int Instance_global_set{i}(InstanceObject *self, PyObject *value, void *closure) {{")
+            add("    (void)closure;")
+            add("    if (value == NULL) {")
+            add(
+                f"        PyErr_SetString(PyExc_AttributeError, {_c_string(f'cannot delete the global {exp_name!r}')});"
+            )
+            add("        return -1;")
+            add("    }")
+            add(f"    {_CTYPE[glob.type]} v = {_TO_WASM[glob.type].format('value')};")
+            add("    if (PyErr_Occurred()) return -1;")
+            add(f"    *{accessor} = v;")
+            add("    return 0;")
+            add("}")
+        add("")
     add("static PyGetSetDef Instance_getset[] = {")
+    for i, (exp_name, glob) in enumerate(globals_):
+        setter = f"(setter)Instance_global_set{i}" if glob.mutable else "NULL"
+        kind = "mutable" if glob.mutable else "immutable"
+        add(
+            f"    {{{_c_string(exp_name)}, (getter)Instance_global_get{i}, {setter}, "
+            f'"the {kind} global of type {glob.type}", NULL}},'
+        )
     for i, exp_name in enumerate(memories):
         add(
             f"    {{{_c_string(exp_name)}, (getter)Instance_memory, NULL, "
@@ -520,7 +557,7 @@ def generate(module: Module, name: str) -> Glue:
     add("    Py_DECREF(m);")
     add("    return NULL;")
     add("}")
-    return Glue("\n".join(w) + "\n", skipped, _stub(last, funcs, memories, module.imports))
+    return Glue("\n".join(w) + "\n", skipped, _stub(last, funcs, memories, globals_, module.imports))
 
 
 _PY_TYPE: dict[ValType, str] = {"i32": "int", "i64": "int", "f32": "float", "f64": "float"}
@@ -548,7 +585,13 @@ def _callable_type(func: FuncType) -> str:
     return f"Callable[[{params}], {result}]"
 
 
-def _stub(last: str, funcs: list[tuple[str, FuncType]], memories: list[str], imports: list[Import]) -> str:
+def _stub(
+    last: str,
+    funcs: list[tuple[str, FuncType]],
+    memories: list[str],
+    globals_: list[tuple[str, GlobalType]],
+    imports: list[Import],
+) -> str:
     """The `.pyi` for the extension module: what a type checker and an editor can know of an extension."""
     # The formatter and the linter of the project the stub lands in leave a generated file alone (the second noqa is
     # for a project that selects every rule, PGH004 among them: it objects to the first).
@@ -584,6 +627,13 @@ def _stub(last: str, funcs: list[tuple[str, FuncType]], memories: list[str], imp
             lines.append(f"    def {name}(self{params}) -> {result}: ...")
         else:
             lines.append(f"    # {_py_string(name)} is not an identifier: getattr(instance, {_py_string(name)})")
+    for name, glob in globals_:
+        if not _usable(name):
+            lines.append(f"    # global {_py_string(name)} is not an identifier: getattr(instance, {_py_string(name)})")
+        elif glob.mutable:
+            lines.append(f"    {name}: {_PY_TYPE[glob.type]}")
+        else:
+            lines += ["    @property", f"    def {name}(self) -> {_PY_TYPE[glob.type]}: ..."]
     for name in memories:
         if _usable(name):
             lines += ["    @property", f"    def {name}(self) -> memoryview: ..."]

@@ -107,7 +107,8 @@ def test_the_stub_describes_the_extension() -> None:
     assert "def mem(self) -> memoryview: ..." in stub
     assert "'twice': Callable[[float], float]" in stub and "def __init__(self, imports: Imports) -> None: ..." in stub
     assert "def pair(self) -> tuple[int, int]: ..." in stub  # several results: a tuple
-    assert "answer" not in stub  # what the extension does not expose
+    assert "def answer(self) -> int: ..." in stub  # an immutable global: a read-only attribute
+    assert "tbl" not in stub  # what the extension does not expose
     header = stub.splitlines()[:5]
     assert (
         "# ruff: noqa" in header and "# ruff: noqa: PGH004" in header and "# fmt: off" in header

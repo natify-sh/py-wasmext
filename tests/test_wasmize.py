@@ -172,7 +172,7 @@ def test_build_dir_and_exclude(project: Path) -> None:
 def test_notes_about_what_is_not_exposed(project: Path, capsys: pytest.CaptureFixture[str]) -> None:
     shutil.copy(DATA / "features.wasm", project / "pkg" / "add.wasm")
     wasmize("pkg/*.wasm")
-    assert "pkg/add.wasm: not exposed: global 'answer'" in capsys.readouterr().err.replace(os.sep, "/")
+    assert "pkg/add.wasm: not exposed: table 'tbl'" in capsys.readouterr().err.replace(os.sep, "/")
 
 
 def test_errors_say_which_file(project: Path) -> None:

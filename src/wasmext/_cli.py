@@ -55,6 +55,13 @@ def _parser() -> argparse.ArgumentParser:
         default=None,
         help="force the stable ABI (abi3) or a native extension; default: abi3 where this Python has one",
     )
+    parser.add_argument(
+        "--guard-pages",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="reserve address space for the memories and check them with guard pages (fast, the default), or allocate "
+        "what they need and check every access (--no-guard-pages: for processes with a limit on address space)",
+    )
     parser.add_argument("--no-stubs", action="store_true", help="do not write a .pyi beside each .wasm")
     parser.add_argument(
         "-X", "--exclude", action="append", default=[], metavar="GLOB", help="leave out files matching GLOB"
@@ -99,6 +106,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             quiet=args.quiet,
             stubs=not args.no_stubs,
             limited_api=args.abi3,
+            guard_pages=args.guard_pages,
         )
     except (WasmError, GenError, ValueError, RuntimeError) as exc:
         print(f"wasmext: error: {exc}", file=sys.stderr)

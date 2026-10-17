@@ -277,3 +277,15 @@ def test_a_project_setting_outranks_the_automatic_wheel_tag(project: Path) -> No
     dist.get_option_dict("bdist_wheel")["py_limited_api"] = ("setup.cfg", "cp312")
     finalize_distribution_options(dist)
     assert dist.get_option_dict("bdist_wheel")["py_limited_api"] == ("setup.cfg", "cp312")
+
+
+def test_guard_pages_can_be_turned_off_for_the_runtime(project: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    [default] = wasmize("pkg/*.wasm", quiet=True)
+    assert ("WASM_RT_USE_MMAP", "0") not in default.define_macros
+    [off] = wasmize("pkg/*.wasm", quiet=True, guard_pages=False)
+    assert ("WASM_RT_USE_MMAP", "0") in off.define_macros
+    monkeypatch.setenv("WASMEXT_GUARD_PAGES", "0")
+    [by_env] = wasmize("pkg/*.wasm", quiet=True)
+    assert ("WASM_RT_USE_MMAP", "0") in by_env.define_macros
+    [on_again] = wasmize("pkg/*.wasm", quiet=True, guard_pages=True)  # the argument wins over the environment
+    assert ("WASM_RT_USE_MMAP", "0") not in on_again.define_macros

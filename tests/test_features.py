@@ -290,3 +290,41 @@ except MemoryError:
 """
     ran = subprocess.run([sys.executable, "-c", code], cwd=tmp_path, capture_output=True, text=True, check=False)
     assert ran.returncode == 0 and ran.stdout.strip() == "MemoryError"  # now the process dies with SIGABRT
+
+
+def _limited_run(tmp_path: Path, code: str, limit_mib: int) -> subprocess.CompletedProcess[str]:
+    import resource
+
+    def limit() -> None:
+        resource.setrlimit(resource.RLIMIT_AS, (limit_mib << 20, limit_mib << 20))
+
+    return subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+        preexec_fn=limit,
+    )
+
+
+@pytest.mark.skipif(platform.system() != "Linux", reason="RLIMIT_AS and the 8 GiB reservation of the runtime")
+@pytest.mark.parametrize("guard_pages", [True, False], ids=["guard pages", "no guard pages"])
+def test_a_limit_on_address_space(guard_pages: bool, tmp_path: Path, wabt: Path) -> None:
+    """With guard pages each memory reserves 8 GiB of address space, so a process limited to 2 GiB dies in abort();
+    without them the module gets the 64 KiB it asks for."""
+    package = tmp_path / "pkg"
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "m.wat").write_text(
+        '(module (memory (export "mem") 1) (func (export "f") (result i32) i32.const 7))', encoding="utf-8"
+    )
+    subprocess.run([wabt / "bin" / "wat2wasm", "m.wat", "-o", "m.wasm"], cwd=package, check=True)
+    built = wasmext(tmp_path, wabt, "-i", "-q", "--guard-pages" if guard_pages else "--no-guard-pages", "pkg/m.wasm")
+    assert built.returncode == 0, built.stderr[-600:]
+    ran = _limited_run(tmp_path, "import pkg.m; i = pkg.m.Instance(); print(i.f(), len(i.mem))", 2048)
+    if guard_pages:
+        assert ran.returncode != 0 and "os_mmap failed" in ran.stderr  # the runtime aborts
+    else:
+        assert ran.returncode == 0, ran.stderr[-300:]
+        assert ran.stdout.split() == ["7", "65536"]

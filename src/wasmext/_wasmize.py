@@ -61,6 +61,17 @@ def abi3_possible() -> str | None:
     return None
 
 
+def _guard_pages(requested: bool | None) -> bool:
+    """Whether the memories of the modules are reserved with guard pages (the default of the runtime of wasm2c).
+
+    False builds the runtime with WASM_RT_USE_MMAP=0: a memory is allocated at the size it has and every access is
+    checked, instead of 8 GiB of address space being reserved for each memory, which a process with a limit on its
+    address space (ulimit -v, some containers) cannot do: the runtime then calls abort()."""
+    if requested is None:
+        return os.environ.get("WASMEXT_GUARD_PAGES", "1") != "0"
+    return requested
+
+
 def _use_limited_api(requested: bool | None, quiet: bool) -> bool:
     """True forces abi3 where it is possible, False never; None takes WASMEXT_LIMITED_API (1/0), else abi3 where possible."""
     if requested is None:
@@ -207,6 +218,7 @@ def wasmize(
     quiet: bool = False,
     stubs: bool = True,
     limited_api: bool | None = None,
+    guard_pages: bool | None = None,
 ) -> list[Extension]:
     """The extensions for the `.wasm` modules in `module_list`, ready for `setup(ext_modules=...)`.
 
@@ -226,13 +238,25 @@ def wasmize(
     the abi3 wheel and `cp314t-*` a native one. WASMEXT_LIMITED_API=0 turns abi3 off for a None; True and False decide in
     the code (True still builds native where abi3 is impossible, and says so).
 
+    `guard_pages` (None, the default, is True unless WASMEXT_GUARD_PAGES=0) is how the memories of the modules are checked
+    and allocated. True reserves 8 GiB of address space for each memory and catches out-of-bounds accesses with the
+    MMU (fast), which fails, with an abort() of the runtime, in a process whose address space is limited. False
+    allocates what the memory needs and checks every access in code (a bit slower).
+
     With `stubs` (the default) a `<stem>.pyi` is written beside each `.wasm`: the types of the extension for editors and type
     checkers (ship it in the wheel with `package-data`).
     """
     return [
         ext
         for _, ext in _wasmize(
-            module_list, exclude, build_dir=build_dir, force=force, quiet=quiet, stubs=stubs, limited_api=limited_api
+            module_list,
+            exclude,
+            build_dir=build_dir,
+            force=force,
+            quiet=quiet,
+            stubs=stubs,
+            limited_api=limited_api,
+            guard_pages=guard_pages,
         )
     ]
 
@@ -246,11 +270,13 @@ def _wasmize(
     quiet: bool,
     stubs: bool,
     limited_api: bool | None,
+    guard_pages: bool | None = None,
 ) -> list[tuple[Path | None, Extension]]:
     """`wasmize()` with the `.wasm` file of each extension (None for an ordinary extension that passed through)."""
     from setuptools import Extension  # a build-time dependency of the projects that call this
 
     use_limited_api = _use_limited_api(limited_api, quiet)
+    use_guard_pages = _guard_pages(guard_pages)
 
     if isinstance(module_list, (str, os.PathLike, Extension)):
         items: list[str | os.PathLike[str] | Extension] = [module_list]
@@ -274,6 +300,8 @@ def _wasmize(
         ext.sources = [*rest, *prepared.sources]
         ext.depends = [*ext.depends, *prepared.depends]
         ext.include_dirs = [*ext.include_dirs, prepared.include_dir]
+        if not use_guard_pages:
+            ext.define_macros = [*ext.define_macros, ("WASM_RT_USE_MMAP", "0")]
         if use_limited_api:  # one wheel for every CPython from 3.11 on (wasmext._setuptools tags the wheel)
             ext.py_limited_api = True
             ext.define_macros = [*ext.define_macros, ("Py_LIMITED_API", LIMITED_API_VERSION)]

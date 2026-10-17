@@ -37,6 +37,7 @@ wasmext = "wasmext._setuptools:finalize_distribution_options"
 [tool.setuptools]
 package-dir = { "" = "src" }
 packages = ["wasmext"]
+py-modules = ["wasmimport"]
 
 [tool.setuptools.package-data]
 wasmext = ["py.typed"]

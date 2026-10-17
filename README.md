@@ -58,6 +58,15 @@ the limited API, so either kind builds from the same C.
 wheels. The build needs a C compiler and `wasm2c` (the wabt-package, or `WASMEXT_WABT`: a directory with its `bin/` and
 `wasm2c/`).
 
+To try a module without building a wheel, `wasmimport` works as `pyximport` does (a development tool: it runs a C compiler on import):
+
+```python
+import wasmimport
+
+wasmimport.install()
+import fast  # fast.wasm on sys.path, or in the working directory
+```
+
 What is supported, what is not yet, and the plan are in [FEATURES.md](FEATURES.md).
 
 ## Development

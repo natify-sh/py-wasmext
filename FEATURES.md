@@ -66,7 +66,8 @@ Status: **done** (works, tested) · **partly** (see the note) · **not yet** (pl
 | Patch for MSVC on ARM64 | done | `_addcarry_u64` exists only on x64; a regex in `_wasmize.py` |
 | Example: CoreMark | done | reference CoreMark of EEMBC, built with `zig cc` by `examples/coremark/build_wasm.py` |
 | simde headers | not yet | see the plan |
-| Android, Pyodide wheels | not yet | not tried |
+| Pyodide wheel | done (locally) | `cibuildwheel --platform pyodide` on `examples/coremark`, Python 3.13: built (`…pyemscripten_2025_0_wasm32.whl`, 83 KB) and the 2 tests passed inside Pyodide; the `wasm2c` of the Linux x86-64 wheel of the wabt-package did the translation on the host, no Pyodide wheel of the wabt-package is needed |
+| Android wheel | partly | `cibuildwheel --platform android --archs arm64_v8a`, Python 3.13, NDK 27: the wheel (`…android_24_arm64_v8a.whl`) builds with the same host wabt-package wheel; the tests were skipped (the machine cannot run an arm64 emulator), so it was not run on Android; the extension links `libpython3.13.so`, as every Android extension does |
 | Import hook, like `pyximport` | done | `import wasmimport; wasmimport.install()`; `import mod` finds `mod.wasm` (working directory, `sys.path`, packages), builds it into `~/.wasmbld` (or `build_dir`) and loads it. Options as in `pyximport`: `build_dir`, `build_in_temp`, `setup_args`, `inplace`, and those of `wasmize()`; `<module>.wasmbld` with `make_ext`/`make_setup_args`; `uninstall(finder)`, `clean()`. Not taken from `pyximport`: `.pyxdep`, importing `.py` files (`pyimport`), `reload_support`, `load_py_module_on_import_failure`. A development tool: it runs a C compiler on import. `tests/test_importer.py` |
 | Configuration in `pyproject.toml` only | not yet | |
 | Published on PyPI | not yet | until then the example is built with `--find-links` to the wheel of wasmext (see `example-wheels.yml`) |
@@ -114,7 +115,7 @@ In this order (the first ones are small):
    All three need a way for extensions to recognise each other's objects.
 4. **Threads**: `--enable-threads`, C11 atomics (and MSVC), a shared `Memory`, `wasm_rt_init_thread` per thread.
 5. **CI**: the matrix above, once there are minutes; MSVC and macOS problems are expected.
-6. Android and Pyodide wheels; `pyproject.toml` configuration; PyPI; reporting `_addcarry_u64` to WABT.
+6. Android and Pyodide in the CI matrix of the example (they build locally, see above); `pyproject.toml` configuration; PyPI; reporting `_addcarry_u64` to WABT.
 7. Compatibility with the wasm3/pywasm3 examples; WASI (deferred).
 
 ## Decisions

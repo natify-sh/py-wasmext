@@ -9,11 +9,11 @@ callable}}`, needed only if the module imports functions), the exported function
 memory is a read-write `memoryview` attribute. A trap is `Trap` (a `RuntimeError`), a missing import `LinkError`. Integers
 are what WebAssembly has: arguments are taken modulo 2**32 / 2**64 and results are signed (as in the JavaScript API). An
 exported function with several results gives them back as a tuple; an imported one returns one. An exported global is an
-attribute (read-only if the global is immutable).
+attribute (read-only if the global is immutable); an imported immutable global is a number in the imports.
 
 The C uses only the limited API (PEP 384, 3.11+), so defining `Py_LIMITED_API` builds an abi3 extension.
 
-Not yet: v128, reference types, imported memories/tables/globals, exported tables.
+Not yet: v128, reference types, imported memories/tables and mutable globals, exported tables.
 """
 
 from __future__ import annotations
@@ -138,28 +138,53 @@ class _Import:
     symbol: str
 
 
+@dataclass
+class _ImportGlobal:
+    module: str
+    field: str
+    type: ValType
+    host: int  # index of the import module (the struct that holds the value)
+    slot: int  # the place among the globals of that module
+    symbol: str
+
+
 def generate(module: Module, name: str) -> Glue:
     """The C source of the extension module `name` (dotted, as it is imported) for the parsed `module`."""
     last = _ident(name)
     prefix = mangle(last, module=True)
     skipped: list[str] = []
 
-    # imports: functions only, and every signature must be one the glue can convert
+    # imports: functions (every signature must be one the glue can convert) and immutable globals (a number is given)
     hosts: list[str] = []
     imports: list[_Import] = []
+    global_imports: list[_ImportGlobal] = []
     slots: dict[str, int] = {}
+    global_slots: dict[str, int] = {}
     for imp in module.imports:
-        if imp.kind != "func" or not isinstance(imp.type, FuncType):
-            raise GenError(f"import {imp.module}.{imp.name}: an imported {imp.kind} is not supported yet")
-        reason = _why_not(imp.type, several_results=True)
-        if reason:
-            raise GenError(f"import {imp.module}.{imp.name} {reason}: not supported yet")
-        if imp.module not in hosts:
-            hosts.append(imp.module)
-        slot = slots.get(imp.module, 0)
-        slots[imp.module] = slot + 1
         symbol = f"w2c_{mangle(imp.module, module=True)}_{mangle(imp.name)}"
-        imports.append(_Import(imp.module, imp.name, imp.type, hosts.index(imp.module), slot, symbol))
+        if imp.kind == "func" and isinstance(imp.type, FuncType):
+            reason = _why_not(imp.type, several_results=True)
+            if reason:
+                raise GenError(f"import {imp.module}.{imp.name} {reason}: not supported yet")
+            if imp.module not in hosts:
+                hosts.append(imp.module)
+            slot = slots.get(imp.module, 0)
+            slots[imp.module] = slot + 1
+            imports.append(_Import(imp.module, imp.name, imp.type, hosts.index(imp.module), slot, symbol))
+        elif imp.kind == "global" and isinstance(imp.type, GlobalType):
+            if imp.type.type not in _CTYPE:
+                raise GenError(f"import {imp.module}.{imp.name} uses {imp.type.type}: not supported yet")
+            if imp.type.mutable:
+                raise GenError(f"import {imp.module}.{imp.name}: an imported mutable global is not supported yet")
+            if imp.module not in hosts:
+                hosts.append(imp.module)
+            slot = global_slots.get(imp.module, 0)
+            global_slots[imp.module] = slot + 1
+            global_imports.append(
+                _ImportGlobal(imp.module, imp.name, imp.type.type, hosts.index(imp.module), slot, symbol)
+            )
+        else:
+            raise GenError(f"import {imp.module}.{imp.name}: an imported {imp.kind} is not supported yet")
 
     # exports: functions and memories; the rest is left out, and reported
     funcs: list[tuple[str, FuncType]] = []
@@ -184,7 +209,7 @@ def generate(module: Module, name: str) -> Glue:
         else:
             skipped.append(f"{exp.kind} {exp.name!r}")
 
-    has_imports = bool(imports)
+    has_imports = bool(imports or global_imports)
     w: list[str] = []
     add = w.append
 
@@ -232,8 +257,9 @@ def generate(module: Module, name: str) -> Glue:
     add("")
 
     for i, host in enumerate(hosts):
-        add(f"/* the callables of the imports of module {_c_string(host)} */")
-        add(f"struct w2c_{mangle(host, module=True)} {{ PyObject *fn[{slots[host]}]; }};")
+        add(f"/* the callables and the values of the imports of module {_c_string(host)} */")
+        values = "".join(f" {_CTYPE[g.type]} g{g.slot};" for g in global_imports if hosts[g.host] == host)
+        add(f"struct w2c_{mangle(host, module=True)} {{ PyObject *fn[{max(slots.get(host, 0), 1)}];{values} }};")
     add("")
     add("typedef struct {")
     add("    PyObject_HEAD")
@@ -250,6 +276,13 @@ def generate(module: Module, name: str) -> Glue:
         add("    InstanceObject *owner;")
         add(f"    wasm_rt_memory_t *(*get)(w2c_{prefix} *);")
         add("} MemoryObject;")
+        add("")
+
+    # the globals the module imports: the runtime asks for a pointer to the value
+    for g in global_imports:
+        mod_struct = f"struct w2c_{mangle(g.module, module=True)}"
+        add(f"{_CTYPE[g.type]} *{g.symbol}({mod_struct} *h) {{ return &h->g{g.slot}; }}")
+    if global_imports:
         add("")
 
     # the functions the module imports, implemented over the callables
@@ -292,7 +325,7 @@ def generate(module: Module, name: str) -> Glue:
 
     # Instance: creation, destruction, the GC protocol
     if has_imports:
-        add("static PyObject *lookup_import(PyObject *imports, const char *module, const char *field) {")
+        add("static PyObject *lookup_import(PyObject *imports, const char *module, const char *field, int callable) {")
         add("    PyObject *key = PyUnicode_FromString(module), *m, *f;")
         add("    if (key == NULL) return NULL;")
         add("    m = PyObject_GetItem(imports, key);")
@@ -312,7 +345,7 @@ def generate(module: Module, name: str) -> Glue:
         add("        PyErr_Format(LinkError, \"missing import '%s.%s'\", module, field);")
         add("        return NULL;")
         add("    }")
-        add("    if (!PyCallable_Check(f)) {")
+        add("    if (callable && !PyCallable_Check(f)) {")
         add("        Py_DECREF(f);")
         add("        PyErr_Format(LinkError, \"import '%s.%s' is not callable\", module, field);")
         add("        return NULL;")
@@ -323,13 +356,13 @@ def generate(module: Module, name: str) -> Glue:
     add("static int Instance_traverse(InstanceObject *self, visitproc visit, void *arg) {")
     add("    Py_VISIT(Py_TYPE((PyObject *)self));")
     for i, host in enumerate(hosts):
-        add(f"    for (int k = 0; k < {slots[host]}; k++) Py_VISIT(self->host{i}.fn[k]);")
+        add(f"    for (int k = 0; k < {slots.get(host, 0)}; k++) Py_VISIT(self->host{i}.fn[k]);")
     add("    return 0;")
     add("}")
     add("")
     add("static int Instance_clear(InstanceObject *self) {")
     for i, host in enumerate(hosts):
-        add(f"    for (int k = 0; k < {slots[host]}; k++) Py_CLEAR(self->host{i}.fn[k]);")
+        add(f"    for (int k = 0; k < {slots.get(host, 0)}; k++) Py_CLEAR(self->host{i}.fn[k]);")
     add("    return 0;")
     add("}")
     add("")
@@ -356,16 +389,34 @@ def generate(module: Module, name: str) -> Glue:
     if has_imports:
         add("    if (imports == Py_None) {")
         add(
-            '        PyErr_SetString(LinkError, "the module imports functions: pass imports={module: {name: callable}}");'
+            '        PyErr_SetString(LinkError, "the module has imports: pass imports={module: {name: callable or value}}");'
         )
         add("        Py_DECREF(self);")
         add("        return NULL;")
         add("    }")
         for imp in imports:
             add(
-                f"    self->host{imp.host}.fn[{imp.slot}] = lookup_import(imports, {_c_string(imp.module)}, {_c_string(imp.field)});"
+                f"    self->host{imp.host}.fn[{imp.slot}] = "
+                f"lookup_import(imports, {_c_string(imp.module)}, {_c_string(imp.field)}, 1);"
             )
             add(f"    if (self->host{imp.host}.fn[{imp.slot}] == NULL) {{ Py_DECREF(self); return NULL; }}")
+        for g in global_imports:
+            number = "PyLong_Check(v)" if g.type in ("i32", "i64") else "(PyLong_Check(v) || PyFloat_Check(v))"
+            what = "an int" if g.type in ("i32", "i64") else "a number"
+            add("    {")
+            add(f"        PyObject *v = lookup_import(imports, {_c_string(g.module)}, {_c_string(g.field)}, 0);")
+            add("        if (v == NULL) { Py_DECREF(self); return NULL; }")
+            add(f"        if (!{number}) {{")
+            add("            Py_DECREF(v);")
+            add(
+                f"            PyErr_SetString(LinkError, {_c_string(f'import {g.module}.{g.field} is a global of type {g.type}: pass {what}')});"
+            )
+            add("            Py_DECREF(self);")
+            add("            return NULL;")
+            add("        }")
+            add(f"        self->host{g.host}.g{g.slot} = {_TO_WASM[g.type].format('v')};")
+            add("        Py_DECREF(v);")
+            add("    }")
     add("    ENTER_WASM({ Py_DECREF(self); return NULL; })")
     host_args = "".join(f", &self->host{i}" for i in range(len(hosts)))
     add(f"    wasm2c_{prefix}_instantiate(&self->inst{host_args});")
@@ -609,7 +660,9 @@ def _stub(
         by_module.setdefault(imp.module, []).append(imp)
     for i, (_module, members) in enumerate(by_module.items()):
         items = ", ".join(
-            f"{_py_string(m.name)}: {_callable_type(m.type)}" for m in members if isinstance(m.type, FuncType)
+            f"{_py_string(m.name)}: {_callable_type(m.type) if isinstance(m.type, FuncType) else _PY_TYPE[m.type.type]}"
+            for m in members
+            if isinstance(m.type, (FuncType, GlobalType))
         )
         lines.append(f"_Imports{i} = TypedDict('_Imports{i}', {{{items}}})")
     if by_module:

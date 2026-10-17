@@ -373,3 +373,54 @@ print(i.mi, pkg.m.Instance().mi)  # a failed set changed nothing; instances do n
         "TypeError",
         "-1 1",
     ]
+
+
+def test_an_imported_immutable_global_is_a_number(tmp_path: Path, wabt: Path) -> None:
+    _build_pkg(
+        tmp_path,
+        wabt,
+        '(module (import "env" "limit" (global i32)) (import "env2" "scale" (global f64)) (import "env" "big" (global i64))'
+        ' (func (export "limit") (result i32) global.get 0) (func (export "scale") (result f64) global.get 1)'
+        ' (func (export "big") (result i64) global.get 2))',
+    )
+    code = """
+import pkg.m
+imports = {'env': {'limit': 100, 'big': -2**40}, 'env2': {'scale': 2.5}}
+i = pkg.m.Instance(imports)
+print(i.limit(), i.scale(), i.big())
+imports['env']['limit'] = 7          # the value was taken when the instance was made
+print(i.limit(), pkg.m.Instance(imports).limit())
+print(pkg.m.Instance({'env': {'limit': 2**32 + 3, 'big': 1}, 'env2': {'scale': 1}}).limit())  # wraps, an int is a number
+for bad in ({'env2': {'scale': 1}, 'env': {'big': 1}},                      # missing
+            {'env': {'limit': 'x', 'big': 1}, 'env2': {'scale': 1}},        # not a number
+            {'env': {'limit': 1.5, 'big': 1}, 'env2': {'scale': 1}},        # a float for an i32
+            {'env': {'limit': 1, 'big': 1}, 'env2': {'scale': print}}):     # a function for a global
+    try:
+        pkg.m.Instance(bad)
+    except pkg.m.LinkError as exc:
+        print('LinkError')
+"""
+    ran = subprocess.run([sys.executable, "-c", code], cwd=tmp_path, capture_output=True, text=True, check=False)
+    assert ran.returncode == 0, ran.stderr[-500:]
+    assert ran.stdout.splitlines() == [
+        "100 2.5 -1099511627776",
+        "100 7",
+        "3",
+        "LinkError",
+        "LinkError",
+        "LinkError",
+        "LinkError",
+    ]
+
+
+def test_an_imported_mutable_global_is_refused_when_the_extension_is_made(tmp_path: Path, wabt: Path) -> None:
+    package = tmp_path / "pkg"
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "m.wat").write_text(
+        '(module (import "env" "counter" (global (mut i32))) (func (export "f") global.get 0 drop))', encoding="utf-8"
+    )
+    subprocess.run([wabt / "bin" / "wat2wasm", "m.wat", "-o", "m.wasm"], cwd=package, check=True)
+    built = wasmext(tmp_path, wabt, "-i", "-q", "pkg/m.wasm")
+    assert built.returncode == 1
+    assert "an imported mutable global is not supported yet" in built.stderr

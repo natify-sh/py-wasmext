@@ -20,9 +20,9 @@ Status: **done** (works, tested) · **partly** (see the note) · **not yet** (pl
 | Reference types, inside the module | done | `2.0 reference types, inside the module` |
 | Reference types in a signature (`funcref`, `externref`) | not yet | the function is left out (export) or the module is refused (import) |
 | Mutable globals | done | exported as attributes, see below |
-| SIMD (`v128`), inside the module | not yet | the C of wasm2c includes `simde/wasm/simd128.h`, which nothing provides (strict xfail `2.0 SIMD…`) |
+| SIMD (`v128`), inside the module | partly | works when the headers of simde are on the include path (checked with gcc and clang: the SIMD case passes with `-I<simde>`); the plan is that the wabt-package ships them (`wabt_package.include_dir()`, in the open branch `ci/more-wheel-platforms`) and wasmext adds the directory when the C includes `simde/`. Strict xfail `2.0 SIMD…` until then |
 | `v128` in a signature | not yet | needs the simde headers and a Python type (proposal: `bytes` of 16) |
-| Relaxed SIMD | not yet | same as SIMD (strict xfail) |
+| Relaxed SIMD | no (wasm2c) | `wasm2c` 1.0.42 itself aborts (signal 6, no message) on `i32x4.relaxed_trunc_f32x4_s`, so it is not a matter of headers; strict xfail `3.0 relaxed SIMD…` |
 | Tail calls | done | `3.0 tail calls` |
 | Extended constants | done | `3.0 extended constants` |
 | memory64 | done | inside the module, exported as a `memoryview`, addresses above 4 GiB (Linux): `3.0 memory64`, `test_an_exported_memory64_is_a_memoryview_too`, `test_memory64_addresses_above_4_gib` |
@@ -92,7 +92,7 @@ In this order (the first ones are small):
 
 1. **The `abort()` of the runtime** → `MemoryError`: replace the four `abort()` of `wasm_rt_allocate_memory` in the copy of the runtime
    by a trap that the glue turns into `MemoryError` (a regex on the copy, like the ARM64 one, that fails loudly if the pattern is gone).
-2. **SIMD**: the simde headers (pinned to the commit WABT 1.0.42 uses, `71fd833d…`; from the wabt-package or bundled in wasmext), then
+2. **SIMD**: the wabt-package ships the simde headers of the commit WABT 1.0.42 pins (`71fd833d…`; `include_dir()`, `simde_commit()`), wasmext adds that directory to the build when the C includes `simde/` (a hook for the dependencies of the C, like the one for the runtime), then
    `v128` ↔ `bytes` of 16 in signatures. Note: simde uses native instructions only if the compiler flags allow, so wheels for the baseline
    x86-64 run SIMD in portable code.
 3. **Shared objects**, in this order:

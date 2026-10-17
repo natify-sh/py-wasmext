@@ -61,4 +61,11 @@ pythonVersion = "3.11"
 typeCheckingMode = "strict"
 
 [dependency-groups]
-dev = ["pytest>=9.1.1", "pyright>=1.1.400", "ruff>=0.16.0", "setuptools>=77", "setuptools-scm>=8"]
+dev = [
+    "pytest>=9.1.1",
+    "pyright>=1.1.400",
+    "ruff>=0.16.0",
+    "setuptools>=77",
+    "setuptools-scm>=8",
+    "ziglang>=0.17.0",
+]

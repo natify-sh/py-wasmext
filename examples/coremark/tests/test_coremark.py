@@ -18,10 +18,10 @@ def test_the_benchmark_runs_and_scores() -> None:
     t0 = time.perf_counter()
     out = coremark.run(clock)
     took = time.perf_counter() - t0
-    assert "Running CoreMark" in out
-    result = [line for line in out.splitlines() if line.startswith("Result:")]
-    # what the clock said is in the message: a score of 0 means the module found its own results wrong or its time odd
-    assert result and float(result[0].split()[1]) > 0, f"{out!r} after {took:.3f} s, clock: {seen}"
+    score = [line for line in out.splitlines() if line.startswith("CoreMark 1.0 :")]
+    # the CRCs of the run are checked by the benchmark itself: "validated" means the module computed the right thing
+    assert "Correct operation validated" in out and score, f"{out!r} after {took:.3f} s, clock: {seen}"
+    assert float(score[0].split()[3]) > 0
 
 
 def test_python_dash_m_runs_it(capsys: pytest.CaptureFixture[str]) -> None:
@@ -29,4 +29,4 @@ def test_python_dash_m_runs_it(capsys: pytest.CaptureFixture[str]) -> None:
 
     assert main(["--scale", "600", "-v"]) == 0
     out = capsys.readouterr().out
-    assert "Running CoreMark" in out and "extension :" in out and "runs (ms) :" in out
+    assert "CoreMark Size" in out and "extension :" in out and "runs (ms) :" in out

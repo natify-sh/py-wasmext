@@ -1,7 +1,7 @@
 # wasmext-example-coremark
 
-[CoreMark](https://github.com/eembc/coremark) as a WebAssembly module (`src/coremark/_core.wasm`, from
-[wasm2mpy](https://github.com/vshymanskyy/wasm2mpy), MIT) turned into a native CPython extension by
+[CoreMark](https://github.com/eembc/coremark) of EEMBC as a WebAssembly module (`src/coremark/_core.wasm`, built by
+`build_wasm.py` with `zig cc` from the reference sources and the small port in `port/`) turned into a native CPython extension by
 [wasmext](../..): a package with no WebAssembly engine at run time.
 
 ```sh
@@ -19,3 +19,12 @@ setup(ext_modules=wasmize("src/coremark/*.wasm"))
 ```
 
 `cibuildwheel` builds wheels of it as it does for any extension.
+
+## The WebAssembly module
+
+`_core.wasm` is in the repository; `build_wasm.py` makes it again (`uv run --group dev python build_wasm.py`, with
+`zig cc` from the `ziglang` package as `wasm32-freestanding`, no libc, no WASI). The module is the reference CoreMark
+(the files of EEMBC, unchanged) with the `barebones` port: it imports `wiring.millis` (the clock) and `wiring.print`,
+exports `setup` (one run of the benchmark), and prints the report of CoreMark: `Correct operation validated` when the
+CRCs are right and the run lasted 10 s or more, then `CoreMark 1.0 : <iterations per second> / ...`. A run shorter than
+10 s prints the same report with `ERROR! Must execute for at least 10 secs for a valid result!`, as CoreMark does.

@@ -39,9 +39,8 @@ def test_coremark(tmp_path: Path, wabt: Path) -> None:
         capture_output=True,
         text=True,
     ).stdout
-    assert "Running CoreMark" in out
-    result = [line for line in out.splitlines() if line.startswith("Result:")]
-    assert result and float(result[0].split()[1]) > 0, out
+    score = [line for line in out.splitlines() if line.startswith("CoreMark 1.0 :")]
+    assert "Correct operation validated" in out and score and float(score[0].split()[3]) > 0, out
     assert any(
         p.name.startswith("_core.") and p.suffix in (".so", ".pyd") for p in (project / "src" / "coremark").iterdir()
     )

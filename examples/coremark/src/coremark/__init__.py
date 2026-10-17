@@ -2,8 +2,9 @@
 
 >>> import coremark
 >>> print(coremark.run())          # ~20 s
-Running CoreMark 1.0...
-Result: 22120.631
+...
+Correct operation validated. See README.md for run and reporting rules.
+CoreMark 1.0 : 23726.199656 / zig cc (clang), wasm32 -O3 / STATIC
 """
 
 from __future__ import annotations
@@ -32,8 +33,6 @@ def run(millis: Callable[[], int] = _monotonic_ms) -> str:
         {
             "wiring": {
                 "millis": millis,
-                "delay": lambda ms: None,
-                "stopWdt": lambda: None,
                 "print": print_,
             }
         }

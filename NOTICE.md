@@ -1,6 +1,6 @@
 # Third-party material
 
-- `poc/wasm/`, `tests/data/simple.wasm`, `tests/data/coremark.wasm` and `examples/coremark/src/coremark/_core.wasm` are the test modules of
+- `poc/wasm/`, `tests/data/simple.wasm` and `tests/data/coremark.wasm` are the test modules of
   [vshymanskyy/wasm2mpy](https://github.com/vshymanskyy/wasm2mpy) (`test/`), copied unchanged. wasm2mpy is MIT
   licensed; its licence text is below.
 - `poc/make.py` expects the sources of the `wasm2c` runtime (`wasm-rt.h`, `wasm-rt-impl.c`, `wasm-rt-mem-impl.c`, ...)
@@ -33,3 +33,8 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+## CoreMark
+
+`examples/coremark/src/coremark/_core.wasm` is built from [CoreMark](https://github.com/eembc/coremark) of EEMBC
+(Apache License 2.0) by `examples/coremark/build_wasm.py`; `examples/coremark/port/` is derived from its `barebones` port.

@@ -45,7 +45,9 @@ Status: **done** (works, tested) · **partly** (see the note) · **not yet** (pl
 | Imported immutable globals | done | a number in the imports; `test_an_imported_immutable_global_is_a_number` |
 | Imported mutable globals | not yet | refused when the extension is made; needs a shared `Global` object |
 | Imported memories, tables | not yet | refused when the extension is made |
-| `Memory`, `Table`, `Global` objects shared by instances | not yet | the design problem: every extension has its own types |
+| Shared `Global`: one mutable global used by several instances | not yet | both ways: a `Global` object that is imported by an instance, and an exported global that is passed on to another instance. The value would live in the object, and wasm2c gets a pointer to it |
+| Shared `Memory` and `Table` objects | not yet | the same design problem as for `Global` |
+| Recognising the objects of another extension | not yet | the design problem: every extension has its own types, so an instance of one cannot take a `Global` made by another unless there is a common way to tell them apart (a capsule with a tag and the type, for example) |
 | Traps | done | `Trap` (a `RuntimeError`), the instance stays usable; `LinkError` for bad imports |
 | GC and weak references | done | `Instance` takes part in the cycle collector and can be weakly referenced |
 | Type stubs | done | `<module>.pyi` written beside the `.wasm`, with `# fmt: off` and `# ruff: noqa` |
@@ -92,8 +94,14 @@ In this order (the first ones are small):
 2. **SIMD**: the simde headers (pinned to the commit WABT 1.0.42 uses, `71fd833d…`; from the wabt-package or bundled in wasmext), then
    `v128` ↔ `bytes` of 16 in signatures. Note: simde uses native instructions only if the compiler flags allow, so wheels for the baseline
    x86-64 run SIMD in portable code.
-3. **Shared objects**: `Global` (mutable imports and exports as objects), then `Memory`, then `Table` (`funcref`; functions of
-   other instances first, Python callables need a native trampoline). Needs a way for extensions to recognise each other's objects.
+3. **Shared objects**, in this order:
+   1. `Global`: an object with `value` (read-write if mutable) that an instance imports, and exported globals that can be passed on.
+      This is the first because the runtime of wasm2c already asks the host for a pointer to the value of an imported global, so the
+      object only has to keep the value alive and say its type and mutability; a mismatch is a `LinkError`.
+   2. `Memory`: a memory made by the host or taken from one instance and given to another.
+   3. `Table` (`funcref`): functions of other instances first; Python callables need a native trampoline.
+
+   All three need a way for extensions to recognise each other's objects.
 4. **Threads**: `--enable-threads`, C11 atomics (and MSVC), a shared `Memory`, `wasm_rt_init_thread` per thread.
 5. **CI**: the matrix above, once there are minutes; MSVC and macOS problems are expected.
 6. Android and Pyodide wheels; `pyproject.toml` configuration; PyPI; reporting `_addcarry_u64` to WABT.

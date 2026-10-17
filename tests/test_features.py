@@ -37,7 +37,7 @@ CASES = [
         "2.0 sign-extension",
         '(module (func (export "f") (param i32) (result i32) local.get 0 i32.extend8_s))',
         args=(0xFF,),
-        expect=0xFFFFFFFF,  # an i32 comes back as an unsigned int
+        expect=-1,  # an i32 comes back signed, as the JavaScript API, wasmtime and wasm3 give it
     ),
     Case(
         "2.0 saturating float-to-int",

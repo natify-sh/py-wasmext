@@ -24,7 +24,8 @@ from ._wasm import FuncType, Import, Module, ValType
 __all__ = ["GenError", "Glue", "generate", "mangle"]
 
 _CTYPE: dict[ValType, str] = {"i32": "u32", "i64": "u64", "f32": "f32", "f64": "f64"}
-# Python -> wasm value, wasm -> Python value, and the Py_BuildValue code with the cast it needs.
+# Python -> wasm value, wasm -> Python value, and the Py_BuildValue code with the cast it needs. An integer comes back
+# signed, as the JavaScript API, wasmtime and wasm3 give it (and a negative or too big one is taken, wrapped).
 _TO_WASM: dict[ValType, str] = {
     "i32": "(u32)PyLong_AsUnsignedLongMask({0})",
     "i64": "(u64)PyLong_AsUnsignedLongLongMask({0})",
@@ -32,14 +33,14 @@ _TO_WASM: dict[ValType, str] = {
     "f64": "PyFloat_AsDouble({0})",
 }
 _FROM_WASM: dict[ValType, str] = {
-    "i32": "PyLong_FromUnsignedLong((unsigned long){0})",
-    "i64": "PyLong_FromUnsignedLongLong((unsigned long long){0})",
+    "i32": "PyLong_FromLong((long)(int32_t){0})",
+    "i64": "PyLong_FromLongLong((long long)(int64_t){0})",
     "f32": "PyFloat_FromDouble((double){0})",
     "f64": "PyFloat_FromDouble({0})",
 }
 _BUILD: dict[ValType, tuple[str, str]] = {
-    "i32": ("k", "(unsigned long){0}"),
-    "i64": ("K", "(unsigned long long){0}"),
+    "i32": ("l", "(long)(int32_t){0}"),
+    "i64": ("L", "(long long)(int64_t){0}"),
     "f32": ("d", "(double){0}"),
     "f64": ("d", "(double){0}"),
 }

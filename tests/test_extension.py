@@ -67,8 +67,10 @@ def test_integers_wrap_as_webassembly_does(ext: Any) -> None:
     assert inst.add(0xFFFFFFFF, 2) == 1
     assert inst.add(-1, 2) == 1  # a negative number is its two's complement
     assert inst.add(2**32 + 5, 0) == 5
+    assert inst.add(2**31 - 1, 1) == -(2**31)  # the result is signed, as in the JavaScript API
+    assert inst.add(0xFFFFFFFF, 0) == -1
     assert inst.mul64(2**40, 2**30) == 0  # 2**70 wraps
-    assert inst.mul64(-1, 3) == 2**64 - 3
+    assert inst.mul64(-1, 3) == -3
 
 
 def test_floats(ext: Any) -> None:
@@ -176,7 +178,7 @@ def test_memory_grows_and_a_new_view_sees_it(ext: Any) -> None:
     inst = make(ext)
     assert inst.grow(1) == 1
     assert len(inst.mem) == 2 * 65536
-    assert inst.grow(5) == 0xFFFFFFFF  # beyond the maximum of 3 pages: -1
+    assert inst.grow(5) == -1  # beyond the maximum of 3 pages
     assert len(inst.mem) == 2 * 65536
 
 

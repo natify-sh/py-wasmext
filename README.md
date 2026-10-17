@@ -58,6 +58,8 @@ the limited API, so either kind builds from the same C.
 wheels. The build needs a C compiler and `wasm2c` (the wabt-package, or `WASMEXT_WABT`: a directory with its `bin/` and
 `wasm2c/`).
 
+What is supported, what is not yet, and the plan are in [FEATURES.md](FEATURES.md).
+
 ## Development
 
 ```sh

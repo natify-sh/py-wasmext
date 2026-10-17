@@ -110,17 +110,18 @@ a separate matter, see its README).
 
 ## Known gaps
 
-- `abort()` in the runtime of wasm2c when the first allocation of a memory fails (strict xfail
-  `test_a_memory_that_cannot_be_allocated_is_a_memory_error`). With guard pages every memory reserves about 8 GiB of address
-  space, so a process limited to less dies with `os_mmap failed`; `--no-guard-pages` avoids that case, not a memory too big to allocate at all.
+- A memory that cannot be allocated when the instance is made (too big, or with guard pages in a process limited in address
+  space, which each memory reserves about 8 GiB of) is a `MemoryError`; `--no-guard-pages` avoids the second case. Other `abort()`
+  of the runtime (the locks, the signal handlers) are left as they are. A memory that fails to *grow* returns -1, as WebAssembly says.
 - Attributes and methods of `Instance` take the names of the exports; a name that is not an identifier is reachable with `getattr`.
 
 ## Plan
 
 In this order (the first ones are small):
 
-1. **The `abort()` of the runtime** → `MemoryError`: replace the four `abort()` of `wasm_rt_allocate_memory` in the copy of the runtime
-   by a trap that the glue turns into `MemoryError` (a regex on the copy, like the ARM64 one, that fails loudly if the pattern is gone).
+1. ~~The `abort()` of the runtime~~ → `MemoryError`: done. The copy of `wasm-rt-mem-impl-helper.inc` gets a trap (code `0x7001`) in place of the
+   four `abort()` of `wasm_rt_allocate_memory` (and loses the `perror` lines); the glue raises `MemoryError`. The patch fails loudly if
+   the function is not what it expects, and is part of the recipe that makes the C be generated again.
 2. **SIMD**: the wabt-package ships the simde headers of the commit WABT 1.0.42 pins (`71fd833d…`; `include_dir()`, `simde_commit()`), wasmext adds that directory to the build when the C includes `simde/` (a hook for the dependencies of the C, like the one for the runtime), then
    `v128` ↔ `bytes` of 16 in signatures. Note: simde uses native instructions only if the compiler flags allow, so wheels for the baseline
    x86-64 run SIMD in portable code.

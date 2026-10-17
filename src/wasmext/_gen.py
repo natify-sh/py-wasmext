@@ -230,8 +230,12 @@ def generate(module: Module, name: str) -> Glue:
     if memories:
         add("static PyTypeObject *MemoryType;")
     add("")
+    add("/* the wasmext copy of the runtime traps with this when a memory cannot be allocated */")
+    add("#define PY_NO_MEMORY_TRAP ((wasm_rt_trap_t)0x7001)")
+    add("")
     add("static void set_trap_error(wasm_rt_trap_t code) {")
-    add("    if (code != PY_ERROR_TRAP) PyErr_SetString(TrapError, wasm_rt_strerror(code));")
+    add("    if (code == PY_NO_MEMORY_TRAP) PyErr_NoMemory();")
+    add("    else if (code != PY_ERROR_TRAP) PyErr_SetString(TrapError, wasm_rt_strerror(code));")
     add("}")
     add("")
     # what a call of WebAssembly code must do about the jump buffer

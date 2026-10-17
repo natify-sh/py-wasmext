@@ -144,12 +144,32 @@ def _made_by_this_wasmext(path: Path) -> bool:
 # the x64 targets have: on ARM64 the C does not link. The `#else` branch it falls back to for other compilers is portable.
 _MSVC_ADDCARRY = re.compile(rb"#elif defined\(_MSC_VER\)(\s+if \(_addcarry_u64\()")
 _MSVC_X64_ONLY = rb"#elif defined(_MSC_VER) && defined(_M_X64)\1"
+# The runtime calls abort() when the first allocation of a memory fails (it cannot be allocated, or the process has not the
+# address space for the 8 GiB that guard pages reserve): in the copy, that is a trap with this code, which the glue
+# raises as MemoryError.
+_ALLOCATE_MEMORY = re.compile(rb"^void MEMORY_API_NAME\(wasm_rt_allocate_memory\).*?^\}", re.DOTALL | re.MULTILINE)
+_ABORT = re.compile(rb"\babort\(\);")
+_PRINT_ERROR = re.compile(rb'[ \t]*os_print_last_error\("os_m\w+ failed\."\);\r?\n')
+_NO_MEMORY = rb"wasm_rt_trap((wasm_rt_trap_t)0x7001)"
 # What wasmext does to the C of `wasm2c`: when this changes the C is made again, so no version number to bump by hand.
-_W2C_RECIPE = _MSVC_ADDCARRY.pattern + b"\0" + _MSVC_X64_ONLY + b"\0--module-name"
+_W2C_RECIPE = (
+    _MSVC_ADDCARRY.pattern + b"\0" + _MSVC_X64_ONLY + b"\0--module-name\0" + _ALLOCATE_MEMORY.pattern + _NO_MEMORY
+)
 
 
 def _portable_on_arm64(c_source: bytes) -> bytes:
     return _MSVC_ADDCARRY.sub(_MSVC_X64_ONLY, c_source)
+
+
+def _memory_error_not_abort(inc_source: bytes) -> bytes:
+    """`wasm_rt_allocate_memory` (in wasm-rt-mem-impl-helper.inc) traps instead of abort(); fails if the runtime has changed."""
+    match = _ALLOCATE_MEMORY.search(inc_source)
+    if match is None or len(_ABORT.findall(match.group())) != 4:
+        raise RuntimeError(
+            "wasmext: wasm_rt_allocate_memory of this WABT is not what it was patched for (four abort())"
+        )
+    body = _ABORT.sub(_NO_MEMORY + b";", _PRINT_ERROR.sub(b"", match.group()))
+    return inc_source[: match.start()] + body + inc_source[match.end() :]
 
 
 def _write_if_changed(path: Path, data: bytes) -> None:
@@ -203,6 +223,8 @@ def _prepare(wasm: Path, name: str, out_dir: Path, *, force: bool, quiet: bool, 
     for src in toolchain.runtime.glob("wasm-rt*"):
         if src.suffix in (".c", ".h", ".inc"):
             shutil.copyfile(src, out_dir / src.name)
+    helper = out_dir / "wasm-rt-mem-impl-helper.inc"
+    helper.write_bytes(_memory_error_not_abort(helper.read_bytes()))
     if glue.skipped and not quiet:
         for item in glue.skipped:
             print(f"wasmext: {wasm}: not exposed: {item}", file=sys.stderr)

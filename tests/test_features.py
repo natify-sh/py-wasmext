@@ -273,10 +273,6 @@ print(i.get(a))
 
 
 @pytest.mark.skipif(platform.system() != "Linux", reason="the memory of 64 TiB is refused by Linux")
-@pytest.mark.xfail(
-    strict=True,
-    reason="wasm_rt_allocate_memory of wasm2c calls abort() when the initial memory cannot be allocated",
-)
 def test_a_memory_that_cannot_be_allocated_is_a_memory_error(tmp_path: Path, wabt: Path) -> None:
     _build_pkg(
         tmp_path, wabt, '(module (memory (export "mem") i64 1073741824) (func (export "f") (result i32) i32.const 1))'
@@ -289,7 +285,7 @@ except MemoryError:
     print('MemoryError')
 """
     ran = subprocess.run([sys.executable, "-c", code], cwd=tmp_path, capture_output=True, text=True, check=False)
-    assert ran.returncode == 0 and ran.stdout.strip() == "MemoryError"  # now the process dies with SIGABRT
+    assert ran.returncode == 0 and ran.stdout.strip() == "MemoryError"
 
 
 def _limited_run(tmp_path: Path, code: str, limit_mib: int) -> subprocess.CompletedProcess[str]:
@@ -311,8 +307,8 @@ def _limited_run(tmp_path: Path, code: str, limit_mib: int) -> subprocess.Comple
 @pytest.mark.skipif(platform.system() != "Linux", reason="RLIMIT_AS and the 8 GiB reservation of the runtime")
 @pytest.mark.parametrize("guard_pages", [True, False], ids=["guard pages", "no guard pages"])
 def test_a_limit_on_address_space(guard_pages: bool, tmp_path: Path, wabt: Path) -> None:
-    """With guard pages each memory reserves 8 GiB of address space, so a process limited to 2 GiB dies in abort();
-    without them the module gets the 64 KiB it asks for."""
+    """With guard pages each memory reserves 8 GiB of address space, so in a process limited to 2 GiB the instance is a
+    MemoryError; without them the module gets the 64 KiB it asks for."""
     package = tmp_path / "pkg"
     package.mkdir()
     (package / "__init__.py").write_text("", encoding="utf-8")
@@ -324,7 +320,7 @@ def test_a_limit_on_address_space(guard_pages: bool, tmp_path: Path, wabt: Path)
     assert built.returncode == 0, built.stderr[-600:]
     ran = _limited_run(tmp_path, "import pkg.m; i = pkg.m.Instance(); print(i.f(), len(i.mem))", 2048)
     if guard_pages:
-        assert ran.returncode != 0 and "os_mmap failed" in ran.stderr  # the runtime aborts
+        assert ran.returncode != 0 and "MemoryError" in ran.stderr
     else:
         assert ran.returncode == 0, ran.stderr[-300:]
         assert ran.stdout.split() == ["7", "65536"]

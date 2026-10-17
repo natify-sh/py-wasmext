@@ -107,6 +107,10 @@ def test_the_stub_describes_the_extension() -> None:
     assert "def mem(self) -> memoryview: ..." in stub
     assert "'twice': Callable[[float], float]" in stub and "def __init__(self, imports: Imports) -> None: ..." in stub
     assert "pair" not in stub and "answer" not in stub  # what the extension does not expose
+    header = stub.splitlines()[:5]
+    assert (
+        "# ruff: noqa" in header and "# ruff: noqa: PGH004" in header and "# fmt: off" in header
+    )  # a formatter and a linter leave it alone
 
 
 def test_the_stub_of_a_module_without_imports_needs_no_arguments_or_imports() -> None:

@@ -22,6 +22,24 @@ a dependency) translates the module to C; wasmext generates the glue that makes 
 setuptools. It is the idea of [wasm2mpy](https://github.com/vshymanskyy/wasm2mpy) moved to CPython, and an alternative to
 [py-wasmhost](https://github.com/ballistics-lab/py-wasmhost), a facade over engines that you bring with you.
 
+## Requirements
+
+To **use** a built wheel you need only Python (3.11 or later): no compiler, no WebAssembly engine.
+
+To **build** an extension (`pip install` from an sdist, `wasmext`, `wasmimport`, `cibuildwheel`) you need:
+
+- **a C compiler** for your platform: gcc or clang (Linux, macOS: the Xcode command line tools), or MSVC (Windows; the
+  Build Tools for Visual Studio). The C of `wasm2c` and the glue are plain C (C99 and GNU extensions on gcc/clang);
+- **the Python development headers** (`Python.h`): `python3-dev` / `python3-devel` on Linux distributions; the python.org
+  installers, `uv` and `cibuildwheel` have them; the stable-ABI build (abi3) needs only the headers, not `libpython`;
+- **setuptools** (the extensions are built with it), and **wasm2c** with its runtime, which come from the
+  [wabt-package](https://github.com/ballistics-lab/wabt-package) that `wasmext` depends on (nothing to install by hand,
+  and no WABT build);
+- for a module with SIMD instructions, the headers of simde: the wabt-package is to carry them (see [FEATURES.md](FEATURES.md)).
+
+`wasm2c` is needed only to make the C. A tree that ships the C (`<name>_wasmext/`, for example in an sdist) builds with the
+compiler and the headers alone.
+
 ## Use
 
 `wasmize()` turns the `.wasm` files of a project into the `Extension`s of its `setup.py`:

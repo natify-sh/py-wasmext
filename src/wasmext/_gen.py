@@ -12,7 +12,7 @@ exported function with several results gives them back as a tuple; an imported o
 
 The C uses only the limited API (PEP 384, 3.11+), so defining `Py_LIMITED_API` builds an abi3 extension.
 
-Not yet: v128, reference types, memory64, imported memories/tables/globals.
+Not yet: v128, reference types, imported memories/tables/globals.
 """
 
 from __future__ import annotations
@@ -163,7 +163,6 @@ def generate(module: Module, name: str) -> Glue:
     # exports: functions and memories; the rest is left out, and reported
     funcs: list[tuple[str, FuncType]] = []
     memories: list[str] = []
-    memory_defs = module.all_memories
     for exp in module.exports:
         if exp.kind == "func":
             func = module.all_functions[exp.index]
@@ -173,10 +172,7 @@ def generate(module: Module, name: str) -> Glue:
             else:
                 funcs.append((exp.name, func))
         elif exp.kind == "memory":
-            if memory_defs[exp.index].is64:
-                skipped.append(f"memory {exp.name!r} is memory64")
-            else:
-                memories.append(exp.name)
+            memories.append(exp.name)  # a memory64 is the same buffer: only its address type differs
         else:
             skipped.append(f"{exp.kind} {exp.name!r}")
 
@@ -422,6 +418,10 @@ def generate(module: Module, name: str) -> Glue:
         add("static int Memory_getbuffer(PyObject *self, Py_buffer *view, int flags) {")
         add("    MemoryObject *m = (MemoryObject *)self;")
         add("    wasm_rt_memory_t *mem = m->get(&m->owner->inst);")
+        add("    if (mem->size > (uint64_t)PY_SSIZE_T_MAX) {")
+        add('        PyErr_SetString(PyExc_MemoryError, "the memory is too big for a buffer");')
+        add("        return -1;")
+        add("    }")
         add("    return PyBuffer_FillInfo(view, self, mem->data, (Py_ssize_t)mem->size, 0, flags);")
         add("}")
         add("")

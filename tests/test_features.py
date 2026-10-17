@@ -209,3 +209,29 @@ print(i.f(5))
     ran = subprocess.run([sys.executable, "-c", code], cwd=tmp_path, capture_output=True, text=True, check=False)
     assert ran.returncode == 0, ran.stderr[-500:]
     assert ran.stdout.splitlines() == ["(5, 2.5, -3)", "TypeError", "TypeError", "TypeError", "(6, 2.5, -3)"]
+
+
+def test_an_exported_memory64_is_a_memoryview_too(tmp_path: Path, wabt: Path) -> None:
+    package = tmp_path / "pkg"
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "m.wat").write_text(
+        '(module (memory (export "mem") i64 1 4) (data (i64.const 0) "hi")'
+        ' (func (export "peek") (param i64) (result i32) local.get 0 i32.load8_u)'
+        ' (func (export "grow") (param i64) (result i64) local.get 0 memory.grow))',
+        encoding="utf-8",
+    )
+    subprocess.run([wabt / "bin" / "wat2wasm", "m.wat", "-o", "m.wasm"], cwd=package, check=True)
+    built = wasmext(tmp_path, wabt, "-i", "-q", "pkg/m.wasm")
+    assert built.returncode == 0, built.stderr[-600:]
+    code = """
+import pkg.m
+i = pkg.m.Instance()
+print(bytes(i.mem[:2]), len(i.mem))
+i.mem[5] = 42
+print(i.peek(5))
+print(i.grow(1), len(i.mem))
+"""
+    ran = subprocess.run([sys.executable, "-c", code], cwd=tmp_path, capture_output=True, text=True, check=False)
+    assert ran.returncode == 0, ran.stderr[-500:]
+    assert ran.stdout.splitlines() == ["b'hi' 65536", "42", "1 131072"]

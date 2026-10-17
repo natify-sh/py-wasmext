@@ -115,7 +115,7 @@ def _export_verdict(kind: str, thing: FuncType | TableType | Limits | GlobalType
         reason = _why_not(thing, several_results=True)
         return f"not exposed: {reason}" if reason else "method of Instance"
     if kind == "memory" and isinstance(thing, Limits):
-        return "not exposed: memory64" if thing.is64 else "Instance.memory"
+        return "Instance.memory"
     return f"not exposed: a {kind}"
 
 

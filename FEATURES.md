@@ -63,7 +63,7 @@ What each line says is tested (`tests/test_features.py`), not read from those do
 | Custom page sizes | not yet | `wasm2c` supports it with `--enable-custom-page-sizes` (checked: it reads a module with `(pagesize 1)` only with the flag); wasmext does not pass the flag, and its `memoryview` assumes 64 KiB pages; not tried through wasmext |
 | Wide arithmetic | no (wasm2c) | `wasm2c --enable-wide-arithmetic`: "currently only supports a limited set of features" (checked), as its README says |
 | Compact imports | not yet | the README of WABT: `wasm2c` is not ticked; not tried |
-| WASI | not yet | deferred; the module builds, but the host has to provide every `wasi_snapshot_preview1` import, and there is no shim (wasm2c has none) |
+| WASI 0.1 (`wasi_snapshot_preview1`, `wasi_unstable`) | done | in the module, in C (wasm2c has none): 41 of the 46 calls work, the rest answers as the specification allows; the 72 programs of the official test suite pass (see "Design: WASI"). WASI 0.2 and 0.3 (components): no |
 
 ## The Python side
 
@@ -123,7 +123,7 @@ a call from Python and of a call back into Python was not measured.
 
 ### Where the suite ran
 
-The whole suite (`pytest`, 183 tests and 4 expected failures at the time of writing), `ruff` and `pyright`:
+The whole suite (`pytest`, 264 tests and 4 expected failures at the time of writing), `ruff` and `pyright`:
 
 | Where | Python | C compiler | Evidence |
 | --- | --- | --- | --- |
@@ -179,7 +179,8 @@ The method (see the Plan) in numbers: the modules of these projects built and ru
 | pywasm3 `03-asyncified` | a module made pausable by Binaryen (`wasm-opt --asyncify`): the import `sleep` calls the `asyncify_*` exports of the running instance | `tests/test_pywasm3.py` | works (the steps of the example without the event loop). Also tested: a trap of the outer call after a call into the instance from its own import, and a trap of the inner call, which is an exception in the import |
 | pywasm3 `04-suspend-resume` | a pause when the gas runs out, a snapshot of the paused call | its module only (`search` and exported globals) | the feature itself is of the wasm3 engine: compiled code cannot pause by gas or save a call, not planned |
 | py-wasmhost `imports.py` | several results of a host function, `i64`, an exception from the host | `tests/test_wasmhost.py` | works |
-| py-wasmhost `lua.wasm`, `coreutils.wasm`, `wasi_sh`, `wasmclang`, `pyodide`, `jslinux` | WASI programs, an engine in an engine | not yet | need WASI (19 and 32 imports); `coreutils.wasm` is 10.8 MB, which makes a very large C file |
+| py-wasmhost `lua.wasm`, `coreutils.wasm` | WASI programs | done | `lua.wasm` is [`examples/lua`](examples/lua) (tests, and wheels in CI); `coreutils.wasm` (10.8 MB, built in 16 files) was run by hand: `cp`, `mv`, `ln`, `mkdir`, `rm`, `touch`, `sleep`, pipes of `sort`/`wc`/`head`, not in the tests |
+| py-wasmhost `wasi_sh`, `wasmclang`, `pyodide`, `jslinux` | a shell, a compiler, an engine in an engine | not yet | not tried; `wasi_sh` is the shell over `coreutils`, the others need more than WASI |
 
 ### Build time of a large module
 
@@ -253,7 +254,7 @@ In this order (the first ones are small):
 7. `funcref`/`externref` in signatures (a design is needed first: who owns an `externref`); custom page sizes (`wasm2c` can, with a
    flag); the rest of the examples of other projects (below).
 8. **WASI** (`wasi_snapshot_preview1` and `wasi_unstable`): part of wasmext, compiled into the native module as a header, `wasi_preview1.h`, the system
-   reached through `Python.h`. Not started; see "Design: WASI".
+   reached through `Python.h`. Done for WASI 0.1 (41 of 46 calls, the official tests pass); see "Design: WASI". Left: the clocks of the process and the thread in `poll_oneoff`, signals, sockets (not possible in this snapshot), WASI 0.2 and 0.3.
 
 How to choose the next features: **on demand, not in advance**. The examples of [wasm2mpy](https://github.com/vshymanskyy/wasm2mpy)
 and [pywasm3](https://github.com/wasm3/pywasm3) are taken one by one, the simplest first, and added to this project as examples

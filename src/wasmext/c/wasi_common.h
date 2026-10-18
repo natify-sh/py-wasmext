@@ -1547,6 +1547,10 @@ static inline uint32_t wasi_be_list(wasmext_wasi *w, wasi_entry *e, wasi_dirlist
    and its target put in front of the rest of the path (never an absolute one): nothing can lead out of the preopen, and there is
    no gap between a check and a use. No interpreter is involved. */
 
+/* renameat is declared by <stdio.h> only when the feature macros were set before it was first included, which a build on an old
+   glibc (manylinux) does not always have: the same prototype again is harmless where it is declared */
+int renameat(int, const char *, int, const char *);
+
 #define WASI_PATH_MAX 4096
 #define WASI_NAME_MAX 255
 #define WASI_MAX_DEPTH 64

@@ -320,7 +320,7 @@ Names of exports that the module does not import are ignored. Built: globals (al
 tell. What `instance['name']` and `instance.__exports__` hold is a capsule (a `PyCapsule`, usable in the limited API) named
 `wasmext.export.v1`, one for each export, that points to a record `wasmext_export`: `size`, `version` (1), `kind` (function, table,
 memory, global), `type`, `flags`, the owner (the instance, which a reader that keeps the address keeps alive) and `address`; for a
-function also the `instance` pointer and the `signature` (`"ii>i"`: `i j f d o`). For a global `type` is the value type of the binary
+function also the `instance` pointer and the `signature` (`"ii>i"`: `i j f d o`); and `runtime`, the fingerprint of the layout of the structs of the wasm2c runtime. For a global `type` is the value type of the binary
 format (`0x7F` is i32) and bit 0 of `flags` says it is mutable; for a memory `type` is `sizeof(wasm_rt_memory_t)` and `flags` has memory64
 (bit 1) and guard pages (bit 2). A function is called as `result f(void *instance, parameters..., int *trapped)`, which catches the
 trap with the jump buffer of the exporter, so each extension handles its own traps. The format is a contract between versions of wasmext,
@@ -355,7 +355,8 @@ out as the `Trap` of its module through the caller, and both instances go on (`t
 object would be needed; postponed until somebody needs it); `externref` tables; threads and `shared` memory (the pointer is shared,
 but not made atomic: that is plan item 4 and changes the layout, so this design must not rely on plain reads of a mutable global
 once threads exist); instances from different wasmext *builds* with different wasm2c runtimes (the structs of `wasm-rt.h` have to
-match; **nothing checks it yet**: the record has the version of its own format and the `sizeof(wasm_rt_memory_t)` of a memory, and not the version of the runtime).
+match: the record has a fingerprint of their layout, `runtime` (the sizes and offsets of `wasm_rt_memory_t` and the size of the table struct), and an import
+from an extension with another one is a `LinkError`: `test_an_export_of_another_wasm2c_runtime_is_not_linked`). It is the layout that is compared, not the version of WABT.
 
 **Order**: 1. imported mutable globals from an exporting instance (smallest: a pointer and a type check; also removes the "refused
 when the extension is made" for them); 2. memories; 3. functions: these three are built, in this order; 4. tables: not built.

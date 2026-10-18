@@ -407,6 +407,21 @@ def generate(module: Module, name: str) -> Glue:
     # what another extension reads of an export of this one: a capsule over this struct. The contract between the extensions
     # is private to wasmext and versioned; a reader checks `version` and `size` before it reads a field.
     add('#define WASMEXT_EXPORT "wasmext.export.v1"')
+    add(
+        "/* A fingerprint of the layout of the structs of the wasm2c runtime that are shared between extensions (a memory, a table): an"
+    )
+    add(
+        "   extension built with another runtime reads another layout, and its exports must not be linked. (Overridable, for the tests.) */"
+    )
+    add("#ifndef WASMEXT_RUNTIME")
+    add(
+        "#define WASMEXT_RUNTIME ((uint32_t)(sizeof(wasm_rt_memory_t) * 1000003u ^ offsetof(wasm_rt_memory_t, data) * 8191u ^ \\"
+    )
+    add(
+        "    offsetof(wasm_rt_memory_t, pages) * 131u ^ offsetof(wasm_rt_memory_t, size) * 17u ^ offsetof(wasm_rt_memory_t, is64) * 7u ^ \\"
+    )
+    add("    sizeof(wasm_rt_funcref_table_t) * 65537u))")
+    add("#endif")
     add("enum { WASMEXT_FUNC = 0, WASMEXT_TABLE = 1, WASMEXT_MEMORY = 2, WASMEXT_GLOBAL = 3 };")
     add("typedef struct {")
     add("    uint32_t size;      /* sizeof of this struct for the extension that made it */")
@@ -424,6 +439,9 @@ def generate(module: Module, name: str) -> Glue:
     )
     add("    void *instance;     /* a function: the first argument of that call */")
     add("    const char *signature;  /* a function: the parameters, '>', the results (i j f d o) */")
+    add(
+        "    uint32_t runtime;   /* WASMEXT_RUNTIME of the extension that made it: the layout of the structs of the wasm2c runtime */"
+    )
     add("} wasmext_export;")
     add(
         "/* a function is called as `result f(void *instance, parameters..., int *trapped)`: a trap is reported through `trapped`,"
@@ -722,9 +740,11 @@ def generate(module: Module, name: str) -> Glue:
             add("        }")
             add("        if (ref != NULL && PyCapsule_IsValid(ref, WASMEXT_EXPORT)) {")
             add("            wasmext_export *e = (wasmext_export *)PyCapsule_GetPointer(ref, WASMEXT_EXPORT);")
-            add("            if (e->version != 1 || e->size < sizeof(wasmext_export)) {")
             add(
-                f"                PyErr_SetString(LinkError, {_c_string(f'import {where}: the export is from an incompatible version of wasmext')});"
+                "            if (e->version != 1 || e->size < sizeof(wasmext_export) || e->runtime != WASMEXT_RUNTIME) {"
+            )
+            add(
+                f"                PyErr_SetString(LinkError, {_c_string(f'import {where}: the export is from an incompatible version of wasmext or of the wasm2c runtime')});"
             )
             add("            } else if (e->kind != WASMEXT_FUNC) {")
             add(
@@ -770,9 +790,11 @@ def generate(module: Module, name: str) -> Glue:
             add("        if (v == NULL) { Py_DECREF(self); return NULL; }")
             add("        if (PyCapsule_IsValid(v, WASMEXT_EXPORT)) {  /* an export of another instance */")
             add("            wasmext_export *e = (wasmext_export *)PyCapsule_GetPointer(v, WASMEXT_EXPORT);")
-            add("            if (e->version != 1 || e->size < sizeof(wasmext_export)) {")
             add(
-                f"                PyErr_SetString(LinkError, {_c_string(f'import {where}: the export is from an incompatible version of wasmext')});"
+                "            if (e->version != 1 || e->size < sizeof(wasmext_export) || e->runtime != WASMEXT_RUNTIME) {"
+            )
+            add(
+                f"                PyErr_SetString(LinkError, {_c_string(f'import {where}: the export is from an incompatible version of wasmext or of the wasm2c runtime')});"
             )
             add("            } else if (e->kind != WASMEXT_GLOBAL) {")
             add(
@@ -835,9 +857,9 @@ def generate(module: Module, name: str) -> Glue:
         add("        if (ref != NULL && PyCapsule_IsValid(ref, WASMEXT_EXPORT)) {")
         add("            wasmext_export *e = (wasmext_export *)PyCapsule_GetPointer(ref, WASMEXT_EXPORT);")
         add("            wasm_rt_memory_t *mem = (wasm_rt_memory_t *)e->address;")
-        add("            if (e->version != 1 || e->size < sizeof(wasmext_export)) {")
+        add("            if (e->version != 1 || e->size < sizeof(wasmext_export) || e->runtime != WASMEXT_RUNTIME) {")
         add(
-            f"                PyErr_SetString(LinkError, {_c_string(f'import {where}: the export is from an incompatible version of wasmext')});"
+            f"                PyErr_SetString(LinkError, {_c_string(f'import {where}: the export is from an incompatible version of wasmext or of the wasm2c runtime')});"
         )
         add("            } else if (e->kind != WASMEXT_MEMORY) {")
         add(
@@ -993,6 +1015,7 @@ def generate(module: Module, name: str) -> Glue:
     )
     add("    e->instance = &((InstanceObject *)self)->inst;")
     add("    e->signature = export_table[k].signature;")
+    add("    e->runtime = WASMEXT_RUNTIME;")
     add("    Py_INCREF(self);")
     add("    e->owner = self;")
     add("    PyObject *capsule = PyCapsule_New(e, WASMEXT_EXPORT, export_free);")

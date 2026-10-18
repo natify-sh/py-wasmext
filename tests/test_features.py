@@ -774,6 +774,39 @@ print(c.load(1), d.load(1))                               # 65 65
     assert ran.stdout.splitlines() == ["h 65536", "b'hAllo'", "66", "1 131072", "65 65"]
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="the flag is given to the compiler with CFLAGS, which MSVC does not read"
+)
+def test_an_export_of_another_wasm2c_runtime_is_not_linked(
+    tmp_path: Path, wabt: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The record of an export has a fingerprint of the layout of the structs of the runtime. An extension that was built with another
+    one (here: told to have another fingerprint) is refused, whatever the kind of the export."""
+    package = tmp_path / "pkg"
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    for name, wat in {"a": _MEMORY_A, "b": _MEMORY_B}.items():
+        (package / f"{name}.wat").write_text(wat, encoding="utf-8")
+        subprocess.run([wabt / "bin" / "wat2wasm", f"{name}.wat", "-o", f"{name}.wasm"], cwd=package, check=True)
+    monkeypatch.setenv("CFLAGS", "-DWASMEXT_RUNTIME=1u")  # a is built with another fingerprint
+    built = wasmext(tmp_path, wabt, "-i", "-q", "pkg/a.wasm")
+    assert built.returncode == 0, built.stderr[-600:]
+    monkeypatch.delenv("CFLAGS")
+    built = wasmext(tmp_path, wabt, "-i", "-q", "pkg/b.wasm")
+    assert built.returncode == 0, built.stderr[-600:]
+    code = """
+import pkg.a, pkg.b
+a = pkg.a.Instance()
+try:
+    pkg.b.Instance({'env': a})
+except pkg.b.LinkError as exc:
+    print('LinkError', exc)
+"""
+    ran = subprocess.run([sys.executable, "-c", code], cwd=tmp_path, capture_output=True, text=True, check=False)
+    assert ran.returncode == 0, ran.stderr[-800:]
+    assert "LinkError" in ran.stdout and "wasm2c runtime" in ran.stdout, ran.stdout
+
+
 def test_linking_a_memory_checks_its_size_and_kind(tmp_path: Path, wabt: Path) -> None:
     _build_modules(
         tmp_path,

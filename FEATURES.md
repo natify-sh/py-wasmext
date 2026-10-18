@@ -171,18 +171,17 @@ In this order (the first ones are small):
    four `abort()` of `wasm_rt_allocate_memory` (and loses the `perror` lines); the glue raises `MemoryError`. The patch fails loudly if
    the function is not what it expects, and is part of the recipe that makes the C be generated again.
 2. ~~**SIMD**~~: done, including `v128` ↔ `bytes` of 16 in signatures. Relaxed SIMD stays out (wasm2c aborts).
-3. **Shared objects**, in this order:
-   1. `Global`: an object with `value` (read-write if mutable) that an instance imports, and exported globals that can be passed on.
-      This is the first because the runtime of wasm2c already asks the host for a pointer to the value of an imported global, so the
-      object only has to keep the value alive and say its type and mutability; a mismatch is a `LinkError`.
-   2. `Memory`: a memory made by the host or taken from one instance and given to another.
-   3. `Table` (`funcref`): functions of other instances first; Python callables need a native trampoline.
-
-   All three need a way for extensions to recognise each other's objects.
-4. **Threads**: `--enable-threads`, C11 atomics (and MSVC), a shared `Memory`, `wasm_rt_init_thread` per thread.
-5. **CI**: the matrix above, once there are minutes; MSVC and macOS problems are expected.
-6. Android and Pyodide in the CI matrix of the example (they build locally, see above); `pyproject.toml` configuration; PyPI; reporting `_addcarry_u64` to WABT.
-7. Compatibility with the wasm3/pywasm3 examples; WASI (deferred).
+3. **Linking instances** (the design below, nothing of it is built; two questions of it are open): the imports of one instance
+   taken from the exports of another, in this order: globals (this also gives the imported mutable globals), memories,
+   functions, tables. A global, memory or table made by the host with no module behind it is postponed.
+4. **Threads**: `--enable-threads`, C11 atomics (and MSVC), a shared memory, `wasm_rt_init_thread` per thread. After 3, since the
+   shared memory is a memory given to several instances, and the link table must not rely on plain reads of a mutable global.
+5. ~~**CI**~~: the desktop matrix is green (see "Verified"). Left: the other architectures of the wabt-package (armv7l, ppc64le,
+   s390x, riscv64, Windows x86, musllinux) for wasmext itself, which need QEMU or other runners.
+6. Android and Pyodide in the CI matrix of the example (they build locally, see above); `pyproject.toml` configuration (no `setup.py`);
+   publishing on PyPI; reporting `_addcarry_u64` to WABT; `.wat` as a source (an idea, see "Build and distribution").
+7. `funcref`/`externref` in signatures (a design is needed first: who owns an `externref`); custom page sizes (`wasm2c` can, with a
+   flag); compatibility with the wasm3/pywasm3 examples; WASI (deferred).
 
 ## Design: linking instances (draft, nothing of it is built)
 

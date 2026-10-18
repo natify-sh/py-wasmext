@@ -20,7 +20,7 @@ module.wasm --wasm2c--> C + glue --C compiler--> module.cpython-3xx-....so | .py
 [`wasm2c`](https://github.com/WebAssembly/wabt) (from the [wabt-package](https://github.com/natify-sh/wabt-package),
 a dependency) translates the module to C; wasmext generates the glue that makes it a Python module and builds it with
 setuptools. It is the idea of [wasm2mpy](https://github.com/vshymanskyy/wasm2mpy) moved to CPython, and an alternative to
-[py-wasmhost](https://github.com/natify-sh/py-wasmhost), a facade over engines that you bring with you.
+[py-wasmhost](https://github.com/ballistics-lab/py-wasmhost), a facade over engines that you bring with you.
 
 ## Requirements
 

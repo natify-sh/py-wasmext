@@ -9,7 +9,7 @@ A proof of concept: turn a WebAssembly module into a **native CPython extension*
 without any WebAssembly engine at run time. Nothing to install next to it: no `wasmtime`, no `node`.
 
 It is the idea of [wasm2mpy](https://github.com/vshymanskyy/wasm2mpy) (a `.wasm` becomes a native MicroPython module)
-moved to CPython, and an alternative to [py-wasmhost](https://github.com/natify-sh/py-wasmhost), which is a facade
+moved to CPython, and an alternative to [py-wasmhost](https://github.com/ballistics-lab/py-wasmhost), which is a facade
 over engines you have to bring with you.
 
 ```
@@ -28,7 +28,7 @@ native or Python callables, and the linear memory a `memoryview`.
 | `wasm/coremark.wasm` | CoreMark, 10.8 KB; imports `wiring.{millis, print, stopWdt, delay}`, exports `memory`, `setup`, `loop` |
 | `glue/simple.c`, `glue/coremark.c` | the glue, **written by hand** for these two modules (what a generator would emit) |
 | `make.py` | `.wasm` -> `wasm2c` -> C compiler -> `out/<name>_ext*.so` |
-| `bench/calls.py`, `bench/coremark.py` | the extension against [wasmhost](https://github.com/natify-sh/py-wasmhost) backends, if it is installed |
+| `bench/calls.py`, `bench/coremark.py` | the extension against [wasmhost](https://github.com/ballistics-lab/py-wasmhost) backends, if it is installed |
 
 The two `.wasm` files are copied from wasm2mpy's `test/` (MIT, see `NOTICE.md`).
 

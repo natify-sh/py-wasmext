@@ -290,3 +290,24 @@ def test_guard_pages_can_be_turned_off_for_the_runtime(project: Path, monkeypatc
     assert ("WASM_RT_USE_MMAP", "0") in by_env.define_macros
     [on_again] = wasmize("pkg/*.wasm", quiet=True, guard_pages=True)  # the argument wins over the environment
     assert ("WASM_RT_USE_MMAP", "0") not in on_again.define_macros
+
+
+def test_a_module_with_simd_gets_the_include_directory_of_simde(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from wasmext._wasmize import _simde_include  # pyright: ignore[reportPrivateUsage]
+
+    c = tmp_path / "m_w2c.c"
+    c.write_text('#include "simde/wasm/simd128.h"\nint x;\n', encoding="utf-8")
+    root = tmp_path / "wabt"
+    (root / "bin").mkdir(parents=True)
+    (root / "bin" / "wasm2c").write_text("", encoding="utf-8")
+    (root / "wasm2c").mkdir()
+    (root / "wasm2c" / "wasm-rt.h").write_text("", encoding="utf-8")
+    monkeypatch.setenv("WASMEXT_WABT", str(root))
+    with pytest.raises(RuntimeError, match="simde"):
+        _simde_include(c)
+    (root / "include" / "simde").mkdir(parents=True)
+    assert _simde_include(c) == (str(root / "include"),)
+    c.write_text("int x;\n", encoding="utf-8")  # no SIMD: nothing is looked for
+    assert _simde_include(c) == ()

@@ -17,7 +17,7 @@ an engine, or `wasmimport` as a development tool, is for), and building needs a 
 module.wasm --wasm2c--> C + glue --C compiler--> module.cpython-3xx-....so | .pyd
 ```
 
-[`wasm2c`](https://github.com/WebAssembly/wabt) (from the [wabt-package](https://github.com/ballistics-lab/wabt-package),
+[`wasm2c`](https://github.com/WebAssembly/wabt) (from the [wabt-package](https://github.com/natify-sh/wabt-package),
 a dependency) translates the module to C; wasmext generates the glue that makes it a Python module and builds it with
 setuptools. It is the idea of [wasm2mpy](https://github.com/vshymanskyy/wasm2mpy) moved to CPython, and an alternative to
 [py-wasmhost](https://github.com/ballistics-lab/py-wasmhost), a facade over engines that you bring with you.
@@ -33,9 +33,9 @@ To **build** an extension (`pip install` from an sdist, `wasmext`, `wasmimport`,
 - **the Python development headers** (`Python.h`): `python3-dev` / `python3-devel` on Linux distributions; the python.org
   installers, `uv` and `cibuildwheel` have them; on Linux and macOS an extension is not linked against `libpython`, so the headers are all it needs (on Windows the `libs` directory of the installation too);
 - **setuptools** (the extensions are built with it), and **wasm2c** with its runtime, which come from the
-  [wabt-package](https://github.com/ballistics-lab/wabt-package) that `wasmext` depends on (nothing to install by hand,
+  [wabt-package](https://github.com/natify-sh/wabt-package) that `wasmext` depends on (nothing to install by hand,
   and no WABT build);
-- for a module with SIMD instructions, the headers of simde: the wabt-package is to carry them (see [FEATURES.md](FEATURES.md)).
+- for a module with SIMD instructions, the headers of simde: the wabt-package carries them (1.0.42.0b2 or later) and wasmext adds them to the build by itself.
 
 Building a native extension has been tested on Linux (x86-64 glibc and musl, ARM64), Windows (x64, ARM64), macOS (Apple
 Silicon, Intel), Pyodide, and, built but not run, Android arm64-v8a; the details and what is not confirmed are in

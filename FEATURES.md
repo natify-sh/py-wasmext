@@ -20,8 +20,8 @@ Status: **done** (works, tested) · **partly** (see the note) · **not yet** (pl
 | Reference types, inside the module | done | `2.0 reference types, inside the module` |
 | Reference types in a signature (`funcref`, `externref`) | not yet | the function is left out (export) or the module is refused (import) |
 | Mutable globals | done | exported as attributes, see below |
-| SIMD (`v128`), inside the module | partly | works when the headers of simde are on the include path (checked with gcc and clang: the SIMD case passes with `-I<simde>`); the plan is that the wabt-package ships them (`wabt_package.include_dir()`, in the open branch `ci/more-wheel-platforms`) and wasmext adds the directory when the C includes `simde/`. Strict xfail `2.0 SIMD…` until then |
-| `v128` in a signature | not yet | needs the simde headers and a Python type (proposal: `bytes` of 16) |
+| SIMD (`v128`), inside the module | done | the C of `wasm2c` includes simde; the wabt-package (1.0.42.0b2 and later) ships the headers (`wabt_package.include_dir()`), and wasmext adds that directory to the include path of the extension when the C includes `simde/` (`_simde_include`; a tree that ships its C and has no SIMD still builds without the wabt-package). `2.0 SIMD, inside the module`, `test_a_module_with_simd_gets_the_include_directory_of_simde`. Native instructions are used only if the compiler flags allow, so a baseline x86-64 wheel runs SIMD in portable code |
+| `v128` in a signature | not yet | needs a Python type (proposal: `bytes` of 16) |
 | Relaxed SIMD | no (wasm2c) | `wasm2c` 1.0.42 itself aborts (signal 6, no message) on `i32x4.relaxed_trunc_f32x4_s`, so it is not a matter of headers; strict xfail `3.0 relaxed SIMD…` |
 | Tail calls | done | `3.0 tail calls` |
 | Extended constants | done | `3.0 extended constants` |
@@ -65,7 +65,7 @@ Status: **done** (works, tested) · **partly** (see the note) · **not yet** (pl
 | WABT from the wabt-package | done | or a directory in `WASMEXT_WABT` |
 | Patch for MSVC on ARM64 | done | `_addcarry_u64` exists only on x64; a regex in `_wasmize.py` |
 | Example: CoreMark | done | reference CoreMark of EEMBC, built with `zig cc` by `examples/coremark/build_wasm.py` |
-| simde headers | not yet | see the plan |
+| simde headers | done | from the wabt-package, see SIMD above |
 | Pyodide wheel | done (locally) | `cibuildwheel --platform pyodide` on `examples/coremark`, Python 3.13: built (`…pyemscripten_2025_0_wasm32.whl`, 83 KB) and the 2 tests passed inside Pyodide; the `wasm2c` of the Linux x86-64 wheel of the wabt-package did the translation on the host, no Pyodide wheel of the wabt-package is needed |
 | Android wheel | partly | `cibuildwheel --platform android --archs arm64_v8a`, Python 3.13, NDK 27: the wheel (`…android_24_arm64_v8a.whl`) builds with the same host wabt-package wheel; the tests were skipped (the machine cannot run an arm64 emulator), so it was not run on Android; the extension links `libpython3.13.so`, as every Android extension does |
 | Import hook, like `pyximport` | done | `import wasmimport; wasmimport.install()`; `import mod` finds `mod.wasm` (working directory, `sys.path`, packages), builds it into `~/.wasmbld` (or `build_dir`) and loads it. Options as in `pyximport`: `build_dir`, `build_in_temp`, `setup_args`, `inplace`, and those of `wasmize()`; `<module>.wasmbld` with `make_ext`/`make_setup_args`; `uninstall(finder)`, `clean()`. Not taken from `pyximport`: `.pyxdep`, importing `.py` files (`pyimport`), `reload_support`, `load_py_module_on_import_failure`. A development tool: it runs a C compiler on import. `tests/test_importer.py` |
@@ -123,12 +123,7 @@ In this order (the first ones are small):
 1. ~~The `abort()` of the runtime~~ → `MemoryError`: done. The copy of `wasm-rt-mem-impl-helper.inc` gets a trap (code `0x7001`) in place of the
    four `abort()` of `wasm_rt_allocate_memory` (and loses the `perror` lines); the glue raises `MemoryError`. The patch fails loudly if
    the function is not what it expects, and is part of the recipe that makes the C be generated again.
-2. **SIMD**: the wabt-package ships the simde headers of the commit WABT 1.0.42 pins (`71fd833d…`; `include_dir()`, `simde_commit()`), wasmext adds that directory to the build when the C includes `simde/` (a hook for the dependencies of the C, like the one for the runtime), then
-   `v128` ↔ `bytes` of 16 in signatures. Note: simde uses native instructions only if the compiler flags allow, so wheels for the baseline
-   x86-64 run SIMD in portable code.
-   **Postponed**: it waits for a release of the wabt-package that carries simde (PR #2, `ci/more-wheel-platforms`), which is not
-   possible yet. Nothing of it is implemented in wasmext. When the release is out: raise the minimum in `wabt-package>=…`,
-   write the hook, turn the strict xfail `2.0 SIMD…` into a normal test, then `v128`. Relaxed SIMD stays out (wasm2c aborts).
+2. ~~**SIMD**~~: the headers part is done (see above). Left: `v128` ↔ `bytes` of 16 in signatures. Relaxed SIMD stays out (wasm2c aborts).
 3. **Shared objects**, in this order:
    1. `Global`: an object with `value` (read-write if mutable) that an instance imports, and exported globals that can be passed on.
       This is the first because the runtime of wasm2c already asks the host for a pointer to the value of an imported global, so the

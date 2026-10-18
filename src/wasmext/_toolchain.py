@@ -15,6 +15,7 @@ class Toolchain:
     wasm2c: Path
     runtime: Path  # wasm-rt.h, wasm-rt-impl.c, ... of the version of `wasm2c`
     version: str
+    include: Path | None = None  # headers the C of wasm2c may include, the simde/ of SIMD modules
 
 
 def find_toolchain() -> Toolchain:
@@ -29,7 +30,13 @@ def find_toolchain() -> Toolchain:
         if not exe.is_file() or not (runtime / "wasm-rt.h").is_file():
             raise RuntimeError(f"WASMEXT_WABT={env}: expected bin/wasm2c and wasm2c/wasm-rt.h in it")
         version = root / "_wabt_version.txt"
-        return Toolchain(exe, runtime, version.read_text(encoding="utf-8").strip() if version.is_file() else "unknown")
+        headers = root / "include"
+        return Toolchain(
+            exe,
+            runtime,
+            version.read_text(encoding="utf-8").strip() if version.is_file() else "unknown",
+            headers if headers.is_dir() else None,
+        )
     try:
         wabt = importlib.import_module("wabt_package")
     except ImportError:
@@ -37,4 +44,4 @@ def find_toolchain() -> Toolchain:
             "wasm2c is not available: install the wabt-package (`pip install wabt-package`; "
             "put it in build-system.requires), or point WASMEXT_WABT at a directory with bin/ and wasm2c/"
         ) from None
-    return Toolchain(wabt.get_executable("wasm2c"), wabt.runtime_dir(), wabt.wabt_version())
+    return Toolchain(wabt.get_executable("wasm2c"), wabt.runtime_dir(), wabt.wabt_version(), wabt.include_dir())

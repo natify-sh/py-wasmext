@@ -85,7 +85,6 @@ CASES = [
         '(module (func (export "f") (result i32)'
         " v128.const i32x4 1 2 3 4 v128.const i32x4 1 1 1 1 i32x4.add i32x4.extract_lane 3))",
         expect=5,
-        gap="the C of wasm2c includes simde, which nothing provides yet",
     ),
     # 3.0: tail calls, extended constants, memory64, multi-memory, exceptions, relaxed SIMD
     Case(
@@ -120,7 +119,7 @@ CASES = [
         '(module (func (export "f") (result i32)'
         " v128.const f32x4 1 2 3 4 i32x4.relaxed_trunc_f32x4_s i32x4.extract_lane 0))",
         expect=1,
-        gap="the C of wasm2c includes simde, which nothing provides yet",
+        gap="wasm2c 1.0.42 itself aborts (signal 6, no message) on i32x4.relaxed_trunc_f32x4_s",
     ),
     # not 1.0, 2.0 or 3.0 proper
     Case(

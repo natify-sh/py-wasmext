@@ -504,7 +504,7 @@ print(b.read())                                  # 100
 b.say(3)
 print(said)                                      # [3]: log came from Python, not from a
 
-c = pkg.b.Instance({'env': {'counter': a.__exports__['counter'], 'fixed': 5, 'log': print}})   # one export of a, the rest by hand
+c = pkg.b.Instance({'env': {'counter': a['counter'], 'fixed': 5, 'log': print}})   # one export of a, the rest by hand
 print(c.read(), c.fixed())                       # 100 5
 
 del a, shelf
@@ -540,12 +540,15 @@ def attempt(counter, fixed=5):
         print('linked')
 
 attempt(3)                    # a mutable global is not given as a number
-attempt(a.__exports__['wide'])            # i64, the module wants i32
-attempt(a.__exports__['fixed'])           # immutable, the module wants mutable
-attempt(a.__exports__['bump'])            # a function
-attempt(a.__exports__['counter'], a.__exports__['wide'])   # an i64 for an i32
-attempt(a.__exports__['counter'], a.__exports__['fixed'])  # fine: an immutable global of a for an immutable import
-print('nothing' in a.__exports__)
+attempt(a['wide'])            # i64, the module wants i32
+attempt(a['fixed'])           # immutable, the module wants mutable
+attempt(a['bump'])            # a function
+attempt(a['counter'], a['wide'])   # an i64 for an i32
+attempt(a['counter'], a['fixed'])  # fine: an immutable global of a for an immutable import
+try:
+    a['nothing']
+except KeyError as exc:
+    print('KeyError', exc)
 """
     ran = subprocess.run([sys.executable, "-c", code], cwd=tmp_path, capture_output=True, text=True, check=False)
     assert ran.returncode == 0, ran.stderr[-800:]
@@ -553,7 +556,7 @@ print('nothing' in a.__exports__)
     assert "mutable global" in out[0] and "export of another instance" in out[0]
     assert all(line.startswith("LinkError") for line in out[1:5])
     assert "another type" in out[1] and "global: the export given is not" in out[3]
-    assert out[5:] == ["linked", "False"]
+    assert out[5:] == ["linked", "KeyError 'nothing'"]
 
 
 def test_a_trap_from_a_signal_handler_can_happen_again(tmp_path: Path, wabt: Path) -> None:
@@ -652,11 +655,11 @@ def test_exports_named_like_the_methods_of_instance_are_reached_by_name(tmp_path
 import pkg.m
 i = pkg.m.Instance()
 print(i.__class__.__name__, i.ok(), i.keys(), sorted(i.__exports__))
-print([type(i.__exports__[name]).__name__ for name in ('__class__', '__init__')])
+print([type(i[name]).__name__ for name in ('__class__', '__init__')], type(i.__exports__['keys']).__name__)
 """
     ran = subprocess.run([sys.executable, "-c", code], cwd=tmp_path, capture_output=True, text=True, check=False)
     assert ran.returncode == 0, ran.stderr[-600:]
     assert ran.stdout.splitlines() == [
         "Instance 4 1 ['__class__', '__init__', 'keys', 'ok']",
-        "['PyCapsule', 'PyCapsule']",
+        "['PyCapsule', 'PyCapsule'] PyCapsule",
     ]

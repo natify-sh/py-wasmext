@@ -537,7 +537,7 @@ def generate(module: Module, name: str) -> Glue:
                 add("        } else {")
                 add("            Py_DECREF(v);")
                 add(
-                    f"            PyErr_SetString(LinkError, {_c_string(f'import {where} is a mutable global: pass an export of another instance: instance.__exports__[{chr(39)}name{chr(39)}] (or the instance for the whole shelf)')});"
+                    f"            PyErr_SetString(LinkError, {_c_string(f'import {where} is a mutable global: pass an export of another instance: instance[{chr(39)}name{chr(39)}] (or the instance for the whole shelf)')});"
                 )
                 add("            Py_DECREF(self);")
                 add("            return NULL;")
@@ -601,7 +601,7 @@ def generate(module: Module, name: str) -> Glue:
             add("    Py_RETURN_NONE;")
         add("}")
         add("")
-    # instance.__exports__: {name: a capsule that another extension reads}; the table it is made from
+    # instance['name'] and instance.__exports__: the references to the exports (capsules that another extension reads)
     mapped: list[
         tuple[str, int, int, int, str]
     ] = []  # name, kind, type code, flags, the function that gives the address
@@ -640,6 +640,22 @@ def generate(module: Module, name: str) -> Glue:
     add("    PyObject *capsule = PyCapsule_New(e, WASMEXT_EXPORT, export_free);")
     add("    if (capsule == NULL) { Py_DECREF(self); PyMem_Free(e); }")
     add("    return capsule;")
+    add("}")
+    add("")
+    add("/* instance['name']: the reference to one export (KeyError if there is none) */")
+    add("static PyObject *Instance_subscript(PyObject *self, PyObject *key) {")
+    add("    const char *name = PyUnicode_Check(key) ? PyUnicode_AsUTF8AndSize(key, NULL) : NULL;")
+    add("    if (name == NULL) {")
+    add("        if (PyErr_Occurred() && !PyErr_ExceptionMatches(PyExc_TypeError)) return NULL;")
+    add("        PyErr_Clear();")
+    add("        PyErr_SetObject(PyExc_KeyError, key);")
+    add("        return NULL;")
+    add("    }")
+    add("    for (int k = 0; export_table[k].name != NULL; k++) {")
+    add("        if (strcmp(name, export_table[k].name) == 0) return export_ref(self, k);")
+    add("    }")
+    add("    PyErr_SetObject(PyExc_KeyError, key);")
+    add("    return NULL;")
     add("}")
     add("")
     add("/* instance.__exports__: {name: a reference to the export}, to be given as an import of another instance */")
@@ -773,6 +789,7 @@ def generate(module: Module, name: str) -> Glue:
     add("    {Py_tp_traverse, Instance_traverse},")
     add("    {Py_tp_clear, Instance_clear},")
     add("    {Py_tp_methods, Instance_methods},")
+    add("    {Py_mp_subscript, Instance_subscript},")
     add("    {Py_tp_getset, Instance_getset},")
     add("    {Py_tp_members, Instance_members},")
     add(f"    {{Py_tp_doc, (void *){_c_string('An instance of the WebAssembly module')}}},")
@@ -901,7 +918,11 @@ def _stub(
     lines.append(
         "    def __init__(self, imports: Imports) -> None: ..." if by_module else "    def __init__(self) -> None: ..."
     )
-    lines += ["    @property", "    def __exports__(self) -> dict[str, object]: ..."]
+    lines += [
+        "    @property",
+        "    def __exports__(self) -> dict[str, object]: ...",
+        "    def __getitem__(self, name: str, /) -> object: ...",
+    ]
     for name, func in funcs:
         params = "".join(f"arg{i}: {_PY_TYPE[t]}, " for i, t in enumerate(func.params))
         params = f", {params}/" if func.params else ""

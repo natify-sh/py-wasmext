@@ -51,14 +51,16 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
-          python-version: "3.12" # the test runner of the suite needs 3.12
+          python-version: "3.11" # wasmext itself, on the oldest Python it supports
           github-token: ${{ github.token }}
 
       - name: Install wasmext and the test runner
         run: |
           uv venv .venv
           uv pip install --python .venv --no-cache -e . setuptools
-          uv pip install --python .venv -r wasi-testsuite/test-runner/requirements/prod.txt
+          # the test runner of the suite needs Python 3.12 (Path.relative_to(walk_up=...)): it has an interpreter of its own
+          uv venv --python 3.12 .runner
+          uv pip install --python .runner -r wasi-testsuite/test-runner/requirements/prod.txt
         shell: bash
 
       - name: Build the programs
@@ -78,13 +80,14 @@ jobs:
         run: |
           # paths in the form of the system (GITHUB_WORKSPACE has C:\ on Windows, $PWD in bash has /c/)
           WORK="$GITHUB_WORKSPACE"
-          if [ "$RUNNER_OS" = "Windows" ]; then PY="$WORK\\.venv\\Scripts\\python.exe"; else PY="$WORK/.venv/bin/python"; fi
+          if [ "$RUNNER_OS" = "Windows" ]; then PY="$WORK\\.venv\\Scripts\\python.exe"; RUNNER="$WORK\\.runner\\Scripts\\python.exe"
+          else PY="$WORK/.venv/bin/python"; RUNNER="$WORK/.runner/bin/python"; fi
           export WASMEXT_PYTHON="$PY"
           EXPECT="tests/wasi_testsuite/expectations-$(echo "$RUNNER_OS" | tr 'A-Z' 'a-z').toml"
           ARGS=()
           if [ -f "$EXPECT" ]; then ARGS=(--expectations "$WORK/$EXPECT"); fi
           cd wasi-testsuite
-          "$PY" run-tests -r "$WORK/tests/wasi_testsuite/adapter.py" --disable-colors --verbose \
+          "$RUNNER" run-tests -r "$WORK/tests/wasi_testsuite/adapter.py" --disable-colors --verbose \
             --json-output-location "$RUNNER_TEMP/wasi-testsuite.json" "${ARGS[@]}"
         shell: bash
 

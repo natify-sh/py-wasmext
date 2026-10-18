@@ -1461,6 +1461,16 @@ static inline uint32_t wasi_be_times_path(wasmext_wasi *w, wasi_entry *dir, uint
     uint32_t rc = wasi_resolve(w, dir, path, len, follow, &full, &rel);
     if (rc) return rc;
     PyMem_Free(rel);
+    if (!follow) {  /* only a link itself needs "do not follow" (Windows before Python 3.13 cannot): for anything else it is the same */
+        PyObject *os = wasi_module_of(&w->os_module, "os");
+        PyObject *st = os ? PyObject_CallMethod(os, "lstat", "y", full) : NULL;
+        wasi_stat info;
+        info.filetype = WASI_FT_UNKNOWN;
+        if (st != NULL) wasi_stat_of_result(st, &info, trapped);
+        Py_XDECREF(st);
+        PyErr_Clear();
+        if (info.filetype != WASI_FT_SYMLINK) follow = 1;
+    }
     PyObject *target = PyBytes_FromString(full);
     PyMem_Free(full);
     if (target == NULL) return wasi_python_error(trapped);
@@ -1558,6 +1568,16 @@ static inline uint32_t wasi_be_symlink(wasmext_wasi *w, const unsigned char *tar
             PyMem_Free(full);
             return rc;
         }
+    }
+    {  /* the name is taken: say so (Windows says "access denied" for a directory) */
+        PyObject *os = wasi_module_of(&w->os_module, "os");
+        PyObject *st = os ? PyObject_CallMethod(os, "lstat", "y", full) : NULL;
+        if (st != NULL) {
+            Py_DECREF(st);
+            PyMem_Free(full);
+            return WASI_E_EXIST;
+        }
+        PyErr_Clear();
     }
     char *text = wasi_copy((const char *)target, tlen);
     if (text == NULL) {

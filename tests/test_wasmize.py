@@ -322,3 +322,14 @@ def test_a_big_endian_host_builds_with_wabt_big_endian(project: Path, monkeypatc
     monkeypatch.setattr(sys, "byteorder", "big")
     [big] = wasmize("top.wasm", quiet=True)
     assert ("WABT_BIG_ENDIAN", "1") in big.define_macros
+
+
+def test_the_locals_that_wasm2c_cuts_in_two_are_put_together() -> None:
+    from wasmext._wasmize import _tail_call_locals  # pyright: ignore[reportPrivateUsage]
+
+    broken = b"  u32   u32 var_i0, var_i1;\n  u64 var_j1;\nvar_l3 = 0, var_l4 = 0,\n      var_l5 = 0;\n  u64 var_l6 = 0;\n  var_i0 = var_p0;\n"
+    assert _tail_call_locals(broken) == (
+        b"  u32 var_i0, var_i1;\n  u64 var_j1;\n  u32 var_l3 = 0, var_l4 = 0,\n      var_l5 = 0;\n  u64 var_l6 = 0;\n  var_i0 = var_p0;\n"
+    )
+    whole = b"  u32 var_l3 = 0;\n  u32 var_i0, var_i1;\n  var_i0 = var_p0;\n"  # what a wasm2c without the bug writes
+    assert _tail_call_locals(whole) == whole

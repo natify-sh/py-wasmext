@@ -6,7 +6,6 @@ from __future__ import annotations
 import math
 from collections.abc import Callable
 from pathlib import Path
-from subprocess import CalledProcessError
 from types import ModuleType
 
 import pytest
@@ -35,11 +34,6 @@ def test_fibonacci(build_extension: Builder, tmp_path: Path) -> None:
     assert fib.fib(2**64 + 5) == 5  # an i64 argument wraps, as in the JavaScript API
 
 
-@pytest.mark.xfail(
-    raises=CalledProcessError,
-    strict=True,
-    reason="the module has return_call in functions with locals, and wasm2c 1.0.42 writes C that does not compile for those",
-)
 def test_coremark_minimal(build_extension: Builder) -> None:
     # The file name has a hyphen: the module name is given by hand (wasmize() wants a name that can be imported).
     mod = build_extension(DATA / "coremark-minimal.wasm", "pw3_coremark")
@@ -53,7 +47,9 @@ def test_coremark_minimal(build_extension: Builder) -> None:
         return now
 
     score = mod.Instance({"env": {"clock_ms": clock_ms}}).run()
-    assert score > 1  # 0.0 is what the module gives for a run it did not validate (the example prints "Error")
+    # The module has return_call in functions with locals: wasm2c 1.0.42 writes C that does not compile for those, and
+    # wasmext repairs it. 10 passes in the 15 s of the clock above; a run that is not valid scores 0.0.
+    assert score == pytest.approx(10 / 15, rel=1e-6)
 
 
 # The pygame examples (`pygame-*.py`): a module draws a frame into its memory when `run()` is called, and the host reads the

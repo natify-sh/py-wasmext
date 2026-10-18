@@ -40,7 +40,7 @@ What each line says is tested (`tests/test_features.py`), not read from those do
 
 | Feature | Status | Note / test |
 | --- | --- | --- |
-| Tail calls | partly | a function without locals: `3.0 tail calls`; with locals wasm2c 1.0.42 writes C that does not compile (strict xfail `3.0 tail calls in a function with locals`; the `coremark-minimal.wasm` of pywasm3 has them) |
+| Tail calls | done | `3.0 tail calls`, and with locals `3.0 tail calls in a function with locals` (wasm2c 1.0.42 writes C that does not compile for a function that has locals and a `return_call`: wasmext repairs it, the pattern matches only that shape; `coremark-minimal.wasm` of pywasm3 needs it) |
 | Extended constants | done | `3.0 extended constants` |
 | Multi-memory | done | `3.0 multi-memory` |
 | memory64 | done | inside the module, exported as a `memoryview`, addresses above 4 GiB (Linux): `3.0 memory64`, `test_an_exported_memory64_is_a_memoryview_too`, `test_memory64_addresses_above_4_gib` |

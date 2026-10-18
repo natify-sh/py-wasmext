@@ -101,7 +101,6 @@ CASES = [
         ' (func (export "f") (param i32) (result i32) (local i32) local.get 0 local.set 1 local.get 1 return_call $a))',
         args=(5,),
         expect=5,
-        gap="wasm2c 1.0.42 writes C that does not compile for a function that has locals and a return_call (`u32   u32 var_i0`)",
     ),
     Case(
         "3.0 extended constants",

@@ -150,14 +150,36 @@ _ALLOCATE_MEMORY = re.compile(rb"^void MEMORY_API_NAME\(wasm_rt_allocate_memory\
 _ABORT = re.compile(rb"\babort\(\);")
 _PRINT_ERROR = re.compile(rb'([ \t]*)os_print_last_error\("os_m\w+ failed\."\);')
 _NO_MEMORY = rb"wasm_rt_trap((wasm_rt_trap_t)0x7001)"
+# wasm2c 1.0.42 writes the C of a function that has locals and ends in `return_call` with the first group of locals cut in
+# two: the type, then the declarations of the temporaries, then `var_l3 = 0, ...;` with no type (`u32   u32 var_i0;`).
+# Put the type back in front of the locals. The pattern matches only that broken shape, so a wasm2c that is fixed passes through.
+_W2C_TYPE = rb"(?:u32|u64|f32|f64|v128)"
+_TAIL_CALL_LOCALS = re.compile(
+    rb"^  (" + _W2C_TYPE + rb") ((?:  " + _W2C_TYPE + rb" var_[a-z]\d+(?:, var_[a-z]\d+)*;\n)+)"
+    rb"(var_l\d+ = 0(?:,\s+var_l\d+ = 0)*;\n)",
+    re.MULTILINE,
+)
+_TAIL_CALL_LOCALS_FIXED = rb"\2  \1 \3"
 # What wasmext does to the C of `wasm2c`: when this changes the C is made again, so no version number to bump by hand.
 _W2C_RECIPE = (
-    _MSVC_ADDCARRY.pattern + b"\0" + _MSVC_X64_ONLY + b"\0--module-name\0" + _ALLOCATE_MEMORY.pattern + _NO_MEMORY
+    _MSVC_ADDCARRY.pattern
+    + b"\0"
+    + _MSVC_X64_ONLY
+    + b"\0--module-name\0"
+    + _ALLOCATE_MEMORY.pattern
+    + _NO_MEMORY
+    + b"\0"
+    + _TAIL_CALL_LOCALS.pattern
+    + _TAIL_CALL_LOCALS_FIXED
 )
 
 
 def _portable_on_arm64(c_source: bytes) -> bytes:
     return _MSVC_ADDCARRY.sub(_MSVC_X64_ONLY, c_source)
+
+
+def _tail_call_locals(c_source: bytes) -> bytes:
+    return _TAIL_CALL_LOCALS.sub(_TAIL_CALL_LOCALS_FIXED, c_source)
 
 
 def _memory_error_not_abort(inc_source: bytes) -> bytes:
@@ -230,7 +252,7 @@ def _prepare(wasm: Path, name: str, out_dir: Path, *, force: bool, quiet: bool, 
     )
     if result.returncode:
         raise RuntimeError(f"wasm2c failed on {wasm}:\n{result.stderr.strip()}")
-    w2c_c.write_bytes(_marker(toolchain.version).encode() + _portable_on_arm64(w2c_c.read_bytes()))
+    w2c_c.write_bytes(_marker(toolchain.version).encode() + _tail_call_locals(_portable_on_arm64(w2c_c.read_bytes())))
     _write_if_changed(glue_c, (_marker(toolchain.version) + glue.source).encode("utf-8"))
     for src in toolchain.runtime.glob("wasm-rt*"):
         if src.suffix in (".c", ".h", ".inc"):

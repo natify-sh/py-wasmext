@@ -824,3 +824,42 @@ def test_a_wasi_module_is_built_with_the_wasi_header_of_wasmext(tmp_path: Path, 
     ran = subprocess.run([sys.executable, "-c", code], cwd=tmp_path, capture_output=True, text=True, check=False)
     assert ran.returncode == 0, ran.stderr[-500:]
     assert ran.stdout.splitlines() == ["b'hello, wasi\\n'", "exit 3"]
+
+
+def test_wasi_files_work_on_every_platform_of_ci(tmp_path: Path, wabt: Path) -> None:
+    """Files through WASI, built the whole way (`wasmext -i`, which runs on Windows too): a preopen, a file read, a listing, and
+    a name that leaves the directory refused. On Windows the file system goes through Python, elsewhere through openat."""
+    package = tmp_path / "pkg"
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "m.wat").write_text((Path(__file__).parent / "data" / "wasi_fs_probe.wat").read_text("utf-8"), "utf-8")
+    subprocess.run([wabt / "bin" / "wat2wasm", "m.wat", "-o", "m.wasm"], cwd=package, check=True)
+    built = wasmext(tmp_path, wabt, "-i", "-q", "pkg/m.wasm")
+    assert built.returncode == 0, built.stderr[-800:]
+    world = tmp_path / "world"
+    (world / "sub").mkdir(parents=True)
+    (world / "hello.txt").write_text("hello, files\n", encoding="utf-8")
+    code = f"""
+import pkg.m
+i = pkg.m.Instance(wasi={{'preopens': {{'/': {str(world)!r}}}}})
+mem = i.memory
+def open_(name, fd=3, rights=2 | 4 | 32 | (1 << 21)):
+    mem[1000:1000 + len(name)] = name.encode()
+    return i.path_open(fd, 1, 1000, len(name), 0, rights, 0, 0, 900), int.from_bytes(mem[900:904], 'little')
+print(i.fd_prestat_get(3, 40), mem[40], int.from_bytes(mem[44:48], 'little'))
+err, fd = open_('hello.txt')
+mem[0:8] = (2000).to_bytes(4, 'little') + (100).to_bytes(4, 'little')
+print(err, fd, i.fd_read(fd, 0, 1, 8), bytes(mem[2000:2000 + int.from_bytes(mem[8:12], 'little')]))
+print(open_('../x')[0], open_('missing')[0])
+print(i.fd_readdir(3, 3000, 1000, 0, 100), int.from_bytes(mem[100:104], 'little') > 24 * 3)
+print(i.fd_filestat_get(fd, 120), mem[136], int.from_bytes(mem[152:160], 'little'))
+"""
+    ran = subprocess.run([sys.executable, "-c", code], cwd=tmp_path, capture_output=True, text=True, check=False)
+    assert ran.returncode == 0, ran.stderr[-600:]
+    assert ran.stdout.splitlines() == [
+        "0 0 1",
+        "0 4 0 b'hello, files\\n'",
+        "76 44",
+        "0 True",
+        "0 4 13",
+    ]

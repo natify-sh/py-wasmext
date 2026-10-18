@@ -60,9 +60,11 @@ class Fs:
         return code, bytes(self.mem[2000 : 2000 + self.u32(8)])
 
 
-@pytest.fixture
-def probe(build_extension: Builder) -> Any:
-    return build_extension(DATA / "wasi_fs_probe.wat", "wasi_fs_probe")
+@pytest.fixture(params=["openat", "python"])
+def probe(request: pytest.FixtureRequest, build_extension: Builder) -> Any:
+    """The probe module built for each way the file system is reached: the system (openat), and Python (what Windows uses)."""
+    defines = ("WASMEXT_WASI_PYTHON_FS=1",) if request.param == "python" else ()
+    return build_extension(DATA / "wasi_fs_probe.wat", f"wasi_fs_probe_{request.param}", defines=defines)
 
 
 def test_a_preopen_is_a_descriptor_with_a_name(probe: Any, world: Path) -> None:
@@ -148,7 +150,8 @@ def test_a_program_cannot_leave_the_directory_it_was_given(probe: Any, world: Pa
     assert fs.open("sub/../hello.txt")[0] == 0  # coming back is fine
     assert fs.open("./hello.txt")[0] == 0
     _, sub = fs.open("sub", rights=DIR_RIGHTS, inheriting=FILE_RIGHTS | DIR_RIGHTS)
-    assert fs.open("../hello.txt", fd=sub)[0] == 0  # one level up, still inside the preopen
+    # a directory descriptor is a capability for that directory: it does not reach what is above it, though that is inside the preopen
+    assert fs.open("../hello.txt", fd=sub)[0] == E_NOTCAPABLE
     assert fs.open("../../outside.txt", fd=sub)[0] == E_NOTCAPABLE
 
 
@@ -215,3 +218,28 @@ def test_the_first_snapshot_reads_with_its_own_whence_and_filestat(
     assert (
         fs.mem[120 + 16] == 4 and fs.u32(120 + 20) >= 1 and fs.u64(120 + 24) == len("hello, files\n")
     )  # the 56-byte layout
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="symbolic links need a privilege on Windows")
+def test_links_inside_the_directory_are_followed_and_a_loop_is_an_error(probe: Any, world: Path) -> None:
+    os.symlink("sub", world / "link_dir")  # a link to a directory, used in the middle of a path
+    os.symlink("link_dir", world / "link_of_link")  # and a link to that link
+    os.symlink("b", world / "a")
+    os.symlink("a", world / "b")
+    fs = Fs(probe, world)
+    code, fd = fs.open("link_dir/deep.txt")
+    assert code == 0 and fs.read(fd, 10) == (0, b"deep")
+    code, fd = fs.open("link_of_link/deep.txt")
+    assert code == 0 and fs.read(fd, 10) == (0, b"deep")
+    assert fs.open("link_dir/../hello.txt")[0] == 0  # the link is expanded before the ".." is applied
+    fs.put(1000, b"a")
+    assert fs.inst.path_filestat_get(3, 1, 1000, 1, 120) == 32  # ELOOP
+    assert fs.open("a")[0] == 32
+    fs.put(1000, b"link_dir")  # without symlink_follow the link itself is what is described
+    assert fs.inst.path_filestat_get(3, 0, 1000, 8, 120) == 0 and fs.mem[120 + 16] == 7
+    assert fs.inst.path_filestat_get(3, 1, 1000, 8, 120) == 0 and fs.mem[120 + 16] == 3
+
+
+def test_a_name_that_is_too_long_is_refused(probe: Any, world: Path) -> None:
+    fs = Fs(probe, world)
+    assert fs.open("x" * 300)[0] == E_NAMETOOLONG

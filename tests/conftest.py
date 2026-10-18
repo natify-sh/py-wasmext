@@ -52,7 +52,7 @@ def build_extension(wabt: Path, tmp_path_factory: pytest.TempPathFactory) -> Cal
     out = tmp_path_factory.mktemp("ext")
     sys.path.insert(0, str(out))
 
-    def build(source: Path, name: str, *, abi3: bool = False) -> ModuleType:
+    def build(source: Path, name: str, *, abi3: bool = False, defines: tuple[str, ...] = ()) -> ModuleType:
         wasm = source
         if source.suffix == ".wat":
             wasm = out / f"{name}.wasm"
@@ -82,7 +82,19 @@ def build_extension(wabt: Path, tmp_path_factory: pytest.TempPathFactory) -> Cal
             "-Werror=int-conversion",
         ]
         subprocess.run(
-            [cc, "-O1", "-fPIC", *strict, *limited, *include, "-c", out / f"{name}_glue.c", "-o", glue_object],
+            [
+                cc,
+                "-O1",
+                "-fPIC",
+                *strict,
+                *limited,
+                *(f"-D{d}" for d in defines),
+                *include,
+                "-c",
+                out / f"{name}_glue.c",
+                "-o",
+                glue_object,
+            ],
             check=True,
         )
         subprocess.run(

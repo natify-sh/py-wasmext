@@ -350,7 +350,8 @@ tests on Windows (CI has Windows x64, x86 and ARM64), not a finding:
 | --- | --- | --- |
 | direct | `args_*`, `environ_*`, `sched_yield`, `fd_prestat_*`, the bookkeeping of descriptors, `fd_seek`/`fd_tell`, `fd_read`/`fd_write` on the descriptors it opened | data of the instance, or the same call on both |
 | through Python | `random_get`, `clock_*` | the source differs (`getrandom`, `BCryptGenRandom`, `clock_gettime`, `QueryPerformanceCounter`); `os.urandom`, `time.time_ns`, `time.monotonic_ns` are cheap |
-| through Python | `path_open`, `fd_readdir`, `fd_filestat_*`, `path_filestat_*`, `path_rename`, `path_unlink_file`, `path_remove_directory`, `path_symlink`, `path_readlink`, `path_link`, `fd_filestat_set_times`, `fd_allocate`, `fd_advise`, `fd_datasync`, `fd_sync`, `fd_pread`, `fd_pwrite`, `poll_oneoff` | Windows has no `pread`, cannot open a directory with `open`, has its own `stat` (no inode, link count), `FindFirstFile` for a listing, other rules for renaming over a file, symbolic links need a privilege, `select` works on sockets only |
+| directly, where the system has `openat` (decided on a measurement, see below) | `path_open`, `path_filestat_get`, `fd_filestat_get`, `fd_readdir` | a directory is an open descriptor and a path is walked from it one name at a time; no interpreter |
+| through Python (Windows; and anywhere with `-DWASMEXT_WASI_PYTHON_FS=1`, for the tests) | the same calls, and the ones of the later stages | Windows has no `openat`; it cannot open a directory with `open`, has its own `stat` (no inode), `FindFirstFile` for a listing, other rules for renaming over a file; symbolic links need a privilege |
 | through Python (decided) | `fd_read`/`fd_write` on the standard streams | direct writes to descriptors 1 and 2 bypass the buffer of `sys.stdout` (the order against Python's `print`, a capture in a notebook or a test), so by default they go to `sys.stdout.buffer` after a flush of `sys.stdout` |
 
 **What it covers.** The 46 functions of the specification (`wasi_snapshot_preview1.witx`, the branch `wasi-0.1` of WebAssembly/WASI;
@@ -379,26 +380,28 @@ give the names and signatures. Its code is not copied: this is written from the 
 - Test modules: `lua.wasm` (wasi_unstable, 19 imports) first, then `coreutils.wasm` (preview1, 32 imports, 10.8 MB, which makes a very large
   C file and a long build).
 
-**Stage 1 (built, `wasi_snapshot_preview1` only).** `src/wasmext/c/wasi_preview1.h`, copied beside the C of a module that imports
-`wasi_snapshot_preview1` and included by its glue (the glue calls the functions directly, through the slots that linking instances uses). The calls
+**Stage 1 (built).** `src/wasmext/c/wasi_common.h` with `wasi_preview1.h` and `wasi_unstable.h`, copied beside the C of a module that
+imports WASI and included by its glue (the glue calls the functions directly, through the slots that linking instances uses). The calls
 that work: `args_*`, `environ_*`, `clock_res_get`, `clock_time_get`, `random_get`, `sched_yield`, `proc_exit` (raises the module's `WasiExit`,
-`.code`), `fd_read` (stdin), `fd_write` (stdout, stderr), `fd_close`, `fd_fdstat_get`, `fd_prestat_get` (always `EBADF`: nothing is
-preopened), `fd_seek`, `fd_tell` (`ESPIPE` on the standard streams). Every other call of the 46 answers `ENOSYS` (the sockets
-`ENOTSOCK`). `Instance()` needs no imports; `wasi={...}` takes args, env, stdin, stdout, stderr; `preopens` raises `NotImplementedError`.
-What the caller gives as an import wins, call by call. Both snapshots are served (`wasi_unstable.h`; `sock_accept` is not a call of the first one: `GenError`). Not built: the files and directories, `poll_oneoff`. Tests:
-`tests/test_wasi.py` (through `build_extension`, not on Windows) and `test_a_wasi_module_is_built_with_the_wasi_header_of_wasmext` (the whole
-path, every platform of CI). `lua.wasm` (imports `wasi_unstable`) is not run in the tests yet.
+`.code`), the standard streams (`fd_read` on stdin, `fd_write` on stdout and stderr), and for files and directories: preopens
+(`wasi={"preopens": {name: directory}, "readonly": ...}`), `path_open` for reading, `fd_read`, `fd_seek`, `fd_tell`, `fd_close`, `fd_renumber`,
+`fd_advise`, `fd_fdstat_get`, `fd_filestat_get`, `path_filestat_get`, `fd_readdir`, `fd_prestat_get`, `fd_prestat_dir_name`. Every other call of the
+46 answers `ENOSYS` (the sockets `ENOTSOCK`); creating and writing files is stage 2. Rights are kept per descriptor (`readonly` takes the
+mutating ones away), and a directory descriptor is a capability for that directory: `..` out of it, an absolute name, or a link that
+leads out are `ENOTCAPABLE` (an absolute link inside is refused too, as in cap-std). Both snapshots are served (`sock_accept` is not a call of the first:
+`GenError`); the first has its own `fd_seek` (another order of `whence`) and `fd_filestat_get`/`path_filestat_get` (56 bytes). `Instance()` needs no
+imports; `wasi={...}` takes args, env, stdin, stdout, stderr, preopens, readonly. What the caller gives as an import wins, call by call.
+Not built: the rest of the files, `poll_oneoff`. Tests: `tests/test_wasi.py` and `tests/test_wasi_fs.py` (through `build_extension`, not on
+Windows; the file tests are run for both ways of reaching the file system), `test_a_wasi_module_is_built_with_the_wasi_header_of_wasmext`
+and `test_wasi_files_work_on_every_platform_of_ci` (the whole path, every platform of CI). `lua.wasm` (imports `wasi_unstable`) is not run in the tests yet.
 
-**WASI 0.2 and 0.3 (preview2, preview3): not planned yet, and not just one more header.** The WASI above is a set of ordinary imports of a core
-module, which is what `wasm2c` translates. 0.2 and 0.3 are defined over the Component Model: what the toolchain gives (Rust `wasm32-wasip2`,
-`wasm-tools component new` on the output of wasi-sdk) is a *component*, a package of core modules with typed interfaces (WIT), resources (handles)
-and the canonical ABI that lifts and lowers strings, lists and records between them. `wasm2c` reads core modules only. To run a component,
-wasmext would first have to take it apart at build time (the core modules inside go to `wasm2c`, the way `jco transpile` does it for
-JavaScript) and write the canonical ABI and the host side of the interfaces (`wasi:cli`, `wasi:io` streams, `wasi:filesystem`, `wasi:clocks`,
-`wasi:random`) itself. 0.3 (ratified in June 2026 by the official pages; the toolchains are still arriving) adds native async to the
-canonical ABI (`stream<T>`, `future<T>`, async functions): a scheduler of tasks on top. That is a separate large feature ("component model"),
-to be decided on its own after preview1 is finished, not a continuation of `wasi_preview1.h`. Until then a component is out of reach, and the way
-around it is to build for `wasm32-wasip1` (or to take the core module before it was made a component), which the toolchains still offer.
+**The cost of a call, measured** (Linux x86-64, Python 3.11, gcc -O2, medians; a loop in WebAssembly that makes the call). First version,
+where every path went through Python (`os.stat`, `os.path.realpath` for the check of the limits): `path_filestat_get` 17.5 us, `path_open` +
+`fd_close` 18.9 us, `fd_readdir` of 101 names 224 us; 13 us of the first were the `realpath` of the check alone. After the move to `openat`:
+0.87 us, 1.6 us and 30 us (the floor in C for the listing is about 18 us). `fd_read`/`fd_seek` on a file (direct since the beginning) 0.1 us;
+`clock_time_get` (Python, `time.time_ns`) 0.14 us; a call of WebAssembly into a C function 3 ns. The way through Python costs 0.1 to 0.9 us
+over the system call itself for a simple call, which is why the clocks and the random bytes stay there. (An earlier figure of "190 times"
+for the listing came from a wrong baseline and is withdrawn.) Windows is on the Python way and was not measured.
 
 ## Decisions
 

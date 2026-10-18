@@ -1907,10 +1907,7 @@ static inline uint32_t wasi_be_remove(wasmext_wasi *w, wasi_entry *dir, uint32_t
     if (itself) errno = EINVAL;
     else failed = unlinkat(parent, leaf, isdir ? AT_REMOVEDIR : 0);
     int saved = errno;
-    if (failed < 0 && !isdir && !itself && saved == EPERM) {  /* some systems say this to unlink of a directory */
-        struct stat st;
-        if (fstatat(parent, leaf, &st, AT_SYMLINK_NOFOLLOW) == 0 && S_ISDIR(st.st_mode)) saved = EISDIR;
-    }
+    /* unlink of a directory: EISDIR on Linux, EPERM on macOS; the system's own answer is what is given */
     if (owned) close(parent);
     return failed < 0 ? wasi_errno(saved) : WASI_E_SUCCESS;
 }

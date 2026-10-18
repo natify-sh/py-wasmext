@@ -377,7 +377,7 @@ def test_directories_are_created_and_removed_and_files_unlinked(probe: Any, worl
     assert fs.inst.path_remove_directory(3, *fs.path("sub/inner")) == 0 and not (world / "sub" / "inner").exists()
     assert fs.inst.path_remove_directory(3, *fs.path("hello.txt")) == E_NOTDIR
     assert fs.inst.path_remove_directory(3, *fs.path(".")) == E_INVAL
-    assert fs.inst.path_unlink_file(3, *fs.path("sub")) == E_ISDIR and (world / "sub").is_dir()
+    assert fs.inst.path_unlink_file(3, *fs.path("sub")) in (E_ISDIR, 63) and (world / "sub").is_dir()  # EPERM on macOS
     assert fs.inst.path_unlink_file(3, *fs.path("hello.txt")) == 0 and not (world / "hello.txt").exists()
     assert fs.inst.path_unlink_file(3, *fs.path("hello.txt")) == E_NOENT
     assert fs.inst.path_unlink_file(3, *fs.path("../outside.txt")) == E_NOTCAPABLE

@@ -210,10 +210,13 @@ of the exporter to the importer: one value, one memory, one table, no copy, no P
 `w2c_env_f(struct w2c_env *, args)`: the glue can call the exported function of the other module itself (its instance pointer is
 the first argument) instead of a Python callable.
 
-**Mixing.** `{"env": a}` takes everything the import module "env" needs from `a`; all or nothing, to begin with. A dict works
-as now (callables and numbers). Taking one name from `a` and the rest from Python needs a way to point at an export (an
-attribute `a.g` is a number, the pointer is not reachable from Python); a marker such as `a.export("g")` is the candidate, left
-open below.
+**Mixing (decided).** What is passed decides how it works, as everywhere else: an instance for a shelf (`{"env": a}`) takes the whole
+shelf from it (all or nothing); a dict (`{"env": {"log": print}}`) is by keys, as now. Taking one name of a shelf from an instance and
+the others from Python is the dict with a marker, `{"env": {"counter": a.export("counter"), "log": print}}`: it is **not built yet**,
+only when somebody needs it. `a.counter` cannot stand for it (for a global it is the number, not the variable). A list of sources
+(`{"env": [a, {"log": print}]}`) was considered and left out; it could be added later without breaking any of this.
+Almost every compiler puts all its imports on one shelf, `env`, host functions (print, clock) and the ones another module could give,
+so the shelf of a module is often given in part from an instance and in part from Python: the marker will be wanted.
 
 **Recognising an instance of another extension.** The types are not the same objects in two extensions, so `isinstance` cannot
 tell. The instance carries a capsule (a `PyCapsule`, usable in the limited API) with a tag and a version, which points to a
@@ -255,8 +258,8 @@ match: the capsule carries the version of the runtime and compares it).
 **Order**: 1. imported mutable globals from an exporting instance (smallest: a pointer and a type check; also removes the "refused
 when the extension is made" for them); 2. memories; 3. functions; 4. tables.
 
-**Open questions**: the name of the marker helper (or whether `{"env": a}` only, all or nothing, is enough to begin with); whether
-the format of the capsule is public API or private until the second user of it exists (proposal: private, documented, versioned).
+**Decided**: whole-shelf form first, the marker later; the format of the link table (capsule) is private, documented and
+versioned (not a promise to others) until a second user of it exists.
 
 ## Decisions
 

@@ -199,7 +199,7 @@ _WASI_SIGNATURES = {
     _WASI_UNSTABLE: {n: sig for n, sig in _WASI_PREVIEW1_SIGNATURES.items() if n != "sock_accept"},
 }
 # the calls of the first snapshot that have a function of their own, wasi_unstable_<name> (the others use wasi_<name>)
-_WASI_UNSTABLE_OWN: frozenset[str] = frozenset()
+_WASI_UNSTABLE_OWN: frozenset[str] = frozenset({"fd_seek", "fd_filestat_get", "path_filestat_get"})
 
 
 @dataclass

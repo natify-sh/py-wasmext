@@ -135,7 +135,7 @@ def test_descriptors_the_first_stage_has(build_extension: Builder) -> None:
     assert inst.fd_prestat_get(3, 40) == 8  # nothing preopened: the end of the walk
     assert inst.fd_seek(1, 40) == 70  # ESPIPE
     assert inst.fd_close(1) == 0 and inst.fd_close(9) == 8
-    assert inst.path_open() == 52  # ENOSYS: the file system comes in the second stage
+    assert inst.path_open() == 8  # EBADF: there is no descriptor 3 without a preopen
 
 
 def test_proc_exit_is_an_exception_and_the_instance_stays_usable(build_extension: Builder) -> None:
@@ -157,8 +157,8 @@ def test_a_wrong_config_is_refused(build_extension: Builder) -> None:
     mod = build_extension(DATA / "wasi_probe.wat", "wasi_probe")
     with pytest.raises(TypeError, match="unknown option 'colour'"):
         mod.Instance(wasi={"colour": 1})
-    with pytest.raises(NotImplementedError, match="preopens"):
-        mod.Instance(wasi={"preopens": {"/": "."}})
+    with pytest.raises(NotADirectoryError):
+        mod.Instance(wasi={"preopens": {"/": __file__}})
     with pytest.raises(TypeError):
         mod.Instance(wasi=[1])
 

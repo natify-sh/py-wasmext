@@ -2,7 +2,8 @@
 
 - `poc/wasm/`, `tests/data/simple.wasm` and `tests/data/coremark.wasm` are the test modules of
   [vshymanskyy/wasm2mpy](https://github.com/vshymanskyy/wasm2mpy) (`test/`), copied unchanged. wasm2mpy is MIT
-  licensed; its licence text is below.
+  licensed; its licence text is below. The same goes for `tests/data/wasm2mpy/` (seven of them, built there from
+  [wasm3/embedded-wasm-apps](https://github.com/wasm3/embedded-wasm-apps)).
 - `poc/make.py` expects the sources of the `wasm2c` runtime (`wasm-rt.h`, `wasm-rt-impl.c`, `wasm-rt-mem-impl.c`, ...)
   from [WABT](https://github.com/WebAssembly/wabt) (Apache-2.0). They are not copied here.
 - The C that wasmext writes (`<name>_wasmext/`, which can end up in your sdist) contains the runtime sources of `wasm2c`

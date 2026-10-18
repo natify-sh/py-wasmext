@@ -20,6 +20,12 @@ def get_version() -> str:
     return "0"
 
 
+def get_timeout_seconds() -> float:
+    # the programs are built before (prebuild.py), but a machine can be slow and a build can be missing; the runner kills a program
+    # at this time, and on Windows what it started goes on
+    return 120.0
+
+
 def get_wasi_versions() -> list[str]:
     return ["wasm32-wasip1"]
 

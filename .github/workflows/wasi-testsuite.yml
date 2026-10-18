@@ -58,6 +58,15 @@ jobs:
           uv pip install --python .venv -r wasi-testsuite/test-runner/requirements/prod.txt
         shell: bash
 
+      - name: Build the programs
+        env:
+          WASMEXT_TESTSUITE_CACHE: ${{ runner.temp }}/wasmext-testsuite
+        run: |
+          WORK="$GITHUB_WORKSPACE"
+          if [ "$RUNNER_OS" = "Windows" ]; then PY="$WORK\\.venv\\Scripts\\python.exe"; else PY="$WORK/.venv/bin/python"; fi
+          "$PY" "$WORK/tests/wasi_testsuite/prebuild.py" "$WORK/wasi-testsuite/tests"
+        shell: bash
+
       - name: Run the tests
         env:
           WASMEXT_TESTSUITE_CACHE: ${{ runner.temp }}/wasmext-testsuite

@@ -19,23 +19,9 @@ import tempfile
 from pathlib import Path
 
 
-def main(argv: list[str]) -> int:
-    faulthandler.dump_traceback_later(
-        int(os.environ.get("WASMEXT_TESTSUITE_TIMEOUT", "600")), exit=True
-    )  # a hang shows where
-    parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("--env", action="append", default=[])
-    parser.add_argument("--dir", action="append", default=[])
-    parser.add_argument("--version", action="store_true")
-    parser.add_argument("program", nargs="?")
-    parser.add_argument("arguments", nargs=argparse.REMAINDER)
-    options = parser.parse_args(argv)
-    if options.version:
-        from wasmext._wasmize import _version  # pyright: ignore[reportPrivateUsage]
-
-        print(f"wasmext {_version()}")
-        return 0
-    program = Path(options.program)
+def prepare(program: Path) -> str:
+    """Make the build of `program` possible (the file copied by its contents, the importer installed), and give the name of the
+    module that imports it; `__import__(name)` builds it, if the build is not there already."""
     digest = hashlib.sha256(program.read_bytes()).hexdigest()[:16]
     cache = Path(os.environ.get("WASMEXT_TESTSUITE_CACHE", Path(tempfile.gettempdir()) / "wasmext-testsuite"))
     module = f"t_{digest}"
@@ -44,7 +30,7 @@ def main(argv: list[str]) -> int:
     wasm = home / f"{module}.wasm"
     if not wasm.exists():
         shutil.copyfile(program, wasm)
-    # -O0: the programs are tests of what a call does, not of how fast it is, and gcc is much quicker without optimizing
+    # no optimizing: the programs are tests of what a call does, not of how fast it is, and the compilers are much quicker
     if os.name == "nt":
         # MSVC reads CL before the command line (setuptools' /O2 and /GL win over it) and _CL_ after it
         os.environ.setdefault("_CL_", "/Od /GL-")
@@ -54,8 +40,32 @@ def main(argv: list[str]) -> int:
 
     _importer.install(build_dir=cache / "build", parts=int(os.environ.get("WASMEXT_TESTSUITE_PARTS", "8")))
     sys.path.insert(0, str(home))
+    return module
+
+
+def main(argv: list[str]) -> int:
+    faulthandler.dump_traceback_later(
+        int(os.environ.get("WASMEXT_TESTSUITE_TIMEOUT", "600")), exit=True
+    )  # a hang shows where
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--env", action="append", default=[])
+    parser.add_argument("--dir", action="append", default=[])
+    parser.add_argument("--version", action="store_true")
+    parser.add_argument("--build-only", action="store_true")  # build the module and stop (see prebuild.py)
+    parser.add_argument("program", nargs="?")
+    parser.add_argument("arguments", nargs=argparse.REMAINDER)
+    options = parser.parse_args(argv)
+    if options.version:
+        from wasmext._wasmize import _version  # pyright: ignore[reportPrivateUsage]
+
+        print(f"wasmext {_version()}")
+        return 0
+    program = Path(options.program)
+    module = prepare(program)
     sys.stdout.flush()
     imported = __import__(module)
+    if options.build_only:
+        return 0
     env = dict(item.split("=", 1) for item in options.env)
     preopens = {}
     for item in options.dir:

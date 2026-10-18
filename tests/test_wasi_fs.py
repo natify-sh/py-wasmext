@@ -1,5 +1,5 @@
-"""WASI for files and directories, the first stage (reading): the preopens, path_open, fd_read, fd_seek, fd_filestat_get,
-fd_readdir, and the confinement of a program to the directories it was given."""
+"""WASI for files and directories: the preopens, path_open, fd_read, fd_write, fd_seek, fd_filestat_get, fd_readdir, the
+calls that create, change and remove, and the confinement of a program to the directories it was given."""
 
 from __future__ import annotations
 
@@ -15,9 +15,12 @@ import pytest
 DATA = Path(__file__).parent / "data"
 Builder = Callable[..., ModuleType]
 
-E_BADF, E_ISDIR, E_NOENT, E_NOSYS, E_NOTDIR, E_NOTCAPABLE, E_NAMETOOLONG, E_SPIPE = 8, 31, 44, 52, 54, 76, 37, 70
+E_BADF, E_EXIST, E_INVAL, E_ISDIR, E_NOENT, E_NOTDIR = 8, 20, 28, 31, 44, 54
+E_NOTEMPTY, E_NOTCAPABLE, E_NAMETOOLONG, E_SPIPE = 55, 76, 37, 70
 # the rights the way wasi-libc asks for them to read a file
 FILE_RIGHTS = (1 << 1) | (1 << 2) | (1 << 5) | (1 << 21)  # fd_read, fd_seek, fd_tell, fd_filestat_get
+# fd_datasync, fd_fdstat_set_flags, fd_sync, fd_write, fd_allocate, fd_filestat_set_size, fd_filestat_set_times
+WRITE_RIGHTS = FILE_RIGHTS | (1 << 0) | (1 << 3) | (1 << 4) | (1 << 6) | (1 << 8) | (1 << 22) | (1 << 23)
 DIR_RIGHTS = (1 << 13) | (1 << 14) | (1 << 18) | (1 << 21)  # path_open, fd_readdir, path_filestat_get, fd_filestat_get
 
 
@@ -48,11 +51,29 @@ class Fs:
         return int.from_bytes(self.mem[at : at + 8], "little")
 
     def open(
-        self, name: str, *, fd: int = 3, flags: int = 1, oflags: int = 0, rights: int = FILE_RIGHTS, inheriting: int = 0
+        self,
+        name: str,
+        *,
+        fd: int = 3,
+        flags: int = 1,
+        oflags: int = 0,
+        rights: int = FILE_RIGHTS,
+        inheriting: int = 0,
+        fdflags: int = 0,
     ) -> tuple[int, int]:
         self.put(1000, name.encode())
-        code = self.inst.path_open(fd, flags, 1000, len(name.encode()), oflags, rights, inheriting, 0, 900)
+        code = self.inst.path_open(fd, flags, 1000, len(name.encode()), oflags, rights, inheriting, fdflags, 900)
         return code, self.u32(900)
+
+    def write(self, fd: int, data: bytes) -> tuple[int, int]:
+        self.put(3000, data)
+        self.put(0, (3000).to_bytes(4, "little") + len(data).to_bytes(4, "little"))
+        code = self.inst.fd_write(fd, 0, 1, 8)
+        return code, self.u32(8)
+
+    def path(self, name: str) -> tuple[int, int]:
+        self.put(1000, name.encode())
+        return 1000, len(name.encode())
 
     def read(self, fd: int, size: int) -> tuple[int, bytes]:
         self.put(0, (2000).to_bytes(4, "little") + size.to_bytes(4, "little"))
@@ -133,12 +154,10 @@ def test_a_directory_is_listed_and_opened_below(probe: Any, world: Path) -> None
     assert fs.inst.fd_seek(sub, 0, 0, 100) == E_BADF  # a directory is not seekable
 
 
-def test_what_is_not_there_or_not_yet_there_is_refused_by_name(probe: Any, world: Path) -> None:
+def test_what_is_not_there_or_is_not_a_directory_is_refused_by_name(probe: Any, world: Path) -> None:
     fs = Fs(probe, world)
     assert fs.open("missing.txt")[0] == E_NOENT
     assert fs.open("hello.txt", oflags=2)[0] == E_NOTDIR  # asked for a directory
-    assert fs.open("hello.txt", oflags=1)[0] == E_NOSYS  # creating: the second stage
-    assert fs.open("hello.txt", rights=FILE_RIGHTS | (1 << 6))[0] == E_NOSYS  # writing: the second stage
     assert fs.open("hello.txt", fd=9)[0] == E_BADF
     assert fs.open("hello.txt", fd=0)[0] == E_NOTDIR  # not a directory descriptor
 
@@ -243,3 +262,126 @@ def test_links_inside_the_directory_are_followed_and_a_loop_is_an_error(probe: A
 def test_a_name_that_is_too_long_is_refused(probe: Any, world: Path) -> None:
     fs = Fs(probe, world)
     assert fs.open("x" * 300)[0] == E_NAMETOOLONG
+
+
+ALL_RIGHTS = (1 << 30) - 1
+
+
+def test_a_file_is_created_written_and_truncated(probe: Any, world: Path) -> None:
+    fs = Fs(probe, world)
+    code, fd = fs.open("new.txt", oflags=1, rights=WRITE_RIGHTS)  # creat
+    assert code == 0
+    assert fs.write(fd, b"first ") == (0, 6) and fs.write(fd, b"second") == (0, 6)
+    assert fs.inst.fd_sync(fd) == 0 and fs.inst.fd_datasync(fd) == 0
+    assert (world / "new.txt").read_bytes() == b"first second"
+    assert fs.read(fd, 3)[0] == 0  # the same descriptor reads too when it was given the right
+    assert fs.inst.fd_close(fd) == 0
+    assert fs.open("new.txt", oflags=1 | 4, rights=WRITE_RIGHTS)[0] == E_EXIST  # creat + excl
+    code, fd = fs.open("new.txt", oflags=8, rights=WRITE_RIGHTS)  # trunc
+    assert code == 0 and (world / "new.txt").read_bytes() == b""
+    assert fs.write(fd, b"x")[0] == 0
+    fs.inst.fd_close(fd)
+    assert fs.open("missing/new.txt", oflags=1, rights=WRITE_RIGHTS)[0] == E_NOENT
+    assert fs.open("sub", oflags=1 | 2, rights=WRITE_RIGHTS)[0] == E_INVAL  # a directory cannot be created this way
+    assert fs.open("sub", rights=WRITE_RIGHTS)[0] == E_ISDIR  # nor opened for writing
+    assert fs.open("../new2.txt", oflags=1, rights=WRITE_RIGHTS)[0] == E_NOTCAPABLE
+
+
+def test_writing_needs_the_right_and_a_directory_is_not_written(probe: Any, world: Path) -> None:
+    fs = Fs(probe, world)
+    _, ro = fs.open("hello.txt")
+    assert fs.write(ro, b"x")[0] == E_NOTCAPABLE  # opened without fd_write
+    _, rw = fs.open("hello.txt", rights=WRITE_RIGHTS)
+    assert fs.write(3, b"x")[0] == E_ISDIR
+    assert fs.inst.fd_fdstat_set_rights(rw, ALL_RIGHTS, 0) == E_NOTCAPABLE  # rights are never gained
+    assert fs.inst.fd_fdstat_set_rights(rw, FILE_RIGHTS, 0) == 0  # only given up
+    assert fs.write(rw, b"x")[0] == E_NOTCAPABLE
+    assert fs.inst.fd_fdstat_get(rw, 80) == 0 and fs.u64(88) == FILE_RIGHTS
+    assert (world / "hello.txt").read_bytes() == b"hello, files\n"
+
+
+def test_append_is_kept_and_can_be_changed(probe: Any, world: Path) -> None:
+    fs = Fs(probe, world)
+    _, fd = fs.open("hello.txt", rights=WRITE_RIGHTS, fdflags=1)  # append
+    assert fs.write(fd, b"more")[0] == 0
+    assert (world / "hello.txt").read_bytes() == b"hello, files\nmore"
+    assert fs.inst.fd_fdstat_get(fd, 80) == 0 and fs.mem[82] == 1
+    assert fs.inst.fd_fdstat_set_flags(fd, 0) == 0
+    assert fs.inst.fd_fdstat_get(fd, 80) == 0 and fs.mem[82] == 0
+    assert fs.inst.fd_fdstat_set_flags(fd, 99) == E_INVAL
+
+
+def test_the_size_of_a_file_is_set_and_allocated(probe: Any, world: Path) -> None:
+    fs = Fs(probe, world)
+    _, fd = fs.open("hello.txt", rights=WRITE_RIGHTS)
+    size = (world / "hello.txt").stat().st_size
+    assert fs.inst.fd_filestat_set_size(fd, 5) == 0 and (world / "hello.txt").read_bytes() == b"hello"
+    assert fs.inst.fd_allocate(fd, 0, 3) == 0 and (world / "hello.txt").stat().st_size == 5  # already that long
+    assert fs.inst.fd_allocate(fd, 4, size) == 0 and (world / "hello.txt").stat().st_size == size + 4
+    assert fs.inst.fd_filestat_set_size(3, 0) == E_ISDIR
+    _, ro = fs.open("sub/deep.txt")
+    assert fs.inst.fd_filestat_set_size(ro, 0) == E_NOTCAPABLE and fs.inst.fd_allocate(ro, 0, 9) == E_NOTCAPABLE
+
+
+def test_times_are_set_for_a_descriptor_and_for_a_path(probe: Any, world: Path) -> None:
+    fs = Fs(probe, world)
+    _, fd = fs.open("hello.txt", rights=WRITE_RIGHTS)
+    before = (world / "hello.txt").stat()
+    a, m = 1_500_000_000 * 10**9, 1_600_000_000 * 10**9
+    assert fs.inst.fd_filestat_set_times(fd, a, m, 1 | 4) == 0  # atim and mtim set
+    now = (world / "hello.txt").stat()
+    assert (now.st_atime_ns, now.st_mtime_ns) == (a, m)
+    assert fs.inst.fd_filestat_set_times(fd, 0, m + 10**9, 4) == 0  # only mtim: atim stays
+    now = (world / "hello.txt").stat()
+    assert (now.st_atime_ns, now.st_mtime_ns) == (a, m + 10**9)
+    assert (
+        fs.inst.fd_filestat_set_times(fd, 0, 0, 1 | 2) == E_INVAL
+        and fs.inst.fd_filestat_set_times(fd, 0, 0, 16) == E_INVAL
+    )
+    ptr, length = fs.path("hello.txt")
+    assert fs.inst.path_filestat_set_times(3, 1, ptr, length, 0, 0, 8) == 0  # mtim now
+    assert (world / "hello.txt").stat().st_mtime_ns > m + 10**9 and (world / "hello.txt").stat().st_atime_ns == a
+    ptr, length = fs.path("missing.txt")
+    assert fs.inst.path_filestat_set_times(3, 1, ptr, length, 0, 0, 8) == E_NOENT
+    assert before.st_size == (world / "hello.txt").stat().st_size
+
+
+def test_directories_are_created_and_removed_and_files_unlinked(probe: Any, world: Path) -> None:
+    fs = Fs(probe, world)
+    assert fs.inst.path_create_directory(3, *fs.path("made")) == 0 and (world / "made").is_dir()
+    assert fs.inst.path_create_directory(3, *fs.path("made")) == E_EXIST
+    assert fs.inst.path_create_directory(3, *fs.path("sub/inner")) == 0
+    assert fs.inst.path_create_directory(3, *fs.path("nothing/inner")) == E_NOENT
+    assert fs.inst.path_create_directory(3, *fs.path(".")) == E_EXIST
+    assert fs.inst.path_create_directory(3, *fs.path("../outside_dir")) == E_NOTCAPABLE
+    assert fs.inst.path_remove_directory(3, *fs.path("sub")) == E_NOTEMPTY
+    assert fs.inst.path_remove_directory(3, *fs.path("sub/inner")) == 0 and not (world / "sub" / "inner").exists()
+    assert fs.inst.path_remove_directory(3, *fs.path("hello.txt")) == E_NOTDIR
+    assert fs.inst.path_remove_directory(3, *fs.path(".")) == E_INVAL
+    assert fs.inst.path_unlink_file(3, *fs.path("sub")) == E_ISDIR and (world / "sub").is_dir()
+    assert fs.inst.path_unlink_file(3, *fs.path("hello.txt")) == 0 and not (world / "hello.txt").exists()
+    assert fs.inst.path_unlink_file(3, *fs.path("hello.txt")) == E_NOENT
+    assert fs.inst.path_unlink_file(3, *fs.path("../outside.txt")) == E_NOTCAPABLE
+    assert fs.inst.path_unlink_file(4, *fs.path("x")) == E_BADF
+
+
+def test_a_file_that_is_removed_while_open_is_still_there_to_read(probe: Any, world: Path) -> None:
+    if sys.platform == "win32":
+        pytest.skip("Windows does not remove a file that is open")
+    fs = Fs(probe, world)
+    _, fd = fs.open("hello.txt")
+    assert fs.inst.path_unlink_file(3, *fs.path("hello.txt")) == 0
+    assert fs.read(fd, 5) == (0, b"hello")
+
+
+def test_a_readonly_preopen_refuses_every_change(probe: Any, world: Path) -> None:
+    fs = Fs(probe, world, readonly=True)
+    assert fs.open("new.txt", oflags=1, rights=WRITE_RIGHTS)[0] == E_NOTCAPABLE
+    _, fd = fs.open("hello.txt", rights=WRITE_RIGHTS)  # the write rights are taken away, not the open
+    assert fs.write(fd, b"x")[0] == E_NOTCAPABLE
+    assert fs.open("hello.txt", oflags=8)[0] == E_NOTCAPABLE  # trunc
+    assert fs.inst.path_create_directory(3, *fs.path("made")) == E_NOTCAPABLE
+    assert fs.inst.path_remove_directory(3, *fs.path("sub")) == E_NOTCAPABLE
+    assert fs.inst.path_unlink_file(3, *fs.path("hello.txt")) == E_NOTCAPABLE
+    assert fs.inst.path_filestat_set_times(3, 1, *fs.path("hello.txt"), 0, 0, 8) == E_NOTCAPABLE
+    assert (world / "hello.txt").read_bytes() == b"hello, files\n" and not (world / "made").exists()

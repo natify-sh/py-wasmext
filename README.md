@@ -119,8 +119,9 @@ A program is kept inside the directories it was given: `..` out of a directory, 
 `ENOTCAPABLE`. A directory the program opens is a capability for that directory only. A program built with an old libc finds a relative path
 only through a preopen named `"."`.
 
-Built so far: arguments, environment, clocks, random bytes, `proc_exit`, the standard streams, and **reading** files and directories
-(`path_open`, `fd_read`, `fd_seek`, `fd_filestat_get`, `fd_readdir`, ...). Writing files and the rest of the calls answer `ENOSYS` for now.
+Built so far: arguments, environment, clocks, random bytes, `proc_exit`, the standard streams, and files and directories: **reading,
+writing, creating, truncating, removing, setting sizes and times** (`path_open`, `fd_read`, `fd_write`, `fd_seek`, `path_create_directory`,
+`path_unlink_file`, `fd_readdir`, ...). `rename`, links, `pread`/`pwrite` and `poll_oneoff` answer `ENOSYS` for now.
 On POSIX the file calls go straight to the system (`openat`), on Windows through Python (slower). WASI 0.2 and 0.3 (components) are not
 supported: build for `wasm32-wasip1`. See [FEATURES.md](FEATURES.md#design-wasi).
 

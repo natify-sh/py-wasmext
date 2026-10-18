@@ -38,7 +38,9 @@ def _verdict_of_import(kind: str, thing: FuncType | TableType | Limits | GlobalT
     if kind == "global" and isinstance(thing, GlobalType):
         if thing.type not in ("i32", "i64", "f32", "f64"):
             return f"not supported yet: uses {thing.type}"
-        return "not supported yet: a mutable global" if thing.mutable else "ok (a number)"
+        return (
+            "ok (an export of another instance)" if thing.mutable else "ok (a number, or an export of another instance)"
+        )
     if kind != "func" or not isinstance(thing, FuncType):
         return f"not supported yet: an imported {kind}"
     reason = _why_not(thing, several_results=True)

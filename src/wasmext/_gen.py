@@ -149,6 +149,7 @@ class _ImportGlobal:
     host: int  # index of the import module (the struct that holds the value)
     slot: int  # the place among the globals of that module
     symbol: str
+    mutable: bool = False
 
 
 def generate(module: Module, name: str) -> Glue:
@@ -177,14 +178,14 @@ def generate(module: Module, name: str) -> Glue:
         elif imp.kind == "global" and isinstance(imp.type, GlobalType):
             if imp.type.type not in _CTYPE:
                 raise GenError(f"import {imp.module}.{imp.name} uses {imp.type.type}: not supported yet")
-            if imp.type.mutable:
-                raise GenError(f"import {imp.module}.{imp.name}: an imported mutable global is not supported yet")
             if imp.module not in hosts:
                 hosts.append(imp.module)
             slot = global_slots.get(imp.module, 0)
             global_slots[imp.module] = slot + 1
             global_imports.append(
-                _ImportGlobal(imp.module, imp.name, imp.type.type, hosts.index(imp.module), slot, symbol)
+                _ImportGlobal(
+                    imp.module, imp.name, imp.type.type, hosts.index(imp.module), slot, symbol, imp.type.mutable
+                )
             )
         else:
             raise GenError(f"import {imp.module}.{imp.name}: an imported {imp.kind} is not supported yet")
@@ -194,6 +195,9 @@ def generate(module: Module, name: str) -> Glue:
     memories: list[str] = []
     globals_: list[tuple[str, GlobalType]] = []
     for exp in module.exports:
+        if exp.name == "keys" and exp.kind in ("func", "memory", "global"):
+            skipped.append(f"{exp.kind} 'keys' would hide the keys() of Instance")
+            continue
         if exp.kind == "func":
             func = module.all_functions[exp.index]
             reason = _why_not(func, several_results=True)
@@ -278,6 +282,20 @@ def generate(module: Module, name: str) -> Glue:
         add("    return PyBytes_FromStringAndSize((const char *)&v, 16);")
         add("}")
         add("")
+    # what another extension reads of an export of this one: a capsule over this struct. The contract between the extensions
+    # is private to wasmext and versioned; a reader checks `version` and `size` before it reads a field.
+    add('#define WASMEXT_EXPORT "wasmext.export.v1"')
+    add("enum { WASMEXT_FUNC = 0, WASMEXT_TABLE = 1, WASMEXT_MEMORY = 2, WASMEXT_GLOBAL = 3 };")
+    add("typedef struct {")
+    add("    uint32_t size;      /* sizeof of this struct for the extension that made it */")
+    add("    uint32_t version;   /* 1 */")
+    add("    uint32_t kind;      /* WASMEXT_FUNC, ... */")
+    add("    uint32_t type;      /* the value type of a global, as numbered in the binary format (0x7F is i32) */")
+    add("    uint32_t flags;     /* bit 0: the global is mutable */")
+    add("    PyObject *owner;    /* the instance: a reader that keeps the address keeps a reference to it */")
+    add("    void *address;      /* a global: the pointer to its value */")
+    add("} wasmext_export;")
+    add("")
     # what a call of WebAssembly code must do about the jump buffer
     add(
         "/* a trap from a signal handler (an access past the guard pages) leaves the signal blocked: sigsetjmp saves no mask, for speed */"
@@ -320,7 +338,13 @@ def generate(module: Module, name: str) -> Glue:
 
     for i, host in enumerate(hosts):
         add(f"/* the callables and the values of the imports of module {_c_string(host)} */")
-        values = "".join(f" {_CTYPE[g.type]} g{g.slot};" for g in global_imports if hosts[g.host] == host)
+        # g: the value of a global the caller gave as a number; gp: where the runtime reads it (g, or the global of another
+        # instance); go: that instance, kept alive
+        values = "".join(
+            f" {_CTYPE[g.type]} g{g.slot}; {_CTYPE[g.type]} *gp{g.slot}; PyObject *go{g.slot};"
+            for g in global_imports
+            if hosts[g.host] == host
+        )
         add(f"struct w2c_{mangle(host, module=True)} {{ PyObject *fn[{max(slots.get(host, 0), 1)}];{values} }};")
     add("")
     add("typedef struct {")
@@ -343,7 +367,7 @@ def generate(module: Module, name: str) -> Glue:
     # the globals the module imports: the runtime asks for a pointer to the value
     for g in global_imports:
         mod_struct = f"struct w2c_{mangle(g.module, module=True)}"
-        add(f"{_CTYPE[g.type]} *{g.symbol}({mod_struct} *h) {{ return &h->g{g.slot}; }}")
+        add(f"{_CTYPE[g.type]} *{g.symbol}({mod_struct} *h) {{ return h->gp{g.slot}; }}")
     if global_imports:
         add("")
 
@@ -419,12 +443,16 @@ def generate(module: Module, name: str) -> Glue:
     add("    Py_VISIT(Py_TYPE((PyObject *)self));")
     for i, host in enumerate(hosts):
         add(f"    for (int k = 0; k < {slots.get(host, 0)}; k++) Py_VISIT(self->host{i}.fn[k]);")
+    for g in global_imports:
+        add(f"    Py_VISIT(self->host{g.host}.go{g.slot});")
     add("    return 0;")
     add("}")
     add("")
     add("static int Instance_clear(InstanceObject *self) {")
     for i, host in enumerate(hosts):
         add(f"    for (int k = 0; k < {slots.get(host, 0)}; k++) Py_CLEAR(self->host{i}.fn[k]);")
+    for g in global_imports:
+        add(f"    Py_CLEAR(self->host{g.host}.go{g.slot});")
     add("    return 0;")
     add("}")
     add("")
@@ -468,19 +496,55 @@ def generate(module: Module, name: str) -> Glue:
             else:
                 number = "PyLong_Check(v)" if g.type in ("i32", "i64") else "(PyLong_Check(v) || PyFloat_Check(v))"
                 what = "an int" if g.type in ("i32", "i64") else "a number"
+            where = f"{g.module}.{g.field}"
+            host = f"self->host{g.host}"
             add("    {")
             add(f"        PyObject *v = lookup_import(imports, {_c_string(g.module)}, {_c_string(g.field)}, 0);")
             add("        if (v == NULL) { Py_DECREF(self); return NULL; }")
-            add(f"        if (!{number}) {{")
-            add("            Py_DECREF(v);")
+            add("        if (PyCapsule_IsValid(v, WASMEXT_EXPORT)) {  /* an export of another instance */")
+            add("            wasmext_export *e = (wasmext_export *)PyCapsule_GetPointer(v, WASMEXT_EXPORT);")
+            add("            if (e->version != 1 || e->size < sizeof(wasmext_export)) {")
             add(
-                f"            PyErr_SetString(LinkError, {_c_string(f'import {g.module}.{g.field} is a global of type {g.type}: pass {what}')});"
+                f"                PyErr_SetString(LinkError, {_c_string(f'import {where}: the export is from an incompatible version of wasmext')});"
             )
-            add("            Py_DECREF(self);")
-            add("            return NULL;")
-            add("        }")
-            add(f"        self->host{g.host}.g{g.slot} = {_TO_WASM[g.type].format('v')};")
-            add("        Py_DECREF(v);")
+            add("            } else if (e->kind != WASMEXT_GLOBAL) {")
+            add(
+                f"                PyErr_SetString(LinkError, {_c_string(f'import {where} is a global: the export given is not')});"
+            )
+            add(f"            }} else if (e->type != {_TYPE_CODE[g.type]} || (e->flags & 1) != {int(g.mutable)}) {{")
+            expected = f"{'mutable ' if g.mutable else ''}{g.type}"
+            add(
+                f"                PyErr_SetString(LinkError, {_c_string(f'import {where} is a {expected} global: the export given has another type or the other mutability')});"
+            )
+            add("            } else {")
+            add(f"                {host}.gp{g.slot} = ({_CTYPE[g.type]} *)e->address;")
+            add("                Py_INCREF(e->owner);")
+            add(f"                {host}.go{g.slot} = e->owner;")
+            add("            }")
+            add("            Py_DECREF(v);")
+            add("            if (PyErr_Occurred()) { Py_DECREF(self); return NULL; }")
+            if g.mutable:
+                add("        } else {")
+                add("            Py_DECREF(v);")
+                add(
+                    f"            PyErr_SetString(LinkError, {_c_string(f'import {where} is a mutable global: pass an export of another instance, instance[{chr(34)}name{chr(34)}]')});"
+                )
+                add("            Py_DECREF(self);")
+                add("            return NULL;")
+                add("        }")
+            else:
+                add(f"        }} else if (!{number}) {{")
+                add("            Py_DECREF(v);")
+                add(
+                    f"            PyErr_SetString(LinkError, {_c_string(f'import {where} is a global of type {g.type}: pass {what} or an export of another instance')});"
+                )
+                add("            Py_DECREF(self);")
+                add("            return NULL;")
+                add("        } else {")
+                add(f"            {host}.g{g.slot} = {_TO_WASM[g.type].format('v')};")
+                add(f"            {host}.gp{g.slot} = &{host}.g{g.slot};")
+                add("            Py_DECREF(v);")
+                add("        }")
             add("    }")
     add("    ENTER_WASM({ Py_DECREF(self); return NULL; })")
     host_args = "".join(f", &self->host{i}" for i in range(len(hosts)))
@@ -527,7 +591,79 @@ def generate(module: Module, name: str) -> Glue:
             add("    Py_RETURN_NONE;")
         add("}")
         add("")
+    # the instance as a mapping of its exports: keys(), instance["name"]; the value is a capsule another extension reads
+    mapped: list[
+        tuple[str, int, int, int, str]
+    ] = []  # name, kind, type code, flags, the function that gives the address
+    for i, (exp_name, glob) in enumerate(globals_):
+        accessor = f"w2c_{prefix}_{mangle(exp_name)}"
+        add(f"static void *export_address{i}(InstanceObject *self) {{ return (void *){accessor}(&self->inst); }}")
+        mapped.append((exp_name, 3, _TYPE_CODE[glob.type], int(glob.mutable), f"export_address{i}"))
+    if globals_:
+        add("")
+    mapped += [(exp_name, 0, 0, 0, "NULL") for exp_name, _ in funcs]
+    mapped += [(exp_name, 2, 0, 0, "NULL") for exp_name in memories]
+    add(
+        "static const struct { const char *name; uint32_t kind, type, flags; void *(*address)(InstanceObject *); } export_table[] = {"
+    )
+    for exp_name, kind, type_code, flags, address in mapped:
+        add(f"    {{{_c_string(exp_name)}, {kind}, {type_code}, {flags}, {address}}},")
+    add("    {NULL, 0, 0, 0, NULL}")
+    add("};")
+    add("")
+    add("static PyObject *Instance_keys(PyObject *self, PyObject *Py_UNUSED(ignored)) {")
+    add("    (void)self;")
+    add("    PyObject *list = PyList_New(0);")
+    add("    if (list == NULL) return NULL;")
+    add("    for (int k = 0; export_table[k].name != NULL; k++) {")
+    add("        PyObject *name = PyUnicode_FromString(export_table[k].name);")
+    add(
+        "        if (name == NULL || PyList_Append(list, name) != 0) { Py_XDECREF(name); Py_DECREF(list); return NULL; }"
+    )
+    add("        Py_DECREF(name);")
+    add("    }")
+    add("    return list;")
+    add("}")
+    add("")
+    add("static void export_free(PyObject *capsule) {")
+    add("    wasmext_export *e = (wasmext_export *)PyCapsule_GetPointer(capsule, WASMEXT_EXPORT);")
+    add("    if (e != NULL) { Py_DECREF(e->owner); PyMem_Free(e); }")
+    add("}")
+    add("")
+    add("static PyObject *Instance_subscript(PyObject *self, PyObject *key) {")
+    add("    const char *name = PyUnicode_Check(key) ? PyUnicode_AsUTF8AndSize(key, NULL) : NULL;")
+    add("    if (name == NULL) {")
+    add("        if (PyErr_Occurred() && !PyErr_ExceptionMatches(PyExc_TypeError)) return NULL;")
+    add("        PyErr_Clear();")
+    add("        PyErr_SetObject(PyExc_KeyError, key);")
+    add("        return NULL;")
+    add("    }")
+    add("    for (int k = 0; export_table[k].name != NULL; k++) {")
+    add("        if (strcmp(name, export_table[k].name) != 0) continue;")
+    add("        wasmext_export *e = (wasmext_export *)PyMem_Malloc(sizeof(wasmext_export));")
+    add("        if (e == NULL) return PyErr_NoMemory();")
+    add("        e->size = sizeof(wasmext_export);")
+    add("        e->version = 1;")
+    add("        e->kind = export_table[k].kind;")
+    add("        e->type = export_table[k].type;")
+    add("        e->flags = export_table[k].flags;")
+    add(
+        "        e->address = export_table[k].address != NULL ? export_table[k].address((InstanceObject *)self) : NULL;"
+    )
+    add("        Py_INCREF(self);")
+    add("        e->owner = self;")
+    add("        PyObject *capsule = PyCapsule_New(e, WASMEXT_EXPORT, export_free);")
+    add("        if (capsule == NULL) { Py_DECREF(self); PyMem_Free(e); }")
+    add("        return capsule;")
+    add("    }")
+    add("    PyErr_SetObject(PyExc_KeyError, key);")
+    add("    return NULL;")
+    add("}")
+    add("")
     add("static PyMethodDef Instance_methods[] = {")
+    add(
+        '    {"keys", Instance_keys, METH_NOARGS, "the names of the exports (an instance is a mapping, so that {**instance} works)"},'
+    )
     for i, (exp_name, func) in enumerate(funcs):
         doc = f"{exp_name}{_signature(func)}"
         add(
@@ -633,6 +769,7 @@ def generate(module: Module, name: str) -> Glue:
     add("    {Py_tp_traverse, Instance_traverse},")
     add("    {Py_tp_clear, Instance_clear},")
     add("    {Py_tp_methods, Instance_methods},")
+    add("    {Py_mp_subscript, Instance_subscript},")
     add("    {Py_tp_getset, Instance_getset},")
     add("    {Py_tp_members, Instance_members},")
     add(f"    {{Py_tp_doc, (void *){_c_string('An instance of the WebAssembly module')}}},")
@@ -685,6 +822,8 @@ def generate(module: Module, name: str) -> Glue:
     return Glue("\n".join(w) + "\n", skipped, _stub(last, funcs, memories, globals_, module.imports))
 
 
+# the value types as the binary format of WebAssembly numbers them: what the link between two extensions says of a global
+_TYPE_CODE: dict[ValType, int] = {"i32": 0x7F, "i64": 0x7E, "f32": 0x7D, "f64": 0x7C, "v128": 0x7B}
 _PY_TYPE: dict[ValType, str] = {"i32": "int", "i64": "int", "f32": "float", "f64": "float", "v128": "bytes"}
 # wasm2c returns several results in a `struct wasm_multi_<codes>` whose members are `<code><position>`.
 _MULTI_CODE: dict[ValType, str] = {"i32": "i", "i64": "j", "f32": "f", "f64": "d", "v128": "o"}
@@ -734,7 +873,7 @@ def _stub(
         by_module.setdefault(imp.module, []).append(imp)
     for i, (_module, members) in enumerate(by_module.items()):
         items = ", ".join(
-            f"{_py_string(m.name)}: {_callable_type(m.type) if isinstance(m.type, FuncType) else _PY_TYPE[m.type.type]}"
+            f"{_py_string(m.name)}: {_callable_type(m.type) if isinstance(m.type, FuncType) else _global_import_type(m.type)}"
             for m in members
             if isinstance(m.type, (FuncType, GlobalType))
         )
@@ -746,6 +885,10 @@ def _stub(
     lines.append(
         "    def __init__(self, imports: Imports) -> None: ..." if by_module else "    def __init__(self) -> None: ..."
     )
+    lines += [
+        "    def keys(self) -> list[str]: ...",
+        "    def __getitem__(self, name: str, /) -> object: ...",
+    ]
     for name, func in funcs:
         params = "".join(f"arg{i}: {_PY_TYPE[t]}, " for i, t in enumerate(func.params))
         params = f", {params}/" if func.params else ""
@@ -767,6 +910,11 @@ def _stub(
         else:
             lines.append(f"    # memory {_py_string(name)} is not an identifier: getattr(instance, {_py_string(name)})")
     return "\n".join(lines) + "\n"
+
+
+def _global_import_type(glob: GlobalType) -> str:
+    """What the imports may hold for a global: its value, or (the only way for a mutable one) an export of another instance."""
+    return "object" if glob.mutable else f"{_PY_TYPE[glob.type]} | object"
 
 
 def _py_string(text: str) -> str:

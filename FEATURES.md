@@ -18,7 +18,7 @@ What each line says is tested (`tests/test_features.py`), not read from those do
 | Feature | Status | Note / test |
 | --- | --- | --- |
 | MVP | done | `1.0 mvp` |
-| Import/export of mutable globals | partly | exported: done, as attributes (see below); imported: not yet, it needs a shared `Global` |
+| Import/export of mutable globals | done | exported: as attributes (see below); imported: an export of another instance (see "Imported mutable globals") |
 
 ### 2.0
 
@@ -76,11 +76,12 @@ What each line says is tested (`tests/test_features.py`), not read from those do
 | Exported tables, tags | not yet | left out and reported |
 | Imported functions | done | `Instance({module: {name: callable}})`; Python exceptions come out of the call of the module; calling back into the module works |
 | Imported immutable globals | done | a number in the imports; `test_an_imported_immutable_global_is_a_number` |
-| Imported mutable globals | not yet | refused when the extension is made; needs a shared `Global` object |
+| Imported mutable globals | done | an export of another instance: `Instance({"env": a})`, `{**a}` or `a["name"]`; the variable is shared; a number is a `LinkError`; type and mutability are checked: `test_instances_share_a_mutable_global_and_an_instance_is_a_mapping`, `test_linking_a_global_checks_what_it_is` |
 | Imported memories, tables | not yet | refused when the extension is made |
-| Shared `Global`: one mutable global used by several instances | not yet | both ways: a `Global` object that is imported by an instance, and an exported global that is passed on to another instance. The value would live in the object, and wasm2c gets a pointer to it |
+| Shared global between instances | done | one variable used by several instances, through the exports of an instance (design below); a global made by the host with no module behind it: not yet |
 | Shared `Memory` and `Table` objects | not yet | the same design problem as for `Global` |
 | Recognising the objects of another extension | not yet | the design problem: every extension has its own types, so an instance of one cannot take a `Global` made by another unless there is a common way to tell them apart (a capsule with a tag and the type, for example) |
+| The instance as a mapping of its exports | done | `keys()` and `a["name"]` (a private capsule `wasmext.export.v1`, read by another extension), so `{**a, "log": print}` works; write it as a dict literal or `dict(a, log=print)`: `dict(**a, log=print)` is a `TypeError` of Python (a duplicate keyword). An export called `keys` is left out (it would hide `keys()`) |
 | Traps | done | `Trap` (a `RuntimeError`), the instance stays usable; `LinkError` for bad imports |
 | GC and weak references | done | `Instance` takes part in the cycle collector and can be weakly referenced |
 | Type stubs | done | `<module>.pyi` written beside the `.wasm`, with `# fmt: off` and `# ruff: noqa` |
@@ -191,7 +192,7 @@ In this order (the first ones are small):
 7. `funcref`/`externref` in signatures (a design is needed first: who owns an `externref`); custom page sizes (`wasm2c` can, with a
    flag); compatibility with the wasm3/pywasm3 examples; WASI (deferred).
 
-## Design: linking instances (draft, nothing of it is built)
+## Design: linking instances (globals are built; memories, functions and tables are not)
 
 The goal is the "shared objects" of the plan: an instance uses a global, a memory, a table or a function of another instance.
 wasmext stays native: no `Global`/`Memory`/`Table` classes copied from the JavaScript API (as `wasmhost` has, because there an

@@ -453,17 +453,110 @@ for bad in ({'env2': {'scale': 1}, 'env': {'big': 1}},                      # mi
     ]
 
 
-def test_an_imported_mutable_global_is_refused_when_the_extension_is_made(tmp_path: Path, wabt: Path) -> None:
+def _build_modules(tmp_path: Path, wabt: Path, **wats: str) -> None:
+    """pkg/<name>.wat for each keyword, built into extensions by one `wasmext -i`."""
     package = tmp_path / "pkg"
     package.mkdir()
     (package / "__init__.py").write_text("", encoding="utf-8")
-    (package / "m.wat").write_text(
-        '(module (import "env" "counter" (global (mut i32))) (func (export "f") global.get 0 drop))', encoding="utf-8"
-    )
-    subprocess.run([wabt / "bin" / "wat2wasm", "m.wat", "-o", "m.wasm"], cwd=package, check=True)
-    built = wasmext(tmp_path, wabt, "-i", "-q", "pkg/m.wasm")
-    assert built.returncode == 1
-    assert "an imported mutable global is not supported yet" in built.stderr
+    for name, wat in wats.items():
+        (package / f"{name}.wat").write_text(wat, encoding="utf-8")
+        subprocess.run([wabt / "bin" / "wat2wasm", f"{name}.wat", "-o", f"{name}.wasm"], cwd=package, check=True)
+    built = wasmext(tmp_path, wabt, "-i", "-q", *(f"pkg/{name}.wasm" for name in wats))
+    assert built.returncode == 0, built.stderr[-600:]
+
+
+_COUNTER_A = """
+(module
+  (global (export "counter") (mut i32) (i32.const 10))
+  (global (export "fixed") i32 (i32.const 7))
+  (global (export "wide") (mut i64) (i64.const 1))
+  (func (export "bump") (result i32) global.get 0 i32.const 1 i32.add global.set 0 global.get 0)
+  (func (export "log") (param i32)))
+"""
+_COUNTER_B = """
+(module
+  (import "env" "counter" (global $c (mut i32)))
+  (import "env" "fixed" (global $k i32))
+  (import "env" "log" (func $log (param i32)))
+  (func (export "add") (param i32) (result i32) global.get $c local.get 0 i32.add global.set $c global.get $c)
+  (func (export "read") (result i32) global.get $c)
+  (func (export "fixed") (result i32) global.get $k)
+  (func (export "say") (param i32) local.get 0 call $log))
+"""
+
+
+def test_instances_share_a_mutable_global_and_an_instance_is_a_mapping(tmp_path: Path, wabt: Path) -> None:
+    _build_modules(tmp_path, wabt, a=_COUNTER_A, b=_COUNTER_B)
+    code = """
+import pkg.a, pkg.b
+
+a = pkg.a.Instance()
+print(sorted(a.keys()))
+print({**a}.keys() == set(a.keys()))
+
+said = []
+shelf = {**a, 'log': said.append}              # everything of a, and log from Python (the later key wins)
+b = pkg.b.Instance({'env': shelf})
+print(b.read(), b.fixed())                       # 10 7: the global of a, seen from b
+print(b.add(5), a.counter, a.bump(), b.read())   # 15 15 16 16: one variable
+a.counter = 100
+print(b.read())                                  # 100
+b.say(3)
+print(said)                                      # [3]: log came from Python, not from a
+
+c = pkg.b.Instance({'env': {'counter': a['counter'], 'fixed': 5, 'log': print}})   # one export of a, the rest by hand
+print(c.read(), c.fixed())                       # 100 5
+
+del a, shelf
+import gc; gc.collect()
+print(b.add(1))                                  # a is kept alive by b: 101
+"""
+    ran = subprocess.run([sys.executable, "-c", code], cwd=tmp_path, capture_output=True, text=True, check=False)
+    assert ran.returncode == 0, ran.stderr[-800:]
+    assert ran.stdout.splitlines() == [
+        str(sorted(["counter", "fixed", "wide", "bump", "log"])),
+        "True",
+        "10 7",
+        "15 15 16 16",
+        "100",
+        "[3]",
+        "100 5",
+        "101",
+    ]
+
+
+def test_linking_a_global_checks_what_it_is(tmp_path: Path, wabt: Path) -> None:
+    _build_modules(tmp_path, wabt, a=_COUNTER_A, b=_COUNTER_B)
+    code = """
+import pkg.a, pkg.b
+a = pkg.a.Instance()
+
+def attempt(counter, fixed=5):
+    try:
+        pkg.b.Instance({'env': {'counter': counter, 'fixed': fixed, 'log': print}})
+    except pkg.b.LinkError as exc:
+        print('LinkError:', exc)
+    else:
+        print('linked')
+
+attempt(3)                    # a mutable global is not given as a number
+attempt(a['wide'])            # i64, the module wants i32
+attempt(a['fixed'])           # immutable, the module wants mutable
+attempt(a['bump'])            # a function
+attempt(a['counter'], a['wide'])   # an i64 for an i32
+attempt(a['counter'], a['fixed'])  # fine: an immutable global of a for an immutable import
+try:
+    a['nothing']
+except KeyError as exc:
+    print('KeyError', exc)
+"""
+    ran = subprocess.run([sys.executable, "-c", code], cwd=tmp_path, capture_output=True, text=True, check=False)
+    assert ran.returncode == 0, ran.stderr[-800:]
+    out = ran.stdout.splitlines()
+    assert "mutable global" in out[0] and "export of another instance" in out[0]
+    assert all(line.startswith("LinkError") for line in out[1:5])
+    assert "another type" in out[1] and "global: the export given is not" in out[3]
+    assert out[5:] == ["linked", "KeyError 'nothing'"]
 
 
 def test_a_trap_from_a_signal_handler_can_happen_again(tmp_path: Path, wabt: Path) -> None:

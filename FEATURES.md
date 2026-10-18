@@ -210,7 +210,7 @@ In this order (the first ones are small):
    publishing on PyPI; `.wat` as a source (an idea, see "Build and distribution").
 7. `funcref`/`externref` in signatures (a design is needed first: who owns an `externref`); custom page sizes (`wasm2c` can, with a
    flag); the rest of the examples of other projects (below).
-8. **WASI** (`wasi_snapshot_preview1` and `wasi_unstable`): part of wasmext, compiled into the native module as `wasi_preview1.c`, the system
+8. **WASI** (`wasi_snapshot_preview1` and `wasi_unstable`): part of wasmext, compiled into the native module as a header, `wasi_preview1.h`, the system
    reached through `Python.h`. Not started; see "Design: WASI".
 
 How to choose the next features: **on demand, not in advance**. The examples of [wasm2mpy](https://github.com/vshymanskyy/wasm2mpy)
@@ -314,12 +314,14 @@ versioned (not a promise to others) until a second user of it exists.
 ## Design: WASI (decided; stage 1 is built, see the end of this section)
 
 **Decided.** WASI is part of wasmext and is compiled into the native module; a built module needs nothing at run time (not wasmext
-either), so a shared library that modules call into was rejected. The code is hand-written C, one file for each interface the module imports:
-`wasi_preview1.c` for `wasi_snapshot_preview1` and `wasi_unstable.c` for `wasi_unstable` (the first snapshot, "preview0"). They are copied
-next to the runtime of `wasm2c` into `<name>_wasmext/` and compiled with the module, as `wasm-rt-impl.c` is; a module gets the file of
-the interface it imports (both, if it imports both). It is not generated each time, so it can be read, tested and fixed as ordinary C.
-The names say the version: later WASI interfaces are largely not compatible with preview1, so each gets its own file
-(`wasi_preview2` and the like), and `wasi_unstable` is not folded into `wasi_preview1` either.
+either), so a shared library that modules call into was rejected. The code is hand-written C, **header only**, one header for each interface the module
+imports: `wasi_preview1.h` for `wasi_snapshot_preview1` and (not built) `wasi_unstable.h` for `wasi_unstable` (the first snapshot,
+"preview0"). A header is copied into `<name>_wasmext/` and included by the glue of the module (both, if it imports both), so there is no
+second source file to build. Its functions are `static inline`: the glue names the ones the module imports, and the compiler drops
+the others, so a module has only the calls it imports. It is not generated each time, so it can be read, tested and fixed as ordinary C.
+The names say the version: later WASI interfaces are largely not compatible with preview1, so each gets its own header
+(`wasi_preview2` and the like), and `wasi_unstable` is not folded into `wasi_preview1` either. A call that WASI does not have, or that
+a module imports with another signature, is refused when the glue is made (`GenError`).
 
 **Portability: direct where it is the same, through `Python.h` where it is not.** A call is made in plain C when the C library behaves the
 same on POSIX and on Windows (the CRT), with no interpreter in between. A call that can differ on Windows (non-POSIX) goes through
@@ -341,7 +343,7 @@ specification allows (`ENOTSOCK`, `ENOSYS`). The first snapshot, `wasi_unstable`
 functions but `sock_accept`, and four differences in what it reads and writes: the order of `whence` (cur, end, set), one right less,
 `filestat` with a 32-bit link count (which moves its fields), and a clock subscription with an extra `identifier` (56 bytes). So the
 two files differ in the few calls that touch those (`fd_seek`, `fd_fdstat_get`, `fd_filestat_get`, `path_filestat_get`, `poll_oneoff`);
-the rest is common. A private header holds the common part, which both files include, so that they cannot drift apart (proposed, not objected to). A module gets only the functions it imports (the glue names them with macros), so a module
+the rest is common. A private header holds the common part, which both headers include, so that they cannot drift apart (to be made when `wasi_unstable.h` is). A module gets only the functions it imports, so a module
 without WASI contains none of it. The state (file descriptors, preopens) is in the instance, not in globals.
 
 **Staged.** First what is the same everywhere: standard streams, arguments, environment, clocks, `random_get`, `proc_exit`. Then
@@ -360,14 +362,14 @@ give the names and signatures. Its code is not copied: this is written from the 
 - Test modules: `lua.wasm` (wasi_unstable, 19 imports) first, then `coreutils.wasm` (preview1, 32 imports, 10.8 MB, which makes a very large
   C file and a long build).
 
-**Stage 1 (built, `wasi_snapshot_preview1` only).** `src/wasmext/c/wasi_preview1.{c,h}`, copied beside the C of a module that imports
-`wasi_snapshot_preview1` and built with it (the glue calls the functions directly, through the slots that linking instances uses). The calls
+**Stage 1 (built, `wasi_snapshot_preview1` only).** `src/wasmext/c/wasi_preview1.h`, copied beside the C of a module that imports
+`wasi_snapshot_preview1` and included by its glue (the glue calls the functions directly, through the slots that linking instances uses). The calls
 that work: `args_*`, `environ_*`, `clock_res_get`, `clock_time_get`, `random_get`, `sched_yield`, `proc_exit` (raises the module's `WasiExit`,
 `.code`), `fd_read` (stdin), `fd_write` (stdout, stderr), `fd_close`, `fd_fdstat_get`, `fd_prestat_get` (always `EBADF`: nothing is
 preopened), `fd_seek`, `fd_tell` (`ESPIPE` on the standard streams). Every other call of the 46 answers `ENOSYS` (the sockets
 `ENOTSOCK`). `Instance()` needs no imports; `wasi={...}` takes args, env, stdin, stdout, stderr; `preopens` raises `NotImplementedError`.
-What the caller gives as an import wins, call by call. Not built: `wasi_unstable.c`, the files and directories, `poll_oneoff`. Tests:
-`tests/test_wasi.py` (through `build_extension`, not on Windows) and `test_a_wasi_module_is_built_with_the_wasi_c_of_wasmext` (the whole
+What the caller gives as an import wins, call by call. Not built: `wasi_unstable.h`, the files and directories, `poll_oneoff`. Tests:
+`tests/test_wasi.py` (through `build_extension`, not on Windows) and `test_a_wasi_module_is_built_with_the_wasi_header_of_wasmext` (the whole
 path, every platform of CI). `lua.wasm` is not run yet (it imports `wasi_unstable` and opens a file).
 
 ## Decisions

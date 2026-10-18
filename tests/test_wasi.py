@@ -161,3 +161,41 @@ def test_a_wrong_config_is_refused(build_extension: Builder) -> None:
         mod.Instance(wasi={"preopens": {"/": "."}})
     with pytest.raises(TypeError):
         mod.Instance(wasi=[1])
+
+
+def test_the_header_has_a_function_for_each_call_of_the_specification() -> None:
+    import re
+
+    from wasmext._gen import _WASI_PREVIEW1_SIGNATURES  # pyright: ignore[reportPrivateUsage]
+
+    header = (Path(__file__).parent.parent / "src" / "wasmext" / "c" / "wasi_preview1.h").read_text("utf-8")
+    defined = set(re.findall(r"static inline (?:uint32_t|void) wasi_p1_(\w+)\(", header))
+    defined |= set(re.findall(r"^WASI_NOT_YET\((\w+),", header, re.MULTILINE))
+    assert defined == set(_WASI_PREVIEW1_SIGNATURES)
+    assert len(_WASI_PREVIEW1_SIGNATURES) == 46
+
+
+def test_a_call_that_wasi_does_not_have_or_has_with_another_signature_is_refused(wabt: Path, tmp_path: Path) -> None:
+    import subprocess
+
+    from wasmext import GenError, generate, parse
+
+    def wasm(imports: str) -> bytes:
+        wat = tmp_path / "m.wat"
+        wat.write_text(f'(module {imports} (memory (export "memory") 1))', encoding="utf-8")
+        subprocess.run([wabt / "bin" / "wat2wasm", wat, "-o", tmp_path / "m.wasm"], check=True)
+        return (tmp_path / "m.wasm").read_bytes()
+
+    unknown = wasm('(import "wasi_snapshot_preview1" "fd_teleport" (func (param i32)))')
+    with pytest.raises(GenError, match="not a function of WASI preview1"):
+        generate(parse(unknown), "m")
+    wrong = wasm('(import "wasi_snapshot_preview1" "fd_write" (func (param i32 i32 i32) (result i32)))')
+    with pytest.raises(GenError, match="fd_write is ii?i>i, WASI preview1 says iiii>i"):
+        generate(parse(wrong), "m")
+    no_memory = (
+        b"\x00asm\x01\x00\x00\x00"  # a module that imports proc_exit and exports no memory
+        b"\x01\x05\x01\x60\x01\x7f\x00"
+        b"\x02\x24\x01\x16wasi_snapshot_preview1\x09proc_exit\x00\x00"
+    )
+    with pytest.raises(GenError, match="does not export its memory"):
+        generate(parse(no_memory), "m")

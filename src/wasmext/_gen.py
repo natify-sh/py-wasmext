@@ -139,6 +139,56 @@ def _ident(name: str) -> str:
 
 # the module a WASI program imports its system calls from; wasmext gives them (wasi_preview1.c) unless the caller does
 _WASI_PREVIEW1 = "wasi_snapshot_preview1"
+# the 46 calls of WASI 0.1 and their signatures (the witx files of the wasi-0.1 branch of WebAssembly/WASI): wasi_preview1.h has a
+# function for each, and a module that imports one with another signature is refused when the glue is made
+_WASI_PREVIEW1_SIGNATURES = {
+    "args_get": "ii>i",
+    "args_sizes_get": "ii>i",
+    "environ_get": "ii>i",
+    "environ_sizes_get": "ii>i",
+    "clock_res_get": "ii>i",
+    "clock_time_get": "iji>i",
+    "random_get": "ii>i",
+    "sched_yield": ">i",
+    "proc_exit": "i>",
+    "proc_raise": "i>i",
+    "poll_oneoff": "iiii>i",
+    "fd_read": "iiii>i",
+    "fd_pread": "iiiji>i",
+    "fd_write": "iiii>i",
+    "fd_pwrite": "iiiji>i",
+    "fd_seek": "ijii>i",
+    "fd_tell": "ii>i",
+    "fd_advise": "ijji>i",
+    "fd_allocate": "ijj>i",
+    "fd_datasync": "i>i",
+    "fd_sync": "i>i",
+    "fd_close": "i>i",
+    "fd_renumber": "ii>i",
+    "fd_fdstat_get": "ii>i",
+    "fd_fdstat_set_flags": "ii>i",
+    "fd_fdstat_set_rights": "ijj>i",
+    "fd_filestat_get": "ii>i",
+    "fd_filestat_set_size": "ij>i",
+    "fd_filestat_set_times": "ijji>i",
+    "fd_prestat_get": "ii>i",
+    "fd_prestat_dir_name": "iii>i",
+    "fd_readdir": "iiiji>i",
+    "path_create_directory": "iii>i",
+    "path_filestat_get": "iiiii>i",
+    "path_filestat_set_times": "iiiijji>i",
+    "path_link": "iiiiiii>i",
+    "path_open": "iiiiijjii>i",
+    "path_readlink": "iiiiii>i",
+    "path_remove_directory": "iii>i",
+    "path_rename": "iiiiii>i",
+    "path_symlink": "iiiii>i",
+    "path_unlink_file": "iii>i",
+    "sock_accept": "iii>i",
+    "sock_recv": "iiiiii>i",
+    "sock_send": "iiiii>i",
+    "sock_shutdown": "ii>i",
+}
 
 
 @dataclass
@@ -192,6 +242,14 @@ def generate(module: Module, name: str) -> Glue:
             reason = _why_not(imp.type, several_results=True)
             if reason:
                 raise GenError(f"import {imp.module}.{imp.name} {reason}: not supported yet")
+            if imp.module == _WASI_PREVIEW1:
+                wanted = _WASI_PREVIEW1_SIGNATURES.get(imp.name)
+                if wanted is None:
+                    raise GenError(f"import {imp.module}.{imp.name} is not a function of WASI preview1")
+                if _signature_code(imp.type) != wanted:
+                    raise GenError(
+                        f"import {imp.module}.{imp.name} is {_signature_code(imp.type)}, WASI preview1 says {wanted}"
+                    )
             if imp.module not in hosts:
                 hosts.append(imp.module)
             slot = slots.get(imp.module, 0)
@@ -615,15 +673,7 @@ def generate(module: Module, name: str) -> Glue:
                 add("            if (v == NULL) PyErr_Clear();")
                 add("        }")
                 add("        if (v == NULL) {")
-                add(f"            void *wasi_function = wasmext_wasi_preview1_lookup({_c_string(imp.field)});")
-                add("            if (wasi_function == NULL) {")
-                add(
-                    f"                PyErr_SetString(LinkError, {_c_string(f'import {where} is not a function of WASI preview1')});"
-                )
-                add("                Py_DECREF(self);")
-                add("                return NULL;")
-                add("            }")
-                add(f"            {host}.lf[{imp.slot}] = wasi_function;")
+                add(f"            {host}.lf[{imp.slot}] = (void *)wasi_p1_{imp.field};")
                 add(f"            {host}.li[{imp.slot}] = self->wasi;")
                 add("        } else {")
             else:

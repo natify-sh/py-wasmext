@@ -844,6 +844,9 @@ static inline uint32_t wasi_fd_write(void *s, uint32_t fd, uint32_t iovs, uint32
         wasi_get_u32(w, iovs + 8 * i + 4, &len);
         if (!wasi_in_memory(w, base, len)) return WASI_E_FAULT;
         if (len == 0) continue;
+#ifdef _WIN32
+        if (e->flags & WASI_FD_APPEND) WASI_LSEEK(e->osfd, 0, SEEK_END);
+#endif
         long long n = WASI_WRITE(e->osfd, w->memory->data + base, len);  /* straight from the memory of the module */
         if (n < 0) {
             if (total) break;
@@ -1050,7 +1053,9 @@ static inline int wasi_dirlist_add(wasi_dirlist *list, const char *name, uint64_
 /* the fdflags as flags of the system (the ones it has) */
 static inline int wasi_native_fdflags(uint32_t fdflags) {
     int flags = 0;
+#ifndef _WIN32  /* the C library of Windows cannot take it off again: fd_write does it by seeking to the end */
     if (fdflags & WASI_FD_APPEND) flags |= O_APPEND;
+#endif
 #ifdef O_DSYNC
     if (fdflags & WASI_FD_DSYNC) flags |= O_DSYNC;
 #endif
@@ -1278,6 +1283,10 @@ static inline uint32_t wasi_be_open(wasmext_wasi *w, wasi_entry *dir, uint32_t p
         return rc;
     }
     int flags = wasi_open_flags(base, oflags, fdflags);
+    if (exists && !follow && info.filetype == WASI_FT_SYMLINK) {  /* what O_NOFOLLOW says, where there is no O_NOFOLLOW */
+        PyMem_Free(full);
+        return WASI_E_LOOP;
+    }
     if (exists && (oflags & WASI_O_CREAT) && (oflags & WASI_O_EXCL)) {
         PyMem_Free(full);
         return WASI_E_EXIST;
@@ -1302,10 +1311,13 @@ static inline uint32_t wasi_be_open(wasmext_wasi *w, wasi_entry *dir, uint32_t p
     if (!follow) flags |= O_NOFOLLOW;
 #endif
     PyObject *opened = PyObject_CallMethod(os, "open", "yii", full, flags, 0666);
-    PyMem_Free(full);
-    if (opened == NULL) return wasi_python_error(trapped);
+    if (opened == NULL) {
+        PyMem_Free(full);
+        return wasi_python_error(trapped);
+    }
     long osfd = PyLong_AsLong(opened);
     Py_DECREF(opened);
+    e->root = full;  /* the path stays with the file: Windows cannot set the times of a descriptor */
     e->kind = WASI_K_FILE;
     e->osfd = (int)osfd;
     e->owns_fd = 1;
@@ -1404,6 +1416,10 @@ static inline uint32_t wasi_py_times(wasmext_wasi *w, PyObject *target, int foll
     PyObject *pair = Py_BuildValue("(KK)", times[0], times[1]);
     PyObject *args = pair ? Py_BuildValue("(O)", target) : NULL;
     PyObject *kwargs = args ? Py_BuildValue("{s:O}", "ns", pair) : NULL;
+    if (kwargs != NULL && !follow && PyDict_SetItemString(kwargs, "follow_symlinks", Py_False) < 0) {
+        Py_DECREF(kwargs);
+        kwargs = NULL;
+    }
     PyObject *function = kwargs ? PyObject_GetAttrString(os, "utime") : NULL;
     PyObject *result = function ? PyObject_Call(function, args, kwargs) : NULL;
     Py_XDECREF(function);
@@ -1423,8 +1439,10 @@ static inline uint32_t wasi_py_times(wasmext_wasi *w, PyObject *target, int foll
 
 static inline uint32_t wasi_be_times_fd(wasmext_wasi *w, wasi_entry *e, uint64_t atim, uint64_t mtim, uint32_t flags, int *trapped) {
     PyObject *target;
-    if (e->kind == WASI_K_FILE) {
+    if (e->kind == WASI_K_FILE && e->root == NULL) {
         target = PyLong_FromLong(e->osfd);
+    } else if (e->kind == WASI_K_FILE) {
+        target = PyBytes_FromString(e->root);
     } else {
         char *path = wasi_join(e->root, e->rel);
         if (path == NULL) return WASI_E_NOMEM;
@@ -1449,6 +1467,27 @@ static inline uint32_t wasi_be_times_path(wasmext_wasi *w, wasi_entry *dir, uint
     rc = wasi_py_times(w, target, follow, atim, mtim, flags, trapped);
     Py_DECREF(target);
     return rc;
+}
+
+/* A name that ends with a slash and is to be made (a link): there is nothing to make it a directory of. EEXIST when a directory is
+   there, ENOTDIR when a file is, else ENOENT, whatever the system says to it. `full` is the path with that slash. */
+static inline uint32_t wasi_dest_with_slash(wasmext_wasi *w, const char *full, int *trapped) {
+    char *bare = wasi_copy(full, strlen(full));
+    if (bare == NULL) return WASI_E_NOMEM;
+    size_t n = strlen(bare);
+    while (n > 1 && bare[n - 1] == '/') bare[--n] = '\0';
+    PyObject *os = wasi_module_of(&w->os_module, "os");
+    PyObject *st = os ? PyObject_CallMethod(os, "lstat", "y", bare) : NULL;
+    PyMem_Free(bare);
+    if (st != NULL) {
+        wasi_stat info;
+        uint32_t rc = wasi_stat_of_result(st, &info, trapped);
+        Py_DECREF(st);
+        if (rc || *trapped) return rc;
+        return info.filetype == WASI_FT_DIR ? WASI_E_EXIST : WASI_E_NOTDIR;  /* what a file with a slash after it is */
+    }
+    uint32_t rc = wasi_python_error(trapped);
+    return rc ? rc : WASI_E_NOENT;
 }
 
 static inline uint32_t wasi_be_call2(wasmext_wasi *w, const char *function, char *first, char *second, int *trapped) {
@@ -1486,6 +1525,24 @@ static inline uint32_t wasi_be_link(wasmext_wasi *w, wasi_entry *d1, uint32_t p1
                                     uint32_t p2, uint32_t l2, int *trapped) {
     char *first = NULL, *second = NULL;
     uint32_t rc = wasi_be_two_names(w, d1, p1, l1, follow, d2, p2, l2, &first, &second);
+    if (rc == WASI_E_SUCCESS && follow) {  /* a link at the end is followed: it has to lead somewhere (os.link may not follow it) */
+        PyObject *os = wasi_module_of(&w->os_module, "os");
+        PyObject *st = os ? PyObject_CallMethod(os, "stat", "y", first) : NULL;
+        if (st == NULL) {
+            PyMem_Free(first);
+            PyMem_Free(second);
+            return wasi_python_error(trapped);
+        }
+        Py_DECREF(st);
+    }
+    if (rc == WASI_E_SUCCESS && l2 && w->memory->data[p2 + l2 - 1] == '/') {
+        rc = wasi_dest_with_slash(w, second, trapped);
+        if (rc || *trapped) {
+            PyMem_Free(first);
+            PyMem_Free(second);
+            return rc;
+        }
+    }
     return rc ? rc : wasi_be_call2(w, "link", first, second, trapped);
 }
 
@@ -1495,11 +1552,23 @@ static inline uint32_t wasi_be_symlink(wasmext_wasi *w, const unsigned char *tar
     uint32_t rc;
     char *full = wasi_be_name(w, dir, path, len, 0, &rc);
     if (full == NULL) return rc == WASI_E_INVAL ? WASI_E_EXIST : rc;
+    if (len && w->memory->data[path + len - 1] == '/') {
+        rc = wasi_dest_with_slash(w, full, trapped);
+        if (rc || *trapped) {
+            PyMem_Free(full);
+            return rc;
+        }
+    }
     char *text = wasi_copy((const char *)target, tlen);
     if (text == NULL) {
         PyMem_Free(full);
         return WASI_E_NOMEM;
     }
+#ifdef _WIN32
+    for (char *c = text; *c; c++) {
+        if (*c == '/') *c = '\\';  /* a link made with a slash does not work on Windows */
+    }
+#endif
     return wasi_be_call2(w, "symlink", text, full, trapped);
 }
 
@@ -1522,6 +1591,11 @@ static inline uint32_t wasi_be_readlink(wasmext_wasi *w, wasi_entry *dir, uint32
     *used = (size_t)n < cap ? (size_t)n : cap;
     memcpy(out, data, *used);
     Py_DECREF(text);
+#ifdef _WIN32
+    for (size_t i = 0; i < *used; i++) {
+        if (out[i] == '\\') out[i] = '/';
+    }
+#endif
     return WASI_E_SUCCESS;
 }
 
@@ -1536,7 +1610,20 @@ static inline uint32_t wasi_be_list(wasmext_wasi *w, wasi_entry *e, wasi_dirlist
         return wasi_python_error(trapped);
     }
     uint32_t rc = WASI_E_SUCCESS;
-    if (wasi_dirlist_add(list, ".", 0, WASI_FT_DIR) < 0 || wasi_dirlist_add(list, "..", 0, WASI_FT_DIR) < 0) rc = WASI_E_NOMEM;
+    uint64_t ino_here = 0, ino_up = 0;  /* of "." and ".." (what fd_filestat_get says of the directory and of the one above it) */
+    for (int k = 0; k < 2 && os != NULL; k++) {
+        char *which = wasi_join(path, k ? ".." : ".");
+        PyObject *st = which ? PyObject_CallMethod(os, "stat", "y", which) : NULL;
+        PyMem_Free(which);
+        wasi_stat info;
+        if (st != NULL && wasi_stat_of_result(st, &info, trapped) == WASI_E_SUCCESS) {
+            if (k) ino_up = info.ino;
+            else ino_here = info.ino;
+        }
+        Py_XDECREF(st);
+        PyErr_Clear();
+    }
+    if (wasi_dirlist_add(list, ".", ino_here, WASI_FT_DIR) < 0 || wasi_dirlist_add(list, "..", ino_up, WASI_FT_DIR) < 0) rc = WASI_E_NOMEM;
     Py_ssize_t count = PyList_Size(names);
     for (Py_ssize_t i = 0; rc == WASI_E_SUCCESS && i < count; i++) {
         PyObject *name = PyList_GetItem(names, i);  /* borrowed */
@@ -1783,6 +1870,19 @@ static inline uint32_t wasi_be_parent(wasmext_wasi *w, wasi_entry *dir, uint32_t
     return rc;
 }
 
+/* A name to be made that has a slash after it (a link): 1, with errno set, when it can only be an error; 0 when it has none */
+static inline int wasi_leaf_slash(int parent, const char *leaf) {
+    size_t n = strlen(leaf);
+    if (n == 0 || leaf[n - 1] != '/') return 0;
+    char bare[WASI_LEAF_MAX];
+    memcpy(bare, leaf, n - 1);
+    bare[n - 1] = '\0';
+    struct stat st;
+    if (fstatat(parent, bare, &st, AT_SYMLINK_NOFOLLOW) < 0) errno = errno == ENOENT ? ENOENT : errno;
+    else errno = S_ISDIR(st.st_mode) ? EEXIST : ENOTDIR;
+    return 1;
+}
+
 static inline uint32_t wasi_be_mkdir(wasmext_wasi *w, wasi_entry *dir, uint32_t path, uint32_t len, int *trapped) {
     (void)trapped;
     int parent, owned, itself;
@@ -1895,7 +1995,7 @@ static inline uint32_t wasi_be_link(wasmext_wasi *w, wasi_entry *d1, uint32_t p1
     char leaf1[WASI_LEAF_MAX], leaf2[WASI_LEAF_MAX];
     uint32_t rc = wasi_be_pair(w, d1, p1, l1, follow, d2, p2, l2, &parent1, &owned1, leaf1, &parent2, &owned2, leaf2);
     if (rc) return rc;
-    int failed = linkat(parent1, leaf1, parent2, leaf2, 0);  /* the walk expanded a link at the end if it was to be followed */
+    int failed = wasi_leaf_slash(parent2, leaf2) ? -1 : linkat(parent1, leaf1, parent2, leaf2, 0);  /* (the walk expanded a link at the end if it was to be followed) */
     int saved = errno;
     if (owned1) close(parent1);
     if (owned2) close(parent2);
@@ -1915,6 +2015,7 @@ static inline uint32_t wasi_be_symlink(wasmext_wasi *w, const unsigned char *tar
     if (rc) return rc;
     int failed = -1;
     if (itself) errno = EEXIST;
+    else if (wasi_leaf_slash(parent, leaf)) failed = -1;  /* errno is set */
     else failed = symlinkat(text, parent, leaf);
     int saved = errno;
     if (owned) close(parent);

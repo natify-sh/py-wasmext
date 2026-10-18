@@ -35,7 +35,8 @@ def prepare(program: Path) -> str:
         # MSVC reads CL before the command line (setuptools' /O2 and /GL win over it) and _CL_ after it
         os.environ.setdefault("_CL_", "/Od /GL-")
     else:
-        os.environ.setdefault("CFLAGS", "-O0")
+        # WASMEXT_TESTSUITE_CFLAGS: more flags, such as -DWASMEXT_WASI_PYTHON_FS=1 for the files through Python (what Windows has)
+        os.environ.setdefault("CFLAGS", f"-O0 {os.environ.get('WASMEXT_TESTSUITE_CFLAGS', '')}".strip())
     from wasmext import _importer  # pyright: ignore[reportPrivateUsage]
 
     _importer.install(build_dir=cache / "build", parts=int(os.environ.get("WASMEXT_TESTSUITE_PARTS", "8")))

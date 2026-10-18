@@ -12,6 +12,19 @@ from pathlib import Path
 RUN = Path(__file__).parent / "run_wasmext.py"
 
 
+# The tests expect other errors on other systems, and the suite asks for the system to be said with the environment of the
+# program (tests/rust/wasm32-wasip1/src/config.rs): without it any of the errors the systems give is taken.
+if sys.platform == "win32":
+    # Windows cannot rename a directory over an empty one, as POSIX does
+    # (no ERRNO_MODE_WINDOWS: it asks for the errors that a system gives that is not POSIX, where wasmext gives the errors of POSIX,
+    # and without it the tests take any of the errors of the systems)
+    PLATFORM = {"NO_RENAME_DIR_TO_EMPTY_DIR": "1"}
+elif sys.platform == "darwin":
+    PLATFORM = {"ERRNO_MODE_MACOS": "1"}
+else:
+    PLATFORM = {"ERRNO_MODE_UNIX": "1"}
+
+
 def get_name() -> str:
     return "wasmext"
 
@@ -43,6 +56,8 @@ def compute_argv(
 ) -> list[str]:
     args, env, root = args_env_root
     argv = [os.environ.get("WASMEXT_PYTHON", sys.executable), str(RUN)]
+    if root:  # a test of files: the tests of the environment look at all of it
+        env = {**PLATFORM, **env}
     for key, value in env.items():
         argv += ["--env", f"{key}={value}"]
     if root:

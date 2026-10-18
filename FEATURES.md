@@ -171,6 +171,14 @@ table of the exports: for each export its kind, value type, mutability and the p
 the instance pointer. The format is a contract between versions of wasmext, so it is versioned from the first day; an unknown
 version is a `LinkError`, not a guess.
 
+**Keeping the contract still.** Changing it means a new `v2` and every extension built before it fails to link with the new
+ones, so it is made to change rarely: the table begins with its own `size`, and new fields are only appended (a reader checks
+`size` before it reads one, so an old reader ignores them and a new one knows an old table has not got them); the entries are a
+fixed-size record with a `kind` and room for flags; the pointers are those of wasm2c (`u32 *`, `wasm_rt_memory_t *`,
+`wasm_rt_funcref_table_t *`), so wasmext adds nothing of its own to what must stay the same. The name `wasmext.link.v1`
+changes only if a field is *removed or changes meaning*, which should never be needed. What the table holds is decided
+before it is built, from what the three kinds of import need, and written down here first.
+
 **Checks, all at instantiation, all `LinkError`**: the export exists; it has the kind the import asks for (a function is not a
 global); the types are equal (`i32` ≠ `i64`, mutable ≠ immutable, the signature of a function); for a memory, the limits of the
 import are satisfied (initial and maximum pages, memory64 equal); for a table, the element type and limits.

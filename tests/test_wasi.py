@@ -1,4 +1,4 @@
-"""WASI, `wasi_snapshot_preview1`, compiled into the module (src/wasmext/c/wasi_preview1.c): the module gets it by itself."""
+"""WASI, `wasi_snapshot_preview1`, compiled into the module (src/wasmext/c/wasi_preview1.h): the module gets it by itself."""
 
 from __future__ import annotations
 
@@ -168,8 +168,9 @@ def test_the_header_has_a_function_for_each_call_of_the_specification() -> None:
 
     from wasmext._gen import _WASI_PREVIEW1_SIGNATURES  # pyright: ignore[reportPrivateUsage]
 
-    header = (Path(__file__).parent.parent / "src" / "wasmext" / "c" / "wasi_preview1.h").read_text("utf-8")
-    defined = set(re.findall(r"static inline (?:uint32_t|void) wasi_p1_(\w+)\(", header))
+    header = (Path(__file__).parent.parent / "src" / "wasmext" / "c" / "wasi_common.h").read_text("utf-8")
+    defined = set(re.findall(r"static inline (?:uint32_t|void) wasi_(\w+)\(", header))
+    defined &= set(_WASI_PREVIEW1_SIGNATURES)  # the helpers that also begin with wasi_ are not calls
     defined |= set(re.findall(r"^WASI_NOT_YET\((\w+),", header, re.MULTILINE))
     assert defined == set(_WASI_PREVIEW1_SIGNATURES)
     assert len(_WASI_PREVIEW1_SIGNATURES) == 46
@@ -187,10 +188,10 @@ def test_a_call_that_wasi_does_not_have_or_has_with_another_signature_is_refused
         return (tmp_path / "m.wasm").read_bytes()
 
     unknown = wasm('(import "wasi_snapshot_preview1" "fd_teleport" (func (param i32)))')
-    with pytest.raises(GenError, match="not a function of WASI preview1"):
+    with pytest.raises(GenError, match="not a function of wasi_snapshot_preview1"):
         generate(parse(unknown), "m")
     wrong = wasm('(import "wasi_snapshot_preview1" "fd_write" (func (param i32 i32 i32) (result i32)))')
-    with pytest.raises(GenError, match="fd_write is ii?i>i, WASI preview1 says iiii>i"):
+    with pytest.raises(GenError, match="fd_write is ii?i>i, wasi_snapshot_preview1 says iiii>i"):
         generate(parse(wrong), "m")
     no_memory = (
         b"\x00asm\x01\x00\x00\x00"  # a module that imports proc_exit and exports no memory
@@ -199,3 +200,62 @@ def test_a_call_that_wasi_does_not_have_or_has_with_another_signature_is_refused
     )
     with pytest.raises(GenError, match="does not export its memory"):
         generate(parse(no_memory), "m")
+
+
+def test_the_first_snapshot_wasi_unstable_is_served_too(build_extension: Builder, tmp_path: Path) -> None:
+    wat = tmp_path / "unstable_probe.wat"
+    wat.write_text(
+        (DATA / "wasi_probe.wat").read_text("utf-8").replace("wasi_snapshot_preview1", "wasi_unstable"), "utf-8"
+    )
+    mod: Any = build_extension(wat, "wasi_unstable_probe")
+    inst = mod.Instance(wasi={"args": ["prog", "x"], "env": {"A": "1"}})
+    mem = inst.memory
+    inst.args_sizes_get(0, 4)
+    assert (u32(mem, 0), u32(mem, 4)) == (2, len(b"prog\0x\0"))
+    assert inst.clock_time_get(0, 16) == 0
+    assert inst.fd_fdstat_get(1, 40) == 0 and mem[40] == 2
+    assert inst.fd_seek(1, 40) == 70
+    with pytest.raises(mod.WasiExit) as info:
+        inst.proc_exit(5)
+    assert info.value.code == 5
+
+
+def test_one_module_can_import_both_snapshots(
+    build_extension: Builder, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    wat = tmp_path / "both.wat"
+    wat.write_text(
+        """
+(module
+  (import "wasi_snapshot_preview1" "fd_write" (func $fd_write (param i32 i32 i32 i32) (result i32)))
+  (import "wasi_unstable" "proc_exit" (func $proc_exit (param i32)))
+  (memory (export "memory") 1)
+  (data (i32.const 8) "both\\n")
+  (func (export "_start")
+    (i32.store (i32.const 0) (i32.const 8))
+    (i32.store (i32.const 4) (i32.const 5))
+    (drop (call $fd_write (i32.const 1) (i32.const 0) (i32.const 1) (i32.const 24)))
+    (call $proc_exit (i32.const 4))))
+""",
+        encoding="utf-8",
+    )
+    mod: Any = build_extension(wat, "wasi_both")
+    with pytest.raises(mod.WasiExit) as info:
+        mod.Instance()._start()
+    assert info.value.code == 4 and capsys.readouterr().out == "both\n"
+
+
+def test_sock_accept_is_not_a_call_of_the_first_snapshot(wabt: Path, tmp_path: Path) -> None:
+    import subprocess
+
+    from wasmext import GenError, generate, parse
+
+    wat = tmp_path / "m.wat"
+    wat.write_text(
+        '(module (import "wasi_unstable" "sock_accept" (func (param i32 i32 i32) (result i32)))'
+        ' (memory (export "memory") 1))',
+        encoding="utf-8",
+    )
+    subprocess.run([wabt / "bin" / "wat2wasm", wat, "-o", tmp_path / "m.wasm"], check=True)
+    with pytest.raises(GenError, match="sock_accept is not a function of wasi_unstable"):
+        generate(parse((tmp_path / "m.wasm").read_bytes()), "m")

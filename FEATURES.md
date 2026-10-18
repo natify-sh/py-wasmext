@@ -315,12 +315,12 @@ versioned (not a promise to others) until a second user of it exists.
 
 **Decided.** WASI is part of wasmext and is compiled into the native module; a built module needs nothing at run time (not wasmext
 either), so a shared library that modules call into was rejected. The code is hand-written C, **header only**, one header for each interface the module
-imports: `wasi_preview1.h` for `wasi_snapshot_preview1` and (not built) `wasi_unstable.h` for `wasi_unstable` (the first snapshot,
-"preview0"). A header is copied into `<name>_wasmext/` and included by the glue of the module (both, if it imports both), so there is no
-second source file to build. Its functions are `static inline`: the glue names the ones the module imports, and the compiler drops
+imports: `wasi_preview1.h` for `wasi_snapshot_preview1` and `wasi_unstable.h` for `wasi_unstable` (the first snapshot,
+"preview0"), which share `wasi_common.h`. The headers are copied into `<name>_wasmext/` and included by the glue of the module (both, if it
+imports both), so there is no second source file to build. Its functions are `static inline`: the glue names the ones the module imports, and the compiler drops
 the others, so a module has only the calls it imports. It is not generated each time, so it can be read, tested and fixed as ordinary C.
-The names say the version: later WASI interfaces are largely not compatible with preview1, so each gets its own header
-(`wasi_preview2` and the like), and `wasi_unstable` is not folded into `wasi_preview1` either. A call that WASI does not have, or that
+`wasi_unstable` is not folded into `wasi_preview1`: the day a call differs between them, it gets its own function there.
+WASI 0.2 and 0.3 are not another header of this kind: see "WASI 0.2 and 0.3" below. A call that WASI does not have, or that
 a module imports with another signature, is refused when the glue is made (`GenError`).
 
 **Portability: direct where it is the same, through `Python.h` where it is not.** A call is made in plain C when the C library behaves the
@@ -343,7 +343,7 @@ specification allows (`ENOTSOCK`, `ENOSYS`). The first snapshot, `wasi_unstable`
 functions but `sock_accept`, and four differences in what it reads and writes: the order of `whence` (cur, end, set), one right less,
 `filestat` with a 32-bit link count (which moves its fields), and a clock subscription with an extra `identifier` (56 bytes). So the
 two files differ in the few calls that touch those (`fd_seek`, `fd_fdstat_get`, `fd_filestat_get`, `path_filestat_get`, `poll_oneoff`);
-the rest is common. A private header holds the common part, which both headers include, so that they cannot drift apart (to be made when `wasi_unstable.h` is). A module gets only the functions it imports, so a module
+the rest is common. A private header holds the common part, which both headers include, so that they cannot drift apart (`wasi_common.h`; the calls built so far read and write none of the four, so the same function serves both snapshots). A module gets only the functions it imports, so a module
 without WASI contains none of it. The state (file descriptors, preopens) is in the instance, not in globals.
 
 **Staged.** First what is the same everywhere: standard streams, arguments, environment, clocks, `random_get`, `proc_exit`. Then
@@ -368,9 +368,20 @@ that work: `args_*`, `environ_*`, `clock_res_get`, `clock_time_get`, `random_get
 `.code`), `fd_read` (stdin), `fd_write` (stdout, stderr), `fd_close`, `fd_fdstat_get`, `fd_prestat_get` (always `EBADF`: nothing is
 preopened), `fd_seek`, `fd_tell` (`ESPIPE` on the standard streams). Every other call of the 46 answers `ENOSYS` (the sockets
 `ENOTSOCK`). `Instance()` needs no imports; `wasi={...}` takes args, env, stdin, stdout, stderr; `preopens` raises `NotImplementedError`.
-What the caller gives as an import wins, call by call. Not built: `wasi_unstable.h`, the files and directories, `poll_oneoff`. Tests:
+What the caller gives as an import wins, call by call. Both snapshots are served (`wasi_unstable.h`; `sock_accept` is not a call of the first one: `GenError`). Not built: the files and directories, `poll_oneoff`. Tests:
 `tests/test_wasi.py` (through `build_extension`, not on Windows) and `test_a_wasi_module_is_built_with_the_wasi_header_of_wasmext` (the whole
-path, every platform of CI). `lua.wasm` is not run yet (it imports `wasi_unstable` and opens a file).
+path, every platform of CI). `lua.wasm` (imports `wasi_unstable`) is not run in the tests yet.
+
+**WASI 0.2 and 0.3 (preview2, preview3): not planned yet, and not just one more header.** The WASI above is a set of ordinary imports of a core
+module, which is what `wasm2c` translates. 0.2 and 0.3 are defined over the Component Model: what the toolchain gives (Rust `wasm32-wasip2`,
+`wasm-tools component new` on the output of wasi-sdk) is a *component*, a package of core modules with typed interfaces (WIT), resources (handles)
+and the canonical ABI that lifts and lowers strings, lists and records between them. `wasm2c` reads core modules only. To run a component,
+wasmext would first have to take it apart at build time (the core modules inside go to `wasm2c`, the way `jco transpile` does it for
+JavaScript) and write the canonical ABI and the host side of the interfaces (`wasi:cli`, `wasi:io` streams, `wasi:filesystem`, `wasi:clocks`,
+`wasi:random`) itself. 0.3 (ratified in June 2026 by the official pages; the toolchains are still arriving) adds native async to the
+canonical ABI (`stream<T>`, `future<T>`, async functions): a scheduler of tasks on top. That is a separate large feature ("component model"),
+to be decided on its own after preview1 is finished, not a continuation of `wasi_preview1.h`. Until then a component is out of reach, and the way
+around it is to build for `wasm32-wasip1` (or to take the core module before it was made a component), which the toolchains still offer.
 
 ## Decisions
 

@@ -60,7 +60,9 @@ class Glue:
     source: str  # the C of the glue
     skipped: list[str] = field(default_factory=list[str])
     stub: str = ""  # the .pyi of the extension module
-    wasi_preview1: bool = False  # the glue calls wasi_preview1.c: it must be copied and built with the module
+    wasi_headers: tuple[
+        str, ...
+    ] = ()  # the headers of wasmext for WASI that the glue includes (and wasi_common.h): copied beside it
 
 
 def mangle(name: str, *, module: bool = False) -> str:
@@ -137,8 +139,10 @@ def _ident(name: str) -> str:
     return last
 
 
-# the module a WASI program imports its system calls from; wasmext gives them (wasi_preview1.c) unless the caller does
+# the modules a WASI program imports its system calls from; wasmext gives them (the headers of src/wasmext/c) unless the caller does
 _WASI_PREVIEW1 = "wasi_snapshot_preview1"
+_WASI_UNSTABLE = "wasi_unstable"  # the first snapshot
+_WASI_HEADERS = {_WASI_PREVIEW1: "wasi_preview1.h", _WASI_UNSTABLE: "wasi_unstable.h"}
 # the 46 calls of WASI 0.1 and their signatures (the witx files of the wasi-0.1 branch of WebAssembly/WASI): wasi_preview1.h has a
 # function for each, and a module that imports one with another signature is refused when the glue is made
 _WASI_PREVIEW1_SIGNATURES = {
@@ -189,6 +193,13 @@ _WASI_PREVIEW1_SIGNATURES = {
     "sock_send": "iiiii>i",
     "sock_shutdown": "ii>i",
 }
+# the first snapshot has the same calls but sock_accept
+_WASI_SIGNATURES = {
+    _WASI_PREVIEW1: _WASI_PREVIEW1_SIGNATURES,
+    _WASI_UNSTABLE: {n: sig for n, sig in _WASI_PREVIEW1_SIGNATURES.items() if n != "sock_accept"},
+}
+# the calls of the first snapshot that have a function of their own, wasi_unstable_<name> (the others use wasi_<name>)
+_WASI_UNSTABLE_OWN: frozenset[str] = frozenset()
 
 
 @dataclass
@@ -242,13 +253,13 @@ def generate(module: Module, name: str) -> Glue:
             reason = _why_not(imp.type, several_results=True)
             if reason:
                 raise GenError(f"import {imp.module}.{imp.name} {reason}: not supported yet")
-            if imp.module == _WASI_PREVIEW1:
-                wanted = _WASI_PREVIEW1_SIGNATURES.get(imp.name)
+            if imp.module in _WASI_HEADERS:
+                wanted = _WASI_SIGNATURES[imp.module].get(imp.name)
                 if wanted is None:
-                    raise GenError(f"import {imp.module}.{imp.name} is not a function of WASI preview1")
+                    raise GenError(f"import {imp.module}.{imp.name} is not a function of {imp.module}")
                 if _signature_code(imp.type) != wanted:
                     raise GenError(
-                        f"import {imp.module}.{imp.name} is {_signature_code(imp.type)}, WASI preview1 says {wanted}"
+                        f"import {imp.module}.{imp.name} is {_signature_code(imp.type)}, {imp.module} says {wanted}"
                     )
             if imp.module not in hosts:
                 hosts.append(imp.module)
@@ -311,11 +322,12 @@ def generate(module: Module, name: str) -> Glue:
             skipped.append(f"{exp.kind} {exp.name!r}")
 
     has_imports = bool(imports or global_imports or memory_imports)
-    uses_wasi = any(imp.module == _WASI_PREVIEW1 for imp in imports)
+    wasi_modules = sorted({imp.module for imp in imports if imp.module in _WASI_HEADERS})
+    uses_wasi = bool(wasi_modules)
     # without other imports the caller need not give any: the module gets WASI by itself
-    needs_imports = any(imp.module != _WASI_PREVIEW1 for imp in imports) or bool(global_imports or memory_imports)
+    needs_imports = any(imp.module not in _WASI_HEADERS for imp in imports) or bool(global_imports or memory_imports)
     if uses_wasi and "memory" not in memories:
-        raise GenError(f"the module imports {_WASI_PREVIEW1} but does not export its memory as 'memory'")
+        raise GenError(f"the module imports {wasi_modules[0]} but does not export its memory as 'memory'")
     w: list[str] = []
     add = w.append
 
@@ -327,8 +339,8 @@ def generate(module: Module, name: str) -> Glue:
     add(f'#include "{last}_w2c.h"')
     add('#include "wasm-rt-impl.h"')
     add('#include "wasm-rt-exceptions.h"')
-    if uses_wasi:
-        add('#include "wasi_preview1.h"')
+    for module_name in wasi_modules:
+        add(f'#include "{_WASI_HEADERS[module_name]}"')
     add("#ifndef _WIN32")
     add("#include <signal.h>")
     add("#endif")
@@ -662,8 +674,8 @@ def generate(module: Module, name: str) -> Glue:
             host = f"self->host{imp.host}"
             signature = _signature_code(imp.func)
             add("    {")
-            if imp.module == _WASI_PREVIEW1:
-                # what the caller gives wins; otherwise wasmext gives the call (wasi_preview1.c), which is then called directly
+            if imp.module in _WASI_HEADERS:
+                # what the caller gives wins; otherwise wasmext gives the call (a function of the WASI headers), called directly
                 add("        PyObject *v = NULL;")
                 add("        if (imports != Py_None) {")
                 add(f"            v = lookup_import(imports, {_c_string(imp.module)}, {_c_string(imp.field)}, 0);")
@@ -673,7 +685,8 @@ def generate(module: Module, name: str) -> Glue:
                 add("            if (v == NULL) PyErr_Clear();")
                 add("        }")
                 add("        if (v == NULL) {")
-                add(f"            {host}.lf[{imp.slot}] = (void *)wasi_p1_{imp.field};")
+                own = imp.module == _WASI_UNSTABLE and imp.field in _WASI_UNSTABLE_OWN
+                add(f"            {host}.lf[{imp.slot}] = (void *)wasi_{'unstable_' if own else ''}{imp.field};")
                 add(f"            {host}.li[{imp.slot}] = self->wasi;")
                 add("        } else {")
             else:
@@ -734,7 +747,7 @@ def generate(module: Module, name: str) -> Glue:
             add("            Py_DECREF(self);")
             add("            return NULL;")
             add("        }")
-            if imp.module == _WASI_PREVIEW1:
+            if imp.module in _WASI_HEADERS:
                 add("        }")
             add("    }")
         for g in global_imports:
@@ -1205,9 +1218,12 @@ def generate(module: Module, name: str) -> Glue:
     add("    Py_DECREF(m);")
     add("    return NULL;")
     add("}")
-    stub_imports = [imp for imp in module.imports if imp.module != _WASI_PREVIEW1]
+    stub_imports = [imp for imp in module.imports if imp.module not in _WASI_HEADERS]
     return Glue(
-        "\n".join(w) + "\n", skipped, _stub(last, funcs, memories, globals_, stub_imports, uses_wasi), uses_wasi
+        "\n".join(w) + "\n",
+        skipped,
+        _stub(last, funcs, memories, globals_, stub_imports, uses_wasi),
+        tuple(_WASI_HEADERS[m] for m in wasi_modules),
     )
 
 

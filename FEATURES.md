@@ -328,14 +328,15 @@ so it is versioned from the first day; an unknown version, or a `size` smaller t
 
 **Keeping the contract still.** Changing it means a new `v2` and every extension built before it fails to link with the new
 ones, so it is made to change rarely: the record begins with its own `size`, and new fields are only appended (a reader checks
-`size` before it reads one, so an old reader ignores them and a new one knows an old table has not got them); the entries are a
+`size` before it reads one: an old reader ignores the fields it does not know, and a new reader refuses a record smaller than its own
+struct with a `LinkError`, as the code does today; it does not guess what an old record would have held); the entries are a
 fixed-size record with a `kind` and room for flags; the pointers are those of wasm2c (`u32 *`, `wasm_rt_memory_t *`,
 `wasm_rt_funcref_table_t *`), so wasmext adds nothing of its own to what must stay the same. The name `wasmext.export.v1`
 changes only if a field is *removed or changes meaning*, which should never be needed.
 
 **Checks, all at instantiation, all `LinkError`**: the export exists; it has the kind the import asks for (a function is not a
 global); the types are equal (`i32` ≠ `i64`, mutable ≠ immutable, the signature of a function); for a memory, the limits of the
-import are satisfied (initial and maximum pages, memory64 equal); for a table, the element type and limits.
+import are satisfied (initial and maximum pages, memory64 equal). For a table (not built) the element type and limits would be checked too.
 
 **Lifetime.** The importer holds a strong reference to the exporter, so the pointers stay valid as long as it lives. A cycle
 (a imports from b and b from a) is not possible at instantiation, because an instance has to exist before it is given; an
@@ -347,17 +348,17 @@ both (the struct is shared); a view taken before the grow is the old size, as it
 
 **Functions between instances.** The glue of the importer calls `w2c_<provider>_<name>` of the other extension through the table of
 the capsule, so the traps cross: a trap in the callee unwinds to the call from Python, as when a Python callable calls back. The
-jump buffer is per thread and the call goes on the same stack, so the existing `ENTER_WASM`/save-and-restore applies; to be checked
-with a test of a trap two instances deep.
+jump buffer is per thread and the call goes on the same stack, so the existing `ENTER_WASM`/save-and-restore applies; a trap in the callee comes
+out as the `Trap` of its module through the caller, and both instances go on (`test_instances_call_each_others_functions_directly`).
 
 **Not covered (and why that is fine for now)**: a global, memory or table made by the host with no module behind it (a small
 object would be needed; postponed until somebody needs it); `externref` tables; threads and `shared` memory (the pointer is shared,
 but not made atomic: that is plan item 4 and changes the layout, so this design must not rely on plain reads of a mutable global
 once threads exist); instances from different wasmext *builds* with different wasm2c runtimes (the structs of `wasm-rt.h` have to
-match: the capsule carries the version of the runtime and compares it).
+match; **nothing checks it yet**: the record has the version of its own format and the `sizeof(wasm_rt_memory_t)` of a memory, and not the version of the runtime).
 
 **Order**: 1. imported mutable globals from an exporting instance (smallest: a pointer and a type check; also removes the "refused
-when the extension is made" for them); 2. memories; 3. functions; 4. tables.
+when the extension is made" for them); 2. memories; 3. functions: these three are built, in this order; 4. tables: not built.
 
 **Decided**: the forms above; the format of the link table (capsule) is private, documented and
 versioned (not a promise to others) until a second user of it exists.

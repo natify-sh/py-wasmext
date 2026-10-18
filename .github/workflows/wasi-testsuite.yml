@@ -29,6 +29,7 @@ jobs:
   wasi-testsuite:
     name: WASI test suite on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:

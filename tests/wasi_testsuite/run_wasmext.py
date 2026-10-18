@@ -10,6 +10,7 @@ test runner of the suite; it is not a part of wasmext.
 from __future__ import annotations
 
 import argparse
+import faulthandler
 import hashlib
 import os
 import shutil
@@ -19,6 +20,9 @@ from pathlib import Path
 
 
 def main(argv: list[str]) -> int:
+    faulthandler.dump_traceback_later(
+        int(os.environ.get("WASMEXT_TESTSUITE_TIMEOUT", "600")), exit=True
+    )  # a hang shows where
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--env", action="append", default=[])
     parser.add_argument("--dir", action="append", default=[])

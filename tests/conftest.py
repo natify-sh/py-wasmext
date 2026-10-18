@@ -81,6 +81,7 @@ def build_extension(wabt: Path, tmp_path_factory: pytest.TempPathFactory) -> Cal
             [
                 cc, "-O1", "-w", "-shared", "-fPIC", *link_flags, *limited, *include,
                 glue_object, out / f"{name}_w2c.c", runtime / "wasm-rt-impl.c", runtime / "wasm-rt-mem-impl.c",
+                runtime / "wasm-rt-exceptions-impl.c",
                 "-o", so,
             ],
             check=True,

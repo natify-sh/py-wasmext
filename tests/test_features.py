@@ -289,6 +289,8 @@ except MemoryError:
 
 
 def _limited_run(tmp_path: Path, code: str, limit_mib: int) -> subprocess.CompletedProcess[str]:
+    if sys.platform == "win32":
+        pytest.skip("RLIMIT_AS")
     import resource
 
     def limit() -> None:
@@ -420,3 +422,26 @@ def test_an_imported_mutable_global_is_refused_when_the_extension_is_made(tmp_pa
     built = wasmext(tmp_path, wabt, "-i", "-q", "pkg/m.wasm")
     assert built.returncode == 1
     assert "an imported mutable global is not supported yet" in built.stderr
+
+
+def test_a_trap_from_a_signal_handler_can_happen_again(tmp_path: Path, wabt: Path) -> None:
+    """An access past the guard pages is a signal; after the trap the signal must not stay blocked, or the second one kills the process."""
+    _build_pkg(
+        tmp_path,
+        wabt,
+        '(module (memory (export "mem") 1) (func (export "load") (param i32) (result i32) local.get 0 i32.load)'
+        ' (func (export "ok") (result i32) i32.const 7))',
+    )
+    code = (
+        "import pkg.m as m\n"
+        "i = m.Instance()\n"
+        "for _ in range(3):\n"
+        "    try:\n"
+        "        i.load(0x7ffffff0)\n"
+        "    except m.Trap:\n"
+        "        print('trap')\n"
+        "print(i.ok())\n"
+    )
+    ran = subprocess.run([sys.executable, "-c", code], cwd=tmp_path, capture_output=True, text=True, check=False)
+    assert ran.returncode == 0, ran.stderr[-400:]
+    assert ran.stdout.split() == ["trap", "trap", "trap", "7"]

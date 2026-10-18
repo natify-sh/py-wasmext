@@ -220,6 +220,10 @@ def generate(module: Module, name: str) -> Glue:
     add("#include <string.h>")
     add(f'#include "{last}_w2c.h"')
     add('#include "wasm-rt-impl.h"')
+    add('#include "wasm-rt-exceptions.h"')
+    add("#ifndef _WIN32")
+    add("#include <signal.h>")
+    add("#endif")
     add("")
     add("/* the trap code of a Python exception that unwinds the WebAssembly frames: the exception is already set */")
     add("#define PY_ERROR_TRAP ((wasm_rt_trap_t)0x7000)")
@@ -239,6 +243,23 @@ def generate(module: Module, name: str) -> Glue:
     add("}")
     add("")
     # what a call of WebAssembly code must do about the jump buffer
+    add(
+        "/* a trap from a signal handler (an access past the guard pages) leaves the signal blocked: sigsetjmp saves no mask, for speed */"
+    )
+    add("static void unblock_fault_signals(void) {")
+    add("#ifndef _WIN32")
+    add("    sigset_t set_;")
+    add("    sigemptyset(&set_);")
+    add("    sigaddset(&set_, SIGSEGV);")
+    add("    sigaddset(&set_, SIGBUS);")
+    add("    pthread_sigmask(SIG_UNBLOCK, &set_, NULL);")
+    add("#endif")
+    add("}")
+    add("")
+    add("/* the unwind target is where a `throw` that no `try` of the module catches goes: the trap of this call */")
+    add("#define SET_UP_TRAP_() \\")
+    add("    (WASM_RT_SAVE_STACK_DEPTH(), wasm_rt_set_unwind_target(&g_wasm_rt_jmp_buf), \\")
+    add("     (wasm_rt_trap_t)wasm_rt_try(g_wasm_rt_jmp_buf))")
     if has_imports:
         add(
             "/* a Python callable can call back into the module: the buffer of the outer call is put back afterwards */"
@@ -246,8 +267,9 @@ def generate(module: Module, name: str) -> Glue:
         add("#define ENTER_WASM(FAIL) \\")
         add("    wasm_rt_jmp_buf saved_jmp_; \\")
         add("    memcpy(&saved_jmp_, &g_wasm_rt_jmp_buf, sizeof saved_jmp_); \\")
-        add("    wasm_rt_trap_t trap_ = (wasm_rt_trap_t)wasm_rt_try(g_wasm_rt_jmp_buf); \\")
+        add("    wasm_rt_trap_t trap_ = SET_UP_TRAP_(); \\")
         add("    if (trap_) { \\")
+        add("        unblock_fault_signals(); \\")
         add("        memcpy(&g_wasm_rt_jmp_buf, &saved_jmp_, sizeof saved_jmp_); \\")
         add("        set_trap_error(trap_); \\")
         add("        FAIL; \\")
@@ -255,8 +277,8 @@ def generate(module: Module, name: str) -> Glue:
         add("#define LEAVE_WASM() memcpy(&g_wasm_rt_jmp_buf, &saved_jmp_, sizeof saved_jmp_)")
     else:
         add("#define ENTER_WASM(FAIL) \\")
-        add("    wasm_rt_trap_t trap_ = (wasm_rt_trap_t)wasm_rt_try(g_wasm_rt_jmp_buf); \\")
-        add("    if (trap_) { set_trap_error(trap_); FAIL; }")
+        add("    wasm_rt_trap_t trap_ = SET_UP_TRAP_(); \\")
+        add("    if (trap_) { unblock_fault_signals(); set_trap_error(trap_); FAIL; }")
         add("#define LEAVE_WASM() ((void)0)")
     add("")
 

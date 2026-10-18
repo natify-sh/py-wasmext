@@ -143,3 +143,17 @@ def test_uninstall_takes_the_finder_that_install_gave(tmp_path: Path, env: dict[
     shutil.copy(SIMPLE, tmp_path / "fast.wasm")
     code = "finder = wasmimport.install()\nwasmimport.uninstall(finder)\ntry:\n    import fast\nexcept ImportError:\n    print('not found')"
     assert python(tmp_path, env, code).stdout.strip() == "not found"
+
+
+def test_what_the_compiler_prints_does_not_reach_the_standard_output(tmp_path: Path) -> None:
+    """MSVC prints the names of the files it compiles to stdout: the build runs with it on stderr."""
+    code = (
+        "import subprocess, sys\n"
+        "from wasmext._importer import _compiler_output_to_stderr\n"
+        "with _compiler_output_to_stderr():\n"
+        "    subprocess.run([sys.executable, '-c', 'print(\"from the compiler\")'], check=True)\n"
+        "print('after')\n"
+    )
+    done = subprocess.run([sys.executable, "-c", code], cwd=tmp_path, capture_output=True, text=True, check=False)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.split() == ["after"] and "from the compiler" in done.stderr

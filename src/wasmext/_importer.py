@@ -23,6 +23,7 @@ As with `pyximport`, a file `<module>.wasmbld` beside the `.wasm` can say how th
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import importlib.abc
 import importlib.machinery
@@ -31,7 +32,7 @@ import os
 import shutil
 import sys
 import sysconfig
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Generator, Sequence
 from pathlib import Path
 from types import ModuleType
 from typing import TYPE_CHECKING, Any, cast
@@ -158,7 +159,8 @@ def build_module(name: str, wasmfilename: str, options: _Options) -> str:
         "--force",
     ]
     try:
-        setup(**args)
+        with _compiler_output_to_stderr():
+            setup(**args)
     except SystemExit as exc:  # distutils reports a failed compile by exiting
         raise RuntimeError(f"the C compiler failed ({exc})") from None
     built = _find_built(lib, name)
@@ -169,6 +171,22 @@ def build_module(name: str, wasmfilename: str, options: _Options) -> str:
 
         _prune_stale(lib, name)
     return str(built)
+
+
+@contextlib.contextmanager
+def _compiler_output_to_stderr() -> Generator[None]:
+    """MSVC (`cl`, `link`) writes the names of the files it compiles and its warnings to the standard output, which would
+    become part of the output of the program that did `import mod`: during the build it goes to the standard error."""
+    sys.stdout.flush()
+    sys.stderr.flush()
+    saved = os.dup(1)
+    try:
+        os.dup2(2, 1)
+        yield
+    finally:
+        sys.stdout.flush()
+        os.dup2(saved, 1)
+        os.close(saved)
 
 
 def _package_root(wasm: Path, name: str) -> Path:

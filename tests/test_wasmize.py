@@ -52,6 +52,7 @@ def test_the_extensions_get_their_names_from_the_packages(project: Path) -> None
     assert sorted(Path(s).name for s in pkg_add.sources) == [
         "add_glue.c",
         "add_w2c.c",
+        "wasm-rt-exceptions-impl.c",
         "wasm-rt-impl.c",
         "wasm-rt-mem-impl.c",
     ]

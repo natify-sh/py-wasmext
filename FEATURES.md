@@ -139,7 +139,7 @@ The example (CoreMark) built by cibuildwheel and its tests run on the wheel (`Ex
 | --- | --- |
 | Linux x86-64 | CI; `manylinux` and `musllinux_1_2` wheels, cp311 abi3 and cp314t, seen in the log of run #23 (commit `0e251d8`) |
 | Linux ARM64 | CI job passed (the wheel list was not read) |
-| Windows x64, Windows ARM64 (MSVC) | CI jobs passed (the wheel lists were not read) |
+| Windows x64, Windows ARM64, Windows x86 (MSVC) | CI jobs passed (the wheel lists were not read); x86 at commit `5bc0dc1`, the others also at `a2ee7ef` |
 | macOS Apple Silicon, macOS Intel | CI jobs passed (the wheel lists were not read) |
 | Pyodide 4.0.9 (CPython 3.13, wasm32) | local, `cibuildwheel --platform pyodide`: the 2 tests passed inside Pyodide (not in CI) |
 | Android arm64-v8a (CPython 3.13, NDK 27) | local: the wheel is built, the tests were skipped, **not run** (not in CI) |
@@ -151,7 +151,9 @@ The cibuildwheel configuration of the example is `build = "cp311-* cp314t-*"`.
 
 ### Not confirmed
 
-- PyPy, iOS. Windows x86: the row is in the CI matrix of the example (`Example wheels`), not run yet at the time of writing.
+- PyPy, iOS.
+- The commits after `5bc0dc1` (the big-endian change, this text): the runners did not start their jobs (they ended in a few seconds, with no
+  runner and no log, as when the minutes run out), so CI says nothing about them; they passed the suite locally.
 - The Linux architectures above in CI (they were built by hand under QEMU, not in a workflow), the `cp314t` wheels on them, and
   `musllinux_1_2` x86-64 locally (the disk of the machine was full; CI built it in run #23, commit `0e251d8`).
 - Big-endian hosts (s390x): a module that exports its memory, or uses `v128` in a signature, does not work there (see above);
@@ -184,8 +186,7 @@ In this order (the first ones are small):
 4. **Threads**: `--enable-threads`, C11 atomics (and MSVC), a shared memory, `wasm_rt_init_thread` per thread. After 3, since the
    shared memory is a memory given to several instances, and the link table must not rely on plain reads of a mutable global.
 5. ~~**CI**~~: the desktop matrix is green (see "Verified"). The other Linux architectures were checked by hand under QEMU (armv7l,
-   riscv64, ppc64le, i686 work; s390x, big-endian, does not for modules with a memory export). Left: those in CI (a QEMU job), Windows x86
-   (in the matrix, waiting for the result).
+   riscv64, ppc64le, i686 work; s390x, big-endian, does not for modules with a memory export). Left: those in CI (a QEMU job). Windows x86 is in the matrix and green.
 6. Android and Pyodide in the CI matrix of the example (they build locally, see above); `pyproject.toml` configuration (no `setup.py`);
    publishing on PyPI; reporting `_addcarry_u64` to WABT; `.wat` as a source (an idea, see "Build and distribution").
 7. `funcref`/`externref` in signatures (a design is needed first: who owns an `externref`); custom page sizes (`wasm2c` can, with a

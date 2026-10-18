@@ -209,7 +209,9 @@ In this order (the first ones are small):
 6. Android and Pyodide in the CI matrix of the example (they build locally, see above); `pyproject.toml` configuration (no `setup.py`);
    publishing on PyPI; `.wat` as a source (an idea, see "Build and distribution").
 7. `funcref`/`externref` in signatures (a design is needed first: who owns an `externref`); custom page sizes (`wasm2c` can, with a
-   flag); the rest of the examples of other projects (below); WASI (deferred).
+   flag); the rest of the examples of other projects (below).
+8. **WASI** (`wasi_snapshot_preview1` and `wasi_unstable`): decided to be part of wasmext and compiled into the native module, in C against
+   `Python.h` and the memory of wasm2c, not a Python layer. Not started; the design questions are open (see "Design: WASI" when written).
 
 How to choose the next features: **on demand, not in advance**. The examples of [wasm2mpy](https://github.com/vshymanskyy/wasm2mpy)
 and [pywasm3](https://github.com/wasm3/pywasm3) are taken one by one, the simplest first, and added to this project as examples

@@ -96,6 +96,14 @@ CASES = [
         expect=5,
     ),
     Case(
+        "3.0 tail calls in a function with locals",
+        "(module (func $a (param i32) (result i32) local.get 0)"
+        ' (func (export "f") (param i32) (result i32) (local i32) local.get 0 local.set 1 local.get 1 return_call $a))',
+        args=(5,),
+        expect=5,
+        gap="wasm2c 1.0.42 writes C that does not compile for a function that has locals and a return_call (`u32   u32 var_i0`)",
+    ),
+    Case(
         "3.0 extended constants",
         '(module (global i32 (i32.add (i32.const 1) (i32.const 2))) (func (export "f") (result i32) global.get 0))',
         expect=3,

@@ -45,7 +45,11 @@ def main(argv: list[str]) -> int:
     if not wasm.exists():
         shutil.copyfile(program, wasm)
     # -O0: the programs are tests of what a call does, not of how fast it is, and gcc is much quicker without optimizing
-    os.environ.setdefault("CFLAGS", "-O0" if os.name != "nt" else "/Od")
+    if os.name == "nt":
+        # MSVC reads CL before the command line (setuptools' /O2 and /GL win over it) and _CL_ after it
+        os.environ.setdefault("_CL_", "/Od /GL-")
+    else:
+        os.environ.setdefault("CFLAGS", "-O0")
     from wasmext import _importer  # pyright: ignore[reportPrivateUsage]
 
     _importer.install(build_dir=cache / "build", parts=int(os.environ.get("WASMEXT_TESTSUITE_PARTS", "8")))

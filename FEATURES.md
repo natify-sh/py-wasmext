@@ -210,13 +210,20 @@ of the exporter to the importer: one value, one memory, one table, no copy, no P
 `w2c_env_f(struct w2c_env *, args)`: the glue can call the exported function of the other module itself (its instance pointer is
 the first argument) instead of a Python callable.
 
-**Mixing (decided).** What is passed decides how it works, as everywhere else: an instance for a shelf (`{"env": a}`) takes the whole
-shelf from it (all or nothing); a dict (`{"env": {"log": print}}`) is by keys, as now. Taking one name of a shelf from an instance and
-the others from Python is the dict with a marker, `{"env": {"counter": a.export("counter"), "log": print}}`: it is **not built yet**,
-only when somebody needs it. `a.counter` cannot stand for it (for a global it is the number, not the variable). A list of sources
-(`{"env": [a, {"log": print}]}`) was considered and left out; it could be added later without breaking any of this.
-Almost every compiler puts all its imports on one shelf, `env`, host functions (print, clock) and the ones another module could give,
-so the shelf of a module is often given in part from an instance and in part from Python: the marker will be wanted.
+**How the imports are given (decided).** Three forms, and what is passed decides how it works:
+
+```python
+B.Instance({"env": a})                                                # a shelf from an instance: all of it
+B.Instance({"env": {"log": print}})                                   # a dict: by keys, as now
+B.Instance({"env": {"counter": a.export("counter"), "log": print}})   # a dict where one value is an export of a
+```
+
+`a.export("name")` is a value for a dict like `print` or a number: it says "this one is that export of `a`". It is needed because
+`a.counter` cannot stand for it (for a global it is the number, not the variable). Almost every compiler puts all its imports on one
+shelf, `env`, the host functions (print, clock) and the ones another module could give, so the third form is the common one for
+real modules, and the first is its short case. A list of sources (`{"env": [a, {"log": print}]}`) was considered and left out.
+The order of building: the first form with globals, then the same for memories, functions, tables; `export()` alongside the first
+form, since both ask the same of the link table.
 
 **Recognising an instance of another extension.** The types are not the same objects in two extensions, so `isinstance` cannot
 tell. The instance carries a capsule (a `PyCapsule`, usable in the limited API) with a tag and a version, which points to a
@@ -258,7 +265,7 @@ match: the capsule carries the version of the runtime and compares it).
 **Order**: 1. imported mutable globals from an exporting instance (smallest: a pointer and a type check; also removes the "refused
 when the extension is made" for them); 2. memories; 3. functions; 4. tables.
 
-**Decided**: whole-shelf form first, the marker later; the format of the link table (capsule) is private, documented and
+**Decided**: the three forms above; the format of the link table (capsule) is private, documented and
 versioned (not a promise to others) until a second user of it exists.
 
 ## Decisions

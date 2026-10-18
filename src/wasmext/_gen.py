@@ -108,6 +108,11 @@ def _c_string(text: str) -> str:
     return "".join(out)
 
 
+def _signature_code(func: FuncType) -> str:
+    """The parameters, '>', the results as one letter each: what two extensions compare before one calls the other."""
+    return "".join(_MULTI_CODE[t] for t in func.params) + ">" + "".join(_MULTI_CODE[t] for t in func.results)
+
+
 def _signature(func: FuncType) -> str:
     return f"({', '.join(func.params)}) -> {', '.join(func.results) or 'None'}"
 
@@ -297,8 +302,18 @@ def generate(module: Module, name: str) -> Glue:
     add("    uint32_t type;      /* the value type of a global, as numbered in the binary format (0x7F is i32) */")
     add("    uint32_t flags;     /* bit 0: the global is mutable */")
     add("    PyObject *owner;    /* the instance: a reader that keeps the address keeps a reference to it */")
-    add("    void *address;      /* a global: the pointer to its value */")
+    add(
+        "    void *address;      /* a global: the pointer to its value; a function: the function to call (see below) */"
+    )
+    add("    void *instance;     /* a function: the first argument of that call */")
+    add("    const char *signature;  /* a function: the parameters, '>', the results (i j f d o) */")
     add("} wasmext_export;")
+    add(
+        "/* a function is called as `result f(void *instance, parameters..., int *trapped)`: a trap is reported through `trapped`,"
+    )
+    add(
+        "   with the exception set in Python, and the result is then undefined; it catches the traps of its own module. */"
+    )
     add("")
     # what a call of WebAssembly code must do about the jump buffer
     add(
@@ -349,7 +364,11 @@ def generate(module: Module, name: str) -> Glue:
             for g in global_imports
             if hosts[g.host] == host
         )
-        add(f"struct w2c_{mangle(host, module=True)} {{ PyObject *fn[{max(slots.get(host, 0), 1)}];{values} }};")
+        n = max(slots.get(host, 0), 1)
+        # fn: the Python callables; lf, li, lo: the function of another instance to call instead, its instance, and the owner
+        add(
+            f"struct w2c_{mangle(host, module=True)} {{ PyObject *fn[{n}]; void *lf[{n}]; void *li[{n}]; PyObject *lo[{n}];{values} }};"
+        )
     add("")
     add("typedef struct {")
     add("    PyObject_HEAD")
@@ -386,6 +405,20 @@ def generate(module: Module, name: str) -> Glue:
         add(f"{ret} {imp.symbol}({mod_struct} *h{params}) {{")
         fmt = "".join(_BUILD[t][0] for t in func.params)
         casts = "".join(f", {_BUILD[t][1].format(f'a{i}')}" for i, t in enumerate(func.params))
+        arg_types = "".join(f", {_CTYPE[t]}" for t in func.params)
+        arg_names = "".join(f", a{i}" for i in range(len(func.params)))
+        add(f"    if (h->lf[{imp.slot}] != NULL) {{  /* a function of another instance: called directly */")
+        add("        int trapped = 0;")
+        call = f"(({ret} (*)(void *{arg_types}, int *))h->lf[{imp.slot}])(h->li[{imp.slot}]{arg_names}, &trapped)"
+        if func.results:
+            add(f"        {ret} r_ = {call};")
+            add("        if (trapped) wasm_rt_trap(PY_ERROR_TRAP);")
+            add("        return r_;")
+        else:
+            add(f"        {call};")
+            add("        if (trapped) wasm_rt_trap(PY_ERROR_TRAP);")
+            add("        return;")
+        add("    }")
         add(f'    PyObject *r = PyObject_CallFunction(h->fn[{imp.slot}], "{fmt}"{casts});')
         add("    if (r == NULL) wasm_rt_trap(PY_ERROR_TRAP);")
         if several:
@@ -453,6 +486,7 @@ def generate(module: Module, name: str) -> Glue:
     add("    Py_VISIT(Py_TYPE((PyObject *)self));")
     for i, host in enumerate(hosts):
         add(f"    for (int k = 0; k < {slots.get(host, 0)}; k++) Py_VISIT(self->host{i}.fn[k]);")
+        add(f"    for (int k = 0; k < {slots.get(host, 0)}; k++) Py_VISIT(self->host{i}.lo[k]);")
     for g in global_imports:
         add(f"    Py_VISIT(self->host{g.host}.go{g.slot});")
     add("    return 0;")
@@ -461,6 +495,7 @@ def generate(module: Module, name: str) -> Glue:
     add("static int Instance_clear(InstanceObject *self) {")
     for i, host in enumerate(hosts):
         add(f"    for (int k = 0; k < {slots.get(host, 0)}; k++) Py_CLEAR(self->host{i}.fn[k]);")
+        add(f"    for (int k = 0; k < {slots.get(host, 0)}; k++) Py_CLEAR(self->host{i}.lo[k]);")
     for g in global_imports:
         add(f"    Py_CLEAR(self->host{g.host}.go{g.slot});")
     add("    return 0;")
@@ -495,11 +530,66 @@ def generate(module: Module, name: str) -> Glue:
         add("        return NULL;")
         add("    }")
         for imp in imports:
+            where = f"{imp.module}.{imp.field}"
+            host = f"self->host{imp.host}"
+            signature = _signature_code(imp.func)
+            add("    {")
+            add(f"        PyObject *v = lookup_import(imports, {_c_string(imp.module)}, {_c_string(imp.field)}, 0);")
+            add("        if (v == NULL) { Py_DECREF(self); return NULL; }")
+            add("        PyObject *ref = NULL;")
             add(
-                f"    self->host{imp.host}.fn[{imp.slot}] = "
-                f"lookup_import(imports, {_c_string(imp.module)}, {_c_string(imp.field)}, 1);"
+                "        if (PyCapsule_IsValid(v, WASMEXT_EXPORT)) {  /* the reference to an export of another instance */"
             )
-            add(f"    if (self->host{imp.host}.fn[{imp.slot}] == NULL) {{ Py_DECREF(self); return NULL; }}")
+            add("            Py_INCREF(v);")
+            add("            ref = v;")
+            add("        } else {  /* a method of an instance of a wasmext extension stands for its export */")
+            add('            PyObject *owner = PyObject_GetAttrString(v, "__self__");')
+            add('            PyObject *name = owner != NULL ? PyObject_GetAttrString(v, "__name__") : NULL;')
+            add('            PyObject *exports = name != NULL ? PyObject_GetAttrString(owner, "__exports__") : NULL;')
+            add("            if (exports != NULL && PyDict_Check(exports)) {")
+            add("                ref = PyDict_GetItemWithError(exports, name);")
+            add("                Py_XINCREF(ref);")
+            add("            }")
+            add("            Py_XDECREF(exports);")
+            add("            Py_XDECREF(name);")
+            add("            Py_XDECREF(owner);")
+            add("            PyErr_Clear();")
+            add("        }")
+            add("        if (ref != NULL && PyCapsule_IsValid(ref, WASMEXT_EXPORT)) {")
+            add("            wasmext_export *e = (wasmext_export *)PyCapsule_GetPointer(ref, WASMEXT_EXPORT);")
+            add("            if (e->version != 1 || e->size < sizeof(wasmext_export)) {")
+            add(
+                f"                PyErr_SetString(LinkError, {_c_string(f'import {where}: the export is from an incompatible version of wasmext')});"
+            )
+            add("            } else if (e->kind != WASMEXT_FUNC) {")
+            add(
+                f"                PyErr_SetString(LinkError, {_c_string(f'import {where} is a function: the export given is not')});"
+            )
+            add(f"            }} else if (strcmp(e->signature, {_c_string(signature)}) != 0) {{")
+            add(
+                f'                PyErr_Format(LinkError, "import {where} is a function {_signature_code(imp.func)}: the export given is another one (%s)", e->signature);'
+            )
+            add("            } else {")
+            add(f"                {host}.lf[{imp.slot}] = e->address;")
+            add(f"                {host}.li[{imp.slot}] = e->instance;")
+            add("                Py_INCREF(e->owner);")
+            add(f"                {host}.lo[{imp.slot}] = e->owner;")
+            add("            }")
+            add("            Py_DECREF(ref);")
+            add("            Py_DECREF(v);")
+            add("            if (PyErr_Occurred()) { Py_DECREF(self); return NULL; }")
+            add("        } else if (PyCallable_Check(v)) {")
+            add("            Py_XDECREF(ref);")
+            add(f"            {host}.fn[{imp.slot}] = v;")
+            add("        } else {")
+            add("            Py_XDECREF(ref);")
+            add("            Py_DECREF(v);")
+            not_callable = f"import '{where}' is not callable"
+            add(f"            PyErr_SetString(LinkError, {_c_string(not_callable)});")
+            add("            Py_DECREF(self);")
+            add("            return NULL;")
+            add("        }")
+            add("    }")
         for g in global_imports:
             if g.type == "v128":
                 number, what = "wasmext_is_v128(v)", "16 bytes"
@@ -602,23 +692,44 @@ def generate(module: Module, name: str) -> Glue:
         add("}")
         add("")
     # instance['name'] and instance.__exports__: the references to the exports (capsules that another extension reads)
-    mapped: list[
-        tuple[str, int, int, int, str]
-    ] = []  # name, kind, type code, flags, the function that gives the address
+    # name, kind, type, flags, the getter of the address of a global, the function to call, its signature
+    mapped: list[tuple[str, int, int, int, str, str, str]] = []
     for i, (exp_name, glob) in enumerate(globals_):
         accessor = f"w2c_{prefix}_{mangle(exp_name)}"
         add(f"static void *export_address{i}(InstanceObject *self) {{ return (void *){accessor}(&self->inst); }}")
-        mapped.append((exp_name, 3, _TYPE_CODE[glob.type], int(glob.mutable), f"export_address{i}"))
+        mapped.append((exp_name, 3, _TYPE_CODE[glob.type], int(glob.mutable), f"export_address{i}", "NULL", "NULL"))
     if globals_:
         add("")
-    mapped += [(exp_name, 0, 0, 0, "NULL") for exp_name, _ in funcs]
-    mapped += [(exp_name, 2, 0, 0, "NULL") for exp_name in memories]
+    for i, (exp_name, func) in enumerate(funcs):
+        # what another extension calls: it traps inside this extension (its own jump buffer), and says so through `trapped`
+        params = "".join(f", {_CTYPE[t]} a{j}" for j, t in enumerate(func.params))
+        several = len(func.results) > 1
+        codes = "".join(_MULTI_CODE[t] for t in func.results)
+        ret = f"struct wasm_multi_{codes}" if several else _CTYPE[func.results[0]] if func.results else "void"
+        names = "".join(f", a{j}" for j in range(len(func.params)))
+        add(f"static {ret} link_call{i}(void *inst{params}, int *trapped) {{")
+        if func.results:
+            add(f"    {ret} zero;")
+            add("    memset(&zero, 0, sizeof zero);")
+            add("    ENTER_WASM({ *trapped = 1; return zero; })")
+            add(f"    {ret} r = w2c_{prefix}_{mangle(exp_name)}((w2c_{prefix} *)inst{names});")
+            add("    LEAVE_WASM();")
+            add("    return r;")
+        else:
+            add("    ENTER_WASM({ *trapped = 1; return; })")
+            add(f"    w2c_{prefix}_{mangle(exp_name)}((w2c_{prefix} *)inst{names});")
+            add("    LEAVE_WASM();")
+        add("}")
+        add("")
+        mapped.append((exp_name, 0, 0, 0, "NULL", f"(void *)link_call{i}", _c_string(_signature_code(func))))
+    mapped += [(exp_name, 2, 0, 0, "NULL", "NULL", "NULL") for exp_name in memories]
     add(
-        "static const struct { const char *name; uint32_t kind, type, flags; void *(*address)(InstanceObject *); } export_table[] = {"
+        "static const struct { const char *name; uint32_t kind, type, flags; void *(*address)(InstanceObject *); "
+        "void *function; const char *signature; } export_table[] = {"
     )
-    for exp_name, kind, type_code, flags, address in mapped:
-        add(f"    {{{_c_string(exp_name)}, {kind}, {type_code}, {flags}, {address}}},")
-    add("    {NULL, 0, 0, 0, NULL}")
+    for exp_name, kind, type_code, flags, address, function, signature in mapped:
+        add(f"    {{{_c_string(exp_name)}, {kind}, {type_code}, {flags}, {address}, {function}, {signature}}},")
+    add("    {NULL, 0, 0, 0, NULL, NULL, NULL}")
     add("};")
     add("")
     add("static void export_free(PyObject *capsule) {")
@@ -634,7 +745,11 @@ def generate(module: Module, name: str) -> Glue:
     add("    e->kind = export_table[k].kind;")
     add("    e->type = export_table[k].type;")
     add("    e->flags = export_table[k].flags;")
-    add("    e->address = export_table[k].address != NULL ? export_table[k].address((InstanceObject *)self) : NULL;")
+    add(
+        "    e->address = export_table[k].address != NULL ? export_table[k].address((InstanceObject *)self) : export_table[k].function;"
+    )
+    add("    e->instance = &((InstanceObject *)self)->inst;")
+    add("    e->signature = export_table[k].signature;")
     add("    Py_INCREF(self);")
     add("    e->owner = self;")
     add("    PyObject *capsule = PyCapsule_New(e, WASMEXT_EXPORT, export_free);")

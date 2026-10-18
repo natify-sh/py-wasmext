@@ -663,3 +663,72 @@ print([type(i[name]).__name__ for name in ('__class__', '__init__')], type(i.__e
         "Instance 4 1 ['__class__', '__init__', 'keys', 'ok']",
         "['PyCapsule', 'PyCapsule'] PyCapsule",
     ]
+
+
+_FUNCS_A = """
+(module
+  (global $seen (mut i32) (i32.const 0))
+  (func (export "add") (param i32 i32) (result i32) local.get 0 local.get 1 i32.add)
+  (func (export "note") (param i32) local.get 0 global.set $seen)
+  (func (export "seen") (result i32) global.get $seen)
+  (func (export "pair") (param i32) (result i32 i32) local.get 0 local.get 0 i32.const 1 i32.add)
+  (func (export "boom") (result i32) unreachable))
+"""
+_FUNCS_B = """
+(module
+  (import "env" "add" (func $add (param i32 i32) (result i32)))
+  (import "env" "note" (func $note (param i32)))
+  (import "env" "pair" (func $pair (param i32) (result i32 i32)))
+  (import "env" "boom" (func $boom (result i32)))
+  (func (export "sum") (param i32 i32) (result i32) local.get 0 local.get 1 call $add)
+  (func (export "tell") (param i32) local.get 0 call $note)
+  (func (export "twin") (param i32) (result i32 i32) local.get 0 call $pair)
+  (func (export "explode") (result i32) call $boom))
+"""
+
+
+def test_instances_call_each_others_functions_directly(tmp_path: Path, wabt: Path) -> None:
+    _build_modules(tmp_path, wabt, a=_FUNCS_A, b=_FUNCS_B)
+    code = """
+import pkg.a, pkg.b
+a = pkg.a.Instance()
+
+b = pkg.b.Instance({'env': a})                                      # the whole shelf from an instance
+print(b.sum(2, 3))                                                    # 5
+b.tell(42); print(a.seen())                                           # 42: a void function of a
+print(b.twin(7))                                                      # (7, 8): several results
+c = pkg.b.Instance({'env': {**a.__exports__}})                      # unpacked references: a capsule is not callable,
+print(c.sum(10, 20))                                                  # so this is the direct call: 30
+d = pkg.b.Instance({'env': {'add': a.add, 'note': a['note'], 'pair': a.pair, 'boom': a['boom']}})
+print(d.sum(1, 1))                                                    # 2: a bound method stands for its export
+
+try:
+    b.explode()
+except pkg.a.Trap as exc:                                             # the trap of a, raised through b
+    print('Trap', exc)
+print(b.sum(4, 4), a.add(1, 2))                                       # both are usable afterwards: 8 3
+try:
+    b.explode()
+except pkg.a.Trap:
+    print('again')
+"""
+    ran = subprocess.run([sys.executable, "-c", code], cwd=tmp_path, capture_output=True, text=True, check=False)
+    assert ran.returncode == 0, ran.stderr[-800:]
+    out = ran.stdout.splitlines()
+    assert out[:5] == ["5", "42", "(7, 8)", "30", "2"]
+    assert out[5].startswith("Trap") and out[6:] == ["8 3", "again"]
+
+
+def test_linking_a_function_checks_its_signature(tmp_path: Path, wabt: Path) -> None:
+    _build_modules(tmp_path, wabt, a=_FUNCS_A, b=_FUNCS_B)
+    code = """
+import pkg.a, pkg.b
+a = pkg.a.Instance()
+refs = a.__exports__
+try:
+    pkg.b.Instance({'env': {**refs, 'add': refs['note']}})            # note(i32), add wants (i32, i32) -> i32
+except pkg.b.LinkError as exc:
+    print(exc)
+"""
+    ran = subprocess.run([sys.executable, "-c", code], cwd=tmp_path, capture_output=True, text=True, check=False)
+    assert "import env.add is a function ii>i" in ran.stdout and "(i>)" in ran.stdout, (ran.stdout, ran.stderr[-300:])

@@ -81,6 +81,7 @@ What each line says is tested (`tests/test_features.py`), not read from those do
 | Shared global between instances | done | one variable used by several instances, through the exports of an instance (design below); a global made by the host with no module behind it: not yet |
 | Shared `Memory` and `Table` objects | not yet | the same design problem as for `Global` |
 | Recognising the objects of another extension | not yet | the design problem: every extension has its own types, so an instance of one cannot take a `Global` made by another unless there is a common way to tell them apart (a capsule with a tag and the type, for example) |
+| Imported functions from another instance | done | `Instance({"env": a})`, `{"add": a.add}` (a bound method stands for its export) or `a["add"]`: the call is direct, in C, without Python in between; the signature is checked (`LinkError`); a trap inside the called function is the `Trap` of its module, raised through the caller, and both instances go on: `test_instances_call_each_others_functions_directly`, `test_linking_a_function_checks_its_signature` |
 | `instance["name"]`, `instance.__exports__` | done | the references to the exports, for linking to another instance (a private capsule `wasmext.export.v1`); `{"env": a}` gives a whole shelf. See "How the imports are given" |
 | Traps | done | `Trap` (a `RuntimeError`), the instance stays usable; `LinkError` for bad imports |
 | GC and weak references | done | `Instance` takes part in the cycle collector and can be weakly referenced |
@@ -192,7 +193,7 @@ In this order (the first ones are small):
 7. `funcref`/`externref` in signatures (a design is needed first: who owns an `externref`); custom page sizes (`wasm2c` can, with a
    flag); compatibility with the wasm3/pywasm3 examples; WASI (deferred).
 
-## Design: linking instances (globals are built; memories, functions and tables are not)
+## Design: linking instances (globals and functions are built; memories and tables are not)
 
 The goal is the "shared objects" of the plan: an instance uses a global, a memory, a table or a function of another instance.
 wasmext stays native: no `Global`/`Memory`/`Table` classes copied from the JavaScript API (as `wasmhost` has, because there an
@@ -236,8 +237,8 @@ could give `log`, `a` wins silently when the types agree; the dict with the expl
 Left out for now: a list of sources (`{"env": [a, {"log": print}]}`); a wrapper object for a function that is both callable and a
 reference (it cannot be done for a global or a memory, whose attribute has to be the value, and costs a type and a cache); instead,
 when functions are linked, a bound method of an instance (`{"add": a.add}`) can be accepted as the reference at no cost on a call.
-Names of exports that the module does not import are ignored. Built so far: globals (also immutable ones), `a["name"]`,
-`__exports__` and the shelf from an instance; memories, functions and tables next.
+Names of exports that the module does not import are ignored. Built so far: globals (also immutable ones), functions, `a["name"]`,
+`__exports__` and the shelf from an instance; memories and tables next.
 
 **Recognising an instance of another extension.** The types are not the same objects in two extensions, so `isinstance` cannot
 tell. The instance carries a capsule (a `PyCapsule`, usable in the limited API) with a tag and a version, which points to a

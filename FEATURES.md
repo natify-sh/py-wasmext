@@ -76,12 +76,12 @@ What each line says is tested (`tests/test_features.py`), not read from those do
 | Exported tables, tags | not yet | left out and reported |
 | Imported functions | done | `Instance({module: {name: callable}})`; Python exceptions come out of the call of the module; calling back into the module works |
 | Imported immutable globals | done | a number in the imports; `test_an_imported_immutable_global_is_a_number` |
-| Imported mutable globals | done | an export of another instance: `Instance({"env": a})`, `{**a}` or `a["name"]`; the variable is shared; a number is a `LinkError`; type and mutability are checked: `test_instances_share_a_mutable_global_and_an_instance_is_a_mapping`, `test_linking_a_global_checks_what_it_is` |
+| Imported mutable globals | done | an export of another instance: `Instance({"env": a})` or `a.__exports__["name"]`; the variable is shared; a number is a `LinkError`; type and mutability are checked: `test_instances_share_a_mutable_global_and_an_instance_is_a_mapping`, `test_linking_a_global_checks_what_it_is` |
 | Imported memories, tables | not yet | refused when the extension is made |
 | Shared global between instances | done | one variable used by several instances, through the exports of an instance (design below); a global made by the host with no module behind it: not yet |
 | Shared `Memory` and `Table` objects | not yet | the same design problem as for `Global` |
 | Recognising the objects of another extension | not yet | the design problem: every extension has its own types, so an instance of one cannot take a `Global` made by another unless there is a common way to tell them apart (a capsule with a tag and the type, for example) |
-| The instance as a mapping of its exports | done | `keys()` and `a["name"]` (a private capsule `wasmext.export.v1`, read by another extension), so `{**a, "log": print}` works; write it as a dict literal or `dict(a, log=print)`: `dict(**a, log=print)` is a `TypeError` of Python (a duplicate keyword). An export called `keys` is left out (it would hide `keys()`) |
+| `instance.__exports__` | done | `{name: reference}` for linking to another instance (a private capsule `wasmext.export.v1`); `{"env": a}` gives a whole shelf. See "How the imports are given" |
 | Traps | done | `Trap` (a `RuntimeError`), the instance stays usable; `LinkError` for bad imports |
 | GC and weak references | done | `Instance` takes part in the cycle collector and can be weakly referenced |
 | Type stubs | done | `<module>.pyi` written beside the `.wasm`, with `# fmt: off` and `# ruff: noqa` |
@@ -212,21 +212,25 @@ of the exporter to the importer: one value, one memory, one table, no copy, no P
 the first argument) instead of a Python callable.
 
 **How the imports are given (decided).** A shelf is a dict, and a value in it can be a reference to an export of another instance.
-An instance is also a mapping of its exports (`keys()` and `a["name"]`), so it unpacks into a dict as in JavaScript's spread:
+`instance.__exports__` is the dict of those references, and an instance given as a whole shelf means its `__exports__`:
 
 ```python
-B.Instance({"env": a})  # a shelf from an instance: all of it (short for {**a})
-B.Instance({"env": {"log": print}})  # a dict: by keys, as now
-B.Instance({"env": {**a, "log": print}})  # everything of a, and log from Python (the later key wins)
-B.Instance({"env": {"counter": a["counter"], "log": print}})  # one export of a, and log from Python
+B.Instance({"env": a})                                                  # a shelf from an instance: all of it
+B.Instance({"env": {"log": print}})                                     # a dict: by keys, as now
+B.Instance({"env": {**a.__exports__, "log": print}})                    # everything of a, and log from Python (the later key wins)
+B.Instance({"env": {"counter": a.__exports__["counter"], "log": print}})   # one export of a, and log from Python
 ```
 
-`a["counter"]` is the reference (there is no `export()` method): `a.counter` cannot stand for it, for a global it is the number and not
-the variable. Almost every compiler puts all its imports on one shelf, `env`, the host functions (print, clock) and the ones another
-module could give, so the dict forms are the common ones for real modules. A list of sources (`{"env": [a, {"log": print}]}`) was
-considered and left out. Names of exports that `B` does not import are ignored. An export called `keys` is not an attribute of the
-instance (it would hide `keys()`); `a["keys"]` reaches it. Order of building: the first form with globals, then memories, functions,
-tables; the mapping (`keys()`, `a[...]`) with the first form, since both ask the same of the link table.
+`a.counter` is the value, to use the module from Python (a function is called, a global is its number, a memory is a memoryview);
+`a.__exports__["counter"]` is the reference, to link the module to another one. A name between double underscores cannot be an
+attribute of the instance, so an export called like that is not one (it is in `__exports__`) and the name `__exports__` never clashes
+with an export; the instance has no other names of its own (no `keys()`, no `export()`, no indexing). Write the dict as a literal or
+`dict(a.__exports__, log=print)`: `dict(**a.__exports__, log=print)` is a `TypeError` of Python (a duplicate keyword).
+Almost every compiler puts all its imports on one shelf, `env`, the host functions (print, clock) and the ones another module could
+give, so the dict forms are the common ones for real modules. Beware that `{"env": a}` matches by name: if both `a` and the host
+could give `log`, `a` wins silently when the types agree; the dict with the explicit key shows what is meant. A list of sources
+(`{"env": [a, {"log": print}]}`) was considered and left out. Names of exports that the module does not import are ignored.
+Built so far: globals (also immutable ones), the dict `__exports__` and the shelf from an instance; memories, functions and tables next.
 
 **Recognising an instance of another extension.** The types are not the same objects in two extensions, so `isinstance` cannot
 tell. The instance carries a capsule (a `PyCapsule`, usable in the limited API) with a tag and a version, which points to a
@@ -268,7 +272,7 @@ match: the capsule carries the version of the runtime and compares it).
 **Order**: 1. imported mutable globals from an exporting instance (smallest: a pointer and a type check; also removes the "refused
 when the extension is made" for them); 2. memories; 3. functions; 4. tables.
 
-**Decided**: the three forms above; the format of the link table (capsule) is private, documented and
+**Decided**: the forms above; the format of the link table (capsule) is private, documented and
 versioned (not a promise to others) until a second user of it exists.
 
 ## Decisions

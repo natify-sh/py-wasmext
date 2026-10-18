@@ -194,10 +194,14 @@ def generate(module: Module, name: str) -> Glue:
     funcs: list[tuple[str, FuncType]] = []
     memories: list[str] = []
     globals_: list[tuple[str, GlobalType]] = []
+    no_attribute: set[str] = set()
     for exp in module.exports:
-        if exp.name == "keys" and exp.kind in ("func", "memory", "global"):
-            skipped.append(f"{exp.kind} 'keys' would hide the keys() of Instance")
-            continue
+        if _reserved(exp.name) and exp.kind in ("func", "memory", "global"):
+            # not an attribute (it would replace a special name of Instance), but instance.__exports__[name] reaches it
+            skipped.append(
+                f"{exp.kind} {exp.name!r} is not an attribute (it would hide a special name of Instance): instance.__exports__[{exp.name!r}]"
+            )
+            no_attribute.add(exp.name)
         if exp.kind == "func":
             func = module.all_functions[exp.index]
             reason = _why_not(func, several_results=True)
@@ -421,6 +425,12 @@ def generate(module: Module, name: str) -> Glue:
         add("        PyErr_Format(LinkError, \"missing import module '%s'\", module);")
         add("        return NULL;")
         add("    }")
+        add(
+            "    {   /* a shelf that is an instance of a wasmext extension (anything with __exports__) gives its exports */"
+        )
+        add('        PyObject *exports = PyObject_GetAttrString(m, "__exports__");')
+        add("        if (exports != NULL) { Py_DECREF(m); m = exports; } else { PyErr_Clear(); }")
+        add("    }")
         add("    key = PyUnicode_FromString(field);")
         add("    if (key == NULL) { Py_DECREF(m); return NULL; }")
         add("    f = PyObject_GetItem(m, key);")
@@ -527,7 +537,7 @@ def generate(module: Module, name: str) -> Glue:
                 add("        } else {")
                 add("            Py_DECREF(v);")
                 add(
-                    f"            PyErr_SetString(LinkError, {_c_string(f'import {where} is a mutable global: pass an export of another instance, instance[{chr(34)}name{chr(34)}]')});"
+                    f"            PyErr_SetString(LinkError, {_c_string(f'import {where} is a mutable global: pass an export of another instance: instance.__exports__[{chr(39)}name{chr(39)}] (or the instance for the whole shelf)')});"
                 )
                 add("            Py_DECREF(self);")
                 add("            return NULL;")
@@ -591,7 +601,7 @@ def generate(module: Module, name: str) -> Glue:
             add("    Py_RETURN_NONE;")
         add("}")
         add("")
-    # the instance as a mapping of its exports: keys(), instance["name"]; the value is a capsule another extension reads
+    # instance.__exports__: {name: a capsule that another extension reads}; the table it is made from
     mapped: list[
         tuple[str, int, int, int, str]
     ] = []  # name, kind, type code, flags, the function that gives the address
@@ -611,60 +621,47 @@ def generate(module: Module, name: str) -> Glue:
     add("    {NULL, 0, 0, 0, NULL}")
     add("};")
     add("")
-    add("static PyObject *Instance_keys(PyObject *self, PyObject *Py_UNUSED(ignored)) {")
-    add("    (void)self;")
-    add("    PyObject *list = PyList_New(0);")
-    add("    if (list == NULL) return NULL;")
-    add("    for (int k = 0; export_table[k].name != NULL; k++) {")
-    add("        PyObject *name = PyUnicode_FromString(export_table[k].name);")
-    add(
-        "        if (name == NULL || PyList_Append(list, name) != 0) { Py_XDECREF(name); Py_DECREF(list); return NULL; }"
-    )
-    add("        Py_DECREF(name);")
-    add("    }")
-    add("    return list;")
-    add("}")
-    add("")
     add("static void export_free(PyObject *capsule) {")
     add("    wasmext_export *e = (wasmext_export *)PyCapsule_GetPointer(capsule, WASMEXT_EXPORT);")
     add("    if (e != NULL) { Py_DECREF(e->owner); PyMem_Free(e); }")
     add("}")
     add("")
-    add("static PyObject *Instance_subscript(PyObject *self, PyObject *key) {")
-    add("    const char *name = PyUnicode_Check(key) ? PyUnicode_AsUTF8AndSize(key, NULL) : NULL;")
-    add("    if (name == NULL) {")
-    add("        if (PyErr_Occurred() && !PyErr_ExceptionMatches(PyExc_TypeError)) return NULL;")
-    add("        PyErr_Clear();")
-    add("        PyErr_SetObject(PyExc_KeyError, key);")
-    add("        return NULL;")
-    add("    }")
+    add("static PyObject *export_ref(PyObject *self, int k) {")
+    add("    wasmext_export *e = (wasmext_export *)PyMem_Malloc(sizeof(wasmext_export));")
+    add("    if (e == NULL) return PyErr_NoMemory();")
+    add("    e->size = sizeof(wasmext_export);")
+    add("    e->version = 1;")
+    add("    e->kind = export_table[k].kind;")
+    add("    e->type = export_table[k].type;")
+    add("    e->flags = export_table[k].flags;")
+    add("    e->address = export_table[k].address != NULL ? export_table[k].address((InstanceObject *)self) : NULL;")
+    add("    Py_INCREF(self);")
+    add("    e->owner = self;")
+    add("    PyObject *capsule = PyCapsule_New(e, WASMEXT_EXPORT, export_free);")
+    add("    if (capsule == NULL) { Py_DECREF(self); PyMem_Free(e); }")
+    add("    return capsule;")
+    add("}")
+    add("")
+    add("/* instance.__exports__: {name: a reference to the export}, to be given as an import of another instance */")
+    add("static PyObject *Instance_exports(PyObject *self, void *closure) {")
+    add("    (void)closure;")
+    add("    PyObject *result = PyDict_New();")
+    add("    if (result == NULL) return NULL;")
     add("    for (int k = 0; export_table[k].name != NULL; k++) {")
-    add("        if (strcmp(name, export_table[k].name) != 0) continue;")
-    add("        wasmext_export *e = (wasmext_export *)PyMem_Malloc(sizeof(wasmext_export));")
-    add("        if (e == NULL) return PyErr_NoMemory();")
-    add("        e->size = sizeof(wasmext_export);")
-    add("        e->version = 1;")
-    add("        e->kind = export_table[k].kind;")
-    add("        e->type = export_table[k].type;")
-    add("        e->flags = export_table[k].flags;")
-    add(
-        "        e->address = export_table[k].address != NULL ? export_table[k].address((InstanceObject *)self) : NULL;"
-    )
-    add("        Py_INCREF(self);")
-    add("        e->owner = self;")
-    add("        PyObject *capsule = PyCapsule_New(e, WASMEXT_EXPORT, export_free);")
-    add("        if (capsule == NULL) { Py_DECREF(self); PyMem_Free(e); }")
-    add("        return capsule;")
+    add("        PyObject *name = PyUnicode_FromString(export_table[k].name);")
+    add("        PyObject *ref = name != NULL ? export_ref(self, k) : NULL;")
+    add("        int bad = ref == NULL || PyDict_SetItem(result, name, ref) != 0;")
+    add("        Py_XDECREF(name);")
+    add("        Py_XDECREF(ref);")
+    add("        if (bad) { Py_DECREF(result); return NULL; }")
     add("    }")
-    add("    PyErr_SetObject(PyExc_KeyError, key);")
-    add("    return NULL;")
+    add("    return result;")
     add("}")
     add("")
     add("static PyMethodDef Instance_methods[] = {")
-    add(
-        '    {"keys", Instance_keys, METH_NOARGS, "the names of the exports (an instance is a mapping, so that {**instance} works)"},'
-    )
     for i, (exp_name, func) in enumerate(funcs):
+        if exp_name in no_attribute:
+            continue
         doc = f"{exp_name}{_signature(func)}"
         add(
             f"    {{{_c_string(exp_name)}, (PyCFunction)(void (*)(void))Instance_f{i}, METH_FASTCALL, {_c_string(doc)}}},"
@@ -742,7 +739,12 @@ def generate(module: Module, name: str) -> Glue:
             add("}")
         add("")
     add("static PyGetSetDef Instance_getset[] = {")
+    add(
+        '    {"__exports__", (getter)Instance_exports, NULL, "{name: a reference to the export}: what another instance can take as an import", NULL},'
+    )
     for i, (exp_name, glob) in enumerate(globals_):
+        if exp_name in no_attribute:
+            continue
         setter = f"(setter)Instance_global_set{i}" if glob.mutable else "NULL"
         kind = "mutable" if glob.mutable else "immutable"
         add(
@@ -750,6 +752,8 @@ def generate(module: Module, name: str) -> Glue:
             f'"the {kind} global of type {glob.type}", NULL}},'
         )
     for i, exp_name in enumerate(memories):
+        if exp_name in no_attribute:
+            continue
         add(
             f"    {{{_c_string(exp_name)}, (getter)Instance_memory, NULL, "
             f'"a memoryview of the linear memory (a new one after the memory grows)", (void *)(size_t){i}}},'
@@ -769,7 +773,6 @@ def generate(module: Module, name: str) -> Glue:
     add("    {Py_tp_traverse, Instance_traverse},")
     add("    {Py_tp_clear, Instance_clear},")
     add("    {Py_tp_methods, Instance_methods},")
-    add("    {Py_mp_subscript, Instance_subscript},")
     add("    {Py_tp_getset, Instance_getset},")
     add("    {Py_tp_members, Instance_members},")
     add(f"    {{Py_tp_doc, (void *){_c_string('An instance of the WebAssembly module')}}},")
@@ -838,9 +841,22 @@ def _result_type(func: FuncType) -> str:
     return f"tuple[{', '.join(_PY_TYPE[t] for t in func.results)}]"
 
 
+def _reserved(name: str) -> bool:
+    """A name of an export that cannot be an attribute of Instance: between double underscores it would replace a special
+    method or attribute of the object (`__class__`, `__init__`, `__exports__`). Such an export is still in `__exports__`."""
+    return name.startswith("__") and name.endswith("__")
+
+
+def _not_a_name(kind: str, name: str) -> str:
+    """The comment of the stub for an export that is not written as an attribute."""
+    if _reserved(name):
+        return f"    # {kind}{_py_string(name)} is not an attribute (a special name of Instance): instance.__exports__[{_py_string(name)}]"
+    return f"    # {kind}{_py_string(name)} is not an identifier: getattr(instance, {_py_string(name)})"
+
+
 def _usable(name: str) -> bool:
     """A name that can be written as a method or an attribute in a stub."""
-    return name.isidentifier() and not keyword.iskeyword(name)
+    return name.isidentifier() and not keyword.iskeyword(name) and not _reserved(name)
 
 
 def _callable_type(func: FuncType) -> str:
@@ -885,10 +901,7 @@ def _stub(
     lines.append(
         "    def __init__(self, imports: Imports) -> None: ..." if by_module else "    def __init__(self) -> None: ..."
     )
-    lines += [
-        "    def keys(self) -> list[str]: ...",
-        "    def __getitem__(self, name: str, /) -> object: ...",
-    ]
+    lines += ["    @property", "    def __exports__(self) -> dict[str, object]: ..."]
     for name, func in funcs:
         params = "".join(f"arg{i}: {_PY_TYPE[t]}, " for i, t in enumerate(func.params))
         params = f", {params}/" if func.params else ""
@@ -896,10 +909,10 @@ def _stub(
         if _usable(name):
             lines.append(f"    def {name}(self{params}) -> {result}: ...")
         else:
-            lines.append(f"    # {_py_string(name)} is not an identifier: getattr(instance, {_py_string(name)})")
+            lines.append(_not_a_name("", name))
     for name, glob in globals_:
         if not _usable(name):
-            lines.append(f"    # global {_py_string(name)} is not an identifier: getattr(instance, {_py_string(name)})")
+            lines.append(_not_a_name("global ", name))
         elif glob.mutable:
             lines.append(f"    {name}: {_PY_TYPE[glob.type]}")
         else:
@@ -908,7 +921,7 @@ def _stub(
         if _usable(name):
             lines += ["    @property", f"    def {name}(self) -> memoryview: ..."]
         else:
-            lines.append(f"    # memory {_py_string(name)} is not an identifier: getattr(instance, {_py_string(name)})")
+            lines.append(_not_a_name("memory ", name))
     return "\n".join(lines) + "\n"
 
 

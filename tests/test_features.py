@@ -491,11 +491,11 @@ def test_instances_share_a_mutable_global_and_an_instance_is_a_mapping(tmp_path:
 import pkg.a, pkg.b
 
 a = pkg.a.Instance()
-print(sorted(a.keys()))
-print({**a}.keys() == set(a.keys()))
+print(sorted(a.__exports__))
+print(set({**a.__exports__}) == set(a.__exports__))
 
 said = []
-shelf = {**a, 'log': said.append}              # everything of a, and log from Python (the later key wins)
+shelf = {**a.__exports__, 'log': said.append}              # everything of a, and log from Python (the later key wins)
 b = pkg.b.Instance({'env': shelf})
 print(b.read(), b.fixed())                       # 10 7: the global of a, seen from b
 print(b.add(5), a.counter, a.bump(), b.read())   # 15 15 16 16: one variable
@@ -504,7 +504,7 @@ print(b.read())                                  # 100
 b.say(3)
 print(said)                                      # [3]: log came from Python, not from a
 
-c = pkg.b.Instance({'env': {'counter': a['counter'], 'fixed': 5, 'log': print}})   # one export of a, the rest by hand
+c = pkg.b.Instance({'env': {'counter': a.__exports__['counter'], 'fixed': 5, 'log': print}})   # one export of a, the rest by hand
 print(c.read(), c.fixed())                       # 100 5
 
 del a, shelf
@@ -540,15 +540,12 @@ def attempt(counter, fixed=5):
         print('linked')
 
 attempt(3)                    # a mutable global is not given as a number
-attempt(a['wide'])            # i64, the module wants i32
-attempt(a['fixed'])           # immutable, the module wants mutable
-attempt(a['bump'])            # a function
-attempt(a['counter'], a['wide'])   # an i64 for an i32
-attempt(a['counter'], a['fixed'])  # fine: an immutable global of a for an immutable import
-try:
-    a['nothing']
-except KeyError as exc:
-    print('KeyError', exc)
+attempt(a.__exports__['wide'])            # i64, the module wants i32
+attempt(a.__exports__['fixed'])           # immutable, the module wants mutable
+attempt(a.__exports__['bump'])            # a function
+attempt(a.__exports__['counter'], a.__exports__['wide'])   # an i64 for an i32
+attempt(a.__exports__['counter'], a.__exports__['fixed'])  # fine: an immutable global of a for an immutable import
+print('nothing' in a.__exports__)
 """
     ran = subprocess.run([sys.executable, "-c", code], cwd=tmp_path, capture_output=True, text=True, check=False)
     assert ran.returncode == 0, ran.stderr[-800:]
@@ -556,7 +553,7 @@ except KeyError as exc:
     assert "mutable global" in out[0] and "export of another instance" in out[0]
     assert all(line.startswith("LinkError") for line in out[1:5])
     assert "another type" in out[1] and "global: the export given is not" in out[3]
-    assert out[5:] == ["linked", "KeyError 'nothing'"]
+    assert out[5:] == ["linked", "False"]
 
 
 def test_a_trap_from_a_signal_handler_can_happen_again(tmp_path: Path, wabt: Path) -> None:
@@ -640,4 +637,26 @@ except m.LinkError:
         "ok TypeError",
         "ok TypeError",
         "LinkError",
+    ]
+
+
+def test_exports_named_like_the_methods_of_instance_are_reached_by_name(tmp_path: Path, wabt: Path) -> None:
+    """An export may be called anything: `keys` and the names between double underscores would replace what Instance has."""
+    _build_pkg(
+        tmp_path,
+        wabt,
+        '(module (func (export "keys") (result i32) i32.const 1) (func (export "__class__") (result i32) i32.const 2)'
+        ' (func (export "__init__") (result i32) i32.const 3) (func (export "ok") (result i32) i32.const 4))',
+    )
+    code = """
+import pkg.m
+i = pkg.m.Instance()
+print(i.__class__.__name__, i.ok(), i.keys(), sorted(i.__exports__))
+print([type(i.__exports__[name]).__name__ for name in ('__class__', '__init__')])
+"""
+    ran = subprocess.run([sys.executable, "-c", code], cwd=tmp_path, capture_output=True, text=True, check=False)
+    assert ran.returncode == 0, ran.stderr[-600:]
+    assert ran.stdout.splitlines() == [
+        "Instance 4 1 ['__class__', '__init__', 'keys', 'ok']",
+        "['PyCapsule', 'PyCapsule']",
     ]

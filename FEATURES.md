@@ -188,9 +188,14 @@ then one `gcc -O2 -g` process, on one core, works on that one file (1.3 GB of me
 finishing**: not practical as it is. `lua.wasm` (329 KB) takes 44 seconds. For a user this is paid once, by whoever builds the wheel; for
 `wasmimport` (a build at import) it hurts. The numbers are of one machine (4 cores, gcc 13). Ideas, not built:
 
-- **Split the C and compile the parts in parallel** (the one to try first). `wasm2c --num-outputs=N` writes N files. setuptools compiles the
-  sources of one extension one after the other, so wasmext would need its own `build_ext` that compiles the objects with a pool (as NumPy
-  does), with care for MSVC. About N times faster on N cores, if the parts are of an even size.
+- **Split the C and compile the parts in parallel: built.** `wasm2c --num-outputs=N` writes N files; wasmext has its own `build_ext`
+  (`wasmext._setuptools`, put in by the entry point of the hook) that compiles the sources of such an extension in a pool of threads
+  (`WASMEXT_JOBS`, else `-j`, else the number of processors) and then links. `wasmize(..., parts=N)`, `--parts N`, `WASMEXT_PARTS`,
+  `wasmimport.install(parts=N)`: None is automatic, 1 turns it off. Automatic: a module under 1 MiB is one file (a split costs the
+  inlining of calls between the files), a larger one gets a file for each 512 KiB (at most 64). Measured (4 cores, one run each): `coreutils.wasm`
+  in 16 files compiled in 3 minutes, where one file was not done in 33; `lua.wasm` (329 KB) 42 s whole and 10.7 s in 8 files; CoreMark
+  (`examples/coremark`) 25 848 whole and 24 124 in 4 files, 6.7% slower, which is why a small module is not split by itself. A tree with another number of files is made
+  again (the old files are removed); where there is no wasm2c, the tree that is there is used.
 - Lower optimization for a very large module (`-O1`), and `-g0` for the generated C. Judged worse than the split: the first costs speed of
   the result, and neither is a big enough step; they can be measured when the split is there.
 - Another compiler (clang may be faster on a file of this size): to be measured, not assumed.

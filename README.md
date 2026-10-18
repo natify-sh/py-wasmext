@@ -93,6 +93,14 @@ method `a.add` and the `memoryview` are accepted as references too). What does n
 `LinkError`. A mutable global can only be shared as a reference; a number given for it is a `LinkError`. Tables cannot be linked yet.
 [`examples/link`](examples/link) is a package of two modules that use each other; the design is in [FEATURES.md](FEATURES.md).
 
+### Large modules
+
+The C that `wasm2c` writes is about 13 times the size of the module, and one file of millions of lines is a very long job for a
+C compiler (the 10.8 MB `coreutils.wasm` was not done in half an hour). A module of 1 MiB or more is therefore written in several
+files, which are compiled at the same time (512 KiB of the module for each file, at most 64). `wasmize(..., parts=N)`, `wasmext
+--parts N`, `WASMEXT_PARTS` and `wasmimport.install(parts=N)` set the number of files (1 keeps the module whole: the code of a split
+module is somewhat slower, as a call from one file to another is not inlined); `WASMEXT_JOBS` sets how many are compiled at once.
+
 ### Native or abi3 wheels
 
 The interpreter that builds decides, as it does in Cython: where it has a stable ABI (CPython 3.11 and later) the extension is

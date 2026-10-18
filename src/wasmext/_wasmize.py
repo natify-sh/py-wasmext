@@ -43,6 +43,12 @@ RUNTIME_SOURCES = ("wasm-rt-impl.c", "wasm-rt-mem-impl.c", "wasm-rt-exceptions-i
 # the C of wasmext that a module is built with when it needs it (WASI): copied beside the C of the module, as the runtime is
 WASI_COMMON = "wasi_common.h"
 C_DIR = Path(__file__).parent / "c"
+# A big module is split into files that gcc and the others compile at the same time: one file of 3 million lines was not compiled
+# in 33 minutes (FEATURES.md, "Build time of a large module"), 16 files of it were, on 4 cores, in 3. Splitting costs speed of the
+# code (a call from one file to another is not inlined), so a small module stays whole.
+AUTO_SPLIT_FROM = 1 << 20  # a module smaller than this (1 MiB) is one file
+AUTO_PART_SIZE = 512 << 10  # and a larger one gets a file for each 512 KiB of it
+MAX_PARTS = 64
 # The oldest CPython an abi3 extension supports (3.11): the buffer protocol joined the limited API there.
 LIMITED_API_VERSION = "0x030B0000"
 # The C of wasm2c for a module with SIMD includes the headers of simde, which the wabt-package carries.
@@ -95,6 +101,7 @@ class _Prepared:
     include_dir: str
     skipped: list[str]
     extra_include_dirs: tuple[str, ...] = ()
+    parts: int = 1  # the files the C of the module is in
 
 
 def _rel(path: Path) -> str:
@@ -122,8 +129,42 @@ def _version() -> str:
         return "0+unknown"
 
 
-def _marker(wabt: str) -> str:
-    return f"{MARKER}{_version()} (WABT {wabt}) */\n"
+def _marker(wabt: str, parts: int = 1) -> str:
+    return f"{MARKER}{_version()} (WABT {wabt}, parts {parts}) */\n"
+
+
+_PARTS_IN_MARKER = re.compile(r", parts (\d+)\) \*/")
+
+
+def _choose_parts(size: int, requested: int | None) -> int:
+    """How many files the C of a module of `size` bytes is written in: what was asked (the argument, else WASMEXT_PARTS), else
+    one for a small module and more for a large one."""
+    if requested is None:
+        env = os.environ.get("WASMEXT_PARTS")
+        if env:
+            try:
+                requested = int(env)
+            except ValueError:
+                raise ValueError(f"WASMEXT_PARTS must be a number, not {env!r}") from None
+    if requested is not None:
+        if requested < 1:
+            raise ValueError(f"parts must be 1 or more, not {requested}")
+        return min(requested, MAX_PARTS)
+    return 1 if size < AUTO_SPLIT_FROM else min(MAX_PARTS, -(-size // AUTO_PART_SIZE))
+
+
+def _w2c_files(out_dir: Path, last: str, parts: int) -> list[Path]:
+    return [out_dir / f"{last}_w2c.c"] if parts == 1 else [out_dir / f"{last}_w2c_{i}.c" for i in range(parts)]
+
+
+def _existing_parts(out_dir: Path, last: str) -> int:
+    """How many files of the C of the module are there (0: none, or not all of them)."""
+    if (out_dir / f"{last}_w2c.c").is_file():
+        return 1
+    count = 0
+    while (out_dir / f"{last}_w2c_{count}.c").is_file():
+        count += 1
+    return count
 
 
 def _made_by_this_wasmext(path: Path) -> bool:
@@ -139,7 +180,8 @@ def _made_by_this_wasmext(path: Path) -> bool:
         wabt = find_toolchain().version
     except RuntimeError:  # a tree that ships its C, built where there is no WABT: what wasmext made stays
         return True
-    return first.rstrip() == _marker(wabt).rstrip()
+    found = _PARTS_IN_MARKER.search(first)
+    return found is not None and first.rstrip() == _marker(wabt, int(found.group(1))).rstrip()
 
 
 # wasm2c 1.0.42 checks the sum of 64-bit addresses with `_addcarry_u64` whenever the compiler is MSVC, an intrinsic that only
@@ -196,10 +238,15 @@ def _memory_error_not_abort(inc_source: bytes) -> bytes:
     return inc_source[: match.start()] + body + inc_source[match.end() :]
 
 
-def _simde_include(w2c_c: Path) -> tuple[str, ...]:
+def _simde_include(w2c_files: list[Path]) -> tuple[str, ...]:
     """The directory with `simde/` when the C of the module includes it, else nothing. It is looked for in the toolchain
     only then, so a tree that ships its C and has no SIMD still builds without the wabt-package."""
-    if not any(_USES_SIMDE.search(p.read_bytes()) for p in (w2c_c, w2c_c.with_suffix(".h")) if p.is_file()):
+    w2c_c = w2c_files[0]
+    headers_of = [w2c_c.with_suffix(".h")]
+    if len(w2c_files) > 1:  # the first part is `<name>_w2c_0.c`: the headers are `<name>_w2c.h` and `<name>_w2c-impl.h`
+        stem = w2c_c.name[: -len("_0.c")]
+        headers_of = [w2c_c.with_name(f"{stem}.h"), w2c_c.with_name(f"{stem}-impl.h")]
+    if not any(_USES_SIMDE.search(p.read_bytes()) for p in (*w2c_files, *headers_of) if p.is_file()):
         return ()
     headers = find_toolchain().include
     if headers is None or not (headers / "simde").is_dir():
@@ -220,18 +267,29 @@ def _write_if_changed(path: Path, data: bytes) -> None:
         path.write_bytes(data)
 
 
-def _prepare(wasm: Path, name: str, out_dir: Path, *, force: bool, quiet: bool, stubs: bool) -> _Prepared:
+def _prepare(
+    wasm: Path, name: str, out_dir: Path, *, force: bool, quiet: bool, stubs: bool, parts: int | None
+) -> _Prepared:
     last = name.rsplit(".", 1)[-1]
     data = wasm.read_bytes()
-    glue_c, w2c_c = out_dir / f"{last}_glue.c", out_dir / f"{last}_w2c.c"
+    glue_c = out_dir / f"{last}_glue.c"
+    wanted = _choose_parts(len(data), parts)
 
-    def outputs(skipped: list[str]) -> _Prepared:
+    def outputs(skipped: list[str], count: int) -> _Prepared:
+        files = _w2c_files(out_dir, last, count)
         runtime = sorted(p for p in out_dir.glob("wasm-rt*") if p.suffix in (".c", ".h", ".inc"))
-        sources = [glue_c, w2c_c, *(out_dir / n for n in RUNTIME_SOURCES)]
+        sources = [glue_c, *files, *(out_dir / n for n in RUNTIME_SOURCES)]
         depends = [*(p for p in runtime if p.name not in RUNTIME_SOURCES), out_dir / f"{last}_w2c.h", wasm]
+        if count > 1:
+            depends.append(out_dir / f"{last}_w2c-impl.h")
         depends.extend(out_dir / n for n in _wasi_files(glue))  # header only: the glue includes them
         return _Prepared(
-            [_rel(p) for p in sources], [_rel(p) for p in depends], _rel(out_dir), skipped, _simde_include(w2c_c)
+            [_rel(p) for p in sources],
+            [_rel(p) for p in depends],
+            _rel(out_dir),
+            skipped,
+            _simde_include(files),
+            count,
         )
 
     # The glue and the stub come from the module alone (no wasm2c, no compiler), so they are always made: a module that
@@ -251,24 +309,42 @@ def _prepare(wasm: Path, name: str, out_dir: Path, *, force: bool, quiet: bool, 
             _write_if_changed(out_dir / c_name, (C_DIR / c_name).read_bytes())
 
     # As cythonize() does: the C is made again when it is missing, was made by another wasmext (or WABT), is older
-    # than the .wasm, or when forced (`force`, or WASMEXT_FORCE_REGEN=1 for build systems).
+    # than the .wasm, or when forced (`force`, or WASMEXT_FORCE_REGEN=1 for build systems). A tree that has the C in a
+    # number of files other than the one wanted is made again too, where there is a wasm2c to do it; where there is none,
+    # what is there is used.
     force = force or os.environ.get("WASMEXT_FORCE_REGEN") == "1"
-    complete = all(p.is_file() for p in (glue_c, w2c_c, out_dir / RUNTIME_SOURCES[0]))
-    if not force and complete and _made_by_this_wasmext(w2c_c) and w2c_c.stat().st_mtime >= wasm.stat().st_mtime:
-        return outputs(glue.skipped)
+    have = _existing_parts(out_dir, last)
+    first = _w2c_files(out_dir, last, have)[0] if have else None
+    complete = bool(have) and all(p.is_file() for p in (glue_c, out_dir / RUNTIME_SOURCES[0]))
+    if (
+        not force
+        and complete
+        and first is not None
+        and _made_by_this_wasmext(first)
+        and first.stat().st_mtime >= wasm.stat().st_mtime
+    ):
+        if have == wanted:
+            return outputs(glue.skipped, have)
+        try:
+            find_toolchain()
+        except RuntimeError:
+            return outputs(glue.skipped, have)
 
     toolchain: Toolchain = find_toolchain()
     out_dir.mkdir(parents=True, exist_ok=True)
-    result = subprocess.run(
-        [str(toolchain.wasm2c), str(wasm), "-o", str(w2c_c), f"--module-name={last}"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    for old in (out_dir / f"{last}_w2c.c", *out_dir.glob(f"{last}_w2c_*.c"), out_dir / f"{last}_w2c-impl.h"):
+        old.unlink(missing_ok=True)  # what a run with another number of files left
+    command = [str(toolchain.wasm2c), str(wasm), "-o", str(out_dir / f"{last}_w2c.c"), f"--module-name={last}"]
+    if wanted > 1:
+        command.append(f"--num-outputs={wanted}")
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
     if result.returncode:
         raise RuntimeError(f"wasm2c failed on {wasm}:\n{result.stderr.strip()}")
-    w2c_c.write_bytes(_marker(toolchain.version).encode() + _tail_call_locals(_portable_on_arm64(w2c_c.read_bytes())))
-    _write_if_changed(glue_c, (_marker(toolchain.version) + glue.source).encode("utf-8"))
+    for part in _w2c_files(out_dir, last, wanted):
+        part.write_bytes(
+            _marker(toolchain.version, wanted).encode() + _tail_call_locals(_portable_on_arm64(part.read_bytes()))
+        )
+    _write_if_changed(glue_c, (_marker(toolchain.version, wanted) + glue.source).encode("utf-8"))
     for src in toolchain.runtime.glob("wasm-rt*"):
         if src.suffix in (".c", ".h", ".inc"):
             shutil.copyfile(src, out_dir / src.name)
@@ -277,7 +353,7 @@ def _prepare(wasm: Path, name: str, out_dir: Path, *, force: bool, quiet: bool, 
     if glue.skipped and not quiet:
         for item in glue.skipped:
             print(f"wasmext: {wasm}: not exposed: {item}", file=sys.stderr)
-    return outputs(glue.skipped)
+    return outputs(glue.skipped, wanted)
 
 
 def wasmize(
@@ -290,6 +366,7 @@ def wasmize(
     stubs: bool = True,
     limited_api: bool | None = None,
     guard_pages: bool | None = None,
+    parts: int | None = None,
 ) -> list[Extension]:
     """The extensions for the `.wasm` modules in `module_list`, ready for `setup(ext_modules=...)`.
 
@@ -314,6 +391,12 @@ def wasmize(
     MMU (fast), which fails, with an abort() of the runtime, in a process whose address space is limited. False
     allocates what the memory needs and checks every access in code (a bit slower).
 
+    `parts` is how many files the C of a module is written in (`wasm2c --num-outputs`), which setuptools then compiles at the same
+    time (WASMEXT_JOBS sets how many at once; the default is the number of processors). None, the default, is WASMEXT_PARTS if
+    that is set, else one file for a module smaller than 1 MiB and a file for each 512 KiB of a larger one (at most 64); 1 turns
+    the splitting off. A split costs some speed of the code (a call from one file to another is not inlined), so a small
+    module is better whole; for a big one it is the difference between minutes and an hour.
+
     With `stubs` (the default) a `<stem>.pyi` is written beside each `.wasm`: the types of the extension for editors and type
     checkers (ship it in the wheel with `package-data`).
     """
@@ -328,6 +411,7 @@ def wasmize(
             stubs=stubs,
             limited_api=limited_api,
             guard_pages=guard_pages,
+            parts=parts,
         )
     ]
 
@@ -342,6 +426,7 @@ def _wasmize(
     stubs: bool,
     limited_api: bool | None,
     guard_pages: bool | None = None,
+    parts: int | None = None,
 ) -> list[tuple[Path | None, Extension]]:
     """`wasmize()` with the `.wasm` file of each extension (None for an ordinary extension that passed through)."""
     from setuptools import Extension  # a build-time dependency of the projects that call this
@@ -364,11 +449,12 @@ def _wasmize(
         if not name.rsplit(".", 1)[-1].isidentifier():
             raise ValueError(f"{wasm}: {name!r} is not a module name; give the module an Extension with a name")
         out_dir = Path(build_dir) / name if build_dir else wasm.parent / f"{wasm.stem}_wasmext"
-        prepared = _prepare(wasm, name, out_dir, force=force, quiet=quiet, stubs=stubs)
+        prepared = _prepare(wasm, name, out_dir, force=force, quiet=quiet, stubs=stubs, parts=parts)
         ext = copy.copy(template) if template else Extension(name, [])
         ext.name = name
         rest = [s for s in (template.sources if template else []) if not str(s).endswith(".wasm")]
         ext.sources = [*rest, *prepared.sources]
+        ext._wasmext_parallel = prepared.parts > 1  # type: ignore[attr-defined]  # wasmext._setuptools compiles the files at once
         ext.depends = [*ext.depends, *prepared.depends]
         ext.include_dirs = [
             *ext.include_dirs,

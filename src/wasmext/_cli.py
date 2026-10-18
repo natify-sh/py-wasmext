@@ -62,6 +62,13 @@ def _parser() -> argparse.ArgumentParser:
         help="reserve address space for the memories and check them with guard pages (fast, the default), or allocate "
         "what they need and check every access (--no-guard-pages: for processes with a limit on address space)",
     )
+    parser.add_argument(
+        "--parts",
+        type=int,
+        metavar="N",
+        help="write the C of each module in N files, which are compiled at the same time (1: one file); default: WASMEXT_PARTS, "
+        "else one file for a module under 1 MiB and one for each 512 KiB of a larger one",
+    )
     parser.add_argument("--no-stubs", action="store_true", help="do not write a .pyi beside each .wasm")
     parser.add_argument(
         "-X", "--exclude", action="append", default=[], metavar="GLOB", help="leave out files matching GLOB"
@@ -107,6 +114,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             stubs=not args.no_stubs,
             limited_api=args.abi3,
             guard_pages=args.guard_pages,
+            parts=args.parts,
         )
     except (WasmError, GenError, ValueError, RuntimeError) as exc:
         print(f"wasmext: error: {exc}", file=sys.stderr)

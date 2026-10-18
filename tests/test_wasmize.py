@@ -306,11 +306,11 @@ def test_a_module_with_simd_gets_the_include_directory_of_simde(
     (root / "wasm2c" / "wasm-rt.h").write_text("", encoding="utf-8")
     monkeypatch.setenv("WASMEXT_WABT", str(root))
     with pytest.raises(RuntimeError, match="simde"):
-        _simde_include(c)
+        _simde_include([c])
     (root / "include" / "simde").mkdir(parents=True)
-    assert _simde_include(c) == (str(root / "include"),)
+    assert _simde_include([c]) == (str(root / "include"),)
     c.write_text("int x;\n", encoding="utf-8")  # no SIMD: nothing is looked for
-    assert _simde_include(c) == ()
+    assert _simde_include([c]) == ()
 
 
 def test_a_big_endian_host_builds_with_wabt_big_endian(project: Path, monkeypatch: pytest.MonkeyPatch) -> None:

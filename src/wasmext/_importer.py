@@ -97,6 +97,7 @@ class _Options:
         guard_pages: bool | None,
         limited_api: bool | None,
         stubs: bool,
+        parts: int | None = None,
     ) -> None:
         self.build_dir = build_dir
         self.inplace = inplace
@@ -105,6 +106,7 @@ class _Options:
         self.guard_pages = guard_pages
         self.limited_api = limited_api
         self.stubs = stubs
+        self.parts = parts
 
 
 def _workdir(options: _Options, wasm: Path, name: str) -> Path:
@@ -133,6 +135,7 @@ def build_module(name: str, wasmfilename: str, options: _Options) -> str:
         stubs=options.stubs,
         limited_api=options.limited_api,
         guard_pages=options.guard_pages,
+        parts=options.parts,
     )
     lib = _package_root(wasm, name) if options.inplace else work / "lib"
     existing = _find_built(lib, name)
@@ -268,6 +271,7 @@ def install(
     guard_pages: bool | None = None,
     limited_api: bool | None = None,
     stubs: bool = False,
+    parts: int | None = None,
 ) -> WasmFinder:
     """Main entry point: let `import` find `.wasm` files, for this process. Returns the finder (to hand to `uninstall()`).
 
@@ -276,7 +280,7 @@ def install(
         `build_dir`: easier to look at when something goes wrong, and it can meet files of the same name.
     :param setup_args: arguments for `setuptools.setup()`; a `.wasmbld` file can add to them.
     :param inplace: put the built extension (`.so` or `.pyd`) next to the `.wasm`.
-    :param guard_pages: and :param limited_api: as for `wasmize()`.
+    :param guard_pages: and :param limited_api: and :param parts: as for `wasmize()`.
     :param stubs: write a `<name>.pyi` beside each `.wasm` (not by default: the directory you import from stays as it is).
 
     A second call replaces the finder of the first (where `pyximport` keeps the first one).
@@ -290,6 +294,7 @@ def install(
         guard_pages,
         limited_api,
         stubs,
+        parts,
     )
     finder = WasmFinder(options)
     sys.meta_path.append(finder)

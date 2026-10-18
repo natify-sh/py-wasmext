@@ -422,6 +422,11 @@ mutating ones away), and a directory descriptor is a capability for that directo
 leads out are `ENOTCAPABLE` (an absolute link inside is refused too, as in cap-std). Both snapshots are served (`sock_accept` is not a call of the first:
 `GenError`); the first has its own `fd_seek` (another order of `whence`) and `fd_filestat_get`/`path_filestat_get` (56 bytes). `Instance()` needs no
 imports; `wasi={...}` takes args, env, stdin, stdout, stderr, preopens, readonly. What the caller gives as an import wins, call by call.
+**The official tests.** The precompiled programs of [WebAssembly/wasi-testsuite](https://github.com/WebAssembly/wasi-testsuite) (`prod/testsuite-base`, WASI 0.1:
+AssemblyScript, C and Rust, 72 programs; the 55 of WASI 0.3 are skipped) run on wasmext: `tests/wasi_testsuite/adapter.py` and `run_wasmext.py` build each one
+into a native extension (without optimizing) and run it, and CI (`.github/workflows/wasi-testsuite.yml`) does so on Linux, macOS and Windows. All 72 pass on Linux.
+They found what our tests had not: the same function imported twice (AssemblyScript), a directory opened with the rights of a scratch directory, a trailing
+slash (`file/` is `ENOTDIR`), `fd_renumber` of the standard streams, the rights of an opened directory (no seek), and `pwrite` on a file opened for writing only.
 Not built: signals (`proc_raise`), sockets, threads, and the clocks of the process and the thread in `poll_oneoff`. Tests: `tests/test_wasi.py` and `tests/test_wasi_fs.py` (through `build_extension`, not on
 Windows; the file tests are run for both ways of reaching the file system), `test_a_wasi_module_is_built_with_the_wasi_header_of_wasmext`
 and `test_wasi_files_work_on_every_platform_of_ci` (the whole path, every platform of CI). `lua.wasm` (imports `wasi_unstable`) is built and run by `examples/lua` (its tests, and the wheels of CI).

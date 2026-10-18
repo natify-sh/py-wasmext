@@ -1,0 +1,83 @@
+name: WASI test suite
+
+# The official tests of WASI 0.1 (https://github.com/WebAssembly/wasi-testsuite, the precompiled programs of its
+# prod/testsuite-base branch) run on wasmext: each program is turned into a native extension (tests/wasi_testsuite/run_wasmext.py,
+# without optimizing: it is the calls that are tested) and run by the test runner of the suite, with the adapter
+# tests/wasi_testsuite/adapter.py. A test that is expected to fail on a system is in tests/wasi_testsuite/expectations-*.toml.
+
+on:
+  push:
+    paths-ignore:
+      - "**.md"
+  pull_request:
+    paths-ignore:
+      - "**.md"
+  workflow_dispatch:
+
+concurrency:
+  group: wasi-testsuite-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # the commit of prod/testsuite-base that the results were taken from; change it on purpose
+  WASI_TESTSUITE_REF: d552798a246242c3efe6931314cdfa93d6eefa52
+
+jobs:
+  wasi-testsuite:
+    name: WASI test suite on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # setuptools-scm
+
+      - uses: actions/checkout@v7
+        with:
+          repository: WebAssembly/wasi-testsuite
+          ref: ${{ env.WASI_TESTSUITE_REF }}
+          path: wasi-testsuite
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          python-version: "3.11"
+          github-token: ${{ github.token }}
+
+      - name: Install wasmext and the test runner
+        run: |
+          uv venv .venv
+          uv pip install --python .venv --no-cache -e . setuptools
+          uv pip install --python .venv -r wasi-testsuite/test-runner/requirements/prod.txt
+        shell: bash
+
+      - name: Run the tests
+        env:
+          WASMEXT_TESTSUITE_CACHE: ${{ runner.temp }}/wasmext-testsuite
+        run: |
+          # paths in the form of the system (GITHUB_WORKSPACE has C:\ on Windows, $PWD in bash has /c/)
+          WORK="$GITHUB_WORKSPACE"
+          if [ "$RUNNER_OS" = "Windows" ]; then PY="$WORK\\.venv\\Scripts\\python.exe"; else PY="$WORK/.venv/bin/python"; fi
+          export WASMEXT_PYTHON="$PY"
+          EXPECT="tests/wasi_testsuite/expectations-$(echo "$RUNNER_OS" | tr 'A-Z' 'a-z').toml"
+          ARGS=()
+          if [ -f "$EXPECT" ]; then ARGS=(--expectations "$WORK/$EXPECT"); fi
+          cd wasi-testsuite
+          "$PY" run-tests -r "$WORK/tests/wasi_testsuite/adapter.py" --disable-colors --verbose \
+            --json-output-location "$RUNNER_TEMP/wasi-testsuite.json" "${ARGS[@]}"
+        shell: bash
+
+      - name: Upload the results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: wasi-testsuite-${{ matrix.os }}
+          path: ${{ runner.temp }}/wasi-testsuite.json
+          retention-days: 7
+          if-no-files-found: ignore

@@ -100,6 +100,11 @@ enum { WASI_T_ATIM = 1, WASI_T_ATIM_NOW = 2, WASI_T_MTIM = 4, WASI_T_MTIM_NOW = 
 #define WASI_R_PATH_REMOVE_DIRECTORY WASI_R(25)
 #define WASI_R_PATH_UNLINK_FILE WASI_R(26)
 #define WASI_R_ALL ((UINT64_C(1) << 30) - 1)
+/* the rights only a directory has: a program that asks for one of them along with the right to write (wasi-libc asks for all the
+   rights there are, and so does the scratch directory of the test suite) may mean a directory, and then writing is not what is meant */
+#define WASI_R_OF_DIRECTORY \
+    (WASI_R(9) | WASI_R(10) | WASI_R(11) | WASI_R(12) | WASI_R(13) | WASI_R(14) | WASI_R(15) | WASI_R(16) | WASI_R(17) | WASI_R(18) | \
+     WASI_R(19) | WASI_R(20) | WASI_R(24) | WASI_R(25) | WASI_R(26))
 /* what changes something: taken away from a preopen that is read-only */
 #define WASI_R_MUTATING \
     (WASI_R(0) | WASI_R(4) | WASI_R(6) | WASI_R(8) | WASI_R(9) | WASI_R(10) | WASI_R(11) | WASI_R(12) | WASI_R(16) | WASI_R(17) | \
@@ -445,7 +450,10 @@ static inline wasmext_wasi *wasmext_wasi_new(PyObject *config, PyObject *exit_ty
         PyErr_NoMemory();
         goto fail;
     }
-    for (int i = 0; i < 3; i++) w->entries[i].kind = WASI_K_STD;
+    for (int i = 0; i < 3; i++) {
+        w->entries[i].kind = WASI_K_STD;
+        w->entries[i].osfd = i;  /* which stream it is, wherever it is renumbered to */
+    }
     if (config == Py_None) config = NULL;
     else if (!PyDict_Check(config)) {
         PyErr_SetString(PyExc_TypeError, "wasi must be a dict (args, env, stdin, stdout, stderr)");
@@ -826,7 +834,7 @@ static inline uint32_t wasi_fd_write(void *s, uint32_t fd, uint32_t iovs, uint32
     WASI_STATE(s);
     wasi_entry *e = wasi_entry_of(w, fd);
     if (e == NULL || e->kind == WASI_K_DIR) return e == NULL ? WASI_E_BADF : WASI_E_ISDIR;
-    if (e->kind == WASI_K_STD) return fd == 0 ? WASI_E_BADF : wasi_write_std(w, fd, iovs, count, nwritten, trapped);
+    if (e->kind == WASI_K_STD) return e->osfd == 0 ? WASI_E_BADF : wasi_write_std(w, (uint32_t)e->osfd, iovs, count, nwritten, trapped);
     if (!(e->rights & WASI_R_FD_WRITE)) return WASI_E_NOTCAPABLE;
     if (!wasi_in_memory(w, iovs, (uint64_t)count * 8)) return WASI_E_FAULT;
     uint64_t total = 0;
@@ -851,7 +859,7 @@ static inline uint32_t wasi_fd_read(void *s, uint32_t fd, uint32_t iovs, uint32_
     WASI_STATE(s);
     wasi_entry *e = wasi_entry_of(w, fd);
     if (e == NULL) return WASI_E_BADF;
-    if (e->kind == WASI_K_STD) return fd == 0 ? wasi_read_std(w, iovs, count, nread, trapped) : WASI_E_BADF;
+    if (e->kind == WASI_K_STD) return e->osfd == 0 ? wasi_read_std(w, iovs, count, nread, trapped) : WASI_E_BADF;
     if (e->kind == WASI_K_DIR) return WASI_E_ISDIR;
     if (!(e->rights & WASI_R_FD_READ)) return WASI_E_NOTCAPABLE;
     if (!wasi_in_memory(w, iovs, (uint64_t)count * 8)) return WASI_E_FAULT;
@@ -913,7 +921,6 @@ static inline uint32_t wasi_fd_renumber(void *s, uint32_t from, uint32_t to, int
     (void)trapped;
     wasi_entry *a = wasi_entry_of(w, from), *b = wasi_entry_of(w, to);
     if (a == NULL || b == NULL) return WASI_E_BADF;
-    if (a->kind == WASI_K_STD || b->kind == WASI_K_STD) return WASI_E_NOTSUP;
     if (from == to) return WASI_E_SUCCESS;
     wasi_release(b);
     *b = *a;
@@ -937,7 +944,7 @@ static inline uint32_t wasi_fd_fdstat_get(void *s, uint32_t fd, uint32_t ptr, in
     wasi_entry *e = wasi_entry_of(w, fd);
     if (e == NULL) return WASI_E_BADF;
     uint8_t filetype = e->kind == WASI_K_STD ? WASI_FT_CHAR : e->filetype;
-    uint64_t base = e->kind == WASI_K_STD ? (fd == 0 ? WASI_RIGHTS_STDIN : WASI_RIGHTS_STDOUT) : e->rights;
+    uint64_t base = e->kind == WASI_K_STD ? (e->osfd == 0 ? WASI_RIGHTS_STDIN : WASI_RIGHTS_STDOUT) : e->rights;
     if (!wasi_in_memory(w, ptr, 24)) return WASI_E_FAULT;
     memset(w->memory->data + ptr, 0, 24);
     wasi_put_u8(w, ptr, filetype);
@@ -1176,6 +1183,16 @@ static inline uint32_t wasi_resolve(wasmext_wasi *w, wasi_entry *dir, uint32_t p
             return WASI_E_NOTCAPABLE;
         }
     }
+    if (n > 0 && given[len - 1] == '/') {  /* the system decides what a slash at the end asks for (a directory) */
+        char *slashed = (char *)PyMem_Realloc(path, strlen(path) + 2);
+        if (slashed == NULL) {
+            PyMem_Free(out);
+            PyMem_Free(path);
+            return WASI_E_NOMEM;
+        }
+        strcat(slashed, "/");
+        path = slashed;
+    }
     *full = path;
     *newrel = out;
     return WASI_E_SUCCESS;
@@ -1266,7 +1283,8 @@ static inline uint32_t wasi_be_open(wasmext_wasi *w, wasi_entry *dir, uint32_t p
         return WASI_E_EXIST;
     }
     if (exists && info.filetype == WASI_FT_DIR) {  /* a directory is its own root: it cannot reach what is above it, as with openat */
-        if ((flags & (O_WRONLY | O_RDWR | O_TRUNC)) != 0 || (oflags & WASI_O_CREAT)) {
+        int as_directory = (base & WASI_R_OF_DIRECTORY) != 0 && !(oflags & (WASI_O_CREAT | WASI_O_TRUNC));
+        if (!as_directory && ((flags & (O_WRONLY | O_RDWR | O_TRUNC)) != 0 || (oflags & WASI_O_CREAT))) {
             PyMem_Free(full);
             return WASI_E_ISDIR;
         }
@@ -1459,14 +1477,14 @@ static inline uint32_t wasi_be_two_names(wasmext_wasi *w, wasi_entry *d1, uint32
 
 static inline uint32_t wasi_be_rename(wasmext_wasi *w, wasi_entry *d1, uint32_t p1, uint32_t l1, wasi_entry *d2, uint32_t p2,
                                       uint32_t l2, int *trapped) {
-    char *first, *second;
+    char *first = NULL, *second = NULL;
     uint32_t rc = wasi_be_two_names(w, d1, p1, l1, 0, d2, p2, l2, &first, &second);
     return rc ? rc : wasi_be_call2(w, "replace", first, second, trapped);  /* replace: a file in the way goes, as on POSIX */
 }
 
 static inline uint32_t wasi_be_link(wasmext_wasi *w, wasi_entry *d1, uint32_t p1, uint32_t l1, int follow, wasi_entry *d2,
                                     uint32_t p2, uint32_t l2, int *trapped) {
-    char *first, *second;
+    char *first = NULL, *second = NULL;
     uint32_t rc = wasi_be_two_names(w, d1, p1, l1, follow, d2, p2, l2, &first, &second);
     return rc ? rc : wasi_be_call2(w, "link", first, second, trapped);
 }
@@ -1553,13 +1571,14 @@ int renameat(int, const char *, int, const char *);
 
 #define WASI_PATH_MAX 4096
 #define WASI_NAME_MAX 255
+#define WASI_LEAF_MAX (WASI_NAME_MAX + 2)  /* a name, a slash that ended the path, and the NUL */
 #define WASI_MAX_DEPTH 64
 
 /* Walks `given` (len bytes) from the directory `base`. 0, with the directory that holds the last name in `*parent` (a new
    descriptor, to close, when `*owned`; else `base` itself) and that name in `leaf` ("." for a path that names a directory itself).
    When `follow` is set a last name that is a link is expanded too. Otherwise an errno of WASI. */
 static inline uint32_t wasi_walk(int base, const unsigned char *given, uint32_t len, int follow, int *parent, int *owned,
-                                 char leaf[WASI_NAME_MAX + 1]) {
+                                 char leaf[WASI_LEAF_MAX]) {
     char work[WASI_PATH_MAX], target[WASI_PATH_MAX], name[WASI_NAME_MAX + 1];
     int fds[WASI_MAX_DEPTH + 1];
     int depth = 0, links = 0;
@@ -1583,6 +1602,7 @@ static inline uint32_t wasi_walk(int base, const unsigned char *given, uint32_t 
         char *rest = cur + clen;
         while (*rest == '/') rest++;
         int last = (*rest == '\0');
+        int slash = last && end != NULL;  /* the path ended with a slash: what it names has to be a directory */
         if (clen > WASI_NAME_MAX) {
             rc = WASI_E_NAMETOOLONG;
             goto done;
@@ -1614,6 +1634,7 @@ static inline uint32_t wasi_walk(int base, const unsigned char *given, uint32_t 
         if (last) {
             if (!follow) {
                 strcpy(leaf, name);
+                if (slash) strcat(leaf, "/");
                 break;
             }
             expand = 1;  /* a link at the end is read before it is used */
@@ -1639,6 +1660,7 @@ static inline uint32_t wasi_walk(int base, const unsigned char *given, uint32_t 
             if (n < 0) {
                 if (last) {  /* not a link: this is the last name */
                     strcpy(leaf, name);
+                if (slash) strcat(leaf, "/");
                     break;
                 }
                 rc = WASI_E_NOTDIR;  /* a name in the middle that is not a directory, nor a link */
@@ -1661,6 +1683,7 @@ static inline uint32_t wasi_walk(int base, const unsigned char *given, uint32_t 
             memmove(work + n + 1, rest, rest_len + 1);  /* rest may lie inside work */
             memcpy(work, target, (size_t)n);
             work[n] = '/';
+            if (rest_len == 0 && !slash) work[n] = '\0';  /* a slash only where the path had one */
             cur = work;
         }
     }
@@ -1707,7 +1730,7 @@ static inline uint32_t wasi_be_stat_path(wasmext_wasi *w, wasi_entry *dir, uint3
     if (dir->kind != WASI_K_DIR) return WASI_E_NOTDIR;
     if (!wasi_in_memory(w, path, len)) return WASI_E_FAULT;
     int parent, owned;
-    char leaf[WASI_NAME_MAX + 1];
+    char leaf[WASI_LEAF_MAX];
     uint32_t rc = wasi_walk(dir->osfd, w->memory->data + path, len, follow, &parent, &owned, leaf);
     if (rc) return rc;
     struct stat st;
@@ -1725,12 +1748,15 @@ static inline uint32_t wasi_be_open(wasmext_wasi *w, wasi_entry *dir, uint32_t p
     if (dir->kind != WASI_K_DIR) return WASI_E_NOTDIR;
     if (!wasi_in_memory(w, path, len)) return WASI_E_FAULT;
     int parent, owned;
-    char leaf[WASI_NAME_MAX + 1];
+    char leaf[WASI_LEAF_MAX];
     uint32_t rc = wasi_walk(dir->osfd, w->memory->data + path, len, follow, &parent, &owned, leaf);
     if (rc) return rc;
     int flags = wasi_open_flags(base, oflags, fdflags) | O_NOFOLLOW | O_CLOEXEC;
     if (oflags & WASI_O_DIRECTORY) flags |= O_DIRECTORY;
     int fd = openat(parent, leaf, flags, 0666);
+    if (fd < 0 && errno == EISDIR && (base & WASI_R_OF_DIRECTORY) && !(oflags & (WASI_O_CREAT | WASI_O_TRUNC))) {
+        fd = openat(parent, leaf, O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_DIRECTORY, 0);  /* it was a directory, and asked for as one */
+    }
     int saved = errno;
     if (owned) close(parent);
     if (fd < 0) return wasi_errno(saved);
@@ -1749,7 +1775,7 @@ static inline uint32_t wasi_be_open(wasmext_wasi *w, wasi_entry *dir, uint32_t p
 
 /* the directory that holds the last name of a path (a link at the end is expanded when `follow`), and that name; "." (the directory itself) is `itself` */
 static inline uint32_t wasi_be_parent(wasmext_wasi *w, wasi_entry *dir, uint32_t path, uint32_t len, int follow, int *parent,
-                                      int *owned, char leaf[WASI_NAME_MAX + 1], int *itself) {
+                                      int *owned, char leaf[WASI_LEAF_MAX], int *itself) {
     if (dir->kind != WASI_K_DIR) return WASI_E_NOTDIR;
     if (!wasi_in_memory(w, path, len)) return WASI_E_FAULT;
     uint32_t rc = wasi_walk(dir->osfd, w->memory->data + path, len, follow, parent, owned, leaf);
@@ -1760,7 +1786,7 @@ static inline uint32_t wasi_be_parent(wasmext_wasi *w, wasi_entry *dir, uint32_t
 static inline uint32_t wasi_be_mkdir(wasmext_wasi *w, wasi_entry *dir, uint32_t path, uint32_t len, int *trapped) {
     (void)trapped;
     int parent, owned, itself;
-    char leaf[WASI_NAME_MAX + 1];
+    char leaf[WASI_LEAF_MAX];
     uint32_t rc = wasi_be_parent(w, dir, path, len, 0, &parent, &owned, leaf, &itself);
     if (rc) return rc;
     int failed = -1;
@@ -1774,7 +1800,7 @@ static inline uint32_t wasi_be_mkdir(wasmext_wasi *w, wasi_entry *dir, uint32_t 
 static inline uint32_t wasi_be_remove(wasmext_wasi *w, wasi_entry *dir, uint32_t path, uint32_t len, int isdir, int *trapped) {
     (void)trapped;
     int parent, owned, itself;
-    char leaf[WASI_NAME_MAX + 1];
+    char leaf[WASI_LEAF_MAX];
     uint32_t rc = wasi_be_parent(w, dir, path, len, 0, &parent, &owned, leaf, &itself);
     if (rc) return rc;
     int failed = -1;
@@ -1817,7 +1843,7 @@ static inline uint32_t wasi_be_times_path(wasmext_wasi *w, wasi_entry *dir, uint
     if (dir->kind != WASI_K_DIR) return WASI_E_NOTDIR;
     if (!wasi_in_memory(w, path, len)) return WASI_E_FAULT;
     int parent, owned;
-    char leaf[WASI_NAME_MAX + 1];
+    char leaf[WASI_LEAF_MAX];
     uint32_t rc = wasi_walk(dir->osfd, w->memory->data + path, len, follow, &parent, &owned, leaf);
     if (rc) return rc;
     struct timespec ts[2];
@@ -1830,8 +1856,8 @@ static inline uint32_t wasi_be_times_path(wasmext_wasi *w, wasi_entry *dir, uint
 
 /* the two directories and names of rename and link; both descriptors have to be closed by the caller (`owned`) */
 static inline uint32_t wasi_be_pair(wasmext_wasi *w, wasi_entry *d1, uint32_t p1, uint32_t l1, int follow, wasi_entry *d2,
-                                    uint32_t p2, uint32_t l2, int *parent1, int *owned1, char leaf1[WASI_NAME_MAX + 1],
-                                    int *parent2, int *owned2, char leaf2[WASI_NAME_MAX + 1]) {
+                                    uint32_t p2, uint32_t l2, int *parent1, int *owned1, char leaf1[WASI_LEAF_MAX],
+                                    int *parent2, int *owned2, char leaf2[WASI_LEAF_MAX]) {
     int itself1, itself2;
     uint32_t rc = wasi_be_parent(w, d1, p1, l1, follow, parent1, owned1, leaf1, &itself1);
     if (rc) return rc;
@@ -1852,7 +1878,7 @@ static inline uint32_t wasi_be_rename(wasmext_wasi *w, wasi_entry *d1, uint32_t 
                                       uint32_t l2, int *trapped) {
     (void)trapped;
     int parent1, owned1, parent2, owned2;
-    char leaf1[WASI_NAME_MAX + 1], leaf2[WASI_NAME_MAX + 1];
+    char leaf1[WASI_LEAF_MAX], leaf2[WASI_LEAF_MAX];
     uint32_t rc = wasi_be_pair(w, d1, p1, l1, 0, d2, p2, l2, &parent1, &owned1, leaf1, &parent2, &owned2, leaf2);
     if (rc) return rc;
     int failed = renameat(parent1, leaf1, parent2, leaf2);
@@ -1866,7 +1892,7 @@ static inline uint32_t wasi_be_link(wasmext_wasi *w, wasi_entry *d1, uint32_t p1
                                     uint32_t p2, uint32_t l2, int *trapped) {
     (void)trapped;
     int parent1, owned1, parent2, owned2;
-    char leaf1[WASI_NAME_MAX + 1], leaf2[WASI_NAME_MAX + 1];
+    char leaf1[WASI_LEAF_MAX], leaf2[WASI_LEAF_MAX];
     uint32_t rc = wasi_be_pair(w, d1, p1, l1, follow, d2, p2, l2, &parent1, &owned1, leaf1, &parent2, &owned2, leaf2);
     if (rc) return rc;
     int failed = linkat(parent1, leaf1, parent2, leaf2, 0);  /* the walk expanded a link at the end if it was to be followed */
@@ -1884,7 +1910,7 @@ static inline uint32_t wasi_be_symlink(wasmext_wasi *w, const unsigned char *tar
     memcpy(text, target, tlen);
     text[tlen] = '\0';
     int parent, owned, itself;
-    char leaf[WASI_NAME_MAX + 1];
+    char leaf[WASI_LEAF_MAX];
     uint32_t rc = wasi_be_parent(w, dir, path, len, 0, &parent, &owned, leaf, &itself);
     if (rc) return rc;
     int failed = -1;
@@ -1899,7 +1925,7 @@ static inline uint32_t wasi_be_readlink(wasmext_wasi *w, wasi_entry *dir, uint32
                                         size_t *used, int *trapped) {
     (void)trapped;
     int parent, owned, itself;
-    char leaf[WASI_NAME_MAX + 1];
+    char leaf[WASI_LEAF_MAX];
     uint32_t rc = wasi_be_parent(w, dir, path, len, 0, &parent, &owned, leaf, &itself);
     if (rc) return rc;
     ssize_t n = -1;
@@ -2051,6 +2077,7 @@ static inline uint32_t wasi_path_open(void *s, uint32_t fd, uint32_t dirflags, u
         return rc;
     }
     e->rights = base;
+    if (e->kind == WASI_K_DIR) e->rights &= ~(WASI_R_FD_SEEK | WASI_R_FD_TELL);  /* a directory is not seeked */
     e->inheriting = inheriting;
     e->flags = (uint16_t)fdflags;
     if (!wasi_put_u32(w, out, (uint32_t)number)) {
@@ -2251,8 +2278,9 @@ static inline uint32_t wasi_fd_at(void *s, uint32_t fd, uint32_t iovs, uint32_t 
     if (e == NULL) return WASI_E_BADF;
     if (e->kind == WASI_K_STD) return WASI_E_SPIPE;
     if (e->kind == WASI_K_DIR) return WASI_E_ISDIR;
-    uint64_t needed = (writing ? WASI_R_FD_WRITE : WASI_R_FD_READ) | WASI_R_FD_SEEK;
-    if ((e->rights & needed) != needed) return WASI_E_NOTCAPABLE;
+    /* the specification asks for fd_seek as well; wasi-libc opens a file for writing without it and calls pwrite all the same */
+    uint64_t needed = writing ? WASI_R_FD_WRITE : WASI_R_FD_READ;
+    if (!(e->rights & needed)) return WASI_E_NOTCAPABLE;
     if (offset > (uint64_t)INT64_MAX) return WASI_E_INVAL;
     if (!wasi_in_memory(w, iovs, (uint64_t)count * 8)) return WASI_E_FAULT;
     uint64_t total = 0;

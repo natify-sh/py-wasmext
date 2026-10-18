@@ -261,6 +261,13 @@ def generate(module: Module, name: str) -> Glue:
                     raise GenError(
                         f"import {imp.module}.{imp.name} is {_signature_code(imp.type)}, {imp.module} says {wanted}"
                     )
+            same = next((i for i in imports if i.module == imp.module and i.field == imp.name), None)
+            if (
+                same is not None
+            ):  # the same function imported twice (AssemblyScript does): wasm2c names both alike, so one is made
+                if same.func != imp.type:
+                    raise GenError(f"import {imp.module}.{imp.name} is imported twice with different types")
+                continue
             if imp.module not in hosts:
                 hosts.append(imp.module)
             slot = slots.get(imp.module, 0)

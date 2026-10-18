@@ -225,7 +225,13 @@ def test_descriptors_are_renumbered(probe: Any, world: Path) -> None:
     assert fs.read(b, 5) == (0, b"hello")
     assert fs.read(a, 1)[0] == E_BADF
     assert fs.open("hello.txt")[1] == a  # the lowest free number is used again
-    assert fs.inst.fd_renumber(1, 5) == 58  # the standard streams stay where they are (ENOTSUP)
+    _, c = fs.open("hello.txt")
+    assert (
+        fs.inst.fd_renumber(1, c) == 0
+    )  # a standard stream can be moved onto another descriptor, and then it is not where it was
+    assert (
+        fs.inst.fd_fdstat_get(1, 80) == E_BADF and fs.inst.fd_fdstat_get(c, 80) == 0 and fs.mem[80] == 2
+    )  # a character device
 
 
 def test_the_first_snapshot_reads_with_its_own_whence_and_filestat(
@@ -291,6 +297,12 @@ def test_a_file_is_created_written_and_truncated(probe: Any, world: Path) -> Non
     assert fs.open("missing/new.txt", oflags=1, rights=WRITE_RIGHTS)[0] == E_NOENT
     assert fs.open("sub", oflags=1 | 2, rights=WRITE_RIGHTS)[0] == E_INVAL  # a directory cannot be created this way
     assert fs.open("sub", rights=WRITE_RIGHTS)[0] == E_ISDIR  # nor opened for writing
+    code, sub = fs.open(
+        "sub", rights=WRITE_RIGHTS | DIR_RIGHTS
+    )  # unless it is asked for as a directory (rights of one)
+    assert code == 0 and fs.write(sub, b"x")[0] == E_ISDIR  # which is not written to
+    assert fs.inst.fd_fdstat_get(sub, 80) == 0 and fs.u64(88) & ((1 << 2) | (1 << 5)) == 0  # and has no seek or tell
+    assert fs.open("sub", oflags=8, rights=WRITE_RIGHTS)[0] == E_ISDIR  # nor truncated
     assert fs.open("../new2.txt", oflags=1, rights=WRITE_RIGHTS)[0] == E_NOTCAPABLE
 
 

@@ -259,3 +259,17 @@ def test_sock_accept_is_not_a_call_of_the_first_snapshot(wabt: Path, tmp_path: P
     subprocess.run([wabt / "bin" / "wat2wasm", wat, "-o", tmp_path / "m.wasm"], check=True)
     with pytest.raises(GenError, match="sock_accept is not a function of wasi_unstable"):
         generate(parse((tmp_path / "m.wasm").read_bytes()), "m")
+
+
+def test_a_function_imported_twice_is_one_function(build_extension: Builder) -> None:
+    mod: Any = build_extension(DATA / "wasi_twice.wat", "wasi_twice")
+    inst = mod.Instance()
+    assert inst.first(99) == 8 and inst.second(99) == 8  # EBADF from both
+    seen: list[int] = []
+
+    def fd_write(fd: int, iovs: int, count: int, nwritten: int) -> int:
+        seen.append(fd)
+        return 0
+
+    again = mod.Instance({"wasi_snapshot_preview1": {"fd_write": fd_write}})
+    assert again.first(5) == 0 and again.second(6) == 0 and seen == [5, 6]

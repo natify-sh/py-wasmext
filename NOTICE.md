@@ -4,7 +4,7 @@
   [vshymanskyy/wasm2mpy](https://github.com/vshymanskyy/wasm2mpy) (`test/`), copied unchanged. wasm2mpy is MIT
   licensed; its licence text is below. The same goes for `tests/data/wasm2mpy/` (seven of them, built there from
   [wasm3/embedded-wasm-apps](https://github.com/wasm3/embedded-wasm-apps)).
-- `tests/data/pywasm3/*.wasm` are from the examples of [wasm3/pywasm3](https://github.com/wasm3/pywasm3)
+- `tests/data/pywasm3/*.wasm` and `collatz.wat` are from the examples of [wasm3/pywasm3](https://github.com/wasm3/pywasm3)
   (`examples/wasm/`), copied unchanged; pywasm3 is MIT licensed (Copyright (c) 2019 Volodymyr Shymanskyy), like wasm2mpy above.
 - `tests/data/wasmhost/imports.wasm` is the module of `examples/imports.py` of
   [py-wasmhost](https://github.com/ballistics-lab/py-wasmhost) written out as a file.

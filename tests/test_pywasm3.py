@@ -4,6 +4,7 @@ the ones of the examples (the first is the WAT of `00-fibonacci.py`, the second 
 from __future__ import annotations
 
 import math
+import struct
 from collections.abc import Callable
 from pathlib import Path
 from types import ModuleType
@@ -86,3 +87,84 @@ def test_maze_calls_back_for_random_sin_and_time(build_extension: Builder) -> No
     before = _frame(inst)
     inst.run()
     assert _frame(inst) != before
+
+
+# `03-asyncified.py`: a module that Binaryen made able to pause (`wasm-opt --asyncify`); to pause it, the import `sleep` calls
+# the exports `asyncify_start_unwind` of the module that is running. That is a call into an instance from inside a call
+# from it (the module is not finished with its own `main` yet). The same steps as the example, without the event loop.
+def test_asyncified_module_pauses_and_resumes_through_its_own_exports(build_extension: Builder) -> None:
+    mod = build_extension(DATA / "asyncified.wasm", "pw3_asyncified")
+    events: list[str] = []
+    state = {"sleeping": False}
+    box: dict[str, object] = {}
+
+    def sleep(ms: int) -> None:
+        inst = box["inst"]
+        if not state["sleeping"]:
+            events.append(f"sleep {ms}")
+            data_addr = 16
+            inst.memory[data_addr : data_addr + 8] = struct.pack("<II", data_addr + 8, 1024)  # type: ignore[attr-defined]
+            inst.asyncify_start_unwind(data_addr)  # type: ignore[attr-defined]
+            state["sleeping"] = True
+        else:
+            events.append("resume")
+            inst.asyncify_stop_rewind()  # type: ignore[attr-defined]
+            state["sleeping"] = False
+
+    inst = mod.Instance(
+        {"env": {"before": lambda: events.append("before"), "sleep": sleep, "after": lambda: events.append("after")}}
+    )
+    box["inst"] = inst
+    inst.main()
+    events.append("stack unwound")
+    inst.asyncify_stop_unwind()
+    inst.asyncify_start_rewind(16)
+    inst.main()  # the module goes back to where it was, and does what follows `sleep`
+    assert events == ["before", "sleep 2000", "stack unwound", "resume", "after"]
+    assert inst.asyncify_get_state() == 0  # normal again
+
+
+def test_a_trap_after_a_call_into_the_instance_from_its_own_import(build_extension: Builder, tmp_path: Path) -> None:
+    """What `asyncify` relies on is more general: an import calls an export of the running instance. When that inner call is
+    over, a trap of the outer one must still come out of the outer call (not jump to the frame of the inner one), and a
+    trap of the inner call is an exception in the import, which can be caught there."""
+    wat = tmp_path / "reenter.wat"
+    wat.write_text(
+        """
+(module
+  (import "env" "host" (func $host (param i32)))
+  (func (export "inner") (param i32) (result i32)
+    local.get 0 i32.eqz if unreachable end
+    local.get 0 i32.const 1 i32.add)
+  (func (export "outer") (param i32) local.get 0 call $host)
+  (func (export "outer_then_trap") (param i32) local.get 0 call $host unreachable))
+""",
+        encoding="utf-8",
+    )
+    mod = build_extension(wat, "pw3_reenter")
+    seen: list[object] = []
+    box: dict[str, object] = {}
+
+    def host(x: int) -> None:
+        inst = box["inst"]
+        seen.append(inst.inner(x))  # type: ignore[attr-defined]
+
+    inst = mod.Instance({"env": {"host": host}})
+    box["inst"] = inst
+    inst.outer(4)
+    assert seen == [5]
+    with pytest.raises(mod.Trap):
+        inst.outer_then_trap(4)  # the inner call returned; the outer one traps
+    assert seen == [5, 5]
+    with pytest.raises(mod.Trap):
+        inst.outer(0)  # the inner call traps: an exception out of `host`, and out of `outer`
+    assert inst.inner(1) == 2  # still usable
+
+
+# `04-suspend-resume.py` is about a feature of the wasm3 engine (a pause when the gas runs out, a snapshot of the paused call),
+# which compiled code does not have and cannot get. Its module, though, is an ordinary one that keeps its progress in exported
+# globals; it is run to the end here.
+def test_collatz_search_of_the_suspend_example_runs_to_the_end(build_extension: Builder) -> None:
+    inst = build_extension(DATA / "collatz.wat", "pw3_collatz").Instance()
+    assert inst.search(10_000) == 6171  # the number below 10000 with the longest chain
+    assert (inst.best_n, inst.best_len, inst.n) == (6171, 261, 10_000)

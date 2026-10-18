@@ -176,7 +176,8 @@ The method (see the Plan) in numbers: the modules of these projects built and ru
 | pywasm3 `01-coremark` | `coremark-minimal.wasm`, `env.clock_ms` | `tests/test_pywasm3.py` | works, since the repair of `return_call` (see "Build and distribution"); the file name has a hyphen, so the test names the module by hand (`wasmize()` refuses such a name with a clear message) |
 | pywasm3 `pygame-*` | `fire` (empty module name), `ray`, `maze` | `tests/test_pywasm3.py` | work: the frame is read from the memory, no window; `snake`, `dino`, `match3`, `metaball`, `chip8`, `plop-sim` not added yet (the same shape) |
 | pywasm3 `02-metered` | a limit of work for an interpreter | not applicable | AOT code has no such hook |
-| pywasm3 `03-asyncified`, `04-suspend-resume` | Asyncify, saving the state | not yet | not looked at; may need re-entry into the module from a host function |
+| pywasm3 `03-asyncified` | a module made pausable by Binaryen (`wasm-opt --asyncify`): the import `sleep` calls the `asyncify_*` exports of the running instance | `tests/test_pywasm3.py` | works (the steps of the example without the event loop). Also tested: a trap of the outer call after a call into the instance from its own import, and a trap of the inner call, which is an exception in the import |
+| pywasm3 `04-suspend-resume` | a pause when the gas runs out, a snapshot of the paused call | its module only (`search` and exported globals) | the feature itself is of the wasm3 engine: compiled code cannot pause by gas or save a call, not planned |
 | py-wasmhost `imports.py` | several results of a host function, `i64`, an exception from the host | `tests/test_wasmhost.py` | works |
 | py-wasmhost `lua.wasm`, `coreutils.wasm`, `wasi_sh`, `wasmclang`, `pyodide`, `jslinux` | WASI programs, an engine in an engine | not yet | need WASI (19 and 32 imports); `coreutils.wasm` is 10.8 MB, which makes a very large C file |
 

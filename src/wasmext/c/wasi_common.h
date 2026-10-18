@@ -53,6 +53,8 @@
 #endif
 #include "wasm-rt.h"
 
+#define WASI_LINK_MAX 4096  /* the most that path_readlink reads of a link */
+
 typedef struct wasmext_wasi wasmext_wasi;
 
 static inline void wasmext_wasi_clear(wasmext_wasi *w);
@@ -1431,6 +1433,80 @@ static inline uint32_t wasi_be_times_path(wasmext_wasi *w, wasi_entry *dir, uint
     return rc;
 }
 
+static inline uint32_t wasi_be_call2(wasmext_wasi *w, const char *function, char *first, char *second, int *trapped) {
+    PyObject *os = wasi_module_of(&w->os_module, "os");
+    PyObject *result = os ? PyObject_CallMethod(os, function, "yy", first, second) : NULL;
+    PyMem_Free(first);
+    PyMem_Free(second);
+    if (result == NULL) return wasi_python_error(trapped);
+    Py_DECREF(result);
+    return WASI_E_SUCCESS;
+}
+
+/* two names below two directories for a call that links them: both paths, to free */
+static inline uint32_t wasi_be_two_names(wasmext_wasi *w, wasi_entry *d1, uint32_t p1, uint32_t l1, int follow1, wasi_entry *d2,
+                                         uint32_t p2, uint32_t l2, char **first, char **second) {
+    uint32_t rc;
+    *first = wasi_be_name(w, d1, p1, l1, follow1, &rc);
+    if (*first == NULL) return rc;
+    *second = wasi_be_name(w, d2, p2, l2, 0, &rc);
+    if (*second == NULL) {
+        PyMem_Free(*first);
+        return rc;
+    }
+    return WASI_E_SUCCESS;
+}
+
+static inline uint32_t wasi_be_rename(wasmext_wasi *w, wasi_entry *d1, uint32_t p1, uint32_t l1, wasi_entry *d2, uint32_t p2,
+                                      uint32_t l2, int *trapped) {
+    char *first, *second;
+    uint32_t rc = wasi_be_two_names(w, d1, p1, l1, 0, d2, p2, l2, &first, &second);
+    return rc ? rc : wasi_be_call2(w, "replace", first, second, trapped);  /* replace: a file in the way goes, as on POSIX */
+}
+
+static inline uint32_t wasi_be_link(wasmext_wasi *w, wasi_entry *d1, uint32_t p1, uint32_t l1, int follow, wasi_entry *d2,
+                                    uint32_t p2, uint32_t l2, int *trapped) {
+    char *first, *second;
+    uint32_t rc = wasi_be_two_names(w, d1, p1, l1, follow, d2, p2, l2, &first, &second);
+    return rc ? rc : wasi_be_call2(w, "link", first, second, trapped);
+}
+
+/* a symbolic link `new` that holds `target` (the text, never looked at) */
+static inline uint32_t wasi_be_symlink(wasmext_wasi *w, const unsigned char *target, uint32_t tlen, wasi_entry *dir, uint32_t path,
+                                       uint32_t len, int *trapped) {
+    uint32_t rc;
+    char *full = wasi_be_name(w, dir, path, len, 0, &rc);
+    if (full == NULL) return rc == WASI_E_INVAL ? WASI_E_EXIST : rc;
+    char *text = wasi_copy((const char *)target, tlen);
+    if (text == NULL) {
+        PyMem_Free(full);
+        return WASI_E_NOMEM;
+    }
+    return wasi_be_call2(w, "symlink", text, full, trapped);
+}
+
+/* what a symbolic link holds, at most `cap` bytes of it */
+static inline uint32_t wasi_be_readlink(wasmext_wasi *w, wasi_entry *dir, uint32_t path, uint32_t len, char *out, size_t cap,
+                                        size_t *used, int *trapped) {
+    uint32_t rc;
+    char *full = wasi_be_name(w, dir, path, len, 0, &rc);
+    if (full == NULL) return rc;
+    PyObject *os = wasi_module_of(&w->os_module, "os");
+    PyObject *text = os ? PyObject_CallMethod(os, "readlink", "y", full) : NULL;
+    PyMem_Free(full);
+    if (text == NULL) return wasi_python_error(trapped);
+    char *data;
+    Py_ssize_t n;
+    if (PyBytes_AsStringAndSize(text, &data, &n) < 0) {
+        Py_DECREF(text);
+        return wasi_python_error(trapped);
+    }
+    *used = (size_t)n < cap ? (size_t)n : cap;
+    memcpy(out, data, *used);
+    Py_DECREF(text);
+    return WASI_E_SUCCESS;
+}
+
 /* the entries of a directory */
 static inline uint32_t wasi_be_list(wasmext_wasi *w, wasi_entry *e, wasi_dirlist *list, int *trapped) {
     PyObject *os = wasi_module_of(&w->os_module, "os");
@@ -1667,12 +1743,12 @@ static inline uint32_t wasi_be_open(wasmext_wasi *w, wasi_entry *dir, uint32_t p
     return WASI_E_SUCCESS;
 }
 
-/* the directory that holds the last name of a path that is not followed, and that name; "." (the directory itself) is `itself` */
-static inline uint32_t wasi_be_parent(wasmext_wasi *w, wasi_entry *dir, uint32_t path, uint32_t len, int *parent, int *owned,
-                                      char leaf[WASI_NAME_MAX + 1], int *itself) {
+/* the directory that holds the last name of a path (a link at the end is expanded when `follow`), and that name; "." (the directory itself) is `itself` */
+static inline uint32_t wasi_be_parent(wasmext_wasi *w, wasi_entry *dir, uint32_t path, uint32_t len, int follow, int *parent,
+                                      int *owned, char leaf[WASI_NAME_MAX + 1], int *itself) {
     if (dir->kind != WASI_K_DIR) return WASI_E_NOTDIR;
     if (!wasi_in_memory(w, path, len)) return WASI_E_FAULT;
-    uint32_t rc = wasi_walk(dir->osfd, w->memory->data + path, len, 0, parent, owned, leaf);
+    uint32_t rc = wasi_walk(dir->osfd, w->memory->data + path, len, follow, parent, owned, leaf);
     *itself = rc == WASI_E_SUCCESS && strcmp(leaf, ".") == 0;
     return rc;
 }
@@ -1681,7 +1757,7 @@ static inline uint32_t wasi_be_mkdir(wasmext_wasi *w, wasi_entry *dir, uint32_t 
     (void)trapped;
     int parent, owned, itself;
     char leaf[WASI_NAME_MAX + 1];
-    uint32_t rc = wasi_be_parent(w, dir, path, len, &parent, &owned, leaf, &itself);
+    uint32_t rc = wasi_be_parent(w, dir, path, len, 0, &parent, &owned, leaf, &itself);
     if (rc) return rc;
     int failed = -1;
     if (itself) errno = EEXIST;
@@ -1695,7 +1771,7 @@ static inline uint32_t wasi_be_remove(wasmext_wasi *w, wasi_entry *dir, uint32_t
     (void)trapped;
     int parent, owned, itself;
     char leaf[WASI_NAME_MAX + 1];
-    uint32_t rc = wasi_be_parent(w, dir, path, len, &parent, &owned, leaf, &itself);
+    uint32_t rc = wasi_be_parent(w, dir, path, len, 0, &parent, &owned, leaf, &itself);
     if (rc) return rc;
     int failed = -1;
     if (itself) errno = EINVAL;
@@ -1746,6 +1822,90 @@ static inline uint32_t wasi_be_times_path(wasmext_wasi *w, wasi_entry *dir, uint
     int saved = errno;
     if (owned) close(parent);
     return failed < 0 ? wasi_errno(saved) : WASI_E_SUCCESS;
+}
+
+/* the two directories and names of rename and link; both descriptors have to be closed by the caller (`owned`) */
+static inline uint32_t wasi_be_pair(wasmext_wasi *w, wasi_entry *d1, uint32_t p1, uint32_t l1, int follow, wasi_entry *d2,
+                                    uint32_t p2, uint32_t l2, int *parent1, int *owned1, char leaf1[WASI_NAME_MAX + 1],
+                                    int *parent2, int *owned2, char leaf2[WASI_NAME_MAX + 1]) {
+    int itself1, itself2;
+    uint32_t rc = wasi_be_parent(w, d1, p1, l1, follow, parent1, owned1, leaf1, &itself1);
+    if (rc) return rc;
+    rc = wasi_be_parent(w, d2, p2, l2, 0, parent2, owned2, leaf2, &itself2);
+    if (rc) {
+        if (*owned1) close(*parent1);
+        return rc;
+    }
+    if (itself1 || itself2) {  /* a directory itself is neither moved nor made a link */
+        if (*owned1) close(*parent1);
+        if (*owned2) close(*parent2);
+        return itself2 ? WASI_E_EXIST : WASI_E_INVAL;
+    }
+    return WASI_E_SUCCESS;
+}
+
+static inline uint32_t wasi_be_rename(wasmext_wasi *w, wasi_entry *d1, uint32_t p1, uint32_t l1, wasi_entry *d2, uint32_t p2,
+                                      uint32_t l2, int *trapped) {
+    (void)trapped;
+    int parent1, owned1, parent2, owned2;
+    char leaf1[WASI_NAME_MAX + 1], leaf2[WASI_NAME_MAX + 1];
+    uint32_t rc = wasi_be_pair(w, d1, p1, l1, 0, d2, p2, l2, &parent1, &owned1, leaf1, &parent2, &owned2, leaf2);
+    if (rc) return rc;
+    int failed = renameat(parent1, leaf1, parent2, leaf2);
+    int saved = errno;
+    if (owned1) close(parent1);
+    if (owned2) close(parent2);
+    return failed < 0 ? wasi_errno(saved) : WASI_E_SUCCESS;
+}
+
+static inline uint32_t wasi_be_link(wasmext_wasi *w, wasi_entry *d1, uint32_t p1, uint32_t l1, int follow, wasi_entry *d2,
+                                    uint32_t p2, uint32_t l2, int *trapped) {
+    (void)trapped;
+    int parent1, owned1, parent2, owned2;
+    char leaf1[WASI_NAME_MAX + 1], leaf2[WASI_NAME_MAX + 1];
+    uint32_t rc = wasi_be_pair(w, d1, p1, l1, follow, d2, p2, l2, &parent1, &owned1, leaf1, &parent2, &owned2, leaf2);
+    if (rc) return rc;
+    int failed = linkat(parent1, leaf1, parent2, leaf2, 0);  /* the walk expanded a link at the end if it was to be followed */
+    int saved = errno;
+    if (owned1) close(parent1);
+    if (owned2) close(parent2);
+    return failed < 0 ? wasi_errno(saved) : WASI_E_SUCCESS;
+}
+
+static inline uint32_t wasi_be_symlink(wasmext_wasi *w, const unsigned char *target, uint32_t tlen, wasi_entry *dir, uint32_t path,
+                                       uint32_t len, int *trapped) {
+    (void)trapped;
+    char text[WASI_PATH_MAX];
+    if (tlen >= sizeof text) return WASI_E_NAMETOOLONG;
+    memcpy(text, target, tlen);
+    text[tlen] = '\0';
+    int parent, owned, itself;
+    char leaf[WASI_NAME_MAX + 1];
+    uint32_t rc = wasi_be_parent(w, dir, path, len, 0, &parent, &owned, leaf, &itself);
+    if (rc) return rc;
+    int failed = -1;
+    if (itself) errno = EEXIST;
+    else failed = symlinkat(text, parent, leaf);
+    int saved = errno;
+    if (owned) close(parent);
+    return failed < 0 ? wasi_errno(saved) : WASI_E_SUCCESS;
+}
+
+static inline uint32_t wasi_be_readlink(wasmext_wasi *w, wasi_entry *dir, uint32_t path, uint32_t len, char *out, size_t cap,
+                                        size_t *used, int *trapped) {
+    (void)trapped;
+    int parent, owned, itself;
+    char leaf[WASI_NAME_MAX + 1];
+    uint32_t rc = wasi_be_parent(w, dir, path, len, 0, &parent, &owned, leaf, &itself);
+    if (rc) return rc;
+    ssize_t n = -1;
+    if (itself) errno = EINVAL;
+    else n = readlinkat(parent, leaf, out, cap);
+    int saved = errno;
+    if (owned) close(parent);
+    if (n < 0) return wasi_errno(saved);
+    *used = (size_t)n;
+    return WASI_E_SUCCESS;
 }
 
 static inline uint32_t wasi_be_list(wasmext_wasi *w, wasi_entry *e, wasi_dirlist *list, int *trapped) {
@@ -1979,6 +2139,7 @@ static inline uint32_t wasi_fd_allocate(void *s, uint32_t fd, uint64_t offset, u
     if (e->kind != WASI_K_FILE) return WASI_E_BADF;
     if (offset > (uint64_t)INT64_MAX || length > (uint64_t)INT64_MAX - offset) return WASI_E_FBIG;
     wasi_stat st;
+    memset(&st, 0, sizeof st);
     rc = wasi_be_stat_fd(w, e, &st, trapped);
     if (rc || *trapped) return rc;
     return st.size >= offset + length ? WASI_E_SUCCESS : wasi_set_size(e, offset + length);
@@ -2062,26 +2223,240 @@ static inline uint32_t wasi_path_unlink_file(void *s, uint32_t fd, uint32_t path
     return rc ? rc : wasi_be_remove(w, dir, path, len, 0, trapped);
 }
 
+/* ---- positions, renaming, links, waiting ---------------------------------------------------------------------------------- */
+
+/* read or write at a position, leaving the position of the descriptor where it was */
+static inline long long wasi_at_position(int osfd, void *buf, size_t n, uint64_t offset, int writing) {
+#ifdef _WIN32
+    long long saved = _lseeki64(osfd, 0, SEEK_CUR);  /* Windows has no pread: seek, do it, seek back */
+    if (saved < 0 || _lseeki64(osfd, (long long)offset, SEEK_SET) < 0) return -1;
+    int count = (int)(n < 0x7fffffff ? n : 0x7fffffff);
+    long long done = writing ? _write(osfd, buf, (unsigned int)count) : _read(osfd, buf, (unsigned int)count);
+    int err = errno;
+    _lseeki64(osfd, saved, SEEK_SET);
+    errno = err;
+    return done;
+#else
+    return writing ? pwrite(osfd, buf, n, (off_t)offset) : pread(osfd, buf, n, (off_t)offset);
+#endif
+}
+
+static inline uint32_t wasi_fd_at(void *s, uint32_t fd, uint32_t iovs, uint32_t count, uint64_t offset, uint32_t out, int writing) {
+    WASI_STATE(s);
+    wasi_entry *e = wasi_entry_of(w, fd);
+    if (e == NULL) return WASI_E_BADF;
+    if (e->kind == WASI_K_STD) return WASI_E_SPIPE;
+    if (e->kind == WASI_K_DIR) return WASI_E_ISDIR;
+    uint64_t needed = (writing ? WASI_R_FD_WRITE : WASI_R_FD_READ) | WASI_R_FD_SEEK;
+    if ((e->rights & needed) != needed) return WASI_E_NOTCAPABLE;
+    if (offset > (uint64_t)INT64_MAX) return WASI_E_INVAL;
+    if (!wasi_in_memory(w, iovs, (uint64_t)count * 8)) return WASI_E_FAULT;
+    uint64_t total = 0;
+    for (uint32_t i = 0; i < count; i++) {
+        uint32_t base = 0, len = 0;
+        wasi_get_u32(w, iovs + 8 * i, &base);
+        wasi_get_u32(w, iovs + 8 * i + 4, &len);
+        if (!wasi_in_memory(w, base, len)) return WASI_E_FAULT;
+        if (len == 0) continue;
+        long long n = wasi_at_position(e->osfd, w->memory->data + base, len, offset + total, writing);
+        if (n < 0) {
+            if (total) break;
+            return wasi_errno(errno);
+        }
+        total += (uint64_t)n;
+        if ((uint32_t)n < len) break;
+    }
+    return wasi_put_u32(w, out, (uint32_t)total) ? WASI_E_SUCCESS : WASI_E_FAULT;
+}
+
+static inline uint32_t wasi_fd_pread(void *s, uint32_t fd, uint32_t iovs, uint32_t count, uint64_t offset, uint32_t nread,
+                                     int *trapped) {
+    (void)trapped;
+    return wasi_fd_at(s, fd, iovs, count, offset, nread, 0);
+}
+
+static inline uint32_t wasi_fd_pwrite(void *s, uint32_t fd, uint32_t iovs, uint32_t count, uint64_t offset, uint32_t nwritten,
+                                      int *trapped) {
+    (void)trapped;
+    return wasi_fd_at(s, fd, iovs, count, offset, nwritten, 1);
+}
+
+static inline uint32_t wasi_path_rename(void *s, uint32_t fd, uint32_t old, uint32_t old_len, uint32_t new_fd, uint32_t new_,
+                                        uint32_t new_len, int *trapped) {
+    WASI_STATE(s);
+    wasi_entry *from, *to;
+    uint32_t rc = wasi_dir_with(w, fd, WASI_R(16), &from);  /* path_rename_source */
+    if (rc) return rc;
+    rc = wasi_dir_with(w, new_fd, WASI_R(17), &to);  /* path_rename_target */
+    return rc ? rc : wasi_be_rename(w, from, old, old_len, to, new_, new_len, trapped);
+}
+
+static inline uint32_t wasi_path_link(void *s, uint32_t fd, uint32_t flags, uint32_t old, uint32_t old_len, uint32_t new_fd,
+                                      uint32_t new_, uint32_t new_len, int *trapped) {
+    WASI_STATE(s);
+    wasi_entry *from, *to;
+    uint32_t rc = wasi_dir_with(w, fd, WASI_R(11), &from);  /* path_link_source */
+    if (rc) return rc;
+    rc = wasi_dir_with(w, new_fd, WASI_R(12), &to);  /* path_link_target */
+    return rc ? rc : wasi_be_link(w, from, old, old_len, (flags & WASI_LOOKUP_FOLLOW) != 0, to, new_, new_len, trapped);
+}
+
+/* A link that leads out cannot be followed, and one that is absolute could not be anywhere else than outside: neither is made. */
+static inline uint32_t wasi_path_symlink(void *s, uint32_t target, uint32_t target_len, uint32_t fd, uint32_t path, uint32_t len,
+                                         int *trapped) {
+    WASI_STATE(s);
+    wasi_entry *dir;
+    uint32_t rc = wasi_dir_with(w, fd, WASI_R(24), &dir);  /* path_symlink */
+    if (rc) return rc;
+    if (!wasi_in_memory(w, target, target_len)) return WASI_E_FAULT;
+    if (target_len == 0) return WASI_E_NOENT;
+    if (memchr(w->memory->data + target, 0, target_len) != NULL) return WASI_E_INVAL;
+    if (w->memory->data[target] == '/') return WASI_E_NOTCAPABLE;
+    return wasi_be_symlink(w, w->memory->data + target, target_len, dir, path, len, trapped);
+}
+
+static inline uint32_t wasi_path_readlink(void *s, uint32_t fd, uint32_t path, uint32_t len, uint32_t buf, uint32_t buf_len,
+                                          uint32_t used, int *trapped) {
+    WASI_STATE(s);
+    wasi_entry *dir;
+    uint32_t rc = wasi_dir_with(w, fd, WASI_R(15), &dir);  /* path_readlink */
+    if (rc) return rc;
+    if (!wasi_in_memory(w, buf, buf_len)) return WASI_E_FAULT;
+    char text[WASI_LINK_MAX];
+    size_t n = 0;
+    rc = wasi_be_readlink(w, dir, path, len, text, buf_len < sizeof text ? buf_len : sizeof text, &n, trapped);
+    if (rc || *trapped) return rc;
+    memcpy(w->memory->data + buf, text, n);
+    return wasi_put_u32(w, used, (uint32_t)n) ? WASI_E_SUCCESS : WASI_E_FAULT;
+}
+
+/* poll_oneoff: the descriptors of files are always ready; what makes the program wait is a clock, and it sleeps (in Python, which
+   lets other threads run) until the first one. `legacy`: the first snapshot, whose clock subscription starts with an identifier. */
+static inline uint32_t wasi_clock_ns(wasmext_wasi *w, uint32_t id, uint64_t *ns, int *trapped) {
+    PyObject *time = wasi_module_of(&w->time_module, "time");
+    PyObject *value = time ? PyObject_CallMethod(time, wasi_clocks[id].function, NULL) : NULL;
+    if (value == NULL) return wasi_python_error(trapped);
+    *ns = PyLong_AsUnsignedLongLongMask(value);
+    Py_DECREF(value);
+    return WASI_E_SUCCESS;
+}
+
+/* how long a clock subscription still has to wait (0: it is due), or an errno of WASI */
+static inline uint32_t wasi_subscription_wait(wasmext_wasi *w, uint32_t sub, int legacy, uint64_t entry_now[2], int have[2],
+                                              uint64_t *wait, int *trapped) {
+    uint32_t shift = legacy ? 8 : 0;
+    uint32_t id = 0, flags16 = 0;
+    uint64_t timeout = 0;
+    wasi_get_u32(w, sub + 16 + shift, &id);
+    uint32_t lo = 0, hi = 0;
+    wasi_get_u32(w, sub + 24 + shift, &lo);
+    wasi_get_u32(w, sub + 28 + shift, &hi);
+    timeout = ((uint64_t)hi << 32) | lo;
+    flags16 = w->memory->data[sub + 40 + shift] | ((uint32_t)w->memory->data[sub + 41 + shift] << 8);
+    if (id > 1) return WASI_E_INVAL;  /* the clocks of the process and the thread are not something to wait for */
+    if (!(flags16 & 1)) {
+        *wait = timeout;
+        return WASI_E_SUCCESS;
+    }
+    if (!have[id]) {
+        uint32_t rc = wasi_clock_ns(w, id, &entry_now[id], trapped);
+        if (rc || *trapped) return rc;
+        have[id] = 1;
+    }
+    *wait = timeout > entry_now[id] ? timeout - entry_now[id] : 0;
+    return WASI_E_SUCCESS;
+}
+
+static inline uint32_t wasi_poll(wasmext_wasi *w, uint32_t in, uint32_t out, uint32_t count, uint32_t nevents, int legacy,
+                                 int *trapped) {
+    uint32_t stride = legacy ? 56 : 48;
+    if (count == 0) return WASI_E_INVAL;
+    if (!wasi_in_memory(w, in, (uint64_t)count * stride) || !wasi_in_memory(w, out, (uint64_t)count * 32)) return WASI_E_FAULT;
+    uint64_t entry_now[2] = {0, 0}, shortest = UINT64_MAX;
+    int have[2] = {0, 0}, immediate = 0;
+    for (uint32_t i = 0; i < count; i++) {  /* first, what is ready and how long the clocks wait */
+        uint32_t sub = in + i * stride;
+        uint8_t tag = w->memory->data[sub + 8];
+        if (tag == 0) {
+            uint64_t wait;
+            uint32_t rc = wasi_subscription_wait(w, sub, legacy, entry_now, have, &wait, trapped);
+            if (rc == WASI_E_SUCCESS && !*trapped && wait < shortest) shortest = wait;
+            if (rc == WASI_E_INVAL) immediate = 1;
+            else if (rc || *trapped) return rc;
+        } else if (tag == 1 || tag == 2) {
+            immediate = 1;
+        } else {
+            return WASI_E_INVAL;
+        }
+    }
+    uint64_t waited = 0;
+    if (!immediate && shortest != UINT64_MAX && shortest > 0) {
+        PyObject *time = wasi_module_of(&w->time_module, "time");
+        PyObject *slept = time ? PyObject_CallMethod(time, "sleep", "d", (double)shortest / 1e9) : NULL;
+        if (slept == NULL) return wasi_python_error(trapped);
+        Py_DECREF(slept);
+        waited = shortest;
+    }
+    uint32_t made = 0;
+    for (uint32_t i = 0; i < count; i++) {
+        uint32_t sub = in + i * stride, event = out + made * 32;
+        uint8_t tag = w->memory->data[sub + 8];
+        uint32_t error = WASI_E_SUCCESS;
+        uint64_t nbytes = 0;
+        if (tag == 0) {
+            uint64_t wait;
+            error = wasi_subscription_wait(w, sub, legacy, entry_now, have, &wait, trapped);
+            if (*trapped) return 0;
+            if (error == WASI_E_SUCCESS && wait > waited) continue;  /* not yet */
+        } else {
+            uint32_t fd = 0;
+            wasi_get_u32(w, sub + 16, &fd);
+            wasi_entry *e = wasi_entry_of(w, fd);
+            if (e == NULL) error = WASI_E_BADF;
+            else if (e->kind == WASI_K_FILE && tag == 1) {
+                wasi_stat st;
+                memset(&st, 0, sizeof st);
+                long long at = WASI_LSEEK(e->osfd, 0, SEEK_CUR);
+                if (at >= 0 && wasi_be_stat_fd(w, e, &st, trapped) == WASI_E_SUCCESS && st.size > (uint64_t)at) nbytes = st.size - (uint64_t)at;
+                *trapped = 0;
+            }
+        }
+        memset(w->memory->data + event, 0, 32);
+        memcpy(w->memory->data + event, w->memory->data + sub, 8);  /* userdata */
+        wasi_put_u16(w, event + 8, (uint16_t)error);
+        w->memory->data[event + 10] = tag;
+        if (tag != 0) wasi_put_u64(w, event + 16, nbytes);
+        made++;
+    }
+    return wasi_put_u32(w, nevents, made) ? WASI_E_SUCCESS : WASI_E_FAULT;
+}
+
+static inline uint32_t wasi_poll_oneoff(void *s, uint32_t in, uint32_t out, uint32_t count, uint32_t nevents, int *trapped) {
+    WASI_STATE(s);
+    return wasi_poll(w, in, out, count, nevents, 0, trapped);
+}
+
 /* ---- not yet: ENOSYS, as the specification allows (ENOTSOCK for the sockets, which will not be there) --------------------- */
 
-#define WASI_NOT_YET(name, code, ...) \
+#define WASI_NOT_PROVIDED(name, code, ...) \
     static inline uint32_t wasi_##name(void *s, __VA_ARGS__, int *trapped) { \
         (void)s; \
         (void)trapped; \
         return code; \
     }
 
-WASI_NOT_YET(proc_raise, WASI_E_NOSYS, uint32_t a)
-WASI_NOT_YET(poll_oneoff, WASI_E_NOSYS, uint32_t a, uint32_t b, uint32_t c, uint32_t d)
-WASI_NOT_YET(fd_pread, WASI_E_NOSYS, uint32_t a, uint32_t b, uint32_t c, uint64_t d, uint32_t e)
-WASI_NOT_YET(fd_pwrite, WASI_E_NOSYS, uint32_t a, uint32_t b, uint32_t c, uint64_t d, uint32_t e)
-WASI_NOT_YET(path_link, WASI_E_NOSYS, uint32_t a, uint32_t b, uint32_t c, uint32_t d, uint32_t e, uint32_t f, uint32_t g)
-WASI_NOT_YET(path_readlink, WASI_E_NOSYS, uint32_t a, uint32_t b, uint32_t c, uint32_t d, uint32_t e, uint32_t f)
-WASI_NOT_YET(path_rename, WASI_E_NOSYS, uint32_t a, uint32_t b, uint32_t c, uint32_t d, uint32_t e, uint32_t f)
-WASI_NOT_YET(path_symlink, WASI_E_NOSYS, uint32_t a, uint32_t b, uint32_t c, uint32_t d, uint32_t e)
-WASI_NOT_YET(sock_accept, WASI_E_NOTSOCK, uint32_t a, uint32_t b, uint32_t c)
-WASI_NOT_YET(sock_recv, WASI_E_NOTSOCK, uint32_t a, uint32_t b, uint32_t c, uint32_t d, uint32_t e, uint32_t f)
-WASI_NOT_YET(sock_send, WASI_E_NOTSOCK, uint32_t a, uint32_t b, uint32_t c, uint32_t d, uint32_t e)
-WASI_NOT_YET(sock_shutdown, WASI_E_NOTSOCK, uint32_t a, uint32_t b)
+/* a descriptor is never a socket (a program cannot make one): the call says so, or that there is no such descriptor */
+#define WASI_SOCKET(name, ...) \
+    static inline uint32_t wasi_##name(void *s, uint32_t fd, __VA_ARGS__, int *trapped) { \
+        WASI_STATE(s); \
+        (void)trapped; \
+        return wasi_entry_of(w, fd) == NULL ? WASI_E_BADF : WASI_E_NOTSOCK; \
+    }
+
+WASI_NOT_PROVIDED(proc_raise, WASI_E_NOSYS, uint32_t a)
+WASI_SOCKET(sock_accept, uint32_t b, uint32_t c)
+WASI_SOCKET(sock_recv, uint32_t b, uint32_t c, uint32_t d, uint32_t e, uint32_t f)
+WASI_SOCKET(sock_send, uint32_t b, uint32_t c, uint32_t d, uint32_t e)
+WASI_SOCKET(sock_shutdown, uint32_t b)
 
 #endif

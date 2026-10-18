@@ -27,4 +27,11 @@ static inline uint32_t wasi_unstable_path_filestat_get(void *s, uint32_t fd, uin
     return wasi_filestat_of_path(w, fd, flags, path, len, ptr, 1, trapped);
 }
 
+/* the clock subscription of this snapshot starts with an identifier (the subscriptions are 56 bytes) */
+static inline uint32_t wasi_unstable_poll_oneoff(void *s, uint32_t in, uint32_t out, uint32_t count, uint32_t nevents,
+                                                 int *trapped) {
+    WASI_STATE(s);
+    return wasi_poll(w, in, out, count, nevents, 1, trapped);
+}
+
 #endif

@@ -40,6 +40,7 @@ class Fs:
     def __init__(self, mod: Any, root: Path, **options: Any) -> None:
         self.inst = mod.Instance(wasi={"preopens": {"/": str(root)}, **options})
         self.mem = self.inst.memory
+        self.cursor = 1100
 
     def put(self, at: int, data: bytes) -> None:
         self.mem[at : at + len(data)] = data
@@ -72,8 +73,14 @@ class Fs:
         return code, self.u32(8)
 
     def path(self, name: str) -> tuple[int, int]:
-        self.put(1000, name.encode())
-        return 1000, len(name.encode())
+        """Put a name in memory, each one in a place of its own (a call can take two), and give where and how long."""
+        data = name.encode()
+        if self.cursor + len(data) > 1900:
+            self.cursor = 1100
+        at = self.cursor
+        self.cursor += len(data) + 1
+        self.put(at, data)
+        return at, len(data)
 
     def read(self, fd: int, size: int) -> tuple[int, bytes]:
         self.put(0, (2000).to_bytes(4, "little") + size.to_bytes(4, "little"))
@@ -385,3 +392,168 @@ def test_a_readonly_preopen_refuses_every_change(probe: Any, world: Path) -> Non
     assert fs.inst.path_unlink_file(3, *fs.path("hello.txt")) == E_NOTCAPABLE
     assert fs.inst.path_filestat_set_times(3, 1, *fs.path("hello.txt"), 0, 0, 8) == E_NOTCAPABLE
     assert (world / "hello.txt").read_bytes() == b"hello, files\n" and not (world / "made").exists()
+
+
+def test_pread_and_pwrite_leave_the_position_where_it_was(probe: Any, world: Path) -> None:
+    fs = Fs(probe, world)
+    _, fd = fs.open("hello.txt", rights=WRITE_RIGHTS)
+    assert fs.read(fd, 2) == (0, b"he")  # the position is 2
+    fs.put(0, (2000).to_bytes(4, "little") + (5).to_bytes(4, "little"))
+    assert fs.inst.fd_pread(fd, 0, 1, 7, 8) == 0 and fs.u32(8) == 5 and bytes(fs.mem[2000:2005]) == b"files"
+    assert fs.inst.fd_tell(fd, 100) == 0 and fs.u64(100) == 2
+    assert fs.inst.fd_pread(fd, 0, 1, 1000, 8) == 0 and fs.u32(8) == 0  # past the end
+    fs.put(3000, b"HELLO")
+    fs.put(0, (3000).to_bytes(4, "little") + (5).to_bytes(4, "little"))
+    assert fs.inst.fd_pwrite(fd, 0, 1, 0, 8) == 0 and fs.u32(8) == 5
+    assert (world / "hello.txt").read_bytes() == b"HELLO, files\n"
+    assert fs.inst.fd_tell(fd, 100) == 0 and fs.u64(100) == 2
+    assert fs.read(fd, 3) == (0, b"LLO")  # reading goes on from where it was
+    _, ro = fs.open("hello.txt")
+    assert fs.inst.fd_pwrite(ro, 0, 1, 0, 8) == E_NOTCAPABLE
+    assert fs.inst.fd_pread(3, 0, 1, 0, 8) == E_ISDIR and fs.inst.fd_pread(1, 0, 1, 0, 8) == E_SPIPE
+    assert fs.inst.fd_pread(99, 0, 1, 0, 8) == E_BADF
+
+
+def test_a_file_is_renamed_moved_and_replaced(probe: Any, world: Path) -> None:
+    fs = Fs(probe, world)
+    old, new = fs.path("hello.txt"), fs.path("renamed.txt")
+    assert fs.inst.path_rename(3, *old, 3, *new) == 0
+    assert not (world / "hello.txt").exists() and (world / "renamed.txt").read_bytes() == b"hello, files\n"
+    (world / "other.txt").write_bytes(b"other")
+    assert fs.inst.path_rename(3, *fs.path("renamed.txt"), 3, *fs.path("other.txt")) == 0  # replaces
+    assert (world / "other.txt").read_bytes() == b"hello, files\n"
+    assert fs.inst.path_rename(3, *fs.path("other.txt"), 3, *fs.path("sub/moved.txt")) == 0
+    assert (world / "sub" / "moved.txt").is_file()
+    assert fs.inst.path_rename(3, *fs.path("sub"), 3, *fs.path("renamed_dir")) == 0
+    assert (world / "renamed_dir" / "moved.txt").is_file()
+    assert fs.inst.path_rename(3, *fs.path("missing"), 3, *fs.path("x")) == E_NOENT
+    assert fs.inst.path_rename(3, *fs.path("renamed_dir"), 3, *fs.path("../escaped")) == E_NOTCAPABLE
+    assert fs.inst.path_rename(3, *fs.path("../outside.txt"), 3, *fs.path("x")) == E_NOTCAPABLE
+    assert fs.inst.path_rename(3, *fs.path("."), 3, *fs.path("x")) == E_INVAL
+    assert fs.inst.path_rename(9, *fs.path("renamed_dir"), 3, *fs.path("y")) == E_BADF
+
+
+def test_a_hard_link_shares_the_file(probe: Any, world: Path) -> None:
+    fs = Fs(probe, world)
+    assert fs.inst.path_link(3, 1, *fs.path("hello.txt"), 3, *fs.path("again.txt")) == 0
+    assert (world / "again.txt").read_bytes() == b"hello, files\n"
+    assert os.stat(world / "hello.txt").st_nlink == 2
+    assert fs.inst.path_link(3, 1, *fs.path("hello.txt"), 3, *fs.path("again.txt")) == E_EXIST
+    assert fs.inst.path_link(3, 1, *fs.path("missing"), 3, *fs.path("z")) == E_NOENT
+    assert fs.inst.path_link(3, 1, *fs.path("../outside.txt"), 3, *fs.path("z")) == E_NOTCAPABLE
+    assert fs.inst.path_link(3, 1, *fs.path("hello.txt"), 3, *fs.path("../z")) == E_NOTCAPABLE
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="symbolic links need a privilege on Windows")
+def test_symbolic_links_are_made_and_read_and_never_lead_out(probe: Any, world: Path) -> None:
+    fs = Fs(probe, world)
+    assert fs.inst.path_symlink(*fs.path("hello.txt"), 3, *fs.path("link.txt")) == 0
+    assert os.readlink(world / "link.txt") == "hello.txt"
+    ptr, length = fs.path("link.txt")
+    assert fs.inst.path_readlink(3, ptr, length, 4000, 100, 120) == 0
+    assert fs.u32(120) == 9 and bytes(fs.mem[4000:4009]) == b"hello.txt"
+    assert fs.inst.path_readlink(3, ptr, length, 4000, 5, 120) == 0 and fs.u32(120) == 5  # cut short
+    code, fd = fs.open("link.txt")  # and it is followed
+    assert code == 0 and fs.read(fd, 5) == (0, b"hello")
+    assert fs.inst.path_readlink(3, *fs.path("hello.txt"), 4000, 100, 120) == E_INVAL  # not a link
+    assert fs.inst.path_readlink(3, *fs.path("missing"), 4000, 100, 120) == E_NOENT
+    assert fs.inst.path_symlink(*fs.path("/etc/passwd"), 3, *fs.path("abs")) == E_NOTCAPABLE
+    assert fs.inst.path_symlink(*fs.path("x"), 3, *fs.path("link.txt")) == E_EXIST
+    assert fs.inst.path_symlink(*fs.path(""), 3, *fs.path("empty")) == E_NOENT
+    assert fs.inst.path_symlink(*fs.path("x"), 3, *fs.path("../escaped")) == E_NOTCAPABLE
+    # a link that points out may be made, but it is not followed
+    assert fs.inst.path_symlink(*fs.path("../outside.txt"), 3, *fs.path("out")) == 0
+    assert fs.open("out")[0] == E_NOTCAPABLE
+
+
+def _clock(user: int, timeout: int, *, flags: int = 0, clock: int = 1, legacy: bool = False) -> bytes:
+    """A subscription to a clock: 48 bytes, or 56 in the first snapshot (whose clock starts with an identifier)."""
+    sub = bytearray(56 if legacy else 48)
+    sub[0:8] = user.to_bytes(8, "little")  # userdata; the tag at 8 is 0 for a clock
+    at = 16
+    if legacy:
+        sub[16:24] = user.to_bytes(8, "little")
+        at = 24
+    sub[at : at + 4] = clock.to_bytes(4, "little")
+    sub[at + 8 : at + 16] = timeout.to_bytes(8, "little")
+    sub[at + 24 : at + 26] = flags.to_bytes(2, "little")
+    return bytes(sub)
+
+
+def _fd_sub(user: int, fd: int, tag: int, *, legacy: bool = False) -> bytes:
+    sub = bytearray(56 if legacy else 48)
+    sub[0:8] = user.to_bytes(8, "little")
+    sub[8] = tag
+    sub[16:20] = fd.to_bytes(4, "little")
+    return bytes(sub)
+
+
+def _events(fs: Fs, out: int, count: int) -> list[tuple[int, int, int, int]]:
+    """(userdata, error, type, nbytes) of the events at `out`."""
+    return [
+        (
+            int.from_bytes(fs.mem[out + 32 * i : out + 32 * i + 8], "little"),
+            int.from_bytes(fs.mem[out + 32 * i + 8 : out + 32 * i + 10], "little"),
+            fs.mem[out + 32 * i + 10],
+            fs.u64(out + 32 * i + 16),
+        )
+        for i in range(count)
+    ]
+
+
+def _poll(fs: Fs, subs: list[bytes]) -> tuple[int, list[tuple[int, int, int, int]]]:
+    blob = b"".join(subs)
+    fs.put(5000, blob)
+    code = fs.inst.poll_oneoff(5000, 7000, len(subs), 100)
+    return code, _events(fs, 7000, fs.u32(100)) if code == 0 else []
+
+
+def test_poll_oneoff_sleeps_until_a_clock_and_reports_what_is_ready(probe: Any, world: Path) -> None:
+    import time
+
+    fs = Fs(probe, world)
+    started = time.monotonic()
+    code, events = _poll(fs, [_clock(7, 60_000_000)])  # 60 ms from now
+    assert code == 0 and events == [(7, 0, 0, 0)]
+    assert time.monotonic() - started >= 0.05
+    started = time.monotonic()
+    assert _poll(fs, [_clock(8, 1, flags=1)])[1] == [(8, 0, 0, 0)]  # an absolute time that has passed
+    assert time.monotonic() - started < 0.05
+    _, fd = fs.open("hello.txt")
+    started = time.monotonic()
+    code, events = _poll(
+        fs, [_clock(1, 5_000_000_000), _fd_sub(2, fd, 1), _fd_sub(3, 1, 2)]
+    )  # a file and stdout are ready
+    assert code == 0 and time.monotonic() - started < 1
+    assert events == [(2, 0, 1, len("hello, files\n")), (3, 0, 2, 0)]  # no event for the clock that has not run out
+    assert _poll(fs, [_fd_sub(4, 99, 1)])[1] == [(4, E_BADF, 1, 0)]
+    assert _poll(fs, [_clock(5, 10, clock=2)])[1] == [
+        (5, E_INVAL, 0, 0)
+    ]  # the clock of the process: nothing to wait for
+    assert _poll(fs, [])[0] == E_INVAL
+    fs.put(5000, bytes(48))
+    fs.mem[5008] = 9  # not a type of subscription
+    assert fs.inst.poll_oneoff(5000, 7000, 1, 100) == E_INVAL
+
+
+def test_the_first_snapshot_polls_with_its_own_subscription(
+    build_extension: Builder, world: Path, tmp_path: Path
+) -> None:
+    wat = tmp_path / "unstable_fs_probe2.wat"
+    wat.write_text(
+        (DATA / "wasi_fs_probe.wat").read_text("utf-8").replace("wasi_snapshot_preview1", "wasi_unstable"), "utf-8"
+    )
+    fs = Fs(build_extension(wat, "wasi_unstable_fs_probe2"), world)
+    code, events = _poll(fs, [_clock(7, 20_000_000, legacy=True), _fd_sub(9, 3, 2, legacy=True)])
+    assert code == 0 and events == [(9, 0, 2, 0)]  # the directory is ready; the clock has not run out
+    assert fs.inst.poll_oneoff(5000, 7000, 1, 100) == 0
+    code, events = _poll(fs, [_clock(7, 20_000_000, legacy=True)])
+    assert code == 0 and events == [(7, 0, 0, 0)]
+
+
+def test_a_descriptor_is_never_a_socket(probe: Any, world: Path) -> None:
+    fs = Fs(probe, world)
+    assert fs.inst.sock_shutdown(3, 0) == 57  # ENOTSOCK
+    _, fd = fs.open("hello.txt")
+    assert fs.inst.sock_shutdown(fd, 0) == 57
+    assert fs.inst.sock_shutdown(99, 0) == E_BADF

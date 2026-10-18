@@ -171,7 +171,7 @@ def test_the_header_has_a_function_for_each_call_of_the_specification() -> None:
     header = (Path(__file__).parent.parent / "src" / "wasmext" / "c" / "wasi_common.h").read_text("utf-8")
     defined = set(re.findall(r"static inline (?:uint32_t|void) wasi_(\w+)\(", header))
     defined &= set(_WASI_PREVIEW1_SIGNATURES)  # the helpers that also begin with wasi_ are not calls
-    defined |= set(re.findall(r"^WASI_NOT_YET\((\w+),", header, re.MULTILINE))
+    defined |= set(re.findall(r"^WASI_(?:NOT_PROVIDED|SOCKET)\((\w+),", header, re.MULTILINE))
     assert defined == set(_WASI_PREVIEW1_SIGNATURES)
     assert len(_WASI_PREVIEW1_SIGNATURES) == 46
 

@@ -121,7 +121,9 @@ only through a preopen named `"."`.
 
 Built so far: arguments, environment, clocks, random bytes, `proc_exit`, the standard streams, and files and directories: **reading,
 writing, creating, truncating, removing, setting sizes and times** (`path_open`, `fd_read`, `fd_write`, `fd_seek`, `path_create_directory`,
-`path_unlink_file`, `fd_readdir`, ...). `rename`, links, `pread`/`pwrite` and `poll_oneoff` answer `ENOSYS` for now.
+`path_unlink_file`, `path_rename`, links and symbolic links, `fd_pread`/`fd_pwrite`, `fd_readdir`, ...) and `poll_oneoff` (clocks, and
+descriptors of files, which are always ready). 41 of the 46 calls of the specification work; `proc_raise` answers `ENOSYS`, and the four `sock_*` say
+`ENOTSOCK` (a program cannot make a socket in this snapshot, as in wasmhost). A symbolic link is made only with a relative target, and one that leads out is not followed.
 On POSIX the file calls go straight to the system (`openat`), on Windows through Python (slower). WASI 0.2 and 0.3 (components) are not
 supported: build for `wasm32-wasip1`. See [FEATURES.md](FEATURES.md#design-wasi).
 

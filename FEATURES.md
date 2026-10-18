@@ -405,20 +405,24 @@ give the names and signatures. Its code is not copied: this is written from the 
 - Test modules: `lua.wasm` (wasi_unstable, 19 imports) first, then `coreutils.wasm` (preview1, 32 imports, 10.8 MB, which makes a very large
   C file and a long build).
 
-**Stages 1 and 2 (built).** `src/wasmext/c/wasi_common.h` with `wasi_preview1.h` and `wasi_unstable.h`, copied beside the C of a module that
+**Stages 1, 2 and 3 (built).** `src/wasmext/c/wasi_common.h` with `wasi_preview1.h` and `wasi_unstable.h`, copied beside the C of a module that
 imports WASI and included by its glue (the glue calls the functions directly, through the slots that linking instances uses). The calls
 that work: `args_*`, `environ_*`, `clock_res_get`, `clock_time_get`, `random_get`, `sched_yield`, `proc_exit` (raises the module's `WasiExit`,
 `.code`), the standard streams (`fd_read` on stdin, `fd_write` on stdout and stderr), and for files and directories: preopens
 (`wasi={"preopens": {name: directory}, "readonly": ...}`), `path_open` (reading, creating, truncating, writing, append), `fd_read`, `fd_write`, `fd_seek`, `fd_tell`, `fd_close`, `fd_renumber`,
 `fd_advise`, `fd_fdstat_get`, `fd_filestat_get`, `path_filestat_get`, `fd_readdir`, `fd_prestat_get`, `fd_prestat_dir_name`, and (stage 2) `fd_sync`, `fd_datasync`,
 `fd_allocate`, `fd_filestat_set_size`, `fd_filestat_set_times`, `path_filestat_set_times`, `fd_fdstat_set_flags`, `fd_fdstat_set_rights` (rights can only
-be given up), `path_create_directory`, `path_remove_directory`, `path_unlink_file`: 34 of the 46 calls. The rest answers `ENOSYS` (the sockets
-`ENOTSOCK`). On POSIX these go straight to the system (`write`, `mkdirat`, `unlinkat`, `utimensat`, ...) after the same walk that confines a path. Rights are kept per descriptor (`readonly` takes the
+be given up), `path_create_directory`, `path_remove_directory`, `path_unlink_file`, and (stage 3) `fd_pread`, `fd_pwrite`, `path_rename`, `path_link`, `path_symlink`, `path_readlink`, `poll_oneoff`: 41 of the 46 calls
+and, with the answers the specification allows, all of them: `proc_raise` is `ENOSYS` and the four `sock_*` are `ENOTSOCK` (`EBADF` for no such descriptor), as in
+wasmhost. `poll_oneoff` sleeps in Python (`time.sleep`) until the first clock; descriptors of files, directories and standard streams are always ready;
+the first snapshot has its own (a clock subscription with an identifier, 56 bytes). A symbolic link is made with a relative target only (an absolute one is
+`ENOTCAPABLE`), and one that points out is not followed. `pread`/`pwrite` use the system calls; Windows seeks, does it and seeks back; `rename` replaces
+a file in the way (`os.replace` on the Python path). On POSIX these go straight to the system (`write`, `mkdirat`, `unlinkat`, `utimensat`, ...) after the same walk that confines a path. Rights are kept per descriptor (`readonly` takes the
 mutating ones away), and a directory descriptor is a capability for that directory: `..` out of it, an absolute name, or a link that
 leads out are `ENOTCAPABLE` (an absolute link inside is refused too, as in cap-std). Both snapshots are served (`sock_accept` is not a call of the first:
 `GenError`); the first has its own `fd_seek` (another order of `whence`) and `fd_filestat_get`/`path_filestat_get` (56 bytes). `Instance()` needs no
 imports; `wasi={...}` takes args, env, stdin, stdout, stderr, preopens, readonly. What the caller gives as an import wins, call by call.
-Not built: `path_rename`, `path_symlink`, `path_readlink`, `path_link`, `fd_pread`, `fd_pwrite`, `poll_oneoff`, `proc_raise` (stage 3). Tests: `tests/test_wasi.py` and `tests/test_wasi_fs.py` (through `build_extension`, not on
+Not built: signals (`proc_raise`), sockets, threads, and the clocks of the process and the thread in `poll_oneoff`. Tests: `tests/test_wasi.py` and `tests/test_wasi_fs.py` (through `build_extension`, not on
 Windows; the file tests are run for both ways of reaching the file system), `test_a_wasi_module_is_built_with_the_wasi_header_of_wasmext`
 and `test_wasi_files_work_on_every_platform_of_ci` (the whole path, every platform of CI). `lua.wasm` (imports `wasi_unstable`) is built and run by `examples/lua` (its tests, and the wheels of CI).
 

@@ -477,6 +477,7 @@ for the listing came from a wrong baseline and is withdrawn.) Windows is on the 
 - The glue is plain CPython C API, not nanobind, pybind11 or Cython: it is generated, targets abi3 from 3.11 (nanobind's linked mode needs 3.12 for
   that) and needs no C++ or extra build dependency.
 - WASI is hand-written C in the module (see "Design: WASI"): not a shim in Python, and not an existing C implementation (uvwasi, which WABT uses
-  itself for `wasm-interp`, was looked at first and not taken: it is a library with its own state and its own build, and a built module should need nothing).
+  itself for `wasm-interp`, was named here as the option if WASI came back; what was decided instead is header-only C compiled into the module, so
+  that a built module needs nothing at run time).
 - `wasmhost` is a different tool (a facade over engines); its API is a guide for names and errors, the reference for behaviour
   is the specification and the JavaScript API.

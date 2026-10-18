@@ -210,8 +210,8 @@ In this order (the first ones are small):
    publishing on PyPI; `.wat` as a source (an idea, see "Build and distribution").
 7. `funcref`/`externref` in signatures (a design is needed first: who owns an `externref`); custom page sizes (`wasm2c` can, with a
    flag); the rest of the examples of other projects (below).
-8. **WASI** (`wasi_snapshot_preview1` and `wasi_unstable`): decided to be part of wasmext and compiled into the native module, in C against
-   `Python.h` and the memory of wasm2c, not a Python layer. Not started; the design questions are open (see "Design: WASI" when written).
+8. **WASI** (`wasi_snapshot_preview1` and `wasi_unstable`): part of wasmext, compiled into the native module as `wasi_preview1.c`, the system
+   reached through `Python.h`. Not started; see "Design: WASI".
 
 How to choose the next features: **on demand, not in advance**. The examples of [wasm2mpy](https://github.com/vshymanskyy/wasm2mpy)
 and [pywasm3](https://github.com/wasm3/pywasm3) are taken one by one, the simplest first, and added to this project as examples
@@ -310,6 +310,42 @@ when the extension is made" for them); 2. memories; 3. functions; 4. tables.
 
 **Decided**: the forms above; the format of the link table (capsule) is private, documented and
 versioned (not a promise to others) until a second user of it exists.
+
+## Design: WASI (nothing is built)
+
+**Decided.** WASI is part of wasmext and is compiled into the native module; a built module needs nothing at run time (not wasmext
+either), so a shared library that modules call into was rejected. The code is one hand-written file, `wasi_preview1.c` (with its
+header), which is copied next to the runtime of `wasm2c` into `<name>_wasmext/` and compiled with the module, as `wasm-rt-impl.c` is.
+It is not generated each time, so it can be read, tested and fixed as ordinary C. The name says the version: later WASI interfaces
+are largely not compatible with preview1, so each gets its own file (`wasi_preview2` and the like), not an extension of this one.
+
+**Portability: through `Python.h`.** The operating system is reached through CPython (the `os`, `io`, `time` and `sys` modules, called
+from C with the limited API), not through `read(2)` and `CreateFileW` of our own. Windows and POSIX then differ only where Python
+differs, and a module built as abi3 can use it. The price is a call into the interpreter for each WASI call that touches the system,
+where the call itself is the expensive part anyway (the wasm side does not change).
+
+**What it covers.** The 46 functions of the specification (`wasi_snapshot_preview1.witx`, the branch `wasi-0.1` of WebAssembly/WASI;
+the files are in `tests/data/wasi/` of py-wasmhost, with their licence): arguments, environment, clocks, `random_get`,
+`proc_exit`, `sched_yield`, `poll_oneoff`, the `fd_*` calls, the `path_*` calls. Sockets, signals and threads answer as the
+specification allows (`ENOTSOCK`, `ENOSYS`). The first snapshot, `wasi_unstable` (what `lua.wasm` imports), differs from it in a few
+things and is served from the same file. A module gets only the functions it imports (the glue names them with macros), so a module
+without WASI contains none of it. The state (file descriptors, preopens) is in the instance, not in globals.
+
+**Staged.** First what is the same everywhere: standard streams, arguments, environment, clocks, `random_get`, `proc_exit`. Then
+files and directories (`fd_*`, `path_*`) with preopens that confine the program to a directory. Last `poll_oneoff`.
+
+**Reference for behaviour.** `wasmhost.wasi.preview1` (plain Python, MIT) is run beside it as the oracle in tests, and the witx files
+give the names and signatures. Its code is not copied: this is written from the specification.
+
+**Proposed, not confirmed yet.**
+- Configuration is a keyword of the instance, `Instance(imports, wasi={"args": [...], "env": {...}, "preopens": {"/": "dir"},
+  "stdin": ..., "stdout": ..., "stderr": ...})`.
+- Standard streams go to `sys.stdin.buffer`, `sys.stdout.buffer` and `sys.stderr.buffer` by default, so that capturing in a notebook or
+  a test works, and an object with `write(bytes)` replaces one.
+- `proc_exit(n)` is an exception (`WasiExit`, carrying the code) out of the call that led to it; the instance stays usable.
+- The command `_start` is called as an export, as any other (no `run()` helper in the first version).
+- Test modules: `lua.wasm` (wasi_unstable, 19 imports) first, then `coreutils.wasm` (preview1, 32 imports, 10.8 MB, which makes a very large
+  C file and a long build).
 
 ## Decisions
 

@@ -314,10 +314,12 @@ versioned (not a promise to others) until a second user of it exists.
 ## Design: WASI (nothing is built)
 
 **Decided.** WASI is part of wasmext and is compiled into the native module; a built module needs nothing at run time (not wasmext
-either), so a shared library that modules call into was rejected. The code is one hand-written file, `wasi_preview1.c` (with its
-header), which is copied next to the runtime of `wasm2c` into `<name>_wasmext/` and compiled with the module, as `wasm-rt-impl.c` is.
-It is not generated each time, so it can be read, tested and fixed as ordinary C. The name says the version: later WASI interfaces
-are largely not compatible with preview1, so each gets its own file (`wasi_preview2` and the like), not an extension of this one.
+either), so a shared library that modules call into was rejected. The code is hand-written C, one file for each interface the module imports:
+`wasi_preview1.c` for `wasi_snapshot_preview1` and `wasi_unstable.c` for `wasi_unstable` (the first snapshot, "preview0"). They are copied
+next to the runtime of `wasm2c` into `<name>_wasmext/` and compiled with the module, as `wasm-rt-impl.c` is; a module gets the file of
+the interface it imports (both, if it imports both). It is not generated each time, so it can be read, tested and fixed as ordinary C.
+The names say the version: later WASI interfaces are largely not compatible with preview1, so each gets its own file
+(`wasi_preview2` and the like), and `wasi_unstable` is not folded into `wasi_preview1` either.
 
 **Portability: through `Python.h`.** The operating system is reached through CPython (the `os`, `io`, `time` and `sys` modules, called
 from C with the limited API), not through `read(2)` and `CreateFileW` of our own. Windows and POSIX then differ only where Python
@@ -327,8 +329,11 @@ where the call itself is the expensive part anyway (the wasm side does not chang
 **What it covers.** The 46 functions of the specification (`wasi_snapshot_preview1.witx`, the branch `wasi-0.1` of WebAssembly/WASI;
 the files are in `tests/data/wasi/` of py-wasmhost, with their licence): arguments, environment, clocks, `random_get`,
 `proc_exit`, `sched_yield`, `poll_oneoff`, the `fd_*` calls, the `path_*` calls. Sockets, signals and threads answer as the
-specification allows (`ENOTSOCK`, `ENOSYS`). The first snapshot, `wasi_unstable` (what `lua.wasm` imports), differs from it in a few
-things and is served from the same file. A module gets only the functions it imports (the glue names them with macros), so a module
+specification allows (`ENOTSOCK`, `ENOSYS`). The first snapshot, `wasi_unstable` (what `lua.wasm` imports), has the same
+functions but `sock_accept`, and four differences in what it reads and writes: the order of `whence` (cur, end, set), one right less,
+`filestat` with a 32-bit link count (which moves its fields), and a clock subscription with an extra `identifier` (56 bytes). So the
+two files differ in the few calls that touch those (`fd_seek`, `fd_fdstat_get`, `fd_filestat_get`, `path_filestat_get`, `poll_oneoff`);
+the rest is common. Proposed: a private header with the common part, which both files include, so that they cannot drift apart. A module gets only the functions it imports (the glue names them with macros), so a module
 without WASI contains none of it. The state (file descriptors, preopens) is in the instance, not in globals.
 
 **Staged.** First what is the same everywhere: standard streams, arguments, environment, clocks, `random_get`, `proc_exit`. Then

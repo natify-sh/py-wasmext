@@ -29,8 +29,21 @@ def build_example(name: str, tmp_path: Path, wabt: Path) -> Path:
 
 def test_coremark(tmp_path: Path, wabt: Path) -> None:
     project = build_example("coremark", tmp_path, wabt)
-    # The benchmark times itself for 10 s with the clock it is given: this one runs 600 times too fast.
-    code = "import time, coremark\nout = coremark.run(lambda: int(time.perf_counter() * 600_000) & 0xFFFFFFFF)\nprint(out)\n"
+    # The benchmark decides how long to run from the clock it is given and wants a last run of 10 s or more: with a real clock
+    # the length of the last run depends on how the machine behaves between the calibration and the run. This clock does not:
+    # the first timed run lasts 1.5 s, the next one 15 s, whatever they really took.
+    code = (
+        "import coremark\n"
+        "calls = []\n"
+        "now = 1_000_000\n"
+        "def clock():\n"
+        "    global now\n"
+        "    calls.append(now)\n"
+        "    if len(calls) % 2 == 0:\n"
+        "        now += 1500 if len(calls) <= 2 else 15000\n"
+        "    return now\n"
+        "print(coremark.run(clock))\n"
+    )
     out = subprocess.run(
         [sys.executable, "-c", code],
         cwd=project,

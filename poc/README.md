@@ -1,5 +1,8 @@
 # Proof of concept
 
+> **Historical.** This is the hand-written proof of concept that `wasmext` (the package in the root of the repository) grew out of. The
+> numbers and the statements about features are for WABT 1.0.36; for what `wasmext` does today, see [FEATURES.md](../FEATURES.md).
+
 The hand-written beginning of [wasmext](..), kept for the measurements.
 
 A proof of concept: turn a WebAssembly module into a **native CPython extension** (`.so`), so that the module runs

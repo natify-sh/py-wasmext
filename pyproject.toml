@@ -8,7 +8,7 @@ authors = [{ name = "o-murphy", email = "thehelixpg@gmail.com" }]
 description = "Turn WebAssembly modules into native CPython extensions (wasm2c), from setup.py or the command line"
 readme = "README.md"
 requires-python = ">=3.11"
-keywords = ["webassembly", "wasm", "wasm2c", "extension", "cibuildwheel"]
+keywords = ["webassembly", "wasm", "wasm2c", "aot", "simd", "extension", "cibuildwheel"]
 license = "MIT"
 license-files = ["LICENSE", "NOTICE.md"]
 classifiers = [
@@ -27,6 +27,12 @@ dependencies = [
     "wabt-package>=1.0.42.0b2",
 ]
 dynamic = ["version"]
+
+[project.urls]
+Homepage = "https://github.com/natify-sh/py-wasmext"
+Repository = "https://github.com/natify-sh/py-wasmext"
+Issues = "https://github.com/natify-sh/py-wasmext/issues"
+Features = "https://github.com/natify-sh/py-wasmext/blob/main/FEATURES.md"
 
 [project.scripts]
 wasmext = "wasmext._cli:main"

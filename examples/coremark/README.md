@@ -5,7 +5,9 @@
 [wasmext](../..): a package with no WebAssembly engine at run time.
 
 ```sh
-pip install .            # wasmext (and with it wabt-package) is a build requirement; a C compiler is needed
+# wasmext (and with it wabt-package) is a build requirement, and a C compiler is needed. wasmext is not on PyPI yet:
+# build its wheel in the root of the repository (`uv build --wheel -o dist`), then
+pip install --find-links ../../dist .
 python -c "import coremark; print(coremark.run())"
 ```
 

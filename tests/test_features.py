@@ -23,6 +23,7 @@ class Case:
     args: tuple[float, ...] = ()
     expect: object = None
     gap: str | None = None  # why it does not work yet
+    flags: tuple[str, ...] = ()  # for wat2wasm: a proposal that is off by default
 
 
 CASES = [
@@ -115,6 +116,48 @@ CASES = [
         expect=1,
     ),
     Case(
+        "3.0 exceptions, try_table",
+        '(module (tag $e (param i32)) (func (export "f") (result i32) block $h (result i32) try_table (catch $e $h)'
+        " i32.const 7 throw $e end i32.const 0 return end))",
+        expect=7,
+    ),
+    Case(
+        "3.0 exceptions, exnref (catch_all_ref and throw_ref)",
+        "(module (tag $e (param i32)) "
+        '(func (export "f") (result i32) block $o try_table (catch_all $o) block $h (result exnref)'
+        " try_table (catch_all_ref $h) i32.const 5 throw $e end unreachable end throw_ref end"
+        " i32.const 0 return end i32.const 9))",
+        expect=9,
+    ),
+    Case(
+        "3.0 memory64, a 64-bit table",
+        '(module (table i64 2 funcref) (func (export "f") (result i32) i32.const 1))',
+        expect=1,
+    ),
+    Case(
+        "3.0 branch hinting (the annotation of the text format)",
+        '(module (func (export "f") (param i32) (result i32) (@metadata.code.branch_hint "\\00")'
+        " local.get 0 if (result i32) i32.const 1 else i32.const 2 end))",
+        args=(1,),
+        expect=1,
+    ),
+    Case(
+        "3.0 typed function references",
+        "(module (type $t (func (result i32))) (func $a (type $t) i32.const 3)"
+        ' (func (export "f") (result i32) ref.func $a call_ref $t) (elem declare func $a))',
+        expect=3,
+        flags=("--enable-function-references",),
+        gap="wasm2c does not read the call_ref of function references (unexpected opcode 0x14)",
+    ),
+    Case(
+        "3.0 garbage collection",
+        '(module (type $s (struct (field i32))) (func (export "f") (result i32)'
+        " i32.const 5 struct.new $s struct.get $s 0))",
+        expect=5,
+        flags=("--enable-gc",),
+        gap="WABT 1.0.42 does not read the instructions of garbage collection (wat2wasm: unexpected token struct.get)",
+    ),
+    Case(
         "3.0 relaxed SIMD, inside the module",
         '(module (func (export "f") (result i32)'
         " v128.const f32x4 1 2 3 4 i32x4.relaxed_trunc_f32x4_s i32x4.extract_lane 0))",
@@ -144,7 +187,7 @@ def test_feature(case: Case, tmp_path: Path, wabt: Path) -> None:
     package.mkdir()
     (package / "__init__.py").write_text("", encoding="utf-8")
     (package / "m.wat").write_text(case.wat, encoding="utf-8")
-    subprocess.run([wabt / "bin" / "wat2wasm", "m.wat", "-o", "m.wasm"], cwd=package, check=True)
+    subprocess.run([wabt / "bin" / "wat2wasm", *case.flags, "m.wat", "-o", "m.wasm"], cwd=package, check=True)
 
     built = wasmext(tmp_path, wabt, "-i", "-q", "pkg/m.wasm")
     assert built.returncode == 0, built.stderr[-600:]

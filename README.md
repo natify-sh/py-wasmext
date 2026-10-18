@@ -62,6 +62,12 @@ inst = mypkg.fast.Instance()  # Instance({"env": {"log": print}}) if the module 
 inst.add(2, 3)  # the exports are methods; an exported memory is a memoryview attribute
 ```
 
+The values are Python's own: an `i32` or `i64` is an `int` (a result comes back signed, an argument is wrapped to the width, as the
+JavaScript API does), an `f32` or `f64` a `float`, a `v128` 16 bytes (`bytes`, or any bytes-like object, in the order of WebAssembly
+memory); an export with several results returns a tuple. A trap is `Trap` (a `RuntimeError`) and the instance stays usable; a missing
+or wrong import is `LinkError`; an exported global is an attribute. The stub `<module>.pyi` written beside the `.wasm` says all that
+for the module at hand.
+
 The command line works in the manner of `cythonize`: `wasmext 'src/mypkg/*.wasm'` writes the C, `wasmext -i ...` also builds
 the extensions in place, `-b` under `build/` (`wasmext --help`).
 
@@ -105,6 +111,12 @@ import fast  # fast.wasm on sys.path, or in the working directory
 ```
 
 What is supported, what is not yet, and the plan are in [FEATURES.md](FEATURES.md).
+
+## Status
+
+A proof of concept that works: the suite passes on Linux, macOS and Windows in CI, and the example builds into wheels on six
+platforms. It is **not published on PyPI yet**; until it is, build the wheel from a checkout (`uv build`) and install it with
+`pip install --find-links <the folder of the wheel> wasmext`, as `examples/coremark` does in CI.
 
 ## Development
 

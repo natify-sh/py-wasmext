@@ -8,9 +8,22 @@ Status: **done** (works, tested) · **partly** (see the note) · **not yet** (pl
 
 ## WebAssembly features
 
+The list follows the specification: the proposals that are finished (phase 4) and the release of the specification that
+took them in, from the list of finished proposals of the WebAssembly CG and the release notes of the specification
+(2.0: 2022, 3.0: 2025; both read on 2026-10-18), and what `wasm2c` of WABT 1.0.42 supports, from the table of its README.
+What each line says is tested (`tests/test_features.py`), not read from those documents, unless it says otherwise.
+
+### 1.0
+
 | Feature | Status | Note / test |
 | --- | --- | --- |
-| 1.0 (MVP) | done | `1.0 mvp` |
+| MVP | done | `1.0 mvp` |
+| Import/export of mutable globals | partly | exported: done, as attributes (see below); imported: not yet, it needs a shared `Global` |
+
+### 2.0
+
+| Feature | Status | Note / test |
+| --- | --- | --- |
 | Sign extension | done | `2.0 sign-extension` |
 | Saturating float-to-int | done | `2.0 saturating float-to-int` |
 | Multi-value, inside the module | done | `2.0 multi-value, inside the module` |
@@ -19,17 +32,37 @@ Status: **done** (works, tested) · **partly** (see the note) · **not yet** (pl
 | Bulk memory | done | `2.0 bulk memory` |
 | Reference types, inside the module | done | `2.0 reference types, inside the module` |
 | Reference types in a signature (`funcref`, `externref`) | not yet | the function is left out (export) or the module is refused (import) |
-| Mutable globals | done | exported as attributes, see below |
 | SIMD (`v128`), inside the module | done | the C of `wasm2c` includes simde; the wabt-package (1.0.42.0b2 and later) ships the headers (`wabt_package.include_dir()`), and wasmext adds that directory to the include path of the extension when the C includes `simde/` (`_simde_include`; a tree that ships its C and has no SIMD still builds without the wabt-package). `2.0 SIMD, inside the module`, `test_a_module_with_simd_gets_the_include_directory_of_simde`. Native instructions are used only if the compiler flags allow, so a baseline x86-64 wheel runs SIMD in portable code |
 | `v128` in a signature | done | 16 bytes in the order of WebAssembly memory: `bytes` (or any bytes-like object of 16 bytes) in, `bytes` out; a wrong length is a `ValueError`, another type a `TypeError`. In exported and imported functions, multi-value, exported globals and imported immutable globals. Not on big-endian hosts (`#error`; the byte order of a v128 there is not checked). `test_v128_in_signatures_globals_and_imports` |
-| Relaxed SIMD | no (wasm2c) | `wasm2c` 1.0.42 itself aborts (signal 6, no message) on `i32x4.relaxed_trunc_f32x4_s`, so it is not a matter of headers; strict xfail `3.0 relaxed SIMD…` |
+| JavaScript BigInt to i64 | n/a | a part of the JavaScript API; here an `i64` is a Python `int` |
+
+### 3.0
+
+| Feature | Status | Note / test |
+| --- | --- | --- |
 | Tail calls | done | `3.0 tail calls` |
 | Extended constants | done | `3.0 extended constants` |
-| memory64 | done | inside the module, exported as a `memoryview`, addresses above 4 GiB (Linux): `3.0 memory64`, `test_an_exported_memory64_is_a_memoryview_too`, `test_memory64_addresses_above_4_gib` |
 | Multi-memory | done | `3.0 multi-memory` |
-| Exceptions (legacy `try`/`catch`) | done | `3.0 exceptions`; an exception nobody catches is a `Trap`: `test_an_exception_nobody_catches_is_a_trap`. `try_table`/`exnref` are not tested |
-| Threads, shared memory, atomics | not yet | wasm2c can do it (`--enable-threads`, C11 atomics, `wasm_rt_init_thread`); wasmext does not pass the flag (strict xfail `threads`) |
-| GC, function references, custom page sizes, compact imports, wide arithmetic | not yet | off in wasm2c by default; the parser refuses GC types; not tried |
+| memory64 | done | inside the module, exported as a `memoryview`, addresses above 4 GiB (Linux): `3.0 memory64`, `test_an_exported_memory64_is_a_memoryview_too`, `test_memory64_addresses_above_4_gib` |
+| 64-bit tables (the address type of tables, with memory64) | done inside the module | `3.0 memory64, a 64-bit table`; a table is not exported yet |
+| Exception handling, legacy `try`/`catch` | done | `3.0 exceptions`; an exception nobody catches is a `Trap`: `test_an_exception_nobody_catches_is_a_trap`. This form is not in the specification, but compilers still make it |
+| Exception handling, `try_table`, `throw_ref`, `exnref` | done | the form of the specification: `3.0 exceptions, try_table`, `3.0 exceptions, exnref (catch_all_ref and throw_ref)`; `exnref` in a signature and exported tags: not yet |
+| Relaxed SIMD | no (wasm2c) | `wasm2c` 1.0.42 itself aborts (signal 6, no message) on `i32x4.relaxed_trunc_f32x4_s`, so it is not a matter of headers; strict xfail `3.0 relaxed SIMD…`. Its README says the same: wasm2c is not ticked for relaxed SIMD |
+| Typed function references | no (wasm2c) | `wat2wasm --enable-function-references` makes the binary, `wasm2c` stops at `call_ref` (unexpected opcode 0x14); the README of WABT does not tick wasm2c for it; strict xfail `3.0 typed function references` |
+| Garbage collection | no (WABT) | WABT 1.0.42 does not read the instructions (`wat2wasm --enable-gc`: unexpected token `struct.get`), and `wasm2c --enable-gc` says it supports a limited set of features; strict xfail `3.0 garbage collection`. wasmext refuses the GC types in a module as well |
+| Branch hinting | done | a hint is a custom section; the text annotation `(@metadata.code.branch_hint …)` builds and runs, `wasm2c` ignores the hint: `3.0 branch hinting` |
+| Custom annotation syntax | n/a | the text format only; `wat2wasm` takes it, nothing is left in the binary to run |
+| JS String Builtins | n/a | a part of the JavaScript API |
+| Deterministic profile | n/a | a profile of the specification (a subset to run in), not something a translator implements |
+
+### Not in 2.0 or 3.0
+
+| Feature | Status | Note / test |
+| --- | --- | --- |
+| Threads, shared memory, atomics | not yet | `wasm2c --enable-threads` translates a module with a shared memory and atomics (checked, although its README does not tick wasm2c for threads), with C11 atomics and `wasm_rt_init_thread`; wasmext does not pass the flag (strict xfail `threads`) |
+| Custom page sizes | not yet | `wasm2c` supports it with `--enable-custom-page-sizes` (checked: it reads a module with `(pagesize 1)` only with the flag); wasmext does not pass the flag, and its `memoryview` assumes 64 KiB pages; not tried through wasmext |
+| Wide arithmetic | no (wasm2c) | `wasm2c --enable-wide-arithmetic`: "currently only supports a limited set of features" (checked), as its README says |
+| Compact imports | not yet | the README of WABT: `wasm2c` is not ticked; not tried |
 | WASI | not yet | deferred; the module builds, but the host has to provide every `wasi_snapshot_preview1` import, and there is no shim (wasm2c has none) |
 
 ## The Python side
@@ -84,30 +117,44 @@ a call from Python and of a call back into Python was not measured.
 
 ## Verified, and not
 
-Run locally on Linux x86-64, Python 3.11: the whole suite with gcc 13.3 and with clang 18.1 (`pytest`), `ruff`, `pyright`.
-By hand, not in the suite: an abi3 build for a 32-bit CPython 3.12 (`gcc -m32`) of a memory64 module.
+### Where the suite ran
+
+The whole suite (`pytest`, 160 tests and 4 expected failures at the time of writing), `ruff` and `pyright`:
+
+| Where | Python | C compiler | Evidence |
+| --- | --- | --- | --- |
+| Linux x86-64, glibc (local) | 3.11 | gcc 13.3 and clang 18.1 | run by hand |
+| ubuntu-latest | 3.11 | gcc | CI, `Pre-commit` runs `pytest` |
+| macOS (macos-latest, Apple Silicon) | 3.11 | AppleClang | CI, the same |
+| windows-latest (x64) | 3.11 | MSVC | CI, the same |
+
+CI at commit `a2ee7ef` (both workflows green on all of these). The suite is not run on Linux ARM64, Windows ARM64, macOS
+Intel or the free-threaded build; only the example is (below).
 
 ### Platforms where a native extension was built and tested
 
-| Platform | What was built | Evidence |
-|---|---|---|
-| Linux x86-64, glibc | cp311 abi3 and cp314t, gcc 13.3 and clang 18.1 | local, whole suite; CI |
-| Linux x86-64, musl | cp311 abi3 and cp314t (`musllinux_1_2`) | CI, the coremark example |
-| Linux ARM64 | cp311 abi3 and cp314t | CI job passed (wheel list not inspected) |
-| Windows x64 (MSVC) | cp311 abi3 and cp314t | CI job passed (wheel list not inspected) |
-| Windows ARM64 (MSVC) | cp311 abi3 and cp314t | CI job passed (wheel list not inspected) |
-| macOS Apple Silicon, macOS Intel | cp311 abi3 and cp314t | CI jobs passed (wheel lists not inspected) |
-| Linux i386, CPython 3.12 | one abi3 memory64 module, by hand | local, not in the suite |
-| Pyodide 4.0.9 (CPython 3.13, wasm32) | the coremark example; its 2 tests passed | local, `cibuildwheel --platform pyodide` |
-| Android arm64-v8a (CPython 3.13, NDK 27) | the coremark example wheel is built; tests are skipped | local; **not run** |
+The example (CoreMark) built by cibuildwheel and its tests run on the wheel (`Example wheels`, commit `a2ee7ef`, green):
 
-The CI rows are from the last green run of `example-wheels.yml` (commit `0e251d8`, cibuildwheel, the example's tests
-run on each wheel). Everything added after that commit (signed results, multi-value, exceptions, globals, guard pages,
-`wasmimport`, the reference CoreMark) was checked only locally on Linux x86-64 and, for the example, on Pyodide.
+| Platform | Evidence |
+| --- | --- |
+| Linux x86-64 | CI; `manylinux` and `musllinux_1_2` wheels, cp311 abi3 and cp314t, seen in the log of run #23 (commit `0e251d8`) |
+| Linux ARM64 | CI job passed (the wheel list was not read) |
+| Windows x64, Windows ARM64 (MSVC) | CI jobs passed (the wheel lists were not read) |
+| macOS Apple Silicon, macOS Intel | CI jobs passed (the wheel lists were not read) |
+| Pyodide 4.0.9 (CPython 3.13, wasm32) | local, `cibuildwheel --platform pyodide`: the 2 tests passed inside Pyodide (not in CI) |
+| Android arm64-v8a (CPython 3.13, NDK 27) | local: the wheel is built, the tests were skipped, **not run** (not in CI) |
+| Linux i386, CPython 3.12 | by hand, one abi3 memory64 module (`gcc -m32`), not in the suite |
 
-**Not confirmed**: the CI matrix for the changes after `0e251d8` — the runners were out of minutes — and PyPy, iOS,
-Linux armv7l/ppc64le/s390x/riscv64 and Windows x86 for wasmext itself (the wabt-package wheels for some of them are
-a separate matter, see its README).
+The cibuildwheel configuration of the example is `build = "cp311-* cp314t-*"`.
+
+### Not confirmed
+
+- PyPy, iOS; Linux armv7l, ppc64le, s390x, riscv64 and Windows x86 for wasmext itself (the wheels of the wabt-package for
+  them exist since 1.0.42.0b2, see its README, but wasmext was not built on them).
+- Big-endian hosts (s390x): `v128` in a signature is refused there by an `#error`, and the rest was not run.
+- Clang on Windows; gcc on macOS; Python 3.12 and later with the suite (CI uses 3.11).
+- Android and Pyodide in CI.
+- Ahead-of-time claims about speed are from one machine (see "Speed").
 
 ## Known gaps
 

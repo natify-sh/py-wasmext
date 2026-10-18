@@ -3,6 +3,7 @@ the ones of the examples (the first is the WAT of `00-fibonacci.py`, the second 
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
 from pathlib import Path
 from subprocess import CalledProcessError
@@ -53,3 +54,39 @@ def test_coremark_minimal(build_extension: Builder) -> None:
 
     score = mod.Instance({"env": {"clock_ms": clock_ms}}).run()
     assert score > 1  # 0.0 is what the module gives for a run it did not validate (the example prints "Error")
+
+
+# The pygame examples (`pygame-*.py`): a module draws a frame into its memory when `run()` is called, and the host reads the
+# pixels from there. Here the host gives a fixed "random" and the frame is read without a window.
+def _frame(inst: object) -> bytes:
+    return bytes(inst.mem)  # type: ignore[attr-defined]
+
+
+def test_fire_draws_a_frame_into_its_memory(build_extension: Builder) -> None:
+    mod = build_extension(DATA / "fire.wasm", "pw3_fire")
+    frames: list[bytes] = []
+    for _ in range(2):  # the same "random" gives the same frame
+        inst = mod.Instance({"": {"rand": lambda: 0.5}})
+        before = _frame(inst)
+        inst.run()
+        frames.append(_frame(inst))
+        assert frames[-1] != before
+    assert frames[0] == frames[1]
+
+
+def test_ray_tracer_uses_the_sin_of_the_host(build_extension: Builder) -> None:
+    mod = build_extension(DATA / "ray.wasm", "pw3_ray")
+    inst = mod.Instance({"Math": {"sin": math.sin}})
+    inst.run(0.5)
+    first = _frame(inst)
+    inst.run(1.5)
+    assert any(first) and _frame(inst) != first  # another time, another picture
+
+
+def test_maze_calls_back_for_random_sin_and_time(build_extension: Builder) -> None:
+    mod = build_extension(DATA / "maze.wasm", "pw3_maze")
+    ticks: list[int] = []
+    inst = mod.Instance({"Math": {"random": lambda: 0.25, "sin": math.sin}, "env": {"t": ticks.append}})
+    before = _frame(inst)
+    inst.run()
+    assert _frame(inst) != before

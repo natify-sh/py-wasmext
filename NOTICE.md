@@ -4,8 +4,10 @@
   [vshymanskyy/wasm2mpy](https://github.com/vshymanskyy/wasm2mpy) (`test/`), copied unchanged. wasm2mpy is MIT
   licensed; its licence text is below. The same goes for `tests/data/wasm2mpy/` (seven of them, built there from
   [wasm3/embedded-wasm-apps](https://github.com/wasm3/embedded-wasm-apps)).
-- `tests/data/pywasm3/coremark-minimal.wasm` is from the examples of [wasm3/pywasm3](https://github.com/wasm3/pywasm3)
+- `tests/data/pywasm3/*.wasm` are from the examples of [wasm3/pywasm3](https://github.com/wasm3/pywasm3)
   (`examples/wasm/`), copied unchanged; pywasm3 is MIT licensed (Copyright (c) 2019 Volodymyr Shymanskyy), like wasm2mpy above.
+- `tests/data/wasmhost/imports.wasm` is the module of `examples/imports.py` of
+  [py-wasmhost](https://github.com/ballistics-lab/py-wasmhost) written out as a file.
 - `poc/make.py` expects the sources of the `wasm2c` runtime (`wasm-rt.h`, `wasm-rt-impl.c`, `wasm-rt-mem-impl.c`, ...)
   from [WABT](https://github.com/WebAssembly/wabt) (Apache-2.0). They are not copied here.
 - The C that wasmext writes (`<name>_wasmext/`, which can end up in your sdist) contains the runtime sources of `wasm2c`

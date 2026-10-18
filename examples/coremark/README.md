@@ -22,7 +22,7 @@ setup(ext_modules=wasmize("src/coremark/*.wasm"))
 
 ## The WebAssembly module
 
-`_core.wasm` is in the repository; `build_wasm.py` makes it again (`uv run --group dev python build_wasm.py`, with
+`_core.wasm` is in the repository; `build_wasm.py` makes it again (`uv run --group wasm python examples/coremark/build_wasm.py` from the root of the repository, with
 `zig cc` from the `ziglang` package as `wasm32-freestanding`, no libc, no WASI). The module is the reference CoreMark
 (the files of EEMBC, unchanged) with the `barebones` port: it imports `wiring.millis` (the clock) and `wiring.print`,
 exports `setup` (one run of the benchmark), and prints the report of CoreMark: `Correct operation validated` when the

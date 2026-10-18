@@ -68,7 +68,8 @@ dev = [
     "ruff>=0.16.0",
     "setuptools>=77",
     "setuptools-scm>=8",
-    # build_wasm.py of the CoreMark example: 0.17.0 has no wheel for Windows, so 0.16 there (the tests do not need either)
-    "ziglang>=0.17.0; sys_platform != 'win32'",
-    "ziglang>=0.16.0,<0.17; sys_platform == 'win32'",
+]
+# only to make examples/coremark/src/coremark/_core.wasm again (build_wasm.py); not installed by `uv sync`/`uv run`
+wasm = [
+    "ziglang>=0.17.0",
 ]

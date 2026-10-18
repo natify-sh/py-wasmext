@@ -188,8 +188,9 @@ dev = [
     { name = "ruff" },
     { name = "setuptools" },
     { name = "setuptools-scm" },
-    { name = "ziglang", version = "0.16.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'win32'" },
-    { name = "ziglang", version = "0.17.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'win32'" },
+]
+wasm = [
+    { name = "ziglang" },
 ]
 
 [package.metadata]
@@ -202,30 +203,13 @@ dev = [
     { name = "ruff", specifier = ">=0.16.0" },
     { name = "setuptools", specifier = ">=77" },
     { name = "setuptools-scm", specifier = ">=8" },
-    { name = "ziglang", marker = "sys_platform != 'win32'", specifier = ">=0.17.0" },
-    { name = "ziglang", marker = "sys_platform == 'win32'", specifier = ">=0.16.0,<0.17" },
 ]
-
-[[package]]
-name = "ziglang"
-version = "0.16.0"
-source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "sys_platform == 'win32'",
-]
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/5d/f0/10a5203071af21bd649a0f97e29f70b710d6ad97b1ac1995a0bb30f51a71/ziglang-0.16.0-py3-none-win32.whl", hash = "sha256:f978c12b5337cf418034964de00023b7ec5ec484383dc97c6a6585f4a9105840", size = 100655765, upload-time = "2026-04-15T03:55:59.7Z" },
-    { url = "https://files.pythonhosted.org/packages/a6/3c/baff40b3fc8ab4e83530246a52e8f3a5186c3606562712dfb58483b04f79/ziglang-0.16.0-py3-none-win_amd64.whl", hash = "sha256:089a16a4eb5a2f45151993342f8fabad24ff1a0723dc146642895c29208a3939", size = 98676957, upload-time = "2026-04-15T03:56:05.934Z" },
-    { url = "https://files.pythonhosted.org/packages/f0/0b/bff28a4acc437cb7da705bffafd81fafbbd37a23144363cecc72becaef93/ziglang-0.16.0-py3-none-win_arm64.whl", hash = "sha256:e44a5271f7b72f7980017bb615823ed52e765f96b6482d93a2fd338cd53101bf", size = 94347646, upload-time = "2026-04-15T03:56:11.85Z" },
-]
+wasm = [{ name = "ziglang", specifier = ">=0.17.0" }]
 
 [[package]]
 name = "ziglang"
 version = "0.17.0"
 source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "sys_platform != 'win32'",
-]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/37/fa/54dd03b21fa790a85e1de39eeda9703386fe519490598abdb38894a1c3b3/ziglang-0.17.0-py3-none-macosx_13_0_arm64.whl", hash = "sha256:87274af689c4128051b26c80f6f676757e0a81c2fdc137fd8b5679e928e4bc4f", size = 100425967, upload-time = "2026-10-08T01:00:16.989Z" },
     { url = "https://files.pythonhosted.org/packages/e2/52/4f8a8f157d994482e501bb37e01f4883990b9848b9d8b809fe95e97aac6d/ziglang-0.17.0-py3-none-macosx_13_0_x86_64.whl", hash = "sha256:4d910f0e363ddb60a6b8ddb55235617797a8ccbcb6c5c7132a949d9f833eea42", size = 104418550, upload-time = "2026-10-08T01:00:25.486Z" },

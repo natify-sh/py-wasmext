@@ -1,7 +1,7 @@
 """Build src/coremark/_core.wasm from the CoreMark of EEMBC with `zig cc` (the `ziglang` package), as wasm32-freestanding.
 
-    uv run --group dev python build_wasm.py                    # clones https://github.com/eembc/coremark
-    uv run --group dev python build_wasm.py --coremark DIR     # a checkout you already have
+    uv run --group wasm python examples/coremark/build_wasm.py                 # clones https://github.com/eembc/coremark
+    uv run --group wasm python examples/coremark/build_wasm.py --coremark DIR  # a checkout you already have
 
 The port in port/ is the `barebones` port of CoreMark with the two imports of the module (wiring.millis, wiring.print)
 and one export (setup). The files of EEMBC are used as they are, except ee_printf.c, whose uart_send_char is ours,

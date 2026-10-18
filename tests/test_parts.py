@@ -108,6 +108,11 @@ def test_a_module_in_three_files_is_built_and_runs_the_same(tmp_path: Path, wabt
         "cm_w2c_2.c",
     ]
     assert not (c_dir / "cm_w2c.c").exists()
+    shared = (c_dir / "cm_w2c-impl.h").read_text(
+        "utf-8"
+    )  # the code the files share is made portable too (no _addcarry_u64 on x86)
+    assert "_addcarry_u64" in shared and "defined(_MSC_VER)\n  if (_addcarry_u64(" not in shared
+    assert "defined(_MSC_VER) && defined(_M_X64)" in shared
     assert _existing_parts(c_dir, "cm") == 3
     assert _run(project) == "0.6667"  # the same as the module in one file (tests/test_pywasm3.py)
     # another number of files: the old ones are gone, and it still runs

@@ -370,6 +370,9 @@ def _prepare(
         part.write_bytes(
             _marker(toolchain.version, wanted).encode() + _tail_call_locals(_portable_on_arm64(part.read_bytes()))
         )
+    shared = out_dir / f"{last}_w2c-impl.h"  # the code every file includes, when there are several
+    if shared.is_file():
+        shared.write_bytes(_portable_on_arm64(shared.read_bytes()))
     _write_if_changed(glue_c, (_marker(toolchain.version, wanted) + glue.source).encode("utf-8"))
     for src in toolchain.runtime.glob("wasm-rt*"):
         if src.suffix in (".c", ".h", ".inc"):

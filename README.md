@@ -121,9 +121,14 @@ platforms. It is **not published on PyPI yet**; until it is, build the wheel fro
 ## Development
 
 ```sh
+git clone https://github.com/natify-sh/py-wasmext
+cd py-wasmext
 uv sync
 uv run pytest        # builds real extensions: needs a C compiler
 ```
+
+The repository is [natify-sh/py-wasmext](https://github.com/natify-sh/py-wasmext) (issues and pull requests there); its dependency, the
+wasm2c and WABT tools as wheels, is [natify-sh/wabt-package](https://github.com/natify-sh/wabt-package).
 
 `poc/` is the hand-written proof of concept this started from, with its measurements ([poc/README.md](poc/README.md)).
 

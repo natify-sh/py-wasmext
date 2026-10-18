@@ -150,7 +150,7 @@ engine owns the objects), but the exports of one instance given as the imports o
 
 ```python
 a = A.Instance()
-b = B.Instance({"env": a})        # imports of module "env" are taken, by name, from the exports of a
+b = B.Instance({"env": a})  # imports of module "env" are taken, by name, from the exports of a
 ```
 
 **What wasm2c gives.** The C of a module that imports a global, a memory or a table keeps a *pointer* to it (`u32 *w2c_env_g`,

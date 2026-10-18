@@ -47,7 +47,7 @@ What each line says is tested (`tests/test_features.py`), not read from those do
 | 64-bit tables (the address type of tables, with memory64) | done inside the module | `3.0 memory64, a 64-bit table`; a table is not exported yet |
 | Exception handling, legacy `try`/`catch` | done | `3.0 exceptions`; an exception nobody catches is a `Trap`: `test_an_exception_nobody_catches_is_a_trap`. This form is not in the specification, but compilers still make it |
 | Exception handling, `try_table`, `throw_ref`, `exnref` | done | the form of the specification: `3.0 exceptions, try_table`, `3.0 exceptions, exnref (catch_all_ref and throw_ref)`; `exnref` in a signature and exported tags: not yet |
-| Relaxed SIMD | no (wasm2c) | `wasm2c` 1.0.42 itself aborts (signal 6, no message) on `i32x4.relaxed_trunc_f32x4_s`, so it is not a matter of headers; strict xfail `3.0 relaxed SIMD…`. Its README says the same: wasm2c is not ticked for relaxed SIMD |
+| Relaxed SIMD | no (wasm2c) | `wasm2c` 1.0.42 itself aborts (signal 6, no message) on `i32x4.relaxed_trunc_f32x4_s`, `f32x4.relaxed_madd`, `i8x16.relaxed_swizzle` and `i32x4.relaxed_laneselect` (the others were not tried; reported to WABT), so it is not a matter of headers; strict xfail `3.0 relaxed SIMD…`. Its README says the same: wasm2c is not ticked for relaxed SIMD |
 | Typed function references | no (wasm2c) | `wat2wasm --enable-function-references` makes the binary, `wasm2c` stops at `call_ref` (unexpected opcode 0x14); the README of WABT does not tick wasm2c for it; strict xfail `3.0 typed function references` |
 | Garbage collection | no (WABT) | WABT 1.0.42 does not read the instructions (`wat2wasm --enable-gc`: unexpected token `struct.get`), and `wasm2c --enable-gc` says it supports a limited set of features; strict xfail `3.0 garbage collection`. wasmext refuses the GC types in a module as well |
 | Branch hinting | done | a hint is a custom section; the text annotation `(@metadata.code.branch_hint …)` builds and runs, `wasm2c` ignores the hint: `3.0 branch hinting` |
@@ -99,7 +99,8 @@ What each line says is tested (`tests/test_features.py`), not read from those do
 | abi3 (cp311) and native (free-threaded) wheels | done | chosen by the interpreter that builds; wheel tag set automatically; `--abi3`/`--no-abi3`, `WASMEXT_LIMITED_API` |
 | `--no-guard-pages` | done | for processes with a limit on address space; about 30% slower on CoreMark |
 | WABT from the wabt-package | done | or a directory in `WASMEXT_WABT` |
-| Patch for MSVC on ARM64 | done | `_addcarry_u64` exists only on x64; a regex in `_wasmize.py` |
+| Patch for MSVC on ARM64 | done | `_addcarry_u64` exists only on x64; a regex in `_wasmize.py` (reported to WABT) |
+| Patch for `return_call` in a function with locals | done | wasm2c writes C that does not compile; a regex in `_wasmize.py` puts the type back, and passes a fixed wasm2c through (reported to WABT) |
 | Example: CoreMark | done | reference CoreMark of EEMBC, built with `zig cc` by `examples/coremark/build_wasm.py` |
 | simde headers | done | from the wabt-package, see SIMD above |
 | Pyodide wheel | done (locally) | `cibuildwheel --platform pyodide` on `examples/coremark`, Python 3.13: built (`…pyemscripten_2025_0_wasm32.whl`, 83 KB) and the 2 tests passed inside Pyodide; the `wasm2c` of the Linux x86-64 wheel of the wabt-package did the translation on the host, no Pyodide wheel of the wabt-package is needed |
@@ -122,7 +123,7 @@ a call from Python and of a call back into Python was not measured.
 
 ### Where the suite ran
 
-The whole suite (`pytest`, 161 tests and 4 expected failures at the time of writing), `ruff` and `pyright`:
+The whole suite (`pytest`, 183 tests and 4 expected failures at the time of writing), `ruff` and `pyright`:
 
 | Where | Python | C compiler | Evidence |
 | --- | --- | --- | --- |
@@ -131,13 +132,13 @@ The whole suite (`pytest`, 161 tests and 4 expected failures at the time of writ
 | macOS (macos-latest, Apple Silicon) | 3.11 | AppleClang | CI, the same |
 | windows-latest (x64) | 3.11 | MSVC | CI, the same |
 
-CI at commit `53483bb` (both workflows green on all of these; the first attempt of that run had no runners, the repository was private
+CI at commit `e880ee8` (both workflows green on all of these, 22 checks; the first attempt of that run had no runners, the repository was private
 and the 2000 free minutes were used up, and it was run again after it became public). The suite is not run on Linux ARM64, Windows ARM64, macOS
 Intel or the free-threaded build; only the example is (below).
 
 ### Platforms where a native extension was built and tested
 
-The example (CoreMark) built by cibuildwheel and its tests run on the wheel (`Example wheels`, commit `53483bb`, green on all seven):
+The example (CoreMark) built by cibuildwheel and its tests run on the wheel (`Example wheels`, commit `e880ee8`, green on all seven):
 
 | Platform | Evidence |
 | --- | --- |
@@ -163,6 +164,21 @@ The cibuildwheel configuration of the example is `build = "cp311-* cp314t-*"`.
 - Clang on Windows; gcc on macOS; Python 3.12 and later with the suite (CI uses 3.11).
 - Android and Pyodide in CI.
 - Ahead-of-time claims about speed are from one machine (see "Speed").
+
+### Examples of other projects
+
+The method (see the Plan) in numbers: the modules of these projects built and run by tests in this repository, all of them without a new feature.
+
+| Source | What | Where | Result |
+| --- | --- | --- | --- |
+| wasm2mpy `test/` | seven languages (AssemblyScript, C++, Rust, TinyGo, Virgil, WAT, Zig), the blinking program with `wiring` as the board; CoreMark is `examples/coremark` | `tests/test_wasm2mpy.py` | works. Rust's `loop` prints only the line ends (the module's own behaviour). Built by `build_extension`, not by `wasmize()` |
+| pywasm3 `00-fibonacci` | `i64` recursion | `tests/test_pywasm3.py` | works |
+| pywasm3 `01-coremark` | `coremark-minimal.wasm`, `env.clock_ms` | `tests/test_pywasm3.py` | works, since the repair of `return_call` (see "Build and distribution"); the file name has a hyphen, so the test names the module by hand (`wasmize()` refuses such a name with a clear message) |
+| pywasm3 `pygame-*` | `fire` (empty module name), `ray`, `maze` | `tests/test_pywasm3.py` | work: the frame is read from the memory, no window; `snake`, `dino`, `match3`, `metaball`, `chip8`, `plop-sim` not added yet (the same shape) |
+| pywasm3 `02-metered` | a limit of work for an interpreter | not applicable | AOT code has no such hook |
+| pywasm3 `03-asyncified`, `04-suspend-resume` | Asyncify, saving the state | not yet | not looked at; may need re-entry into the module from a host function |
+| py-wasmhost `imports.py` | several results of a host function, `i64`, an exception from the host | `tests/test_wasmhost.py` | works |
+| py-wasmhost `lua.wasm`, `coreutils.wasm`, `wasi_sh`, `wasmclang`, `pyodide`, `jslinux` | WASI programs, an engine in an engine | not yet | need WASI (19 and 32 imports); `coreutils.wasm` is 10.8 MB, which makes a very large C file |
 
 ## Known gaps
 
@@ -190,9 +206,9 @@ In this order (the first ones are small):
 5. ~~**CI**~~: the desktop matrix is green (see "Verified"). The other Linux architectures were checked by hand under QEMU (armv7l,
    riscv64, ppc64le, i686 work; s390x, big-endian, does not for modules with a memory export). Left: those in CI (a QEMU job). Windows x86 is in the matrix and green.
 6. Android and Pyodide in the CI matrix of the example (they build locally, see above); `pyproject.toml` configuration (no `setup.py`);
-   publishing on PyPI; reporting `_addcarry_u64` to WABT; `.wat` as a source (an idea, see "Build and distribution").
+   publishing on PyPI; `.wat` as a source (an idea, see "Build and distribution").
 7. `funcref`/`externref` in signatures (a design is needed first: who owns an `externref`); custom page sizes (`wasm2c` can, with a
-   flag); compatibility with the wasm3/pywasm3 examples; WASI (deferred).
+   flag); the rest of the examples of other projects (below); WASI (deferred).
 
 How to choose the next features: **on demand, not in advance**. The examples of [wasm2mpy](https://github.com/vshymanskyy/wasm2mpy)
 and [pywasm3](https://github.com/wasm3/pywasm3) are taken one by one, the simplest first, and added to this project as examples

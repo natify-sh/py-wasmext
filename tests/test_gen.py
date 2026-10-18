@@ -10,7 +10,7 @@ import pytest
 from wasmext import GenError, generate, mangle, parse
 
 from .conftest import DATA
-from .test_wasm_parser import F64, I32, V128, code, functype, leb, module, name, section, vec
+from .test_wasm_parser import EXTERNREF, F64, I32, code, functype, leb, module, name, section, vec
 
 HEADER_FUNC = section(3, vec(leb(0)))
 
@@ -56,22 +56,22 @@ def test_mangling_follows_wasm2c(wabt: Path, tmp_path: Path) -> None:
         assert f"{prefix}{mangle(text)}(" in header, text
 
 
-def test_a_v128_export_is_skipped_but_an_import_of_one_is_refused() -> None:
+def test_an_externref_export_is_skipped_but_an_import_of_one_is_refused() -> None:
     skipped = module(
-        section(1, vec(functype([V128], [V128]))),
+        section(1, vec(functype([EXTERNREF], [EXTERNREF]))),
         HEADER_FUNC,
         section(7, vec(name("vec") + b"\x00" + leb(0))),
         code(b"\x00\x20\x00\x0b"),
     )
     glue = generate(parse(skipped), "m")
-    assert glue.skipped == ["function 'vec' uses v128"]
+    assert glue.skipped == ["function 'vec' uses externref"]
     assert "Instance_f" not in glue.source.replace("Instance_free", "")
 
     refused = module(
-        section(1, vec(functype([V128], []))),
+        section(1, vec(functype([EXTERNREF], []))),
         section(2, vec(name("env") + name("f") + b"\x00" + leb(0))),
     )
-    with pytest.raises(GenError, match=r"env\.f uses v128"):
+    with pytest.raises(GenError, match=r"env\.f uses externref"):
         generate(parse(refused), "m")
 
 

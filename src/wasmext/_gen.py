@@ -13,7 +13,7 @@ attribute (read-only if the global is immutable); an imported immutable global i
 
 The C uses only the limited API (PEP 384, 3.11+), so defining `Py_LIMITED_API` builds an abi3 extension.
 
-Not yet: v128, reference types, imported memories/tables and mutable globals, exported tables.
+Not yet: reference types, imported memories/tables and mutable globals, exported tables.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ from ._wasm import FuncType, GlobalType, Import, Module, ValType
 
 __all__ = ["GenError", "Glue", "generate", "mangle"]
 
-_CTYPE: dict[ValType, str] = {"i32": "u32", "i64": "u64", "f32": "f32", "f64": "f64"}
+_CTYPE: dict[ValType, str] = {"i32": "u32", "i64": "u64", "f32": "f32", "f64": "f64", "v128": "v128"}
 # Python -> wasm value, wasm -> Python value, and the Py_BuildValue code with the cast it needs. An integer comes back
 # signed, as the JavaScript API, wasmtime and wasm3 give it (and a negative or too big one is taken, wrapped).
 _TO_WASM: dict[ValType, str] = {
@@ -33,18 +33,21 @@ _TO_WASM: dict[ValType, str] = {
     "i64": "(u64)PyLong_AsUnsignedLongLongMask({0})",
     "f32": "(f32)PyFloat_AsDouble({0})",
     "f64": "PyFloat_AsDouble({0})",
+    "v128": "wasmext_bytes_v128({0})",
 }
 _FROM_WASM: dict[ValType, str] = {
     "i32": "PyLong_FromLong((long)(int32_t){0})",
     "i64": "PyLong_FromLongLong((long long)(int64_t){0})",
     "f32": "PyFloat_FromDouble((double){0})",
     "f64": "PyFloat_FromDouble({0})",
+    "v128": "wasmext_v128_bytes({0})",
 }
 _BUILD: dict[ValType, tuple[str, str]] = {
     "i32": ("l", "(long)(int32_t){0}"),
     "i64": ("L", "(long long)(int64_t){0}"),
     "f32": ("d", "(double){0}"),
     "f64": ("d", "(double){0}"),
+    "v128": ("N", "wasmext_v128_bytes({0})"),
 }
 
 
@@ -242,6 +245,39 @@ def generate(module: Module, name: str) -> Glue:
     add("    else if (code != PY_ERROR_TRAP) PyErr_SetString(TrapError, wasm_rt_strerror(code));")
     add("}")
     add("")
+    uses_v128 = any("v128" in (*imp.func.params, *imp.func.results) for imp in imports) or any(
+        "v128" in (*f.params, *f.results) for _, f in funcs
+    )
+    uses_v128 = uses_v128 or any(g.type == "v128" for g in global_imports) or any(g.type == "v128" for _, g in globals_)
+    if uses_v128:
+        # a v128 is 16 bytes, in the order of WebAssembly memory (little-endian), as bytes or any bytes-like object of 16 bytes
+        add("#if defined(__BYTE_ORDER__) && defined(__ORDER_BIG_ENDIAN__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__")
+        add('#error "wasmext: v128 in a signature is not supported on big-endian hosts"')
+        add("#endif")
+        add("static int wasmext_is_v128(PyObject *o) {")
+        add("    Py_buffer view;")
+        add("    if (PyObject_GetBuffer(o, &view, PyBUF_SIMPLE) != 0) { PyErr_Clear(); return 0; }")
+        add("    int ok = view.len == 16;")
+        add("    PyBuffer_Release(&view);")
+        add("    return ok;")
+        add("}")
+        add("static v128 wasmext_bytes_v128(PyObject *o) {")
+        add("    v128 out;")
+        add("    memset(&out, 0, sizeof out);")
+        add("    Py_buffer view;")
+        add("    if (PyObject_GetBuffer(o, &view, PyBUF_SIMPLE) != 0) return out;")
+        add("    if (view.len != 16) {")
+        add('        PyErr_Format(PyExc_ValueError, "a v128 is 16 bytes, got %zd", (Py_ssize_t)view.len);')
+        add("    } else {")
+        add("        memcpy(&out, view.buf, 16);")
+        add("    }")
+        add("    PyBuffer_Release(&view);")
+        add("    return out;")
+        add("}")
+        add("static PyObject *wasmext_v128_bytes(v128 v) {")
+        add("    return PyBytes_FromStringAndSize((const char *)&v, 16);")
+        add("}")
+        add("")
     # what a call of WebAssembly code must do about the jump buffer
     add(
         "/* a trap from a signal handler (an access past the guard pages) leaves the signal blocked: sigsetjmp saves no mask, for speed */"
@@ -326,7 +362,7 @@ def generate(module: Module, name: str) -> Glue:
         add("    if (r == NULL) wasm_rt_trap(PY_ERROR_TRAP);")
         if several:
             n = len(func.results)
-            what = _c_string(f"{imp.module}.{imp.field}() must return a tuple of {n} numbers")
+            what = _c_string(f"{imp.module}.{imp.field}() must return a tuple of {n} values")
             add(f"    {ret} v = {{0}};")
             add(f"    if (!PyTuple_Check(r) || PyTuple_Size(r) != {n}) {{")
             add("        Py_DECREF(r);")
@@ -427,8 +463,11 @@ def generate(module: Module, name: str) -> Glue:
             )
             add(f"    if (self->host{imp.host}.fn[{imp.slot}] == NULL) {{ Py_DECREF(self); return NULL; }}")
         for g in global_imports:
-            number = "PyLong_Check(v)" if g.type in ("i32", "i64") else "(PyLong_Check(v) || PyFloat_Check(v))"
-            what = "an int" if g.type in ("i32", "i64") else "a number"
+            if g.type == "v128":
+                number, what = "wasmext_is_v128(v)", "16 bytes"
+            else:
+                number = "PyLong_Check(v)" if g.type in ("i32", "i64") else "(PyLong_Check(v) || PyFloat_Check(v))"
+                what = "an int" if g.type in ("i32", "i64") else "a number"
             add("    {")
             add(f"        PyObject *v = lookup_import(imports, {_c_string(g.module)}, {_c_string(g.field)}, 0);")
             add("        if (v == NULL) { Py_DECREF(self); return NULL; }")
@@ -637,9 +676,9 @@ def generate(module: Module, name: str) -> Glue:
     return Glue("\n".join(w) + "\n", skipped, _stub(last, funcs, memories, globals_, module.imports))
 
 
-_PY_TYPE: dict[ValType, str] = {"i32": "int", "i64": "int", "f32": "float", "f64": "float"}
+_PY_TYPE: dict[ValType, str] = {"i32": "int", "i64": "int", "f32": "float", "f64": "float", "v128": "bytes"}
 # wasm2c returns several results in a `struct wasm_multi_<codes>` whose members are `<code><position>`.
-_MULTI_CODE: dict[ValType, str] = {"i32": "i", "i64": "j", "f32": "f", "f64": "d"}
+_MULTI_CODE: dict[ValType, str] = {"i32": "i", "i64": "j", "f32": "f", "f64": "d", "v128": "o"}
 
 
 def _result_type(func: FuncType) -> str:

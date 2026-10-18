@@ -21,7 +21,7 @@ Status: **done** (works, tested) · **partly** (see the note) · **not yet** (pl
 | Reference types in a signature (`funcref`, `externref`) | not yet | the function is left out (export) or the module is refused (import) |
 | Mutable globals | done | exported as attributes, see below |
 | SIMD (`v128`), inside the module | done | the C of `wasm2c` includes simde; the wabt-package (1.0.42.0b2 and later) ships the headers (`wabt_package.include_dir()`), and wasmext adds that directory to the include path of the extension when the C includes `simde/` (`_simde_include`; a tree that ships its C and has no SIMD still builds without the wabt-package). `2.0 SIMD, inside the module`, `test_a_module_with_simd_gets_the_include_directory_of_simde`. Native instructions are used only if the compiler flags allow, so a baseline x86-64 wheel runs SIMD in portable code |
-| `v128` in a signature | not yet | needs a Python type (proposal: `bytes` of 16) |
+| `v128` in a signature | done | 16 bytes in the order of WebAssembly memory: `bytes` (or any bytes-like object of 16 bytes) in, `bytes` out; a wrong length is a `ValueError`, another type a `TypeError`. In exported and imported functions, multi-value, exported globals and imported immutable globals. Not on big-endian hosts (`#error`; the byte order of a v128 there is not checked). `test_v128_in_signatures_globals_and_imports` |
 | Relaxed SIMD | no (wasm2c) | `wasm2c` 1.0.42 itself aborts (signal 6, no message) on `i32x4.relaxed_trunc_f32x4_s`, so it is not a matter of headers; strict xfail `3.0 relaxed SIMD…` |
 | Tail calls | done | `3.0 tail calls` |
 | Extended constants | done | `3.0 extended constants` |
@@ -123,7 +123,7 @@ In this order (the first ones are small):
 1. ~~The `abort()` of the runtime~~ → `MemoryError`: done. The copy of `wasm-rt-mem-impl-helper.inc` gets a trap (code `0x7001`) in place of the
    four `abort()` of `wasm_rt_allocate_memory` (and loses the `perror` lines); the glue raises `MemoryError`. The patch fails loudly if
    the function is not what it expects, and is part of the recipe that makes the C be generated again.
-2. ~~**SIMD**~~: the headers part is done (see above). Left: `v128` ↔ `bytes` of 16 in signatures. Relaxed SIMD stays out (wasm2c aborts).
+2. ~~**SIMD**~~: done, including `v128` ↔ `bytes` of 16 in signatures. Relaxed SIMD stays out (wasm2c aborts).
 3. **Shared objects**, in this order:
    1. `Global`: an object with `value` (read-write if mutable) that an instance imports, and exported globals that can be passed on.
       This is the first because the runtime of wasm2c already asks the host for a pointer to the value of an imported global, so the

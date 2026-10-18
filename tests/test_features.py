@@ -444,3 +444,64 @@ def test_a_trap_from_a_signal_handler_can_happen_again(tmp_path: Path, wabt: Pat
     ran = subprocess.run([sys.executable, "-c", code], cwd=tmp_path, capture_output=True, text=True, check=False)
     assert ran.returncode == 0, ran.stderr[-400:]
     assert ran.stdout.split() == ["trap", "trap", "trap", "7"]
+
+
+# v128 in a signature is 16 bytes in the order of WebAssembly memory: bytes (or any bytes-like object) in, bytes out.
+_V128_WAT = """
+(module
+  (import "env" "twice" (func $twice (param v128) (result v128)))
+  (import "env" "seed" (global $seed v128))
+  (global (export "acc") (mut v128) (v128.const i32x4 1 2 3 4))
+  (func (export "double") (param v128) (result v128) local.get 0 local.get 0 i32x4.add)
+  (func (export "pair") (param i32 v128) (result v128 i32) local.get 1 local.get 0)
+  (func (export "via_import") (param v128) (result v128) local.get 0 call $twice)
+  (func (export "seed_back") (result v128) global.get $seed))
+"""
+
+
+def test_v128_in_signatures_globals_and_imports(tmp_path: Path, wabt: Path) -> None:
+    _build_pkg(tmp_path, wabt, _V128_WAT)
+    code = """
+import struct
+import pkg.m as m
+
+lanes = lambda *v: struct.pack('<4i', *v)
+seen = []
+def twice(b):
+    seen.append(type(b).__name__)
+    return lanes(*(2 * x for x in struct.unpack('<4i', b)))
+
+i = m.Instance({'env': {'twice': twice, 'seed': lanes(9, 8, 7, 6)}})
+print(i.double(lanes(1, 2, 3, 4)) == lanes(2, 4, 6, 8))
+print(i.double(bytearray(lanes(5, 5, 5, 5))) == lanes(10, 10, 10, 10))   # any bytes-like object
+print(i.pair(7, lanes(1, 1, 1, 1)) == (lanes(1, 1, 1, 1), 7))
+print(i.via_import(lanes(1, 2, 3, 4)) == lanes(2, 4, 6, 8), seen)
+print(i.seed_back() == lanes(9, 8, 7, 6))
+print(i.acc == lanes(1, 2, 3, 4))
+i.acc = lanes(0, 0, 0, 1)
+print(i.acc == lanes(0, 0, 0, 1))
+for bad, exc in ((b'short', ValueError), (7, TypeError), ('0123456789abcdef', TypeError)):
+    try:
+        i.double(bad)
+    except exc:
+        print('ok', exc.__name__)
+try:
+    m.Instance({'env': {'twice': twice, 'seed': b'xx'}})
+except m.LinkError:
+    print('LinkError')
+"""
+    ran = subprocess.run([sys.executable, "-c", code], cwd=tmp_path, capture_output=True, text=True, check=False)
+    assert ran.returncode == 0, ran.stderr[-600:]
+    assert ran.stdout.splitlines() == [
+        "True",
+        "True",
+        "True",
+        "True ['bytes']",
+        "True",
+        "True",
+        "True",
+        "ok ValueError",
+        "ok TypeError",
+        "ok TypeError",
+        "LinkError",
+    ]

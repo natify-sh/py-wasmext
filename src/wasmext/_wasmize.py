@@ -174,7 +174,7 @@ def _memory_error_not_abort(inc_source: bytes) -> bytes:
 def _simde_include(w2c_c: Path) -> tuple[str, ...]:
     """The directory with `simde/` when the C of the module includes it, else nothing. It is looked for in the toolchain
     only then, so a tree that ships its C and has no SIMD still builds without the wabt-package."""
-    if not _USES_SIMDE.search(w2c_c.read_bytes()):
+    if not any(_USES_SIMDE.search(p.read_bytes()) for p in (w2c_c, w2c_c.with_suffix(".h")) if p.is_file()):
         return ()
     headers = find_toolchain().include
     if headers is None or not (headers / "simde").is_dir():

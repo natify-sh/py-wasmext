@@ -187,12 +187,12 @@ def test_inspect_says_what_a_module_has_and_what_is_left_out(tmp_path: Path) -> 
 
 
 def test_inspect_exits_nonzero_for_what_cannot_be_wrapped(tmp_path: Path) -> None:
-    # (type (func (param v128))) (import "e" "f" (func (type 0)))
-    module = b"\0asm\1\0\0\0" + bytes([1, 5, 1, 0x60, 1, 0x7B, 0]) + bytes([2, 7, 1, 1, 0x65, 1, 0x66, 0, 0])
+    # (type (func (param externref))) (import "e" "f" (func (type 0)))
+    module = b"\0asm\1\0\0\0" + bytes([1, 5, 1, 0x60, 1, 0x6F, 0]) + bytes([2, 7, 1, 1, 0x65, 1, 0x66, 0, 0])
     (tmp_path / "v.wasm").write_bytes(module)
     (tmp_path / "junk.wasm").write_bytes(b"not wasm")
     bad = wasmext(tmp_path, None, "inspect", "v.wasm")
-    assert bad.returncode == 1 and "e.f" in bad.stdout and "uses v128" in bad.stdout
+    assert bad.returncode == 1 and "e.f" in bad.stdout and "uses externref" in bad.stdout
     assert "result: cannot be wrapped" in bad.stdout
     junk = wasmext(tmp_path, None, "inspect", "junk.wasm", "missing.wasm")
     assert junk.returncode == 1 and "not a module wasmext can read" in junk.stdout and "missing.wasm" in junk.stdout

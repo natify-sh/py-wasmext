@@ -215,10 +215,10 @@ the first argument) instead of a Python callable.
 `instance.__exports__` is the dict of those references, and an instance given as a whole shelf means its `__exports__`:
 
 ```python
-B.Instance({"env": a})                                                  # a shelf from an instance: all of it
-B.Instance({"env": {"log": print}})                                     # a dict: by keys, as now
-B.Instance({"env": {**a.__exports__, "log": print}})                    # everything of a, and log from Python (the later key wins)
-B.Instance({"env": {"counter": a.__exports__["counter"], "log": print}})   # one export of a, and log from Python
+B.Instance({"env": a})  # a shelf from an instance: all of it
+B.Instance({"env": {"log": print}})  # a dict: by keys, as now
+B.Instance({"env": {**a.__exports__, "log": print}})  # everything of a, and log from Python (the later key wins)
+B.Instance({"env": {"counter": a.__exports__["counter"], "log": print}})  # one export of a, and log from Python
 ```
 
 `a.counter` is the value, to use the module from Python (a function is called, a global is its number, a memory is a memoryview);

@@ -838,7 +838,7 @@ def test_wasi_files_work_on_every_platform_of_ci(tmp_path: Path, wabt: Path) -> 
     assert built.returncode == 0, built.stderr[-800:]
     world = tmp_path / "world"
     (world / "sub").mkdir(parents=True)
-    (world / "hello.txt").write_text("hello, files\n", encoding="utf-8")
+    (world / "hello.txt").write_bytes(b"hello, files\n")
     code = f"""
 import pkg.m
 i = pkg.m.Instance(wasi={{'preopens': {{'/': {str(world)!r}}}}})

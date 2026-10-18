@@ -42,9 +42,9 @@
 #ifndef WASMEXT_WASI_PYTHON_FS
 #define WASMEXT_WASI_PYTHON_FS 0
 #endif
+#include <stdlib.h>
 #if !WASMEXT_WASI_PYTHON_FS
 #include <dirent.h>
-#include <stdlib.h>
 #include <sys/stat.h>
 #endif
 #include "wasm-rt.h"
@@ -1484,7 +1484,6 @@ static inline uint32_t wasi_be_list(wasmext_wasi *w, wasi_entry *e, wasi_dirlist
         if (wasi_dirlist_add(list, entry->d_name, (uint64_t)entry->d_ino, type) < 0) rc = WASI_E_NOMEM;
     }
     closedir(d);
-    if (rc == WASI_E_SUCCESS && list->count > 1) qsort(list->items, list->count, sizeof(wasi_dirent), wasi_dirent_order);
     return rc;
 }
 #endif
@@ -1542,6 +1541,7 @@ static inline uint32_t wasi_fd_readdir(void *s, uint32_t fd, uint32_t buf, uint3
             wasi_dirlist_free(list);
             return rc;
         }
+        if (list->count > 1) qsort(list->items, list->count, sizeof(wasi_dirent), wasi_dirent_order);  /* the same order for both ways */
         wasi_dirlist_free(e->list);
         e->list = list;
     }

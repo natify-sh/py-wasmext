@@ -25,8 +25,8 @@ DIR_RIGHTS = (1 << 13) | (1 << 14) | (1 << 18) | (1 << 21)  # path_open, fd_read
 def world(tmp_path: Path) -> Path:
     root = tmp_path / "world"
     (root / "sub").mkdir(parents=True)
-    (root / "hello.txt").write_text("hello, files\n", encoding="utf-8")
-    (root / "sub" / "deep.txt").write_text("deep", encoding="utf-8")
+    (root / "hello.txt").write_bytes(b"hello, files\n")
+    (root / "sub" / "deep.txt").write_bytes(b"deep")
     (tmp_path / "outside.txt").write_text("secret", encoding="utf-8")
     return root
 

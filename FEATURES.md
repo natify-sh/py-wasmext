@@ -80,8 +80,8 @@ What each line says is tested (`tests/test_features.py`), not read from those do
 | Imported memories | done | the memory of another instance: `Instance({"env": a})`, `{"memory": a.memory}` (the memoryview stands for its memory) or `a["memory"]`; one buffer, `grow` is seen by both; checked: size (at least the minimum, at most the maximum), memory64, guard pages on both sides or neither (`LinkError`): `test_instances_share_a_memory`, `test_linking_a_memory_checks_its_size_and_kind`. A shared (threads) memory is refused |
 | Imported tables | not yet | refused when the extension is made |
 | Shared global between instances | done | one variable used by several instances, through the exports of an instance (design below); a global made by the host with no module behind it: not yet |
-| Shared `Memory` and `Table` objects | not yet | the same design problem as for `Global` |
-| Recognising the objects of another extension | not yet | the design problem: every extension has its own types, so an instance of one cannot take a `Global` made by another unless there is a common way to tell them apart (a capsule with a tag and the type, for example) |
+| Shared memory between instances | done | one buffer used by several instances (see "Imported memories"); a memory made by the host with no module behind it, and a table: not yet |
+| Recognising the objects of another extension | done | a private capsule `wasmext.export.v1` with a versioned struct, see "Recognising an instance of another extension" |
 | Imported functions from another instance | done | `Instance({"env": a})`, `{"add": a.add}` (a bound method stands for its export) or `a["add"]`: the call is direct, in C, without Python in between; the signature is checked (`LinkError`); a trap inside the called function is the `Trap` of its module, raised through the caller, and both instances go on: `test_instances_call_each_others_functions_directly`, `test_linking_a_function_checks_its_signature` |
 | `instance["name"]`, `instance.__exports__` | done | the references to the exports, for linking to another instance (a private capsule `wasmext.export.v1`); `{"env": a}` gives a whole shelf. See "How the imports are given" |
 | Traps | done | `Trap` (a `RuntimeError`), the instance stays usable; `LinkError` for bad imports |
@@ -199,9 +199,9 @@ In this order (the first ones are small):
    four `abort()` of `wasm_rt_allocate_memory` (and loses the `perror` lines); the glue raises `MemoryError`. The patch fails loudly if
    the function is not what it expects, and is part of the recipe that makes the C be generated again.
 2. ~~**SIMD**~~: done, including `v128` ↔ `bytes` of 16 in signatures. Relaxed SIMD stays out (wasm2c aborts).
-3. **Linking instances** (the design below; globals, functions and memories are built, [`examples/link`](examples/link) shows them; tables are not): the imports of one instance
-   taken from the exports of another, in this order: globals (this also gives the imported mutable globals), memories,
-   functions, tables. A global, memory or table made by the host with no module behind it is postponed.
+3. **Linking instances**: done for globals, memories and functions (the design below; [`examples/link`](examples/link) shows them). Left: tables
+   (they first have to be exposed as an object, then linked: imported and exported tables are both refused now). A global, memory or
+   table made by the host with no module behind it is postponed.
 4. **Threads**: `--enable-threads`, C11 atomics (and MSVC), a shared memory, `wasm_rt_init_thread` per thread. After 3, since the
    shared memory is a memory given to several instances, and the link table must not rely on plain reads of a mutable global.
 5. ~~**CI**~~: the desktop matrix is green (see "Verified"). The other Linux architectures were checked by hand under QEMU (armv7l,
@@ -260,22 +260,25 @@ could give `log`, `a` wins silently when the types agree; the dict with the expl
 Left out for now: a list of sources (`{"env": [a, {"log": print}]}`); a wrapper object for a function that is both callable and a
 reference (it cannot be done for a global or a memory, whose attribute has to be the value, and costs a type and a cache); instead,
 when functions are linked, a bound method of an instance (`{"add": a.add}`) can be accepted as the reference at no cost on a call.
-Names of exports that the module does not import are ignored. Built so far: globals (also immutable ones), functions, memories, `a["name"]`,
-`__exports__` and the shelf from an instance; tables next (they first have to be exposed as an object).
+Names of exports that the module does not import are ignored. Built: globals (also immutable ones), functions, memories, `a["name"]`,
+`__exports__` and the shelf from an instance. Tables are not (they first have to be exposed as an object).
 
 **Recognising an instance of another extension.** The types are not the same objects in two extensions, so `isinstance` cannot
-tell. The instance carries a capsule (a `PyCapsule`, usable in the limited API) with a tag and a version, which points to a
-table of the exports: for each export its kind, value type, mutability and the pointer, and for a function the C function and
-the instance pointer. The format is a contract between versions of wasmext, so it is versioned from the first day; an unknown
-version is a `LinkError`, not a guess.
+tell. What `instance['name']` and `instance.__exports__` hold is a capsule (a `PyCapsule`, usable in the limited API) named
+`wasmext.export.v1`, one for each export, that points to a record `wasmext_export`: `size`, `version` (1), `kind` (function, table,
+memory, global), `type`, `flags`, the owner (the instance, which a reader that keeps the address keeps alive) and `address`; for a
+function also the `instance` pointer and the `signature` (`"ii>i"`: `i j f d o`). For a global `type` is the value type of the binary
+format (`0x7F` is i32) and bit 0 of `flags` says it is mutable; for a memory `type` is `sizeof(wasm_rt_memory_t)` and `flags` has memory64
+(bit 1) and guard pages (bit 2). A function is called as `result f(void *instance, parameters..., int *trapped)`, which catches the
+trap with the jump buffer of the exporter, so each extension handles its own traps. The format is a contract between versions of wasmext,
+so it is versioned from the first day; an unknown version, or a `size` smaller than the reader knows, is a `LinkError`, not a guess.
 
 **Keeping the contract still.** Changing it means a new `v2` and every extension built before it fails to link with the new
-ones, so it is made to change rarely: the table begins with its own `size`, and new fields are only appended (a reader checks
+ones, so it is made to change rarely: the record begins with its own `size`, and new fields are only appended (a reader checks
 `size` before it reads one, so an old reader ignores them and a new one knows an old table has not got them); the entries are a
 fixed-size record with a `kind` and room for flags; the pointers are those of wasm2c (`u32 *`, `wasm_rt_memory_t *`,
-`wasm_rt_funcref_table_t *`), so wasmext adds nothing of its own to what must stay the same. The name `wasmext.link.v1`
-changes only if a field is *removed or changes meaning*, which should never be needed. What the table holds is decided
-before it is built, from what the three kinds of import need, and written down here first.
+`wasm_rt_funcref_table_t *`), so wasmext adds nothing of its own to what must stay the same. The name `wasmext.export.v1`
+changes only if a field is *removed or changes meaning*, which should never be needed.
 
 **Checks, all at instantiation, all `LinkError`**: the export exists; it has the kind the import asks for (a function is not a
 global); the types are equal (`i32` ≠ `i64`, mutable ≠ immutable, the signature of a function); for a memory, the limits of the

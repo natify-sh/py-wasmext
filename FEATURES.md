@@ -353,7 +353,7 @@ when the extension is made" for them); 2. memories; 3. functions; 4. tables.
 **Decided**: the forms above; the format of the link table (capsule) is private, documented and
 versioned (not a promise to others) until a second user of it exists.
 
-## Design: WASI (decided; stage 1 is built, see the end of this section)
+## Design: WASI
 
 **Decided.** WASI is part of wasmext and is compiled into the native module; a built module needs nothing at run time (not wasmext
 either), so a shared library that modules call into was rejected. The code is hand-written C, **header only**, one header for each interface the module

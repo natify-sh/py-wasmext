@@ -93,6 +93,37 @@ method `a.add` and the `memoryview` are accepted as references too). What does n
 `LinkError`. A mutable global can only be shared as a reference; a number given for it is a `LinkError`. Tables cannot be linked yet.
 [`examples/link`](examples/link) is a package of two modules that use each other; the design is in [FEATURES.md](FEATURES.md).
 
+### WASI programs
+
+A module that imports `wasi_snapshot_preview1` (or its first snapshot, `wasi_unstable`) gets those calls from wasmext, compiled into
+the extension (C in `wasi_*.h` that the glue includes: the built module needs nothing of wasmext when it runs). `Instance()` needs no
+imports, and the program is started as an export:
+
+```python
+import mypkg.lua  # lua.wasm, a command built for WASI
+
+lua = mypkg.lua.Instance(wasi={"args": ["lua", "/hello.lua"], "preopens": {"/": "scripts"}, "readonly": True})
+try:
+    lua._start()
+except mypkg.lua.WasiExit as exit:  # proc_exit(code): the instance stays usable
+    print("exit code", exit.code)
+```
+
+`wasi=` is optional and takes `args` (default: the name of the module), `env` (default: empty, the environment of the host is not
+passed on), `stdin`, `stdout`, `stderr` (default: `sys.stdin`, `sys.stdout`, `sys.stderr`, so that `print` and a capture in a test or a
+notebook keep their order; or bytes / an object with `read` / `write`), `preopens` (`{name the program sees: directory of the host}`;
+default: none, the program sees no files) and `readonly` (`True`, a name or a list of names of the preopens that cannot be changed). A call
+can be replaced as any import can: `Instance({"wasi_snapshot_preview1": {"clock_time_get": my_clock}})`; what you give wins, call by call.
+
+A program is kept inside the directories it was given: `..` out of a directory, an absolute name, or a symbolic link that leads out is
+`ENOTCAPABLE`. A directory the program opens is a capability for that directory only. A program built with an old libc finds a relative path
+only through a preopen named `"."`.
+
+Built so far: arguments, environment, clocks, random bytes, `proc_exit`, the standard streams, and **reading** files and directories
+(`path_open`, `fd_read`, `fd_seek`, `fd_filestat_get`, `fd_readdir`, ...). Writing files and the rest of the calls answer `ENOSYS` for now.
+On POSIX the file calls go straight to the system (`openat`), on Windows through Python (slower). WASI 0.2 and 0.3 (components) are not
+supported: build for `wasm32-wasip1`. See [FEATURES.md](FEATURES.md#design-wasi).
+
 ### Large modules
 
 The C that `wasm2c` writes is about 13 times the size of the module, and one file of millions of lines is a very long job for a

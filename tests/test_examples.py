@@ -80,3 +80,23 @@ def test_the_coremark_sdist_directory_builds_without_wasm2c(tmp_path: Path, wabt
         capture_output=True,
     )
     assert any(p.name.startswith("_core.") for p in (copy / "src" / "coremark").iterdir())
+
+
+def test_link_example_modules_use_each_other(tmp_path: Path, wabt: Path) -> None:
+    project = build_example("link", tmp_path, wabt)
+    out = subprocess.run(
+        [sys.executable, "-m", "linkdemo"],
+        cwd=project,
+        env={**os.environ, "PYTHONPATH": str(project / "src")},
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    assert "the variable of counter: 2" in out and "starts with: Hello" in out, out
+    subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", str(project / "tests")],
+        cwd=project,
+        env={**os.environ, "PYTHONPATH": str(project / "src")},
+        check=True,
+        capture_output=True,
+    )

@@ -182,7 +182,7 @@ In this order (the first ones are small):
    four `abort()` of `wasm_rt_allocate_memory` (and loses the `perror` lines); the glue raises `MemoryError`. The patch fails loudly if
    the function is not what it expects, and is part of the recipe that makes the C be generated again.
 2. ~~**SIMD**~~: done, including `v128` ↔ `bytes` of 16 in signatures. Relaxed SIMD stays out (wasm2c aborts).
-3. **Linking instances** (the design below, nothing of it is built; two questions of it are open): the imports of one instance
+3. **Linking instances** (the design below; globals, functions and memories are built, [`examples/link`](examples/link) shows them; tables are not): the imports of one instance
    taken from the exports of another, in this order: globals (this also gives the imported mutable globals), memories,
    functions, tables. A global, memory or table made by the host with no module behind it is postponed.
 4. **Threads**: `--enable-threads`, C11 atomics (and MSVC), a shared memory, `wasm_rt_init_thread` per thread. After 3, since the
@@ -193,6 +193,10 @@ In this order (the first ones are small):
    publishing on PyPI; reporting `_addcarry_u64` to WABT; `.wat` as a source (an idea, see "Build and distribution").
 7. `funcref`/`externref` in signatures (a design is needed first: who owns an `externref`); custom page sizes (`wasm2c` can, with a
    flag); compatibility with the wasm3/pywasm3 examples; WASI (deferred).
+
+How to choose the next features: **on demand, not in advance**. The examples of [wasm2mpy](https://github.com/vshymanskyy/wasm2mpy)
+[pywasm3](https://github.com/wasm3/pywasm3) and [py-wasmhost](https://github.com/ballistics-lab/py-wasmhost) are taken one by one, the simplest first, and added to this project as examples
+(or tests); a feature is built when the next example needs it, and not before.
 
 ## Design: linking instances (globals, functions and memories are built; tables are not)
 

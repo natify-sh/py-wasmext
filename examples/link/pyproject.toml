@@ -1,0 +1,25 @@
+[build-system]
+# wasmext turns the .wasm files into extensions (see setup.py); it brings wasm2c with it (wabt-package).
+requires = ["setuptools>=77", "wasmext"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wasmext-example-link"
+version = "0.1.0"
+description = "Two WebAssembly modules, turned into native CPython extensions by wasmext, that use each other's memory, variable and function"
+requires-python = ">=3.11"
+dependencies = []
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+packages = ["linkdemo"]
+# The generated C and the .wasm are the sources of the extensions, not part of them.
+include-package-data = false
+
+[tool.setuptools.package-data]
+linkdemo = ["py.typed", "*.pyi"]
+
+[tool.cibuildwheel]
+build = "cp311-* cp314t-*"
+test-requires = "pytest"
+test-command = "pytest {package}/tests"

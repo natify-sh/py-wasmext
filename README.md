@@ -75,6 +75,24 @@ the extensions in place, `-b` under `build/` (`wasmext --help`).
 methods of `Instance` and which are left out, and why. It writes nothing and needs no `wasm2c`; the exit status is 1 for a module
 that cannot be wrapped.
 
+### Linking instances
+
+An instance can take its imports from the exports of another one, with no Python in between: a function is then called
+as a C function, a memory and a global are the very same ones. This works between modules of separate extensions.
+
+```python
+a = mypkg.lib.Instance()
+b = mypkg.app.Instance({"env": a})  # the whole shelf: everything that `a` exports, under its names
+b = mypkg.app.Instance({"env": {**a.__exports__, "log": print}})  # or by names, with what only Python can give
+b = mypkg.app.Instance({"env": {"add": a.add, "counter": a["counter"], "memory": a.memory}})
+```
+
+The rule: **attributes use, items link**. `a.add(1, 2)`, `a.counter` (a number; `a.counter = 5` writes it) and `a.memory` (a
+`memoryview`) are for you; `a['counter']` and `a.__exports__` (a dict of references) are what another instance imports (a bound
+method `a.add` and the `memoryview` are accepted as references too). What does not fit (another kind, type, signature, size) is a
+`LinkError`. A mutable global can only be shared as a reference; a number given for it is a `LinkError`. Tables cannot be linked yet.
+[`examples/link`](examples/link) is a package of two modules that use each other; the design is in [FEATURES.md](FEATURES.md).
+
 ### Native or abi3 wheels
 
 The interpreter that builds decides, as it does in Cython: where it has a stable ABI (CPython 3.11 and later) the extension is

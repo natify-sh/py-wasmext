@@ -210,20 +210,22 @@ of the exporter to the importer: one value, one memory, one table, no copy, no P
 `w2c_env_f(struct w2c_env *, args)`: the glue can call the exported function of the other module itself (its instance pointer is
 the first argument) instead of a Python callable.
 
-**How the imports are given (decided).** Three forms, and what is passed decides how it works:
+**How the imports are given (decided).** A shelf is a dict, and a value in it can be a reference to an export of another instance.
+An instance is also a mapping of its exports (`keys()` and `a["name"]`), so it unpacks into a dict as in JavaScript's spread:
 
 ```python
-B.Instance({"env": a})                                                # a shelf from an instance: all of it
-B.Instance({"env": {"log": print}})                                   # a dict: by keys, as now
-B.Instance({"env": {"counter": a.export("counter"), "log": print}})   # a dict where one value is an export of a
+B.Instance({"env": a})                                                 # a shelf from an instance: all of it (short for {**a})
+B.Instance({"env": {"log": print}})                                    # a dict: by keys, as now
+B.Instance({"env": {**a, "log": print}})                               # everything of a, and log from Python (the later key wins)
+B.Instance({"env": {"counter": a["counter"], "log": print}})           # one export of a, and log from Python
 ```
 
-`a.export("name")` is a value for a dict like `print` or a number: it says "this one is that export of `a`". It is needed because
-`a.counter` cannot stand for it (for a global it is the number, not the variable). Almost every compiler puts all its imports on one
-shelf, `env`, the host functions (print, clock) and the ones another module could give, so the third form is the common one for
-real modules, and the first is its short case. A list of sources (`{"env": [a, {"log": print}]}`) was considered and left out.
-The order of building: the first form with globals, then the same for memories, functions, tables; `export()` alongside the first
-form, since both ask the same of the link table.
+`a["counter"]` is the reference (there is no `export()` method): `a.counter` cannot stand for it, for a global it is the number and not
+the variable. Almost every compiler puts all its imports on one shelf, `env`, the host functions (print, clock) and the ones another
+module could give, so the dict forms are the common ones for real modules. A list of sources (`{"env": [a, {"log": print}]}`) was
+considered and left out. Names of exports that `B` does not import are ignored. An export called `keys` is not an attribute of the
+instance (it would hide `keys()`); `a["keys"]` reaches it. Order of building: the first form with globals, then memories, functions,
+tables; the mapping (`keys()`, `a[...]`) with the first form, since both ask the same of the link table.
 
 **Recognising an instance of another extension.** The types are not the same objects in two extensions, so `isinstance` cannot
 tell. The instance carries a capsule (a `PyCapsule`, usable in the limited API) with a tag and a version, which points to a

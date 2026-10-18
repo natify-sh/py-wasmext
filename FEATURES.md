@@ -138,7 +138,7 @@ Intel or the free-threaded build; only the example is (below).
 
 ### Platforms where a native extension was built and tested
 
-The example (CoreMark) built by cibuildwheel and its tests run on the wheel (`Example wheels`, commit `e880ee8`, green on all seven):
+The examples (CoreMark, and Lua from commit `43324a2`) built by cibuildwheel and their tests run on the wheel (`Example wheels`, commit `e880ee8` for CoreMark, `2691854` for both, green on all seven):
 
 | Platform | Evidence |
 | --- | --- |
@@ -161,7 +161,7 @@ The cibuildwheel configuration of the example is `build = "cp311-* cp314t-*"`.
   `musllinux_1_2` x86-64 locally (the disk of the machine was full; CI built it in run #23, commit `0e251d8`).
 - Big-endian hosts (s390x): a module that exports its memory, or uses `v128` in a signature, does not work there (see above);
   the rest was run only through the example and one small module.
-- Clang on Windows; gcc on macOS; Python 3.12 and later with the suite (CI uses 3.11).
+- Clang on Windows; gcc on macOS; Python 3.12 and later with the suite (CI uses 3.11; the official WASI tests use 3.11 for wasmext and 3.12 for the runner of that suite).
 - Android and Pyodide in CI.
 - Ahead-of-time claims about speed are from one machine (see "Speed").
 
@@ -423,11 +423,22 @@ mutating ones away), and a directory descriptor is a capability for that directo
 leads out are `ENOTCAPABLE` (an absolute link inside is refused too, as in cap-std). Both snapshots are served (`sock_accept` is not a call of the first:
 `GenError`); the first has its own `fd_seek` (another order of `whence`) and `fd_filestat_get`/`path_filestat_get` (56 bytes). `Instance()` needs no
 imports; `wasi={...}` takes args, env, stdin, stdout, stderr, preopens, readonly. What the caller gives as an import wins, call by call.
-**The official tests.** The precompiled programs of [WebAssembly/wasi-testsuite](https://github.com/WebAssembly/wasi-testsuite) (`prod/testsuite-base`, WASI 0.1:
-AssemblyScript, C and Rust, 72 programs; the 55 of WASI 0.3 are skipped) run on wasmext: `tests/wasi_testsuite/adapter.py` and `run_wasmext.py` build each one
-into a native extension (without optimizing) and run it, and CI (`.github/workflows/wasi-testsuite.yml`) does so on Linux, macOS and Windows. All 72 pass on Linux.
-They found what our tests had not: the same function imported twice (AssemblyScript), a directory opened with the rights of a scratch directory, a trailing
-slash (`file/` is `ENOTDIR`), `fd_renumber` of the standard streams, the rights of an opened directory (no seek), and `pwrite` on a file opened for writing only.
+**The official tests.** The precompiled programs of [WebAssembly/wasi-testsuite](https://github.com/WebAssembly/wasi-testsuite) (`prod/testsuite-base`, commit
+`d552798`, WASI 0.1: AssemblyScript, C and Rust, 72 programs; the 55 of WASI 0.3 are skipped) run on wasmext: `tests/wasi_testsuite/adapter.py` is the
+adapter for the runner of the suite, `run_wasmext.py` builds one program into a native extension (without optimizing) and runs it, and `prebuild.py` builds all
+of them at the same time first (the runner kills a program after its timeout, and the first run of a program is a build). CI (`.github/workflows/wasi-testsuite.yml`)
+runs it with `wasmext` on Python 3.11 and the runner on 3.12 (it needs it): **all 72 pass** on Linux (both ways of reaching files: `openat`, and Python, as a
+fourth job), macOS (the suite told to expect the errors of macOS, `ERRNO_MODE_MACOS`) and Windows. On Linux the suite is told `ERRNO_MODE_UNIX`; on Windows it
+is not told `ERRNO_MODE_WINDOWS` (that mode asks for the errors of a system that is not POSIX, where wasmext gives those of POSIX, so any error of the systems is
+taken) but `NO_RENAME_DIR_TO_EMPTY_DIR`. One test is expected to fail on Windows (`expectations-windows.toml`): `symlink_filestat`, because Python before 3.13 cannot set the
+times of a link itself.
+
+What they found, that our tests had not: the same function imported twice (AssemblyScript; a duplicate in the glue); a directory opened with all the rights of its
+preopen (a retry as a directory on `EISDIR`); the rights of an opened directory (no seek); a trailing slash (`file/` is `ENOTDIR`, and a name to be made that has one is
+`EEXIST`, `ENOTDIR` or `ENOENT`); `fd_renumber` of the standard streams; `pwrite` on a file opened for writing only (no `fd_seek` is asked for); and, on Windows (the Python way),
+`os.utime` of a file by its descriptor (it has none: the path is kept), the inode of `.` and `..` in a listing, no `O_NOFOLLOW` (a link is not opened without following it: `ELOOP`, checked by hand), links made with `/`,
+`O_APPEND` (it cannot be taken off again: `fd_write` seeks to the end), `os.link` that does not follow a link, and the times of a link (`follow_symlinks=False` only for a link).
+It also found that the runner kills a program after 5 s unless the adapter says more, and that what a killed program started goes on on Windows and held the runner for 30 minutes.
 Not built: signals (`proc_raise`), sockets, threads, and the clocks of the process and the thread in `poll_oneoff`. Tests: `tests/test_wasi.py` and `tests/test_wasi_fs.py` (through `build_extension`, not on
 Windows; the file tests are run for both ways of reaching the file system), `test_a_wasi_module_is_built_with_the_wasi_header_of_wasmext`
 and `test_wasi_files_work_on_every_platform_of_ci` (the whole path, every platform of CI). `lua.wasm` (imports `wasi_unstable`) is built and run by `examples/lua` (its tests, and the wheels of CI).
@@ -438,7 +449,7 @@ where every path went through Python (`os.stat`, `os.path.realpath` for the chec
 0.87 us, 1.6 us and 30 us (the floor in C for the listing is about 18 us). `fd_read`/`fd_seek` on a file (direct since the beginning) 0.1 us;
 `clock_time_get` (Python, `time.time_ns`) 0.14 us; a call of WebAssembly into a C function 3 ns. The way through Python costs 0.1 to 0.9 us
 over the system call itself for a simple call, which is why the clocks and the random bytes stay there. (An earlier figure of "190 times"
-for the listing came from a wrong baseline and is withdrawn.) Windows is on the Python way and was not measured.
+for the listing came from a wrong baseline and is withdrawn.) Windows is on the Python way and was not measured; a native path for it (`NtCreateFile` relative to a directory handle, as cap-std does) is possible, would be 600 to 900 lines of C that can be tried only in CI, and is not written.
 
 ## Decisions
 

@@ -119,13 +119,23 @@ A program is kept inside the directories it was given: `..` out of a directory, 
 `ENOTCAPABLE`. A directory the program opens is a capability for that directory only. A program built with an old libc finds a relative path
 only through a preopen named `"."`.
 
-Built so far: arguments, environment, clocks, random bytes, `proc_exit`, the standard streams, and files and directories: **reading,
-writing, creating, truncating, removing, setting sizes and times** (`path_open`, `fd_read`, `fd_write`, `fd_seek`, `path_create_directory`,
-`path_unlink_file`, `path_rename`, links and symbolic links, `fd_pread`/`fd_pwrite`, `fd_readdir`, ...) and `poll_oneoff` (clocks, and
-descriptors of files, which are always ready). 41 of the 46 calls of the specification work; `proc_raise` answers `ENOSYS`, and the four `sock_*` say
-`ENOTSOCK` (a program cannot make a socket in this snapshot, as in wasmhost). A symbolic link is made only with a relative target, and one that leads out is not followed.
-On POSIX the file calls go straight to the system (`openat`), on Windows through Python (slower). The 72 programs of the official [wasi-testsuite](https://github.com/WebAssembly/wasi-testsuite) for WASI 0.1 pass (`tests/wasi_testsuite/`, run in CI). WASI 0.2 and 0.3 (components) are not
-supported: build for `wasm32-wasip1`. See [FEATURES.md](FEATURES.md#design-wasi).
+What is there, of the 46 calls of the specification (WASI 0.1):
+
+- **41 work**: arguments, environment, clocks, random bytes, `proc_exit`, the standard streams, and files and directories: reading,
+  writing, creating, truncating, removing, renaming, hard and symbolic links, `pread`/`pwrite`, sizes, times, `fd_readdir`,
+  `poll_oneoff` (clocks, and descriptors of files, which are always ready).
+- **`proc_raise` answers `ENOSYS`** and the four `sock_*` say `ENOTSOCK` (a program cannot make a socket in this snapshot), as the
+  specification allows. WASI 0.2 and 0.3 (components) are not supported: build for `wasm32-wasip1`.
+- A symbolic link is made only with a relative target, and one that leads out of the directory is not followed.
+- **How files are reached.** On POSIX the calls go straight to the system (`openat`: no interpreter, no gap between a check and a use).
+  On Windows they go through Python (`os`), which is slower for opening, `stat` and listing (reading and writing are still direct), and
+  keeps a path inside its directory by checking it before using it. A native Windows path is not written.
+- **Tested** against the programs of the official [wasi-testsuite](https://github.com/WebAssembly/wasi-testsuite) for WASI 0.1 (72 of
+  them: C, Rust, AssemblyScript), all passing on Linux (both ways of reaching files), macOS and Windows in CI (`tests/wasi_testsuite/`);
+  on Windows, `symlink_filestat` is expected to fail before Python 3.13, which cannot set the times of a link. A real program that
+  uses all this is [`examples/lua`](examples/lua); `coreutils` (10.8 MB) was run by hand.
+
+See [FEATURES.md](FEATURES.md#design-wasi) for the design.
 
 ### Large modules
 
@@ -170,13 +180,26 @@ wasmimport.install()
 import fast  # fast.wasm on sys.path, or in the working directory
 ```
 
+### Examples
+
+Each is a package with a `setup.py` of a few lines, whose wheels `cibuildwheel` builds in CI on seven platforms (Linux x64 and ARM64,
+Windows x64, x86 and ARM64, macOS Apple Silicon and Intel):
+
+| | |
+|---|---|
+| [`examples/coremark`](examples/coremark) | the CoreMark benchmark as a module (imports the clock and print from Python) |
+| [`examples/link`](examples/link) | two modules that use each other's memory, variable and function with no Python in between |
+| [`examples/lua`](examples/lua) | Lua 5.4, a WASI program: `luawasm.run(["script.lua"], root="dir")`, files in the directory it is given and nowhere else |
+
 What is supported, what is not yet, and the plan are in [FEATURES.md](FEATURES.md).
 
 ## Status
 
-A proof of concept that works: the suite passes on Linux, macOS and Windows in CI, and the example builds into wheels on six
-platforms. It is **not published on PyPI yet**; until it is, build the wheel from a checkout (`uv build`) and install it with
-`pip install --find-links <the folder of the wheel> wasmext`, as `examples/coremark` does in CI.
+A proof of concept that works. In CI the test suite passes on Linux, macOS and Windows, the three examples build into wheels on seven
+platforms, and the WASI programs of the official test suite run on all three systems. It is **not published on PyPI yet**; until it
+is, build the wheel from a checkout (`uv build`) and install it with `pip install --find-links <the folder of the wheel> wasmext`, as
+the examples do in CI. Open: tables and threads, `funcref`/`externref` in a signature, a native (not through Python) path to files on
+Windows; the list and the reasons are in [FEATURES.md](FEATURES.md).
 
 ## Development
 
@@ -186,6 +209,10 @@ cd py-wasmext
 uv sync
 uv run pytest        # builds real extensions: needs a C compiler
 ```
+
+The official WASI tests run with `tests/wasi_testsuite/` (see the header of `adapter.py`; the runner of the suite needs Python 3.12,
+`wasmext` itself 3.11): clone `WebAssembly/wasi-testsuite` (branch `prod/testsuite-base`), build the programs with
+`prebuild.py <suite>/tests`, then `run-tests -r tests/wasi_testsuite/adapter.py`. `.github/workflows/wasi-testsuite.yml` does exactly that.
 
 The repository is [natify-sh/py-wasmext](https://github.com/natify-sh/py-wasmext) (issues and pull requests there); its dependency, the
 wasm2c and WABT tools as wheels, is [natify-sh/wabt-package](https://github.com/natify-sh/wabt-package).

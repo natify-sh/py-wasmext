@@ -181,6 +181,23 @@ The method (see the Plan) in numbers: the modules of these projects built and ru
 | py-wasmhost `imports.py` | several results of a host function, `i64`, an exception from the host | `tests/test_wasmhost.py` | works |
 | py-wasmhost `lua.wasm`, `coreutils.wasm`, `wasi_sh`, `wasmclang`, `pyodide`, `jslinux` | WASI programs, an engine in an engine | not yet | need WASI (19 and 32 imports); `coreutils.wasm` is 10.8 MB, which makes a very large C file |
 
+### Build time of a large module
+
+`coreutils.wasm` (10.8 MB, from py-wasmhost) gives 137 MB of C (12.7 times the module) from `wasm2c` in seconds; then one `gcc -O2 -g`
+process, on one core, works on that one file (about 1.1 GB of memory) for a long time (more than 11 minutes when this was written; the
+result is not in yet). `lua.wasm` (329 KB) takes 44 seconds. For a user this is paid once, by whoever builds the wheel; for `wasmimport`
+(a build at import) it hurts. Ideas, not built:
+
+- **Split the C and compile the parts in parallel** (the one to try first). `wasm2c --num-outputs=N` writes N files. setuptools compiles the
+  sources of one extension one after the other, so wasmext would need its own `build_ext` that compiles the objects with a pool (as NumPy
+  does), with care for MSVC. About N times faster on N cores, if the parts are of an even size.
+- Lower optimization for a very large module (`-O1`), and `-g0` for the generated C. Judged worse than the split: the first costs speed of
+  the result, and neither is a big enough step; they can be measured when the split is there.
+- Another compiler (clang may be faster on a file of this size): to be measured, not assumed.
+- A cache of objects (ccache or one by the hash of the C): a rebuild costs nothing, the first build is as long.
+- A smaller module before the translation (`wasm-opt`, dropping what is not used): depends on the module, not general.
+- `wasmimport` to warn when the C is larger than some size.
+
 ## Known gaps
 
 - A memory that cannot be allocated when the instance is made (too big, or with guard pages in a process limited in address

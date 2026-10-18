@@ -289,11 +289,11 @@ except MemoryError:
 
 
 def _limited_run(tmp_path: Path, code: str, limit_mib: int) -> subprocess.CompletedProcess[str]:
-    if sys.platform == "win32":
-        pytest.skip("RLIMIT_AS")
-    import resource
-
     def limit() -> None:
+        if sys.platform == "win32":  # the tests that use this are Linux-only; this tells pyright on Windows too
+            return
+        import resource
+
         resource.setrlimit(resource.RLIMIT_AS, (limit_mib << 20, limit_mib << 20))
 
     return subprocess.run(

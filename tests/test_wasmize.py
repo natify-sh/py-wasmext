@@ -301,7 +301,7 @@ def test_a_module_with_simd_gets_the_include_directory_of_simde(
     c.write_text('#include "simde/wasm/simd128.h"\nint x;\n', encoding="utf-8")
     root = tmp_path / "wabt"
     (root / "bin").mkdir(parents=True)
-    (root / "bin" / "wasm2c").write_text("", encoding="utf-8")
+    (root / "bin" / ("wasm2c.exe" if os.name == "nt" else "wasm2c")).write_text("", encoding="utf-8")
     (root / "wasm2c").mkdir()
     (root / "wasm2c" / "wasm-rt.h").write_text("", encoding="utf-8")
     monkeypatch.setenv("WASMEXT_WABT", str(root))

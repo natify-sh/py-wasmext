@@ -163,7 +163,13 @@ def _rebase(ext: Extension, base: Path) -> Extension:
     """`ext` with its paths relative to `base` instead of the working directory."""
 
     def rel(paths: list[str]) -> list[str]:
-        return [Path(os.path.relpath(os.path.abspath(p), base)).as_posix() for p in paths]
+        result: list[str] = []
+        for p in paths:
+            try:
+                result.append(Path(os.path.relpath(os.path.abspath(p), base)).as_posix())
+            except ValueError:  # another drive on Windows (the headers of simde are in the environment)
+                result.append(Path(os.path.abspath(p)).as_posix())
+        return result
 
     moved = copy.copy(ext)
     moved.sources = rel(ext.sources)

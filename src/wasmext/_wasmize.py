@@ -333,7 +333,11 @@ def _wasmize(
         rest = [s for s in (template.sources if template else []) if not str(s).endswith(".wasm")]
         ext.sources = [*rest, *prepared.sources]
         ext.depends = [*ext.depends, *prepared.depends]
-        ext.include_dirs = [*ext.include_dirs, prepared.include_dir, *prepared.extra_include_dirs]
+        ext.include_dirs = [
+            *ext.include_dirs,
+            *prepared.extra_include_dirs,
+            prepared.include_dir,
+        ]  # the C dir stays last
         if not use_guard_pages:
             ext.define_macros = [*ext.define_macros, ("WASM_RT_USE_MMAP", "0")]
         if use_limited_api:  # one wheel for every CPython from 3.11 on (wasmext._setuptools tags the wheel)

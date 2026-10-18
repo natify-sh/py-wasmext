@@ -143,15 +143,19 @@ The example (CoreMark) built by cibuildwheel and its tests run on the wheel (`Ex
 | macOS Apple Silicon, macOS Intel | CI jobs passed (the wheel lists were not read) |
 | Pyodide 4.0.9 (CPython 3.13, wasm32) | local, `cibuildwheel --platform pyodide`: the 2 tests passed inside Pyodide (not in CI) |
 | Android arm64-v8a (CPython 3.13, NDK 27) | local: the wheel is built, the tests were skipped, **not run** (not in CI) |
+| Linux armv7l, riscv64, ppc64le, i686: `manylinux` and `musllinux_1_2` | local, `cibuildwheel` in Docker (armv7l, riscv64, ppc64le under QEMU; i686 in a 32-bit userland), the wasmext wheel of this branch and the wabt-package 1.0.42.0b2 wheels from PyPI: the cp311 abi3 wheel was built and the 2 tests of the example passed in each of the eight (not cp314t; not in CI) |
+| Linux s390x (big-endian): `manylinux_2_28`, `musllinux_1_2` | local, the same way: the wheel is built, but the example's tests **fail**. Checked with a small module under QEMU: before the fix `i32.load` of the bytes 01 02 03 04 gave 0x01020304 instead of 0x04030201, because nothing defined `WABT_BIG_ENDIAN`; now it is defined and the value is right. The exported memory is refused there (`NotImplementedError`), and the example needs it, so on s390x the example still fails; `v128` in a signature is refused by an `#error` |
 | Linux i386, CPython 3.12 | by hand, one abi3 memory64 module (`gcc -m32`), not in the suite |
 
 The cibuildwheel configuration of the example is `build = "cp311-* cp314t-*"`.
 
 ### Not confirmed
 
-- PyPy, iOS; Linux armv7l, ppc64le, s390x, riscv64 and Windows x86 for wasmext itself (the wheels of the wabt-package for
-  them exist since 1.0.42.0b2, see its README, but wasmext was not built on them).
-- Big-endian hosts (s390x): `v128` in a signature is refused there by an `#error`, and the rest was not run.
+- PyPy, iOS. Windows x86: the row is in the CI matrix of the example (`Example wheels`), not run yet at the time of writing.
+- The Linux architectures above in CI (they were built by hand under QEMU, not in a workflow), the `cp314t` wheels on them, and
+  `musllinux_1_2` x86-64 locally (the disk of the machine was full; CI built it in run #23, commit `0e251d8`).
+- Big-endian hosts (s390x): a module that exports its memory, or uses `v128` in a signature, does not work there (see above);
+  the rest was run only through the example and one small module.
 - Clang on Windows; gcc on macOS; Python 3.12 and later with the suite (CI uses 3.11).
 - Android and Pyodide in CI.
 - Ahead-of-time claims about speed are from one machine (see "Speed").
@@ -161,6 +165,9 @@ The cibuildwheel configuration of the example is `build = "cp311-* cp314t-*"`.
 - A memory that cannot be allocated when the instance is made (too big, or with guard pages in a process limited in address
   space, which each memory reserves about 8 GiB of) is a `MemoryError`; `--no-guard-pages` avoids the second case. Other `abort()`
   of the runtime (the locks, the signal handlers) are left as they are. A memory that fails to *grow* returns -1, as WebAssembly says.
+- Big-endian hosts (s390x): wasm2c keeps the memory reversed there, so the exported memory cannot be a `memoryview` (it raises
+  `NotImplementedError`) and `v128` in a signature is refused; a module that does not use them runs (checked on one small module). A copy-based view
+  or conversion would be needed.
 - Attributes and methods of `Instance` take the names of the exports; a name that is not an identifier is reachable with `getattr`.
 
 ## Plan
@@ -176,8 +183,9 @@ In this order (the first ones are small):
    functions, tables. A global, memory or table made by the host with no module behind it is postponed.
 4. **Threads**: `--enable-threads`, C11 atomics (and MSVC), a shared memory, `wasm_rt_init_thread` per thread. After 3, since the
    shared memory is a memory given to several instances, and the link table must not rely on plain reads of a mutable global.
-5. ~~**CI**~~: the desktop matrix is green (see "Verified"). Left: the other architectures of the wabt-package (armv7l, ppc64le,
-   s390x, riscv64, Windows x86, musllinux) for wasmext itself, which need QEMU or other runners.
+5. ~~**CI**~~: the desktop matrix is green (see "Verified"). The other Linux architectures were checked by hand under QEMU (armv7l,
+   riscv64, ppc64le, i686 work; s390x, big-endian, does not for modules with a memory export). Left: those in CI (a QEMU job), Windows x86
+   (in the matrix, waiting for the result).
 6. Android and Pyodide in the CI matrix of the example (they build locally, see above); `pyproject.toml` configuration (no `setup.py`);
    publishing on PyPI; reporting `_addcarry_u64` to WABT; `.wat` as a source (an idea, see "Build and distribution").
 7. `funcref`/`externref` in signatures (a design is needed first: who owns an `externref`); custom page sizes (`wasm2c` can, with a

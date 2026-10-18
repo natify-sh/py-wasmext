@@ -99,9 +99,12 @@ What each line says is tested (`tests/test_features.py`), not read from those do
 | abi3 (cp311) and native (free-threaded) wheels | done | chosen by the interpreter that builds; wheel tag set automatically; `--abi3`/`--no-abi3`, `WASMEXT_LIMITED_API` |
 | `--no-guard-pages` | done | for processes with a limit on address space; about 30% slower on CoreMark |
 | WABT from the wabt-package | done | or a directory in `WASMEXT_WABT` |
-| Patch for MSVC on ARM64 | done | `_addcarry_u64` exists only on x64; a regex in `_wasmize.py` (reported: [WABT #2885](https://github.com/WebAssembly/wabt/issues/2885)) |
+| Patch for MSVC on ARM64 and x86 | done | `_addcarry_u64` exists only on x64 (not on ARM64 and 32-bit x86); a regex in `_wasmize.py`, applied to the shared `_w2c-impl.h` of a module in several files too (it was missed there, and `lua` did not link on Windows x86 and ARM64) (reported: [WABT #2885](https://github.com/WebAssembly/wabt/issues/2885)) |
 | Patch for `return_call` in a function with locals | done | wasm2c writes C that does not compile; a regex in `_wasmize.py` puts the type back, and passes a fixed wasm2c through (reported: [WABT #2884](https://github.com/WebAssembly/wabt/issues/2884)) |
+| Large modules in several files | done | `wasm2c --num-outputs`, compiled at the same time; automatic from 1 MiB, `parts=` / `--parts` / `WASMEXT_PARTS`; see "Build time of a large module" |
 | Example: CoreMark | done | reference CoreMark of EEMBC, built with `zig cc` by `examples/coremark/build_wasm.py` |
+| Example: link | done | two modules that use each other's memory, variable and function (`examples/link`) |
+| Example: Lua | done | `lua.wasm`, a WASI program, built in 8 files (`examples/lua`); tests on the wheel, and the wheels, in CI on seven platforms |
 | simde headers | done | from the wabt-package, see SIMD above |
 | Pyodide wheel | done (locally) | `cibuildwheel --platform pyodide` on `examples/coremark`, Python 3.13: built (`…pyemscripten_2025_0_wasm32.whl`, 83 KB) and the 2 tests passed inside Pyodide; the `wasm2c` of the Linux x86-64 wheel of the wabt-package did the translation on the host, no Pyodide wheel of the wabt-package is needed |
 | Android wheel | partly | `cibuildwheel --platform android --archs arm64_v8a`, Python 3.13, NDK 27: the wheel (`…android_24_arm64_v8a.whl`) builds with the same host wabt-package wheel; the tests were skipped (the machine cannot run an arm64 emulator), so it was not run on Android; the extension links `libpython3.13.so`, as every Android extension does |
@@ -131,6 +134,9 @@ The whole suite (`pytest`, 264 tests and 4 expected failures at the time of writ
 | ubuntu-latest | 3.11 | gcc | CI, `Pre-commit` runs `pytest` |
 | macOS (macos-latest, Apple Silicon) | 3.11 | AppleClang | CI, the same |
 | windows-latest (x64) | 3.11 | MSVC | CI, the same |
+
+The official tests of WASI (`WASI test suite`, below) run on three more rows of this table: ubuntu-latest (twice: `openat`, and files through Python),
+macOS and Windows, with `wasmext` on Python 3.11 and the runner of the suite on 3.12.
 
 CI at commit `e880ee8` (both workflows green on all of these, 22 checks; the first attempt of that run had no runners, the repository was private
 and the 2000 free minutes were used up, and it was run again after it became public). The suite is not run on Linux ARM64, Windows ARM64, macOS
@@ -253,8 +259,10 @@ In this order (the first ones are small):
    publishing on PyPI; `.wat` as a source (an idea, see "Build and distribution").
 7. `funcref`/`externref` in signatures (a design is needed first: who owns an `externref`); custom page sizes (`wasm2c` can, with a
    flag); the rest of the examples of other projects (below).
-8. **WASI** (`wasi_snapshot_preview1` and `wasi_unstable`): part of wasmext, compiled into the native module as a header, `wasi_preview1.h`, the system
-   reached through `Python.h`. Done for WASI 0.1 (41 of 46 calls, the official tests pass); see "Design: WASI". Left: the clocks of the process and the thread in `poll_oneoff`, signals, sockets (not possible in this snapshot), WASI 0.2 and 0.3.
+8. ~~**WASI**~~ (`wasi_snapshot_preview1` and `wasi_unstable`): done for WASI 0.1. Part of wasmext, compiled into the native module as a header, `wasi_preview1.h`, the system
+   reached through `Python.h`; 41 of 46 calls, the official tests pass on Linux, macOS and Windows; see "Design: WASI". Left: the clocks of the process and the thread in `poll_oneoff`, signals, sockets (not possible in this snapshot), WASI 0.2 and 0.3.
+9. **A native path to files on Windows** (now through Python). `NtCreateFile` relative to a directory handle, as cap-std does: it would give the safety of `openat` there
+   (no gap between a check and a use) and the speed. Not started; first measure what the Python way costs on Windows (it was not measured).
 
 How to choose the next features: **on demand, not in advance**. The examples of [wasm2mpy](https://github.com/vshymanskyy/wasm2mpy)
 and [pywasm3](https://github.com/wasm3/pywasm3) are taken one by one, the simplest first, and added to this project as examples
@@ -369,10 +377,10 @@ a module imports with another signature, is refused when the glue is made (`GenE
 **Portability: direct where it is the same, through `Python.h` where it is not.** A call is made in plain C when the C library behaves the
 same on POSIX and on Windows (the CRT), with no interpreter in between. A call that can differ on Windows (non-POSIX) goes through
 CPython instead (the `os`, `io`, `time` and `sys` modules, called from C with the limited API, so an abi3 module can use it), and then
-differs only where Python itself differs. The rule is applied call by call, and the table below is a draft to be confirmed by the
-tests on Windows (CI has Windows x64, x86 and ARM64), not a finding:
+differs only where Python itself differs. The rule is applied call by call; the table is what was built, and the official tests of WASI
+run on it in CI (Linux both ways, macOS, Windows):
 
-| Way | Calls (draft) | Why |
+| Way | Calls | Why |
 | --- | --- | --- |
 | direct | `args_*`, `environ_*`, `sched_yield`, `fd_prestat_*`, the bookkeeping of descriptors, `fd_seek`/`fd_tell`, `fd_read`/`fd_write` on the descriptors it opened | data of the instance, or the same call on both |
 | through Python | `random_get`, `clock_*` | the source differs (`getrandom`, `BCryptGenRandom`, `clock_gettime`, `QueryPerformanceCounter`); `os.urandom`, `time.time_ns`, `time.monotonic_ns` are cheap |
@@ -387,14 +395,16 @@ specification allows (`ENOTSOCK`, `ENOSYS`). The first snapshot, `wasi_unstable`
 functions but `sock_accept`, and four differences in what it reads and writes: the order of `whence` (cur, end, set), one right less,
 `filestat` with a 32-bit link count (which moves its fields), and a clock subscription with an extra `identifier` (56 bytes). So the
 two files differ in the few calls that touch those (`fd_seek`, `fd_fdstat_get`, `fd_filestat_get`, `path_filestat_get`, `poll_oneoff`);
-the rest is common. A private header holds the common part, which both headers include, so that they cannot drift apart (`wasi_common.h`; the calls built so far read and write none of the four, so the same function serves both snapshots). A module gets only the functions it imports, so a module
+the rest is common. A private header holds the common part, which both headers include, so that they cannot drift apart (`wasi_common.h`); the four that differ have a
+function of their own in `wasi_unstable.h` (`fd_seek`, `fd_filestat_get`, `path_filestat_get`, `poll_oneoff`), and the rest serves both snapshots. A module gets only the functions it imports, so a module
 without WASI contains none of it. The state (file descriptors, preopens) is in the instance, not in globals.
 
-**Staged.** First what is the same everywhere: standard streams, arguments, environment, clocks, `random_get`, `proc_exit`. Then
-files and directories (`fd_*`, `path_*`) with preopens that confine the program to a directory. Last `poll_oneoff`.
+**Staged (all three built).** First what is the same everywhere: standard streams, arguments, environment, clocks, `random_get`, `proc_exit`. Then
+files and directories (`fd_*`, `path_*`) with preopens that confine the program to a directory: reading, then writing and creating. Last the links, `pread`/`pwrite`,
+renaming and `poll_oneoff`.
 
-**Reference for behaviour.** `wasmhost.wasi.preview1` (plain Python, MIT) is run beside it as the oracle in tests, and the witx files
-give the names and signatures. Its code is not copied: this is written from the specification.
+**Reference for behaviour.** The witx files give the names and signatures; the oracle is the official test suite (below), not `wasmhost.wasi.preview1`
+(plain Python, MIT), which was meant to be run beside it and was not. Its code is not copied: this is written from the specification.
 
 **Decided (the first version).**
 - Configuration is a keyword of the instance, `Instance(imports, wasi={"args": [...], "env": {...}, "preopens": {"/": "dir"},
@@ -404,7 +414,7 @@ give the names and signatures. Its code is not copied: this is written from the 
 - `proc_exit(n)` is an exception (`WasiExit`, carrying the code) out of the call that led to it; the instance stays usable.
 - The command `_start` is called as an export, as any other (no `run()` helper in the first version).
 - Test modules: `lua.wasm` (wasi_unstable, 19 imports) first, then `coreutils.wasm` (preview1, 32 imports, 10.8 MB, which makes a very large
-  C file and a long build).
+  C file and a long build). Both were built and run: `lua.wasm` is `examples/lua`, `coreutils.wasm` was run by hand (built in 16 files).
 
 **Stages 1, 2 and 3 (built).** `src/wasmext/c/wasi_common.h` with `wasi_preview1.h` and `wasi_unstable.h`, copied beside the C of a module that
 imports WASI and included by its glue (the glue calls the functions directly, through the slots that linking instances uses). The calls
@@ -466,6 +476,7 @@ for the listing came from a wrong baseline and is withdrawn.) Windows is on the 
 
 - The glue is plain CPython C API, not nanobind, pybind11 or Cython: it is generated, targets abi3 from 3.11 (nanobind's linked mode needs 3.12 for
   that) and needs no C++ or extra build dependency.
-- No WASI shim in Python. If WASI comes back, it is an existing C implementation (uvwasi, which WABT uses itself for `wasm-interp`).
+- WASI is hand-written C in the module (see "Design: WASI"): not a shim in Python, and not an existing C implementation (uvwasi, which WABT uses
+  itself for `wasm-interp`, was looked at first and not taken: it is a library with its own state and its own build, and a built module should need nothing).
 - `wasmhost` is a different tool (a facade over engines); its API is a guide for names and errors, the reference for behaviour
   is the specification and the JavaScript API.

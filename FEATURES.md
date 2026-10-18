@@ -195,8 +195,9 @@ In this order (the first ones are small):
    flag); compatibility with the wasm3/pywasm3 examples; WASI (deferred).
 
 How to choose the next features: **on demand, not in advance**. The examples of [wasm2mpy](https://github.com/vshymanskyy/wasm2mpy)
-[pywasm3](https://github.com/wasm3/pywasm3) and [py-wasmhost](https://github.com/ballistics-lab/py-wasmhost) are taken one by one, the simplest first, and added to this project as examples
-(or tests); a feature is built when the next example needs it, and not before.
+and [pywasm3](https://github.com/wasm3/pywasm3) are taken one by one, the simplest first, and added to this project as examples
+(or tests); a feature is built when the next example needs it, and not before. The examples of
+[py-wasmhost](https://github.com/ballistics-lab/py-wasmhost) are more complex: they come after those.
 
 ## Design: linking instances (globals, functions and memories are built; tables are not)
 

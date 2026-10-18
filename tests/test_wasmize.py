@@ -311,3 +311,14 @@ def test_a_module_with_simd_gets_the_include_directory_of_simde(
     assert _simde_include(c) == (str(root / "include"),)
     c.write_text("int x;\n", encoding="utf-8")  # no SIMD: nothing is looked for
     assert _simde_include(c) == ()
+
+
+def test_a_big_endian_host_builds_with_wabt_big_endian(project: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The C of wasm2c lays the memory out reversed only when told (-DWABT_BIG_ENDIAN=1): without it a big-endian host
+    (s390x) computed the wrong values, with no error."""
+    (project / "top.wasm").write_bytes(SIMPLE.read_bytes())
+    [little] = wasmize("top.wasm", quiet=True)
+    assert ("WABT_BIG_ENDIAN", "1") not in little.define_macros
+    monkeypatch.setattr(sys, "byteorder", "big")
+    [big] = wasmize("top.wasm", quiet=True)
+    assert ("WABT_BIG_ENDIAN", "1") in big.define_macros

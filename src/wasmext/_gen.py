@@ -563,6 +563,14 @@ def generate(module: Module, name: str) -> Glue:
         add("};")
         add("")
         add("static PyObject *Instance_memory(InstanceObject *self, void *closure) {")
+        add("#if WABT_BIG_ENDIAN")
+        add("    /* wasm2c keeps the memory reversed on a big-endian host: there is no plain buffer to give */")
+        add("    (void)self; (void)closure;")
+        add(
+            '    PyErr_SetString(PyExc_NotImplementedError, "the memory of a module is not available as a memoryview on a big-endian host");'
+        )
+        add("    return NULL;")
+        add("#else")
         add("    MemoryObject *m = PyObject_New(MemoryObject, MemoryType);")
         add("    PyObject *view;")
         add("    if (m == NULL) return NULL;")
@@ -572,6 +580,7 @@ def generate(module: Module, name: str) -> Glue:
         add("    view = PyMemoryView_FromObject((PyObject *)m);")
         add("    Py_DECREF(m);")
         add("    return view;")
+        add("#endif")
         add("}")
         add("")
     # the exported globals: attributes of the instance (read-only if the global is immutable)

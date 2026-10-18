@@ -340,6 +340,8 @@ def _wasmize(
         ]  # the C dir stays last
         if not use_guard_pages:
             ext.define_macros = [*ext.define_macros, ("WASM_RT_USE_MMAP", "0")]
+        if sys.byteorder == "big":  # the C of wasm2c reads this to lay the memory out reversed; nothing else sets it
+            ext.define_macros = [*ext.define_macros, ("WABT_BIG_ENDIAN", "1")]
         if use_limited_api:  # one wheel for every CPython from 3.11 on (wasmext._setuptools tags the wheel)
             ext.py_limited_api = True
             ext.define_macros = [*ext.define_macros, ("Py_LIMITED_API", LIMITED_API_VERSION)]

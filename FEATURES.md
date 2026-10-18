@@ -311,7 +311,7 @@ when the extension is made" for them); 2. memories; 3. functions; 4. tables.
 **Decided**: the forms above; the format of the link table (capsule) is private, documented and
 versioned (not a promise to others) until a second user of it exists.
 
-## Design: WASI (nothing is built)
+## Design: WASI (decided; stage 1 is next)
 
 **Decided.** WASI is part of wasmext and is compiled into the native module; a built module needs nothing at run time (not wasmext
 either), so a shared library that modules call into was rejected. The code is hand-written C, one file for each interface the module imports:
@@ -341,7 +341,7 @@ specification allows (`ENOTSOCK`, `ENOSYS`). The first snapshot, `wasi_unstable`
 functions but `sock_accept`, and four differences in what it reads and writes: the order of `whence` (cur, end, set), one right less,
 `filestat` with a 32-bit link count (which moves its fields), and a clock subscription with an extra `identifier` (56 bytes). So the
 two files differ in the few calls that touch those (`fd_seek`, `fd_fdstat_get`, `fd_filestat_get`, `path_filestat_get`, `poll_oneoff`);
-the rest is common. Proposed: a private header with the common part, which both files include, so that they cannot drift apart. A module gets only the functions it imports (the glue names them with macros), so a module
+the rest is common. A private header holds the common part, which both files include, so that they cannot drift apart (proposed, not objected to). A module gets only the functions it imports (the glue names them with macros), so a module
 without WASI contains none of it. The state (file descriptors, preopens) is in the instance, not in globals.
 
 **Staged.** First what is the same everywhere: standard streams, arguments, environment, clocks, `random_get`, `proc_exit`. Then
@@ -350,7 +350,7 @@ files and directories (`fd_*`, `path_*`) with preopens that confine the program 
 **Reference for behaviour.** `wasmhost.wasi.preview1` (plain Python, MIT) is run beside it as the oracle in tests, and the witx files
 give the names and signatures. Its code is not copied: this is written from the specification.
 
-**Proposed, not confirmed yet.**
+**Decided (the first version).**
 - Configuration is a keyword of the instance, `Instance(imports, wasi={"args": [...], "env": {...}, "preopens": {"/": "dir"},
   "stdin": ..., "stdout": ..., "stderr": ...})`.
 - Standard streams go to `sys.stdin.buffer`, `sys.stdout.buffer` and `sys.stderr.buffer` by default, so that capturing in a notebook or

@@ -321,10 +321,18 @@ the interface it imports (both, if it imports both). It is not generated each ti
 The names say the version: later WASI interfaces are largely not compatible with preview1, so each gets its own file
 (`wasi_preview2` and the like), and `wasi_unstable` is not folded into `wasi_preview1` either.
 
-**Portability: through `Python.h`.** The operating system is reached through CPython (the `os`, `io`, `time` and `sys` modules, called
-from C with the limited API), not through `read(2)` and `CreateFileW` of our own. Windows and POSIX then differ only where Python
-differs, and a module built as abi3 can use it. The price is a call into the interpreter for each WASI call that touches the system,
-where the call itself is the expensive part anyway (the wasm side does not change).
+**Portability: direct where it is the same, through `Python.h` where it is not.** A call is made in plain C when the C library behaves the
+same on POSIX and on Windows (the CRT), with no interpreter in between. A call that can differ on Windows (non-POSIX) goes through
+CPython instead (the `os`, `io`, `time` and `sys` modules, called from C with the limited API, so an abi3 module can use it), and then
+differs only where Python itself differs. The rule is applied call by call, and the table below is a draft to be confirmed by the
+tests on Windows (CI has Windows x64, x86 and ARM64), not a finding:
+
+| Way | Calls (draft) | Why |
+| --- | --- | --- |
+| direct | `args_*`, `environ_*`, `sched_yield`, `fd_prestat_*`, the bookkeeping of descriptors, `fd_seek`/`fd_tell`, `fd_read`/`fd_write` on the descriptors it opened | data of the instance, or the same call on both |
+| through Python | `random_get`, `clock_*` | the source differs (`getrandom`, `BCryptGenRandom`, `clock_gettime`, `QueryPerformanceCounter`); `os.urandom`, `time.time_ns`, `time.monotonic_ns` are cheap |
+| through Python | `path_open`, `fd_readdir`, `fd_filestat_*`, `path_filestat_*`, `path_rename`, `path_unlink_file`, `path_remove_directory`, `path_symlink`, `path_readlink`, `path_link`, `fd_filestat_set_times`, `fd_allocate`, `fd_advise`, `fd_datasync`, `fd_sync`, `fd_pread`, `fd_pwrite`, `poll_oneoff` | Windows has no `pread`, cannot open a directory with `open`, has its own `stat` (no inode, link count), `FindFirstFile` for a listing, other rules for renaming over a file, symbolic links need a privilege, `select` works on sockets only |
+| decided later | `fd_read`/`fd_write` on the standard streams | direct writes to descriptors 1 and 2 bypass the buffer of `sys.stdout` (the order against Python's `print` and a capture in a notebook or a test); the default may have to go through Python |
 
 **What it covers.** The 46 functions of the specification (`wasi_snapshot_preview1.witx`, the branch `wasi-0.1` of WebAssembly/WASI;
 the files are in `tests/data/wasi/` of py-wasmhost, with their licence): arguments, environment, clocks, `random_get`,

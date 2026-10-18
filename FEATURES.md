@@ -215,10 +215,10 @@ the first argument) instead of a Python callable.
 An instance is also a mapping of its exports (`keys()` and `a["name"]`), so it unpacks into a dict as in JavaScript's spread:
 
 ```python
-B.Instance({"env": a})                                                 # a shelf from an instance: all of it (short for {**a})
-B.Instance({"env": {"log": print}})                                    # a dict: by keys, as now
-B.Instance({"env": {**a, "log": print}})                               # everything of a, and log from Python (the later key wins)
-B.Instance({"env": {"counter": a["counter"], "log": print}})           # one export of a, and log from Python
+B.Instance({"env": a})  # a shelf from an instance: all of it (short for {**a})
+B.Instance({"env": {"log": print}})  # a dict: by keys, as now
+B.Instance({"env": {**a, "log": print}})  # everything of a, and log from Python (the later key wins)
+B.Instance({"env": {"counter": a["counter"], "log": print}})  # one export of a, and log from Python
 ```
 
 `a["counter"]` is the reference (there is no `export()` method): `a.counter` cannot stand for it, for a global it is the number and not

@@ -183,10 +183,10 @@ The method (see the Plan) in numbers: the modules of these projects built and ru
 
 ### Build time of a large module
 
-`coreutils.wasm` (10.8 MB, from py-wasmhost) gives 137 MB of C (12.7 times the module) from `wasm2c` in seconds; then one `gcc -O2 -g`
-process, on one core, works on that one file (about 1.1 GB of memory) for a long time (more than 11 minutes when this was written; the
-result is not in yet). `lua.wasm` (329 KB) takes 44 seconds. For a user this is paid once, by whoever builds the wheel; for `wasmimport`
-(a build at import) it hurts. Ideas, not built:
+`coreutils.wasm` (10.8 MB, from py-wasmhost) gives 137 MB of C (3.1 million lines, 12.7 times the size of the module) from `wasm2c` in seconds;
+then one `gcc -O2 -g` process, on one core, works on that one file (1.3 GB of memory). **It was stopped by hand after 33 minutes without
+finishing**: not practical as it is. `lua.wasm` (329 KB) takes 44 seconds. For a user this is paid once, by whoever builds the wheel; for
+`wasmimport` (a build at import) it hurts. The numbers are of one machine (4 cores, gcc 13). Ideas, not built:
 
 - **Split the C and compile the parts in parallel** (the one to try first). `wasm2c --num-outputs=N` writes N files. setuptools compiles the
   sources of one extension one after the other, so wasmext would need its own `build_ext` that compiles the objects with a pool (as NumPy

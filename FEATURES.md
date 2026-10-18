@@ -420,7 +420,7 @@ leads out are `ENOTCAPABLE` (an absolute link inside is refused too, as in cap-s
 imports; `wasi={...}` takes args, env, stdin, stdout, stderr, preopens, readonly. What the caller gives as an import wins, call by call.
 Not built: `path_rename`, `path_symlink`, `path_readlink`, `path_link`, `fd_pread`, `fd_pwrite`, `poll_oneoff`, `proc_raise` (stage 3). Tests: `tests/test_wasi.py` and `tests/test_wasi_fs.py` (through `build_extension`, not on
 Windows; the file tests are run for both ways of reaching the file system), `test_a_wasi_module_is_built_with_the_wasi_header_of_wasmext`
-and `test_wasi_files_work_on_every_platform_of_ci` (the whole path, every platform of CI). `lua.wasm` (imports `wasi_unstable`) is not run in the tests yet.
+and `test_wasi_files_work_on_every_platform_of_ci` (the whole path, every platform of CI). `lua.wasm` (imports `wasi_unstable`) is built and run by `examples/lua` (its tests, and the wheels of CI).
 
 **The cost of a call, measured** (Linux x86-64, Python 3.11, gcc -O2, medians; a loop in WebAssembly that makes the call). First version,
 where every path went through Python (`os.stat`, `os.path.realpath` for the check of the limits): `path_filestat_get` 17.5 us, `path_open` +

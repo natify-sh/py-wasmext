@@ -1,7 +1,7 @@
 name: Example wheels
 
-# examples/coremark is a package whose extension is made by wasmext from a .wasm: cibuildwheel builds its wheels on
-# every platform, with the wasmext of this checkout (it is not on PyPI yet) as the build tool.
+# examples/coremark and examples/lua are packages whose extension is made by wasmext from a .wasm: cibuildwheel builds their
+# wheels on every platform, with the wasmext of this checkout (it is not on PyPI yet) as the build tool.
 
 on:
   push:
@@ -46,11 +46,20 @@ jobs:
           retention-days: 7
 
   build-example:
-    name: coremark on ${{ matrix.name }}
+    name: ${{ matrix.example }} on ${{ matrix.name }}
     needs: build-wasmext
     strategy:
       fail-fast: false
       matrix:
+        example: [coremark, lua]
+        name:
+          - Linux x64
+          - Linux ARM64
+          - Windows x64
+          - Windows x86
+          - Windows ARM64
+          - macOS Apple Silicon
+          - macOS Intel
         include:
           - { name: "Linux x64", os: ubuntu-latest, archs: "x86_64" }
           - { name: "Linux ARM64", os: ubuntu-24.04-arm, archs: "aarch64" }
@@ -67,7 +76,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: wasmext-wheel
-          path: examples/coremark/deps
+          path: examples/${{ matrix.example }}/deps
 
       - name: Install uv
         uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
@@ -80,7 +89,7 @@ jobs:
           # is what the build uses.
           CIBW_BUILD_FRONTEND: "build; args: --no-isolation"
           CIBW_BEFORE_BUILD: pip install --find-links {package}/deps wasmext setuptools
-        run: uvx cibuildwheel examples/coremark --output-dir wheelhouse --archs ${{ matrix.archs }}
+        run: uvx cibuildwheel examples/${{ matrix.example }} --output-dir wheelhouse --archs ${{ matrix.archs }}
         shell: bash
 
       - name: list ./wheelhouse
@@ -90,6 +99,6 @@ jobs:
       - name: Upload the wheels
         uses: actions/upload-artifact@v7
         with:
-          name: coremark-wheels-${{ matrix.os }}
+          name: ${{ matrix.example }}-wheels-${{ matrix.os }}-${{ matrix.archs }}
           path: ./wheelhouse
           retention-days: 7

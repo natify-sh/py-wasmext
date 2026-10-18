@@ -43,3 +43,22 @@ SOFTWARE.
 
 `examples/coremark/src/coremark/_core.wasm` is built from [CoreMark](https://github.com/eembc/coremark) of EEMBC
 (Apache License 2.0) by `examples/coremark/build_wasm.py`; `examples/coremark/port/` is derived from its `barebones` port.
+
+## Lua
+
+`examples/lua/src/luawasm/_lua.wasm` is Lua 5.4.6, built to WASI by the [lua-wasi](https://github.com/nalgeon/lua-wasi) project and taken
+as it is from the npm package `@antonz/lua-wasi` (MIT License). Lua is
+
+Copyright (C) 1994-2023 Lua.org, PUC-Rio.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the
+"Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR
+ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH
+THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.

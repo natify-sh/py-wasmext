@@ -41,6 +41,8 @@ def _verdict_of_import(kind: str, thing: FuncType | TableType | Limits | GlobalT
         return (
             "ok (an export of another instance)" if thing.mutable else "ok (a number, or an export of another instance)"
         )
+    if kind == "memory" and isinstance(thing, Limits):
+        return "not supported yet: a shared memory" if thing.shared else "ok (the memory of another instance)"
     if kind != "func" or not isinstance(thing, FuncType):
         return f"not supported yet: an imported {kind}"
     reason = _why_not(thing, several_results=True)

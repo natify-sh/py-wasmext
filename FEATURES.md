@@ -77,7 +77,8 @@ What each line says is tested (`tests/test_features.py`), not read from those do
 | Imported functions | done | `Instance({module: {name: callable}})`; Python exceptions come out of the call of the module; calling back into the module works |
 | Imported immutable globals | done | a number in the imports; `test_an_imported_immutable_global_is_a_number` |
 | Imported mutable globals | done | an export of another instance: `Instance({"env": a})` or `a["name"]`; the variable is shared; a number is a `LinkError`; type and mutability are checked: `test_instances_share_a_mutable_global_and_an_instance_is_a_mapping`, `test_linking_a_global_checks_what_it_is` |
-| Imported memories, tables | not yet | refused when the extension is made |
+| Imported memories | done | the memory of another instance: `Instance({"env": a})`, `{"memory": a.memory}` (the memoryview stands for its memory) or `a["memory"]`; one buffer, `grow` is seen by both; checked: size (at least the minimum, at most the maximum), memory64, guard pages on both sides or neither (`LinkError`): `test_instances_share_a_memory`, `test_linking_a_memory_checks_its_size_and_kind`. A shared (threads) memory is refused |
+| Imported tables | not yet | refused when the extension is made |
 | Shared global between instances | done | one variable used by several instances, through the exports of an instance (design below); a global made by the host with no module behind it: not yet |
 | Shared `Memory` and `Table` objects | not yet | the same design problem as for `Global` |
 | Recognising the objects of another extension | not yet | the design problem: every extension has its own types, so an instance of one cannot take a `Global` made by another unless there is a common way to tell them apart (a capsule with a tag and the type, for example) |
@@ -193,7 +194,7 @@ In this order (the first ones are small):
 7. `funcref`/`externref` in signatures (a design is needed first: who owns an `externref`); custom page sizes (`wasm2c` can, with a
    flag); compatibility with the wasm3/pywasm3 examples; WASI (deferred).
 
-## Design: linking instances (globals and functions are built; memories and tables are not)
+## Design: linking instances (globals, functions and memories are built; tables are not)
 
 The goal is the "shared objects" of the plan: an instance uses a global, a memory, a table or a function of another instance.
 wasmext stays native: no `Global`/`Memory`/`Table` classes copied from the JavaScript API (as `wasmhost` has, because there an
@@ -237,8 +238,8 @@ could give `log`, `a` wins silently when the types agree; the dict with the expl
 Left out for now: a list of sources (`{"env": [a, {"log": print}]}`); a wrapper object for a function that is both callable and a
 reference (it cannot be done for a global or a memory, whose attribute has to be the value, and costs a type and a cache); instead,
 when functions are linked, a bound method of an instance (`{"add": a.add}`) can be accepted as the reference at no cost on a call.
-Names of exports that the module does not import are ignored. Built so far: globals (also immutable ones), functions, `a["name"]`,
-`__exports__` and the shelf from an instance; memories and tables next.
+Names of exports that the module does not import are ignored. Built so far: globals (also immutable ones), functions, memories, `a["name"]`,
+`__exports__` and the shelf from an instance; tables next (they first have to be exposed as an object).
 
 **Recognising an instance of another extension.** The types are not the same objects in two extensions, so `isinstance` cannot
 tell. The instance carries a capsule (a `PyCapsule`, usable in the limited API) with a tag and a version, which points to a

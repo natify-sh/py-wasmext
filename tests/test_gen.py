@@ -75,10 +75,13 @@ def test_an_externref_export_is_skipped_but_an_import_of_one_is_refused() -> Non
         generate(parse(refused), "m")
 
 
-def test_imported_memories_are_refused() -> None:
+def test_an_imported_memory_is_taken_from_another_instance_but_not_a_shared_one() -> None:
     data = module(section(2, vec(name("env") + name("mem") + b"\x02\x00" + leb(1))))
-    with pytest.raises(GenError, match="imported memory"):
-        generate(parse(data), "m")
+    glue = generate(parse(data), "m")
+    assert "wasm_rt_memory_t *w2c_env_mem(" in glue.source and "'mem': object" in glue.stub
+    shared = module(section(2, vec(name("env") + name("mem") + b"\x02\x03" + leb(1) + leb(2))))
+    with pytest.raises(GenError, match="imported shared memory"):
+        generate(parse(shared), "m")
 
 
 def test_the_module_name_must_be_an_identifier() -> None:

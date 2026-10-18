@@ -21,7 +21,7 @@ from __future__ import annotations
 import keyword
 from dataclasses import dataclass, field
 
-from ._wasm import FuncType, GlobalType, Import, Module, ValType
+from ._wasm import FuncType, GlobalType, Import, Limits, Module, ValType
 
 __all__ = ["GenError", "Glue", "generate", "mangle"]
 
@@ -147,6 +147,16 @@ class _Import:
 
 
 @dataclass
+class _ImportMemory:
+    module: str
+    field: str
+    limits: Limits
+    host: int  # index of the import module (the struct that holds the pointer)
+    slot: int  # the place among the memories of that module
+    symbol: str
+
+
+@dataclass
 class _ImportGlobal:
     module: str
     field: str
@@ -169,6 +179,8 @@ def generate(module: Module, name: str) -> Glue:
     global_imports: list[_ImportGlobal] = []
     slots: dict[str, int] = {}
     global_slots: dict[str, int] = {}
+    memory_imports: list[_ImportMemory] = []
+    memory_slots: dict[str, int] = {}
     for imp in module.imports:
         symbol = f"w2c_{mangle(imp.module, module=True)}_{mangle(imp.name)}"
         if imp.kind == "func" and isinstance(imp.type, FuncType):
@@ -192,12 +204,21 @@ def generate(module: Module, name: str) -> Glue:
                     imp.module, imp.name, imp.type.type, hosts.index(imp.module), slot, symbol, imp.type.mutable
                 )
             )
+        elif imp.kind == "memory" and isinstance(imp.type, Limits):
+            if imp.type.shared:
+                raise GenError(f"import {imp.module}.{imp.name}: an imported shared memory is not supported yet")
+            if imp.module not in hosts:
+                hosts.append(imp.module)
+            slot = memory_slots.get(imp.module, 0)
+            memory_slots[imp.module] = slot + 1
+            memory_imports.append(_ImportMemory(imp.module, imp.name, imp.type, hosts.index(imp.module), slot, symbol))
         else:
             raise GenError(f"import {imp.module}.{imp.name}: an imported {imp.kind} is not supported yet")
 
     # exports: functions and memories; the rest is left out, and reported
     funcs: list[tuple[str, FuncType]] = []
     memories: list[str] = []
+    memory_limits: list[Limits] = []
     globals_: list[tuple[str, GlobalType]] = []
     no_attribute: set[str] = set()
     for exp in module.exports:
@@ -216,6 +237,7 @@ def generate(module: Module, name: str) -> Glue:
                 funcs.append((exp.name, func))
         elif exp.kind == "memory":
             memories.append(exp.name)  # a memory64 is the same buffer: only its address type differs
+            memory_limits.append(module.all_memories[exp.index])
         elif exp.kind == "global":
             glob = module.all_globals[exp.index]
             if glob.type in _CTYPE:
@@ -225,7 +247,7 @@ def generate(module: Module, name: str) -> Glue:
         else:
             skipped.append(f"{exp.kind} {exp.name!r}")
 
-    has_imports = bool(imports or global_imports)
+    has_imports = bool(imports or global_imports or memory_imports)
     w: list[str] = []
     add = w.append
 
@@ -299,11 +321,15 @@ def generate(module: Module, name: str) -> Glue:
     add("    uint32_t size;      /* sizeof of this struct for the extension that made it */")
     add("    uint32_t version;   /* 1 */")
     add("    uint32_t kind;      /* WASMEXT_FUNC, ... */")
-    add("    uint32_t type;      /* the value type of a global, as numbered in the binary format (0x7F is i32) */")
-    add("    uint32_t flags;     /* bit 0: the global is mutable */")
+    add(
+        "    uint32_t type;      /* a global: its value type as numbered in the binary format (0x7F is i32); a memory: sizeof(wasm_rt_memory_t) */"
+    )
+    add(
+        "    uint32_t flags;     /* bit 0: the global is mutable; bit 1: the memory is 64-bit; bit 2: it is checked with guard pages */"
+    )
     add("    PyObject *owner;    /* the instance: a reader that keeps the address keeps a reference to it */")
     add(
-        "    void *address;      /* a global: the pointer to its value; a function: the function to call (see below) */"
+        "    void *address;      /* a global: the pointer to its value; a memory: the wasm_rt_memory_t; a function: the function to call (see below) */"
     )
     add("    void *instance;     /* a function: the first argument of that call */")
     add("    const char *signature;  /* a function: the parameters, '>', the results (i j f d o) */")
@@ -365,9 +391,12 @@ def generate(module: Module, name: str) -> Glue:
             if hosts[g.host] == host
         )
         n = max(slots.get(host, 0), 1)
+        memory_fields = "".join(
+            f" wasm_rt_memory_t *mp{m.slot}; PyObject *mo{m.slot};" for m in memory_imports if hosts[m.host] == host
+        )
         # fn: the Python callables; lf, li, lo: the function of another instance to call instead, its instance, and the owner
         add(
-            f"struct w2c_{mangle(host, module=True)} {{ PyObject *fn[{n}]; void *lf[{n}]; void *li[{n}]; PyObject *lo[{n}];{values} }};"
+            f"struct w2c_{mangle(host, module=True)} {{ PyObject *fn[{n}]; void *lf[{n}]; void *li[{n}]; PyObject *lo[{n}];{values}{memory_fields} }};"
         )
     add("")
     add("typedef struct {")
@@ -384,6 +413,7 @@ def generate(module: Module, name: str) -> Glue:
         add("    PyObject_HEAD")
         add("    InstanceObject *owner;")
         add(f"    wasm_rt_memory_t *(*get)(w2c_{prefix} *);")
+        add("    int export_index;  /* its place in export_table: the reference to it is made from that */")
         add("} MemoryObject;")
         add("")
 
@@ -392,6 +422,11 @@ def generate(module: Module, name: str) -> Glue:
         mod_struct = f"struct w2c_{mangle(g.module, module=True)}"
         add(f"{_CTYPE[g.type]} *{g.symbol}({mod_struct} *h) {{ return h->gp{g.slot}; }}")
     if global_imports:
+        add("")
+    for m in memory_imports:
+        mod_struct = f"struct w2c_{mangle(m.module, module=True)}"
+        add(f"wasm_rt_memory_t *{m.symbol}({mod_struct} *h) {{ return h->mp{m.slot}; }}")
+    if memory_imports:
         add("")
 
     # the functions the module imports, implemented over the callables
@@ -489,6 +524,8 @@ def generate(module: Module, name: str) -> Glue:
         add(f"    for (int k = 0; k < {slots.get(host, 0)}; k++) Py_VISIT(self->host{i}.lo[k]);")
     for g in global_imports:
         add(f"    Py_VISIT(self->host{g.host}.go{g.slot});")
+    for m in memory_imports:
+        add(f"    Py_VISIT(self->host{m.host}.mo{m.slot});")
     add("    return 0;")
     add("}")
     add("")
@@ -498,6 +535,8 @@ def generate(module: Module, name: str) -> Glue:
         add(f"    for (int k = 0; k < {slots.get(host, 0)}; k++) Py_CLEAR(self->host{i}.lo[k]);")
     for g in global_imports:
         add(f"    Py_CLEAR(self->host{g.host}.go{g.slot});")
+    for m in memory_imports:
+        add(f"    Py_CLEAR(self->host{m.host}.mo{m.slot});")
     add("    return 0;")
     add("}")
     add("")
@@ -646,6 +685,75 @@ def generate(module: Module, name: str) -> Glue:
                 add("            Py_DECREF(v);")
                 add("        }")
             add("    }")
+    for m in memory_imports:
+        where = f"{m.module}.{m.field}"
+        host = f"self->host{m.host}"
+        lim = m.limits
+        add("    {")
+        add(f"        PyObject *v = lookup_import(imports, {_c_string(m.module)}, {_c_string(m.field)}, 0);")
+        add("        if (v == NULL) { Py_DECREF(self); return NULL; }")
+        add("        PyObject *ref = NULL;")
+        add("        if (PyCapsule_IsValid(v, WASMEXT_EXPORT)) {  /* the reference to an export of another instance */")
+        add("            Py_INCREF(v);")
+        add("            ref = v;")
+        add(
+            "        } else {  /* the memoryview of a memory of an instance: the object behind it gives the reference */"
+        )
+        add('            PyObject *obj = PyObject_GetAttrString(v, "obj");')
+        add('            if (obj != NULL) ref = PyObject_GetAttrString(obj, "__wasmext_ref__");')
+        add("            Py_XDECREF(obj);")
+        add("            PyErr_Clear();")
+        add("        }")
+        add("        if (ref != NULL && PyCapsule_IsValid(ref, WASMEXT_EXPORT)) {")
+        add("            wasmext_export *e = (wasmext_export *)PyCapsule_GetPointer(ref, WASMEXT_EXPORT);")
+        add("            wasm_rt_memory_t *mem = (wasm_rt_memory_t *)e->address;")
+        add("            if (e->version != 1 || e->size < sizeof(wasmext_export)) {")
+        add(
+            f"                PyErr_SetString(LinkError, {_c_string(f'import {where}: the export is from an incompatible version of wasmext')});"
+        )
+        add("            } else if (e->kind != WASMEXT_MEMORY) {")
+        add(
+            f"                PyErr_SetString(LinkError, {_c_string(f'import {where} is a memory: the export given is not')});"
+        )
+        add("            } else if (e->type != sizeof(wasm_rt_memory_t)) {")
+        add(
+            f"                PyErr_SetString(LinkError, {_c_string(f'import {where}: the memory is from an incompatible runtime of wasm2c')});"
+        )
+        add(f"            }} else if (((e->flags >> 1) & 1) != {int(lim.is64)}) {{")
+        add(
+            f"                PyErr_SetString(LinkError, {_c_string(f'import {where} is a {chr(54)}{chr(52)}-bit memory the other way: memory64 differs')});"
+        )
+        add("            } else if (((e->flags >> 2) & 1) != (WASM_RT_MEMCHECK_GUARD_PAGES ? 1 : 0)) {")
+        add(
+            f"                PyErr_SetString(LinkError, {_c_string(f'import {where}: one module is built with guard pages and the other without (--no-guard-pages)')});"
+        )
+        add(f"            }} else if (mem->pages < {lim.min}ULL) {{")
+        add(
+            f'                PyErr_Format(LinkError, "import {where}: the memory has %llu pages, the module needs at least {lim.min}", (unsigned long long)mem->pages);'
+        )
+        if lim.max is not None:
+            add(f"            }} else if (mem->max_pages > {lim.max}ULL) {{")
+            add(
+                f'                PyErr_Format(LinkError, "import {where}: the memory may grow to %llu pages, the module allows {lim.max}", (unsigned long long)mem->max_pages);'
+            )
+        add("            } else {")
+        add(f"                {host}.mp{m.slot} = mem;")
+        add("                Py_INCREF(e->owner);")
+        add(f"                {host}.mo{m.slot} = e->owner;")
+        add("            }")
+        add("            Py_DECREF(ref);")
+        add("            Py_DECREF(v);")
+        add("            if (PyErr_Occurred()) { Py_DECREF(self); return NULL; }")
+        add("        } else {")
+        add("            Py_XDECREF(ref);")
+        add("            Py_DECREF(v);")
+        add(
+            f"            PyErr_SetString(LinkError, {_c_string(f'import {where} is a memory: pass the memory of another instance (instance.memory or instance[{chr(39)}memory{chr(39)}])')});"
+        )
+        add("            Py_DECREF(self);")
+        add("            return NULL;")
+        add("        }")
+        add("    }")
     add("    ENTER_WASM({ Py_DECREF(self); return NULL; })")
     host_args = "".join(f", &self->host{i}" for i in range(len(hosts)))
     add(f"    wasm2c_{prefix}_instantiate(&self->inst{host_args});")
@@ -693,7 +801,7 @@ def generate(module: Module, name: str) -> Glue:
         add("")
     # instance['name'] and instance.__exports__: the references to the exports (capsules that another extension reads)
     # name, kind, type, flags, the getter of the address of a global, the function to call, its signature
-    mapped: list[tuple[str, int, int, int, str, str, str]] = []
+    mapped: list[tuple[str, int, int | str, int | str, str, str, str]] = []
     for i, (exp_name, glob) in enumerate(globals_):
         accessor = f"w2c_{prefix}_{mangle(exp_name)}"
         add(f"static void *export_address{i}(InstanceObject *self) {{ return (void *){accessor}(&self->inst); }}")
@@ -722,7 +830,14 @@ def generate(module: Module, name: str) -> Glue:
         add("}")
         add("")
         mapped.append((exp_name, 0, 0, 0, "NULL", f"(void *)link_call{i}", _c_string(_signature_code(func))))
-    mapped += [(exp_name, 2, 0, 0, "NULL", "NULL", "NULL") for exp_name in memories]
+    memory_base = len(mapped)
+    for i, (exp_name, lim) in enumerate(zip(memories, memory_limits, strict=True)):
+        accessor = f"w2c_{prefix}_{mangle(exp_name)}"
+        add(f"static void *export_memory{i}(InstanceObject *self) {{ return (void *){accessor}(&self->inst); }}")
+        flags = f"({2 * int(lim.is64)}u | (WASM_RT_MEMCHECK_GUARD_PAGES ? 4u : 0u))"
+        mapped.append((exp_name, 2, "(uint32_t)sizeof(wasm_rt_memory_t)", flags, f"export_memory{i}", "NULL", "NULL"))
+    if memories:
+        add("")
     add(
         "static const struct { const char *name; uint32_t kind, type, flags; void *(*address)(InstanceObject *); "
         "void *function; const char *signature; } export_table[] = {"
@@ -813,6 +928,21 @@ def generate(module: Module, name: str) -> Glue:
         add("    return PyBuffer_FillInfo(view, self, mem->data, (Py_ssize_t)mem->size, 0, flags);")
         add("}")
         add("")
+        add(
+            "/* memory.__wasmext_ref__: the reference to this memory, for the instance that imports it (see Instance_new) */"
+        )
+        add("static PyObject *Memory_ref(PyObject *self, void *closure) {")
+        add("    (void)closure;")
+        add("    return export_ref((PyObject *)((MemoryObject *)self)->owner, ((MemoryObject *)self)->export_index);")
+        add("}")
+        add("")
+        add("static PyGetSetDef Memory_getset[] = {")
+        add(
+            '    {"__wasmext_ref__", (getter)Memory_ref, NULL, "the reference to the memory, to be given as an import", NULL},'
+        )
+        add("    {NULL, NULL, NULL, NULL, NULL}")
+        add("};")
+        add("")
         add("static void Memory_dealloc(MemoryObject *self) {")
         add("    PyTypeObject *tp = Py_TYPE((PyObject *)self);")
         add("    Py_XDECREF((PyObject *)self->owner);")
@@ -841,6 +971,7 @@ def generate(module: Module, name: str) -> Glue:
         add("    Py_INCREF((PyObject *)self);")
         add("    m->owner = self;")
         add("    m->get = memory_getters[(size_t)closure];")
+        add(f"    m->export_index = {memory_base} + (int)(size_t)closure;")
         add("    view = PyMemoryView_FromObject((PyObject *)m);")
         add("    Py_DECREF(m);")
         add("    return view;")
@@ -919,6 +1050,7 @@ def generate(module: Module, name: str) -> Glue:
         add("static PyType_Slot memory_slots[] = {")
         add("    {Py_bf_getbuffer, Memory_getbuffer},")
         add("    {Py_tp_dealloc, Memory_dealloc},")
+        add("    {Py_tp_getset, Memory_getset},")
         add("    {0, NULL}")
         add("};")
         add(
@@ -1021,9 +1153,9 @@ def _stub(
         by_module.setdefault(imp.module, []).append(imp)
     for i, (_module, members) in enumerate(by_module.items()):
         items = ", ".join(
-            f"{_py_string(m.name)}: {_callable_type(m.type) if isinstance(m.type, FuncType) else _global_import_type(m.type)}"
+            f"{_py_string(m.name)}: {_import_type(m.type)}"
             for m in members
-            if isinstance(m.type, (FuncType, GlobalType))
+            if isinstance(m.type, (FuncType, GlobalType, Limits))
         )
         lines.append(f"_Imports{i} = TypedDict('_Imports{i}', {{{items}}})")
     if by_module:
@@ -1059,6 +1191,14 @@ def _stub(
         else:
             lines.append(_not_a_name("memory ", name))
     return "\n".join(lines) + "\n"
+
+
+def _import_type(thing: FuncType | GlobalType | Limits) -> str:
+    if isinstance(thing, FuncType):
+        return _callable_type(thing)
+    if isinstance(thing, Limits):  # a memory: the memory of another instance
+        return "object"
+    return _global_import_type(thing)
 
 
 def _global_import_type(glob: GlobalType) -> str:

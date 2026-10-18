@@ -732,3 +732,64 @@ except pkg.b.LinkError as exc:
 """
     ran = subprocess.run([sys.executable, "-c", code], cwd=tmp_path, capture_output=True, text=True, check=False)
     assert "import env.add is a function ii>i" in ran.stdout and "(i>)" in ran.stdout, (ran.stdout, ran.stderr[-300:])
+
+
+_MEMORY_A = '(module (memory (export "memory") 1 4) (data (i32.const 0) "hello"))'
+_MEMORY_B = """
+(module
+  (import "env" "memory" (memory 1))
+  (func (export "load") (param i32) (result i32) local.get 0 i32.load8_u)
+  (func (export "store") (param i32 i32) local.get 0 local.get 1 i32.store8)
+  (func (export "grow") (param i32) (result i32) local.get 0 memory.grow))
+"""
+
+
+def test_instances_share_a_memory(tmp_path: Path, wabt: Path) -> None:
+    _build_modules(tmp_path, wabt, a=_MEMORY_A, b=_MEMORY_B)
+    code = """
+import pkg.a, pkg.b
+a = pkg.a.Instance()
+
+b = pkg.b.Instance({'env': a})                          # the shelf from an instance
+print(chr(b.load(0)), len(a.memory))                      # h 65536
+b.store(1, 65)
+print(bytes(a.memory[:5]))                                # b'hAllo': one memory
+a.memory[2] = 66
+print(b.load(2))                                          # 66
+print(b.grow(1), len(a.memory))                           # 1 131072: a grows with b
+
+c = pkg.b.Instance({'env': {'memory': a.memory}})       # a memoryview of the memory stands for it
+d = pkg.b.Instance({'env': {'memory': a['memory']}})    # or the reference
+print(c.load(1), d.load(1))                               # 65 65
+"""
+    ran = subprocess.run([sys.executable, "-c", code], cwd=tmp_path, capture_output=True, text=True, check=False)
+    assert ran.returncode == 0, ran.stderr[-800:]
+    assert ran.stdout.splitlines() == ["h 65536", "b'hAllo'", "66", "1 131072", "65 65"]
+
+
+def test_linking_a_memory_checks_its_size_and_kind(tmp_path: Path, wabt: Path) -> None:
+    _build_modules(
+        tmp_path,
+        wabt,
+        a=_MEMORY_A,
+        big='(module (import "env" "memory" (memory 2)))',
+        small='(module (import "env" "memory" (memory 1 2)))',
+        wide='(module (import "env" "memory" (memory i64 1)))',
+        other='(module (import "env" "memory" (memory 1)) (global (export "g") i32 (i32.const 1)))',
+    )
+    code = """
+import pkg.a, pkg.big, pkg.small, pkg.wide, pkg.other
+a = pkg.a.Instance()
+for module, given in ((pkg.big, a.memory), (pkg.small, a.memory), (pkg.wide, a.memory), (pkg.other, 3)):
+    try:
+        module.Instance({'env': {'memory': given}})
+    except module.LinkError as exc:
+        print(exc)
+"""
+    ran = subprocess.run([sys.executable, "-c", code], cwd=tmp_path, capture_output=True, text=True, check=False)
+    assert ran.returncode == 0, ran.stderr[-800:]
+    big, small, wide, other = ran.stdout.splitlines()
+    assert "1 pages" in big and "at least 2" in big
+    assert "may grow to 4 pages" in small and "allows 2" in small
+    assert "memory64" in wide
+    assert "is a memory" in other

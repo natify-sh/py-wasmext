@@ -119,7 +119,7 @@ a call from Python and of a call back into Python was not measured.
 
 ### Where the suite ran
 
-The whole suite (`pytest`, 160 tests and 4 expected failures at the time of writing), `ruff` and `pyright`:
+The whole suite (`pytest`, 161 tests and 4 expected failures at the time of writing), `ruff` and `pyright`:
 
 | Where | Python | C compiler | Evidence |
 | --- | --- | --- | --- |
@@ -128,18 +128,19 @@ The whole suite (`pytest`, 160 tests and 4 expected failures at the time of writ
 | macOS (macos-latest, Apple Silicon) | 3.11 | AppleClang | CI, the same |
 | windows-latest (x64) | 3.11 | MSVC | CI, the same |
 
-CI at commit `a2ee7ef` (both workflows green on all of these). The suite is not run on Linux ARM64, Windows ARM64, macOS
+CI at commit `53483bb` (both workflows green on all of these; the first attempt of that run had no runners, the repository was private
+and the 2000 free minutes were used up, and it was run again after it became public). The suite is not run on Linux ARM64, Windows ARM64, macOS
 Intel or the free-threaded build; only the example is (below).
 
 ### Platforms where a native extension was built and tested
 
-The example (CoreMark) built by cibuildwheel and its tests run on the wheel (`Example wheels`, commit `a2ee7ef`, green):
+The example (CoreMark) built by cibuildwheel and its tests run on the wheel (`Example wheels`, commit `53483bb`, green on all seven):
 
 | Platform | Evidence |
 | --- | --- |
 | Linux x86-64 | CI; `manylinux` and `musllinux_1_2` wheels, cp311 abi3 and cp314t, seen in the log of run #23 (commit `0e251d8`) |
 | Linux ARM64 | CI job passed (the wheel list was not read) |
-| Windows x64, Windows ARM64, Windows x86 (MSVC) | CI jobs passed (the wheel lists were not read); x86 at commit `5bc0dc1`, the others also at `a2ee7ef` |
+| Windows x64, Windows ARM64, Windows x86 (MSVC) | CI jobs passed (the wheel lists were not read) |
 | macOS Apple Silicon, macOS Intel | CI jobs passed (the wheel lists were not read) |
 | Pyodide 4.0.9 (CPython 3.13, wasm32) | local, `cibuildwheel --platform pyodide`: the 2 tests passed inside Pyodide (not in CI) |
 | Android arm64-v8a (CPython 3.13, NDK 27) | local: the wheel is built, the tests were skipped, **not run** (not in CI) |
@@ -152,8 +153,6 @@ The cibuildwheel configuration of the example is `build = "cp311-* cp314t-*"`.
 ### Not confirmed
 
 - PyPy, iOS.
-- The commits after `5bc0dc1` (the big-endian change, this text): the runners did not start their jobs (they ended in a few seconds, with no
-  runner and no log, as when the minutes run out), so CI says nothing about them; they passed the suite locally.
 - The Linux architectures above in CI (they were built by hand under QEMU, not in a workflow), the `cp314t` wheels on them, and
   `musllinux_1_2` x86-64 locally (the disk of the machine was full; CI built it in run #23, commit `0e251d8`).
 - Big-endian hosts (s390x): a module that exports its memory, or uses `v128` in a signature, does not work there (see above);

@@ -21,6 +21,7 @@ from wasmext import generate, parse
 from wasmext._wasmize import _tail_call_locals  # pyright: ignore[reportPrivateUsage]
 
 DATA = Path(__file__).parent / "data"
+WASMEXT_C = Path(__file__).parent.parent / "src" / "wasmext" / "c"
 
 
 def _wabt_dir() -> Path | None:
@@ -58,6 +59,9 @@ def build_extension(wabt: Path, tmp_path_factory: pytest.TempPathFactory) -> Cal
             subprocess.run([wabt / "bin" / "wat2wasm", source, "-o", wasm], check=True)
         glue = generate(parse(wasm.read_bytes()), name)
         (out / f"{name}_glue.c").write_text(glue.source, encoding="utf-8")
+        if glue.wasi_preview1:  # the C of wasmext for WASI is beside the glue, which includes its header
+            for c_name in ("wasi_preview1.c", "wasi_preview1.h"):
+                (out / c_name).write_bytes((WASMEXT_C / c_name).read_bytes())
         subprocess.run(
             [wabt / "bin" / "wasm2c", wasm, "-o", out / f"{name}_w2c.c", f"--module-name={name}"], check=True
         )
@@ -80,10 +84,18 @@ def build_extension(wabt: Path, tmp_path_factory: pytest.TempPathFactory) -> Cal
             [cc, "-O1", "-fPIC", *strict, *limited, *include, "-c", out / f"{name}_glue.c", "-o", glue_object],
             check=True,
         )
+        extra: list[Path] = []
+        if glue.wasi_preview1:  # built as strictly as the glue
+            wasi_object = out / f"{name}_wasi_preview1.o"
+            subprocess.run(
+                [cc, "-O1", "-fPIC", *strict, *limited, *include, "-c", out / "wasi_preview1.c", "-o", wasi_object],
+                check=True,
+            )
+            extra.append(wasi_object)
         subprocess.run(
             [
                 cc, "-O1", "-w", "-shared", "-fPIC", *link_flags, *limited, *include,
-                glue_object, out / f"{name}_w2c.c", runtime / "wasm-rt-impl.c", runtime / "wasm-rt-mem-impl.c",
+                glue_object, *extra, out / f"{name}_w2c.c", runtime / "wasm-rt-impl.c", runtime / "wasm-rt-mem-impl.c",
                 runtime / "wasm-rt-exceptions-impl.c",
                 "-o", so,
             ],

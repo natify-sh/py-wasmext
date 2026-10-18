@@ -46,7 +46,7 @@ packages = ["wasmext"]
 py-modules = ["wasmimport"]
 
 [tool.setuptools.package-data]
-wasmext = ["py.typed"]
+wasmext = ["py.typed", "c/*.c", "c/*.h"]
 
 [tool.setuptools_scm]
 root = "."

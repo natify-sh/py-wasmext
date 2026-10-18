@@ -311,7 +311,7 @@ when the extension is made" for them); 2. memories; 3. functions; 4. tables.
 **Decided**: the forms above; the format of the link table (capsule) is private, documented and
 versioned (not a promise to others) until a second user of it exists.
 
-## Design: WASI (decided; stage 1 is next)
+## Design: WASI (decided; stage 1 is built, see the end of this section)
 
 **Decided.** WASI is part of wasmext and is compiled into the native module; a built module needs nothing at run time (not wasmext
 either), so a shared library that modules call into was rejected. The code is hand-written C, one file for each interface the module imports:
@@ -359,6 +359,16 @@ give the names and signatures. Its code is not copied: this is written from the 
 - The command `_start` is called as an export, as any other (no `run()` helper in the first version).
 - Test modules: `lua.wasm` (wasi_unstable, 19 imports) first, then `coreutils.wasm` (preview1, 32 imports, 10.8 MB, which makes a very large
   C file and a long build).
+
+**Stage 1 (built, `wasi_snapshot_preview1` only).** `src/wasmext/c/wasi_preview1.{c,h}`, copied beside the C of a module that imports
+`wasi_snapshot_preview1` and built with it (the glue calls the functions directly, through the slots that linking instances uses). The calls
+that work: `args_*`, `environ_*`, `clock_res_get`, `clock_time_get`, `random_get`, `sched_yield`, `proc_exit` (raises the module's `WasiExit`,
+`.code`), `fd_read` (stdin), `fd_write` (stdout, stderr), `fd_close`, `fd_fdstat_get`, `fd_prestat_get` (always `EBADF`: nothing is
+preopened), `fd_seek`, `fd_tell` (`ESPIPE` on the standard streams). Every other call of the 46 answers `ENOSYS` (the sockets
+`ENOTSOCK`). `Instance()` needs no imports; `wasi={...}` takes args, env, stdin, stdout, stderr; `preopens` raises `NotImplementedError`.
+What the caller gives as an import wins, call by call. Not built: `wasi_unstable.c`, the files and directories, `poll_oneoff`. Tests:
+`tests/test_wasi.py` (through `build_extension`, not on Windows) and `test_a_wasi_module_is_built_with_the_wasi_c_of_wasmext` (the whole
+path, every platform of CI). `lua.wasm` is not run yet (it imports `wasi_unstable` and opens a file).
 
 ## Decisions
 

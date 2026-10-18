@@ -60,6 +60,7 @@ class Glue:
     source: str  # the C of the glue
     skipped: list[str] = field(default_factory=list[str])
     stub: str = ""  # the .pyi of the extension module
+    wasi_preview1: bool = False  # the glue calls wasi_preview1.c: it must be copied and built with the module
 
 
 def mangle(name: str, *, module: bool = False) -> str:
@@ -134,6 +135,10 @@ def _ident(name: str) -> str:
     if not last.isidentifier() or not last.isascii():
         raise GenError(f"{name!r} is not a valid extension module name")
     return last
+
+
+# the module a WASI program imports its system calls from; wasmext gives them (wasi_preview1.c) unless the caller does
+_WASI_PREVIEW1 = "wasi_snapshot_preview1"
 
 
 @dataclass
@@ -248,6 +253,11 @@ def generate(module: Module, name: str) -> Glue:
             skipped.append(f"{exp.kind} {exp.name!r}")
 
     has_imports = bool(imports or global_imports or memory_imports)
+    uses_wasi = any(imp.module == _WASI_PREVIEW1 for imp in imports)
+    # without other imports the caller need not give any: the module gets WASI by itself
+    needs_imports = any(imp.module != _WASI_PREVIEW1 for imp in imports) or bool(global_imports or memory_imports)
+    if uses_wasi and "memory" not in memories:
+        raise GenError(f"the module imports {_WASI_PREVIEW1} but does not export its memory as 'memory'")
     w: list[str] = []
     add = w.append
 
@@ -259,6 +269,8 @@ def generate(module: Module, name: str) -> Glue:
     add(f'#include "{last}_w2c.h"')
     add('#include "wasm-rt-impl.h"')
     add('#include "wasm-rt-exceptions.h"')
+    if uses_wasi:
+        add('#include "wasi_preview1.h"')
     add("#ifndef _WIN32")
     add("#include <signal.h>")
     add("#endif")
@@ -268,6 +280,8 @@ def generate(module: Module, name: str) -> Glue:
     add("")
     add("static PyObject *TrapError;")
     add("static PyObject *LinkError;")
+    if uses_wasi:
+        add("static PyObject *WasiExitError;")
     add("static PyTypeObject *InstanceType;")
     if memories:
         add("static PyTypeObject *MemoryType;")
@@ -404,6 +418,8 @@ def generate(module: Module, name: str) -> Glue:
     add(f"    w2c_{prefix} inst;")
     add("    int instantiated;")
     add("    PyObject *weakreflist;")
+    if uses_wasi:
+        add("    wasmext_wasi *wasi;")
     for i, host in enumerate(hosts):
         add(f"    struct w2c_{mangle(host, module=True)} host{i};")
     add("} InstanceObject;")
@@ -522,6 +538,8 @@ def generate(module: Module, name: str) -> Glue:
     for i, host in enumerate(hosts):
         add(f"    for (int k = 0; k < {slots.get(host, 0)}; k++) Py_VISIT(self->host{i}.fn[k]);")
         add(f"    for (int k = 0; k < {slots.get(host, 0)}; k++) Py_VISIT(self->host{i}.lo[k]);")
+    if uses_wasi:
+        add("    if (self->wasi != NULL) wasmext_wasi_traverse(self->wasi, visit, arg);")
     for g in global_imports:
         add(f"    Py_VISIT(self->host{g.host}.go{g.slot});")
     for m in memory_imports:
@@ -533,6 +551,8 @@ def generate(module: Module, name: str) -> Glue:
     for i, host in enumerate(hosts):
         add(f"    for (int k = 0; k < {slots.get(host, 0)}; k++) Py_CLEAR(self->host{i}.fn[k]);")
         add(f"    for (int k = 0; k < {slots.get(host, 0)}; k++) Py_CLEAR(self->host{i}.lo[k]);")
+    if uses_wasi:
+        add("    if (self->wasi != NULL) wasmext_wasi_clear(self->wasi);")
     for g in global_imports:
         add(f"    Py_CLEAR(self->host{g.host}.go{g.slot});")
     for m in memory_imports:
@@ -546,12 +566,18 @@ def generate(module: Module, name: str) -> Glue:
     add("    if (self->weakreflist != NULL) PyObject_ClearWeakRefs((PyObject *)self);")
     add(f"    if (self->instantiated) wasm2c_{prefix}_free(&self->inst);")
     add("    Instance_clear(self);")
+    if uses_wasi:
+        add("    wasmext_wasi_free(self->wasi);")
     add("    ((freefunc)PyType_GetSlot(tp, Py_tp_free))((PyObject *)self);")
     add("    Py_DECREF(tp);")
     add("}")
     add("")
     add("static PyObject *Instance_new(PyTypeObject *type, PyObject *args, PyObject *kwds) {")
-    if has_imports:
+    if uses_wasi:
+        add('    static char *kwlist[] = {"imports", "wasi", NULL};')
+        add("    PyObject *imports = Py_None, *wasi = Py_None;")
+        add('    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|O$O:Instance", kwlist, &imports, &wasi)) return NULL;')
+    elif has_imports:
         add('    static char *kwlist[] = {"imports", NULL};')
         add("    PyObject *imports = Py_None;")
         add('    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|O:Instance", kwlist, &imports)) return NULL;')
@@ -560,21 +586,51 @@ def generate(module: Module, name: str) -> Glue:
         add('    if (!PyArg_ParseTupleAndKeywords(args, kwds, ":Instance", kwlist)) return NULL;')
     add("    InstanceObject *self = (InstanceObject *)PyType_GenericAlloc(type, 0);")
     add("    if (self == NULL) return NULL;")
+    if uses_wasi:
+        add(f"    self->wasi = wasmext_wasi_new(wasi, WasiExitError, {_c_string(last)});")
+        add("    if (self->wasi == NULL) { Py_DECREF(self); return NULL; }")
+        add(f"    wasmext_wasi_bind(self->wasi, w2c_{prefix}_{mangle('memory')}(&self->inst));")
     if has_imports:
-        add("    if (imports == Py_None) {")
-        add(
-            '        PyErr_SetString(LinkError, "the module has imports: pass imports={module: {name: callable or value}}");'
-        )
-        add("        Py_DECREF(self);")
-        add("        return NULL;")
-        add("    }")
+        if needs_imports:
+            add("    if (imports == Py_None) {")
+            add(
+                '        PyErr_SetString(LinkError, "the module has imports: pass imports={module: {name: callable or value}}");'
+            )
+            add("        Py_DECREF(self);")
+            add("        return NULL;")
+            add("    }")
         for imp in imports:
             where = f"{imp.module}.{imp.field}"
             host = f"self->host{imp.host}"
             signature = _signature_code(imp.func)
             add("    {")
-            add(f"        PyObject *v = lookup_import(imports, {_c_string(imp.module)}, {_c_string(imp.field)}, 0);")
-            add("        if (v == NULL) { Py_DECREF(self); return NULL; }")
+            if imp.module == _WASI_PREVIEW1:
+                # what the caller gives wins; otherwise wasmext gives the call (wasi_preview1.c), which is then called directly
+                add("        PyObject *v = NULL;")
+                add("        if (imports != Py_None) {")
+                add(f"            v = lookup_import(imports, {_c_string(imp.module)}, {_c_string(imp.field)}, 0);")
+                add(
+                    "            if (v == NULL && !PyErr_ExceptionMatches(LinkError)) { Py_DECREF(self); return NULL; }"
+                )
+                add("            if (v == NULL) PyErr_Clear();")
+                add("        }")
+                add("        if (v == NULL) {")
+                add(f"            void *wasi_function = wasmext_wasi_preview1_lookup({_c_string(imp.field)});")
+                add("            if (wasi_function == NULL) {")
+                add(
+                    f"                PyErr_SetString(LinkError, {_c_string(f'import {where} is not a function of WASI preview1')});"
+                )
+                add("                Py_DECREF(self);")
+                add("                return NULL;")
+                add("            }")
+                add(f"            {host}.lf[{imp.slot}] = wasi_function;")
+                add(f"            {host}.li[{imp.slot}] = self->wasi;")
+                add("        } else {")
+            else:
+                add(
+                    f"        PyObject *v = lookup_import(imports, {_c_string(imp.module)}, {_c_string(imp.field)}, 0);"
+                )
+                add("        if (v == NULL) { Py_DECREF(self); return NULL; }")
             add("        PyObject *ref = NULL;")
             add(
                 "        if (PyCapsule_IsValid(v, WASMEXT_EXPORT)) {  /* the reference to an export of another instance */"
@@ -628,6 +684,8 @@ def generate(module: Module, name: str) -> Glue:
             add("            Py_DECREF(self);")
             add("            return NULL;")
             add("        }")
+            if imp.module == _WASI_PREVIEW1:
+                add("        }")
             add("    }")
         for g in global_imports:
             if g.type == "v128":
@@ -1074,10 +1132,21 @@ def generate(module: Module, name: str) -> Glue:
     add(
         f'    LinkError = PyErr_NewExceptionWithDoc({_c_string(name + ".LinkError")}, "An import is missing", PyExc_Exception, NULL);'
     )
+    if uses_wasi:
+        add(
+            f'    WasiExitError = PyErr_NewExceptionWithDoc({_c_string(name + ".WasiExit")}, "The WebAssembly program called proc_exit (its code is .code)", PyExc_Exception, NULL);'
+        )
     add("    InstanceType = (PyTypeObject *)PyType_FromSpec(&instance_spec);")
     if memories:
         add("    MemoryType = (PyTypeObject *)PyType_FromSpec(&memory_spec);")
-    add("    if (!TrapError || !LinkError || !InstanceType" + (" || !MemoryType" if memories else "") + ") goto fail;")
+    add(
+        "    if (!TrapError || !LinkError || !InstanceType"
+        + (" || !WasiExitError" if uses_wasi else "")
+        + (" || !MemoryType" if memories else "")
+        + ") goto fail;"
+    )
+    if uses_wasi:
+        add('    if (PyModule_AddObjectRef(m, "WasiExit", WasiExitError) < 0) goto fail;')
     add('    if (PyModule_AddObjectRef(m, "Trap", TrapError) < 0) goto fail;')
     add('    if (PyModule_AddObjectRef(m, "LinkError", LinkError) < 0) goto fail;')
     add('    if (PyModule_AddObjectRef(m, "Instance", (PyObject *)InstanceType) < 0) goto fail;')
@@ -1086,7 +1155,10 @@ def generate(module: Module, name: str) -> Glue:
     add("    Py_DECREF(m);")
     add("    return NULL;")
     add("}")
-    return Glue("\n".join(w) + "\n", skipped, _stub(last, funcs, memories, globals_, module.imports))
+    stub_imports = [imp for imp in module.imports if imp.module != _WASI_PREVIEW1]
+    return Glue(
+        "\n".join(w) + "\n", skipped, _stub(last, funcs, memories, globals_, stub_imports, uses_wasi), uses_wasi
+    )
 
 
 # the value types as the binary format of WebAssembly numbers them: what the link between two extensions says of a global
@@ -1135,6 +1207,7 @@ def _stub(
     memories: list[str],
     globals_: list[tuple[str, GlobalType]],
     imports: list[Import],
+    wasi: bool = False,
 ) -> str:
     """The `.pyi` for the extension module: what a type checker and an editor can know of an extension."""
     # The formatter and the linter of the project the stub lands in leave a generated file alone (the second noqa is
@@ -1145,9 +1218,15 @@ def _stub(
         "# ruff: noqa: PGH004",
         "# fmt: off",
     ]
-    if imports:
+    if imports or wasi:
         lines += ["from collections.abc import Callable", "from typing import TypedDict"]
-    lines += ["", "class Trap(RuntimeError): ...", "class LinkError(Exception): ...", ""]
+    lines += ["", "class Trap(RuntimeError): ...", "class LinkError(Exception): ..."]
+    if wasi:
+        lines += ["class WasiExit(Exception):", "    code: int", ""]
+        wasi_keys = "'args': list[str], 'env': dict[str, str], 'stdin': object, 'stdout': object, "
+        wasi_keys += "'stderr': object, 'preopens': dict[str, str]"
+        lines.append(f"Wasi = TypedDict('Wasi', {{{wasi_keys}}}, total=False)")
+    lines.append("")
     by_module: dict[str, list[Import]] = {}
     for imp in imports:
         by_module.setdefault(imp.module, []).append(imp)
@@ -1162,9 +1241,15 @@ def _stub(
         fields = ", ".join(f"{_py_string(m)}: _Imports{i}" for i, m in enumerate(by_module))
         lines += [f"Imports = TypedDict('Imports', {{{fields}}})", ""]
     lines.append("class Instance:")
-    lines.append(
-        "    def __init__(self, imports: Imports) -> None: ..." if by_module else "    def __init__(self) -> None: ..."
-    )
+    if wasi:
+        required = "imports: Imports, " if by_module else "imports: None = None, "
+        lines.append(f"    def __init__(self, {required}*, wasi: Wasi | None = None) -> None: ...")
+    else:
+        lines.append(
+            "    def __init__(self, imports: Imports) -> None: ..."
+            if by_module
+            else "    def __init__(self) -> None: ..."
+        )
     lines += [
         "    @property",
         "    def __exports__(self) -> dict[str, object]: ...",

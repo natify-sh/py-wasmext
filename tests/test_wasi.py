@@ -1,0 +1,163 @@
+"""WASI, `wasi_snapshot_preview1`, compiled into the module (src/wasmext/c/wasi_preview1.c): the module gets it by itself."""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from pathlib import Path
+from types import ModuleType
+from typing import Any
+
+import pytest
+
+DATA = Path(__file__).parent / "data"
+Builder = Callable[..., ModuleType]
+
+
+def test_hello_writes_to_stdout_and_exits_with_a_code(
+    build_extension: Builder, capsys: pytest.CaptureFixture[str]
+) -> None:
+    mod = build_extension(DATA / "wasi_hello.wat", "wasi_hello")
+    inst = mod.Instance()  # no imports: the module gets WASI by itself
+    with pytest.raises(mod.WasiExit) as info:
+        inst._start()
+    assert info.value.code == 3
+    assert capsys.readouterr().out == "hello, wasi\n"
+
+
+def probe(build_extension: Builder, **config: object) -> tuple[Any, Any]:
+    mod = build_extension(DATA / "wasi_probe.wat", "wasi_probe")
+    return mod, mod.Instance(wasi=config) if config else mod.Instance()
+
+
+def u32(mem: memoryview, at: int) -> int:
+    return int.from_bytes(mem[at : at + 4], "little")
+
+
+def strings(mem: memoryview, table: int, count: int) -> list[bytes]:
+    out: list[bytes] = []
+    for i in range(count):
+        start = u32(mem, table + 4 * i)
+        out.append(bytes(mem[start:]).split(b"\0", 1)[0])
+    return out
+
+
+def test_arguments_and_environment_are_what_the_caller_gave(build_extension: Builder) -> None:
+    _, inst = probe(build_extension, args=["prog", "-v", "héllo"], env={"A": "1", "B": "two"})
+    mem = inst.memory
+    assert inst.args_sizes_get(0, 4) == 0
+    assert (u32(mem, 0), u32(mem, 4)) == (3, len(b"prog\0-v\0h\xc3\xa9llo\0"))
+    assert inst.args_get(0x100, 0x200) == 0
+    assert strings(mem, 0x100, 3) == [b"prog", b"-v", "héllo".encode()]
+    assert inst.environ_sizes_get(0, 4) == 0
+    assert (u32(mem, 0), u32(mem, 4)) == (2, len(b"A=1\0B=two\0"))
+    assert inst.environ_get(0x100, 0x200) == 0
+    assert strings(mem, 0x100, 2) == [b"A=1", b"B=two"]
+
+
+def test_defaults_are_the_name_of_the_module_and_an_empty_environment(build_extension: Builder) -> None:
+    _, inst = probe(build_extension)
+    mem = inst.memory
+    inst.args_sizes_get(0, 4)
+    assert (u32(mem, 0), u32(mem, 4)) == (1, len(b"wasi_probe\0"))
+    inst.environ_sizes_get(0, 4)
+    assert (u32(mem, 0), u32(mem, 4)) == (0, 0)
+
+
+def test_clocks_random_and_yield(build_extension: Builder) -> None:
+    import time
+
+    _, inst = probe(build_extension)
+    mem = inst.memory
+    before = time.time_ns()
+    assert inst.clock_time_get(0, 16) == 0
+    now = int.from_bytes(mem[16:24], "little")
+    assert before <= now <= time.time_ns()
+    assert inst.clock_time_get(1, 16) == 0
+    first = int.from_bytes(mem[16:24], "little")
+    assert inst.clock_time_get(1, 16) == 0
+    assert int.from_bytes(mem[16:24], "little") >= first  # monotonic
+    assert inst.clock_time_get(9, 16) == 28  # EINVAL: no such clock
+    assert inst.clock_res_get(0, 16) == 0
+    assert int.from_bytes(mem[16:24], "little") >= 1
+    mem[64:96] = bytes(32)
+    assert inst.random_get(64, 32) == 0
+    assert bytes(mem[64:96]) != bytes(32)
+    assert inst.random_get(65536, 1) == 21  # EFAULT: past the memory
+    assert inst.sched_yield() == 0
+
+
+def test_standard_streams_go_where_the_caller_says(build_extension: Builder) -> None:
+    out: list[bytes] = []
+    err: list[bytes] = []
+
+    class Sink:
+        def write(self, data: bytes) -> None:
+            err.append(data)
+
+    _, inst = probe(build_extension, stdin=b"abcdef", stdout=out.append, stderr=Sink())
+    mem = inst.memory
+    mem[100:105] = b"hello"
+    mem[0:8] = (100).to_bytes(4, "little") + (5).to_bytes(4, "little")
+    assert inst.fd_write(1, 0, 1, 32) == 0
+    assert u32(mem, 32) == 5 and out == [b"hello"]
+    assert inst.fd_write(2, 0, 1, 32) == 0
+    assert err == [b"hello"]
+    assert inst.fd_write(0, 0, 1, 32) == 8  # EBADF: stdin is not for writing
+    assert inst.fd_write(7, 0, 1, 32) == 8
+    mem[0:8] = (200).to_bytes(4, "little") + (4).to_bytes(4, "little")  # read 4 bytes to 200
+    assert inst.fd_read(0, 0, 1, 32) == 0
+    assert u32(mem, 32) == 4 and bytes(mem[200:204]) == b"abcd"
+    assert inst.fd_read(0, 0, 1, 32) == 0
+    assert u32(mem, 32) == 2 and bytes(mem[200:202]) == b"ef"
+    assert inst.fd_read(0, 0, 1, 32) == 0 and u32(mem, 32) == 0  # the end
+    assert inst.fd_read(1, 0, 1, 32) == 8
+
+
+def test_default_streams_follow_sys_stdout(build_extension: Builder, capsys: pytest.CaptureFixture[str]) -> None:
+    _, inst = probe(build_extension)
+    mem = inst.memory
+    mem[100:106] = b"wasm!\n"
+    mem[0:8] = (100).to_bytes(4, "little") + (6).to_bytes(4, "little")
+    print("before", end="")  # not flushed by itself: the order must be kept
+    inst.fd_write(1, 0, 1, 32)
+    print("after")
+    inst.fd_write(2, 0, 1, 32)
+    captured = capsys.readouterr()
+    assert captured.out == "beforewasm!\nafter\n" and captured.err == "wasm!\n"
+
+
+def test_descriptors_the_first_stage_has(build_extension: Builder) -> None:
+    _, inst = probe(build_extension)
+    mem = inst.memory
+    assert inst.fd_fdstat_get(1, 40) == 0
+    assert mem[40] == 2 and int.from_bytes(mem[48:56], "little") & (1 << 6)  # a character device that can be written
+    assert inst.fd_fdstat_get(9, 40) == 8
+    assert inst.fd_prestat_get(3, 40) == 8  # nothing preopened: the end of the walk
+    assert inst.fd_seek(1, 40) == 70  # ESPIPE
+    assert inst.fd_close(1) == 0 and inst.fd_close(9) == 8
+    assert inst.path_open() == 52  # ENOSYS: the file system comes in the second stage
+
+
+def test_proc_exit_is_an_exception_and_the_instance_stays_usable(build_extension: Builder) -> None:
+    mod, inst = probe(build_extension)
+    with pytest.raises(mod.WasiExit) as info:
+        inst.proc_exit(7)
+    assert info.value.code == 7
+    assert inst.sched_yield() == 0
+
+
+def test_the_caller_can_replace_a_call_and_the_rest_stays(build_extension: Builder) -> None:
+    mod: Any = build_extension(DATA / "wasi_probe.wat", "wasi_probe")
+    inst = mod.Instance({"wasi_snapshot_preview1": {"sched_yield": lambda: 99}})
+    assert inst.sched_yield() == 99
+    assert inst.random_get(64, 8) == 0  # still ours
+
+
+def test_a_wrong_config_is_refused(build_extension: Builder) -> None:
+    mod = build_extension(DATA / "wasi_probe.wat", "wasi_probe")
+    with pytest.raises(TypeError, match="unknown option 'colour'"):
+        mod.Instance(wasi={"colour": 1})
+    with pytest.raises(NotImplementedError, match="preopens"):
+        mod.Instance(wasi={"preopens": {"/": "."}})
+    with pytest.raises(TypeError):
+        mod.Instance(wasi=[1])

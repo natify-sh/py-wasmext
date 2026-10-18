@@ -97,7 +97,7 @@ method `a.add` and the `memoryview` are accepted as references too). What does n
 
 The C that `wasm2c` writes is about 13 times the size of the module, and one file of millions of lines is a very long job for a
 C compiler (the 10.8 MB `coreutils.wasm` was not done in half an hour). A module of 1 MiB or more is therefore written in several
-files, which are compiled at the same time (512 KiB of the module for each file, at most 64). `wasmize(..., parts=N)`, `wasmext
+files, which are compiled at the same time (128 KiB of the module for each file, at most 256). `wasmize(..., parts=N)`, `wasmext
 --parts N`, `WASMEXT_PARTS` and `wasmimport.install(parts=N)` set the number of files (1 keeps the module whole: the code of a split
 module is somewhat slower, as a call from one file to another is not inlined); `WASMEXT_JOBS` sets how many are compiled at once.
 

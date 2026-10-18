@@ -47,8 +47,15 @@ C_DIR = Path(__file__).parent / "c"
 # in 33 minutes (FEATURES.md, "Build time of a large module"), 16 files of it were, on 4 cores, in 3. Splitting costs speed of the
 # code (a call from one file to another is not inlined), so a small module stays whole.
 AUTO_SPLIT_FROM = 1 << 20  # a module smaller than this (1 MiB) is one file
-AUTO_PART_SIZE = 512 << 10  # and a larger one gets a file for each 512 KiB of it
-MAX_PARTS = 64
+AUTO_PART_SIZE = (
+    128 << 10
+)  # and a larger one gets a file for each 128 KiB of it (measured: more files balance the cores better)
+MAX_AUTO_PARTS = (
+    256  # coreutils.wasm built as fast with 256 files as with 64; the number asked for by hand has no limit
+)
+# Below this much of the module in a file the work of reading the shared header and of the extra files starts to cost more
+# than the parallelism gives (lua.wasm: from 128 files, 2.6 KB each, 12% more processor time; 256 files, 36% more).
+WARN_PART_BYTES = 4096
 # The oldest CPython an abi3 extension supports (3.11): the buffer protocol joined the limited API there.
 LIMITED_API_VERSION = "0x030B0000"
 # The C of wasm2c for a module with SIMD includes the headers of simde, which the wabt-package carries.
@@ -149,8 +156,20 @@ def _choose_parts(size: int, requested: int | None) -> int:
     if requested is not None:
         if requested < 1:
             raise ValueError(f"parts must be 1 or more, not {requested}")
-        return min(requested, MAX_PARTS)
-    return 1 if size < AUTO_SPLIT_FROM else min(MAX_PARTS, -(-size // AUTO_PART_SIZE))
+        return requested  # what is asked for is done, with a warning where it is unwise (see _parts_warning)
+    return 1 if size < AUTO_SPLIT_FROM else min(MAX_AUTO_PARTS, -(-size // AUTO_PART_SIZE))
+
+
+def _parts_warning(parts: int, size: int, functions: int) -> str | None:
+    """Why the number of files asked for is unwise, or None."""
+    if parts > functions:
+        return f"{parts} files for {functions} functions: some of the files stay empty"
+    if parts > 1 and size // parts < WARN_PART_BYTES:
+        return (
+            f"{parts} files for a module of {size} bytes ({size // parts} bytes each): the work of every extra file "
+            f"(the shared header is read by each) costs more than it gains below about {WARN_PART_BYTES} bytes"
+        )
+    return None
 
 
 def _w2c_files(out_dir: Path, last: str, parts: int) -> list[Path]:
@@ -295,9 +314,16 @@ def _prepare(
     # The glue and the stub come from the module alone (no wasm2c, no compiler), so they are always made: a module that
     # cannot be wrapped is reported on every run, and a stub deleted from a tree that ships its C is written again.
     try:
-        glue = generate(parse(data), name)
+        parsed = parse(data)
+        glue = generate(parsed, name)
     except (WasmError, GenError) as exc:
         raise type(exc)(f"{wasm}: {exc}") from None
+    if (
+        not quiet
+        and (note := _parts_warning(wanted, len(data), len(parsed.functions)))
+        and (parts or os.environ.get("WASMEXT_PARTS"))
+    ):
+        print(f"wasmext: {wasm}: {note}", file=sys.stderr)  # only for a number somebody asked for
     if stubs:
         stub = wasm.with_suffix(".pyi")
         _write_if_changed(stub, glue.stub.encode("utf-8"))
@@ -393,8 +419,9 @@ def wasmize(
 
     `parts` is how many files the C of a module is written in (`wasm2c --num-outputs`), which setuptools then compiles at the same
     time (WASMEXT_JOBS sets how many at once; the default is the number of processors). None, the default, is WASMEXT_PARTS if
-    that is set, else one file for a module smaller than 1 MiB and a file for each 512 KiB of a larger one (at most 64); 1 turns
-    the splitting off. A split costs some speed of the code (a call from one file to another is not inlined), so a small
+    that is set, else one file for a module smaller than 1 MiB and a file for each 128 KiB of a larger one (at most 256); 1 turns
+    the splitting off, and a number asked for has no upper limit (a warning says when it is unwise: more files than functions,
+    or less than 4 KiB of the module in a file). A split costs some speed of the code (a call from one file to another is not inlined), so a small
     module is better whole; for a big one it is the difference between minutes and an hour.
 
     With `stubs` (the default) a `<stem>.pyi` is written beside each `.wasm`: the types of the extension for editors and type

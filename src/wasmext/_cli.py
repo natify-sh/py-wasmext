@@ -67,7 +67,7 @@ def _parser() -> argparse.ArgumentParser:
         type=int,
         metavar="N",
         help="write the C of each module in N files, which are compiled at the same time (1: one file); default: WASMEXT_PARTS, "
-        "else one file for a module under 1 MiB and one for each 512 KiB of a larger one",
+        "else one file for a module under 1 MiB and one for each 128 KiB of a larger one",
     )
     parser.add_argument("--no-stubs", action="store_true", help="do not write a .pyi beside each .wasm")
     parser.add_argument(

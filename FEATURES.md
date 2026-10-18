@@ -192,10 +192,30 @@ finishing**: not practical as it is. `lua.wasm` (329 KB) takes 44 seconds. For a
   (`wasmext._setuptools`, put in by the entry point of the hook) that compiles the sources of such an extension in a pool of threads
   (`WASMEXT_JOBS`, else `-j`, else the number of processors) and then links. `wasmize(..., parts=N)`, `--parts N`, `WASMEXT_PARTS`,
   `wasmimport.install(parts=N)`: None is automatic, 1 turns it off. Automatic: a module under 1 MiB is one file (a split costs the
-  inlining of calls between the files), a larger one gets a file for each 512 KiB (at most 64). Measured (4 cores, one run each): `coreutils.wasm`
-  in 16 files compiled in 3 minutes, where one file was not done in 33; `lua.wasm` (329 KB) 42 s whole and 10.7 s in 8 files; CoreMark
-  (`examples/coremark`) 25 848 whole and 24 124 in 4 files, 6.7% slower, which is why a small module is not split by itself. A tree with another number of files is made
-  again (the old files are removed); where there is no wasm2c, the tree that is there is used.
+  inlining of calls between the files: CoreMark 25 848 whole and 24 124 in 4 files, 6.7% slower, one run each), a larger one gets a file for
+  each 128 KiB (at most 256). A number asked for has no upper limit and is only warned about (more files than functions, or less than
+  4 KiB of the module in a file). A tree with another number of files is made again (the old files are removed); where there is no
+  wasm2c, the tree that is there is used.
+
+  **Measured** (4 cores, gcc 13 `-O2 -g`, 4 files compiled at a time, wall time and processor time of the compile and the link, one run for each point):
+
+  | files | `lua.wasm` (329 KB) wall / cpu, s | `coreutils.wasm` (10.8 MB) wall / cpu, s |
+  | --- | --- | --- |
+  | 1 | 27.1 / 27.4 | not done in 33 min |
+  | 2 | 15.1 / 24.4 | |
+  | 4 | 9.8 / 24.5 | |
+  | 8 | 7.3 / 24.1 | 175.9 / 607 |
+  | 16 | 8.1 / 26.1 | 177.5 / 603 |
+  | 32 | 7.0 / 24.4 | 183.5 / 585 |
+  | 64 | 7.2 / 24.9 | 149.3 / 560 |
+  | 128 | 8.5 / 27.4 | 147.8 / 547 |
+  | 256 | 10.6 / 33.3 | 150.6 / 553 |
+
+  For `lua` the time falls up to the number of cores, is flat from 8 to 64 files and rises from 128 (2.6 KB of the module in a file; 12% more
+  processor time, and 36% at 256). For `coreutils` more files kept helping up to 64 (a better balance of the files among the cores:
+  148 s against 177 s at 16) and did not hurt up to 256 (42 KB of the module in a file). So the limit is in the size of a file and not in
+  their number: 4 KiB of the module is the line of the warning, 128 KiB is what the automatic choice aims at. The ideal for
+  `coreutils` is 553 s / 4 cores = 138 s; the rest is the longest files and the link. These are the numbers of one machine.
 - Lower optimization for a very large module (`-O1`), and `-g0` for the generated C. Judged worse than the split: the first costs speed of
   the result, and neither is a big enough step; they can be measured when the split is there.
 - Another compiler (clang may be faster on a file of this size): to be measured, not assumed.

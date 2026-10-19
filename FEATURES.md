@@ -285,7 +285,7 @@ In this order (the first ones are small):
    each its own commit(s), none changing what the extension does:
    1. **Inventory and the seams, on paper.** Sort the 49 functions of `wasi_common.h` that mention Python (stdio, the configuration `wasi=`, the
       exceptions, the files of Windows, the user functions for the clock and the random bytes); fix the table of hooks (names, signatures, who owns
-      the state), the interface of the file backend (open one component, stat, list, rename, link; shaped by POSIX and by Win32, see stage 3), the names of the files, and what
+      the state), the interface of the file backend (open one component, stat, list, rename, link; shaped by POSIX and by Win32, see stage 3), the protocol of errors of host functions (below), the names of the files, and what
       the shared library and the executable need from the core (the entry points, `_start` and the exports of a reactor, the instance). Output: this
       document, no code. The cheap stage that stops later ones from being done twice.
    2. **The core of WASI, cut** (`wasi_core.h`, no `Python.h`) and the hooks of Python (`wasi_python.h`). POSIX files stay in the core (`openat`).
@@ -303,11 +303,31 @@ In this order (the first ones are small):
    5. **The first front end that is not Python, on the three systems**: the C runner (`wasmext-run module.wasm`, the idea of `natify --exe`):
       `main()`, the hooks of WASI in plain C, `_start`. It needs 2 to 4 (the core of WASI complete on every system, the core of the glue). It runs
       the official tests without the Python adapter (the cause of the slow Windows job) and is check (b). If the cut is wrong, it shows here.
-   6. **The shared library and the ctypes wrapper** (`natify --shared`): the fixed `.c` that exports the functions of `<name>_glue.h`, the generated
-      `<name>_ctypes.py` and the `.pyi` shared with `Instance`; the open points listed above (callbacks and exceptions, the interruption of a sleep, the
-      link between instances, the GIL) are settled here. The largest stage.
+   6. **The shared library**, and after it, on demand, **the ctypes wrapper**.
+      a. The shared library (`natify --shared`): the fixed `.c` that exports the functions of `<name>_glue.h` and a **generated C header of the API**
+         (create and release an instance, call an export, the pointer and size of a memory, register an import with the status of the protocol above,
+         the configuration of WASI, the code of a trap and its message). For any host language; no Python in it. The error protocol is checked here
+         with a host in C.
+      b. The ctypes wrapper (`<name>_ctypes.py` and the `.pyi` shared with `Instance`): **kept as viable** (the protocol above is the one wasmtime-py
+         uses over ctypes), **not started, on demand**: it is a front end on the C API of 6a and needs nothing from the core that 6a does not give.
+         Its open points are listed above (the interruption of a sleep, the link between instances, the GIL, the lifetime of the callbacks).
    7. **The executable** (`natify --exe`) on all three systems; the documentation, the README and the table of products brought up to date; the
       alpha-level decisions about names (`--shared`, `--exe`, the files shipped in the wheel).
+   **The protocol of errors of host functions (decided in its form; part of the interface of the core, stage 1).** A C ABI has no exception that can
+   cross it, and a `longjmp` through the frames of another language (ctypes, libffi, cgo, JNI, a Rust `extern "C"`) is not safe. So a host function
+   (an import given by the host, a hook of WASI) **reports failure by its return value and never unwinds through the core**; the core then raises the
+   trap itself, so that only the frames of WebAssembly and of the core are unwound. This is the protocol of the others: wasmtime (the callback
+   `wasmtime_func_callback_t` returns a `wasm_trap_t *`, `NULL` is success; `wasmtime_func_call` gives the trap back in an output parameter) and wasm3
+   (a host function returns an `M3Result`, `NULL` is success; `m3ApiTrap(VALUE)` is `return VALUE`; the error rides up as a value, no `longjmp` in the
+   API) — read in their headers, not tried here. For us: an import of the host returns a status (and the results through pointers); on a failure the
+   core traps with a code for "error of the host" and the call of the export reports `trapped` and the code. A language that has exceptions does what
+   wasmtime-py (ctypes, over the C API of wasmtime) does: the callback catches `BaseException` inside, keeps the object, returns the status of failure;
+   after the call returns the wrapper sees the trap and raises the kept object (the original exception, not a copy). Why it is needed: tried on a model, a
+   ctypes callback that raises does **not** pass the exception on; ctypes prints `Exception ignored on calling ctypes callback function`, gives the C code
+   an undefined value, and the C code goes on. The extension for CPython needs none of this (its callbacks are called with Python frames above them and
+   `PY_ERROR_TRAP` unwinds C frames only), and the executable has no imports of the host but WASI. An exception of WebAssembly (the proposal of
+   exception handling; `wasm-rt-exceptions-impl.c`) that nothing in the module catches would be a result of its own for the host (a code and the tag):
+   not needed yet.
    What does not wait for any of it: the alpha of the extension, as it is. The public interface (`Instance`, `natify`, `wasi=`) does not change in
    stages 1 to 5; the files that a built extension carries do (the headers beside its C), which the cache of `wasmimport` and the stamp of the
    build already follow. Order and why: 1 before everything (the seams are the part that is expensive to redo); 2 and 3 together and first,
@@ -633,12 +653,12 @@ Whatever is not in `wasi=` can be replaced call by call through `imports`.
         `imports` as Python callables, `wasi={...}` as the same dict, `__exports__`, the memory as a `memoryview`, the same exceptions (`Trap`,
         `LinkError`, `WasiExit`, `WasiSignal`), so that code and the `.pyi` are the same for both (one stub, not two). The wheel then depends on the
         platform and not on the version of Python; it may serve interpreters with no CPython extensions (PyPy, GraalPy: **not tried**). A call through
-        ctypes costs much more than a call of the extension: an alternative, not a replacement. To be settled when it is built, not decided: a Python
-        callable given as an import is called through a ctypes callback, which cannot let an exception pass through the C frames (the wrapper would catch
-        it, answer the core with a trap code, and raise it again after the call); the interruption of a sleep (`PyErr_CheckSignals` has no place in
-        the core: a hook); the link between two instances (the capsule `wasmext.export.v1` is a CPython object: a pointer to the record would be
-        carried by the wrapper in its own way, and whether an extension and a ctypes instance can link with each other is open); the GIL (ctypes
-        releases it during a call of a function of a `CDLL`);
+        ctypes costs much more than a call of the extension: an alternative, not a replacement. **The error of a host function is settled by the protocol
+        below** (it was the one that looked like a block). Still open when it is built: the interruption of a sleep (`PyErr_CheckSignals` has no
+        place in the core: a hook; a `KeyboardInterrupt` that comes while a callback runs is caught inside it, like any exception); the link between
+        two instances (the capsule `wasmext.export.v1` is a CPython object: a pointer to the record would be carried by the wrapper in its own way,
+        and whether an extension and a ctypes instance can link with each other is open); the GIL (ctypes releases it during a call of a function of
+        a `CDLL`); the `CFUNCTYPE` objects of the imports kept alive as long as the instance;
      c. an executable: a `.c` with `main()` that gives the arguments and the environment of the process to the program, the hooks of WASI in plain C
         (standard streams are descriptors 0, 1, 2; `proc_exit` is `exit`; a signal is `raise`), and calls `_start` (`natify --exe`).
   WASI follows the same cut: `wasi_core.h` (plain C: descriptors, the walk of paths, arguments, environment, clocks, random bytes, `poll_oneoff`, the

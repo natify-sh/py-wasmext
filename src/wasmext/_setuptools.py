@@ -44,9 +44,32 @@ _WASMIZE_KEYS = {
 }
 
 
+# ... and what is added to each extension that the call makes, as `Extension()` has it (the flags, the macros, the libraries)
+_EXTENSION_KEYS = {
+    "extra-compile-args": "extra_compile_args",
+    "extra-link-args": "extra_link_args",
+    "define-macros": "define_macros",
+    "undef-macros": "undef_macros",
+    "include-dirs": "include_dirs",
+    "libraries": "libraries",
+    "library-dirs": "library_dirs",
+}
+
+
+def _macro(value: Any) -> tuple[str, str | None]:
+    """A macro as the table says it: "NAME", "NAME=value", or ["NAME", "value"]; `Extension` wants (name, value or None)."""
+    if isinstance(value, str):
+        name, _, text = value.partition("=")
+        return (name, text if "=" in value else None)
+    if isinstance(value, list) and len(value) == 2 and all(isinstance(v, str) for v in value):  # pyright: ignore[reportUnknownArgumentType]
+        return (value[0], value[1])
+    raise TypeError(f"define-macros: {value!r} is not NAME, NAME=value or [NAME, value]")
+
+
 def pyproject_calls(root: Path) -> list[dict[str, Any]]:
     """The calls of `wasmize()` that `pyproject.toml` in `root` asks for: `[tool.wasmext.wasmize]`, or several as `[[tool.wasmext.wasmize]]`,
-    as the keyword arguments of the function. An empty list where the file or the table is not there."""
+    as the keyword arguments of the function, and under the key "extension" what is added to the extensions it makes. An empty list where
+    the file or the table is not there."""
     path = root / "pyproject.toml"
     if not path.is_file():
         return []
@@ -67,16 +90,23 @@ def pyproject_calls(root: Path) -> list[dict[str, Any]]:
     for entry in entries:
         if not isinstance(entry, dict):
             raise TypeError(f"{path}: [tool.wasmext.wasmize] must be a table, or an array of tables")
-        unknown = sorted(set(entry) - set(_WASMIZE_KEYS))
+        unknown = sorted(set(entry) - set(_WASMIZE_KEYS) - set(_EXTENSION_KEYS))
         if unknown:
+            known = sorted([*_WASMIZE_KEYS, *_EXTENSION_KEYS])
             raise ValueError(
-                f"{path}: [tool.wasmext.wasmize] has no key {unknown[0]!r} (the keys are {', '.join(sorted(_WASMIZE_KEYS))})"
+                f"{path}: [tool.wasmext.wasmize] has no key {unknown[0]!r} (the keys are {', '.join(known)})"
             )
         if "module-list" not in entry:
             raise ValueError(
                 f"{path}: [tool.wasmext.wasmize] needs module-list (the .wasm files, as a glob pattern or a list of them)"
             )
-        calls.append({_WASMIZE_KEYS[key]: value for key, value in entry.items()})
+        call = {_WASMIZE_KEYS[key]: value for key, value in entry.items() if key in _WASMIZE_KEYS}
+        extension = {_EXTENSION_KEYS[key]: value for key, value in entry.items() if key in _EXTENSION_KEYS}
+        if "define_macros" in extension:
+            extension["define_macros"] = [_macro(m) for m in extension["define_macros"]]
+        if extension:
+            call["extension"] = extension
+        calls.append(call)
     return calls
 
 
@@ -94,7 +124,11 @@ def _add_extensions_from_pyproject(dist: Any) -> None:
             "(an extension of another kind in setup.py goes with the table)"
         )
     for call in calls:
-        extensions.extend(wasmize(**call))
+        settings = call.pop("extension", {})
+        for extension in wasmize(**call):
+            for attribute, value in settings.items():
+                setattr(extension, attribute, [*(getattr(extension, attribute, None) or []), *value])
+            extensions.append(extension)
     dist.ext_modules = extensions
 
 

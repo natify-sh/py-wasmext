@@ -55,8 +55,11 @@ from wasmext import wasmize
 setup(ext_modules=wasmize("src/mypkg/*.wasm"))  # build-system.requires = ["setuptools", "wasmext"]
 ```
 
-Or with no `setup.py` at all, in `pyproject.toml` (a hook of wasmext, an entry point of setuptools, reads the table; the keys are the arguments
-of `wasmize()` with dashes: `module-list`, `exclude`, `build-dir`, `force`, `quiet`, `stubs`, `limited-api`, `guard-pages`, `parts`):
+Or with no `setup.py` at all, in `pyproject.toml` (a hook of wasmext, an entry point of setuptools, reads the table). The keys are the
+arguments of `wasmize()` with dashes: `module-list` (a glob pattern, or a list of them), `exclude`, `build-dir`, `force`, `quiet`, `stubs`,
+`limited-api`, `guard-pages`, `parts`; and, added to each extension the table makes, those of `Extension`: `extra-compile-args`,
+`extra-link-args`, `define-macros` (`"NAME"`, `"NAME=value"` or `["NAME", "value"]`), `undef-macros`, `include-dirs`, `libraries`,
+`library-dirs`. (In a `setup.py` the same settings are those of an `Extension` given to `wasmize()`, as to `cythonize()`.)
 
 ```toml
 [build-system]
@@ -191,7 +194,10 @@ the wheel: set `include-package-data = false` under `[tool.setuptools]` and name
 wheels. The build needs a C compiler and `wasm2c` (the wabt-package, or `WASMEXT_WABT`: a directory with its `bin/` and
 `wasm2c/`).
 
-To try a module without building a wheel, `wasmimport` works as `pyximport` does (a development tool: it runs a C compiler on import):
+To try a module without building a wheel, `wasmimport` works as `pyximport` does (a development tool: it runs a C compiler on import). The
+extension is kept in a cache, `~/.wasmbld` (or `WASMIMPORT_BUILD_DIR`, or `install(build_dir=...)`; `install(inplace=True)` puts it beside
+the `.wasm`), one folder for each file and each Python, and is made again when the `.wasm`, wasmext, or how it is built (`guard_pages`,
+`limited_api`, `parts`, the flags of the compiler) changes:
 
 ```python
 import wasmimport
@@ -202,8 +208,10 @@ import fast  # fast.wasm on sys.path, or in the working directory
 
 ### Examples
 
-Each is a package with a `setup.py` of a few lines, whose wheels `cibuildwheel` builds in CI on seven platforms (Linux x64 and ARM64,
-Windows x64, x86 and ARM64, macOS Apple Silicon and Intel):
+Each is a package whose integration is a few lines (`setup.py`, or for `quickjs` the table of `pyproject.toml` above), and whose wheels
+`cibuildwheel` builds in CI on seven platforms (Linux x64 and ARM64, Windows x64, x86 and ARM64, macOS Apple Silicon and Intel). `coremark`
+is built in CI on more: Linux armv7l, i686, ppc64le and riscv64, Pyodide and Android. Build and test an example with `uv sync --reinstall`
+and `uv run pytest` in its folder.
 
 | | |
 |---|---|

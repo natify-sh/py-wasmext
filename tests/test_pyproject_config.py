@@ -120,3 +120,31 @@ def test_a_setup_py_with_an_extension_of_another_kind_goes_with_the_table(tmp_pa
     assert built.returncode == 0, built.stderr[-800:]
     names = {p.name.split(".")[0] for p in (project / "src" / "pk").iterdir() if p.suffix in (".so", ".pyd")}
     assert names == {"plain", "cm"}
+
+
+def test_flags_macros_and_libraries_are_added_to_the_extensions(tmp_path: Path, wabt: Path) -> None:
+    table = (
+        '\n[tool.wasmext.wasmize]\nmodule-list = "src/pk/*.wasm"\nstubs = false\n'
+        'extra-compile-args = ["-O1"]\ndefine-macros = ["PLAIN", "VALUE=2", ["PAIR", "3"]]\nlibraries = ["m"]\n'
+    )
+    project = _project(tmp_path, BUILD + table)
+    env = {**os.environ, "WASMEXT_WABT": str(wabt), "PYTHONPATH": str(ROOT / "src")}
+    probe = (
+        "from setuptools import Distribution\n"
+        "dist = Distribution({'name': 'pk'})  # the hook of wasmext runs by itself\n"
+        "[e] = dist.ext_modules\n"
+        "print(e.extra_compile_args, e.libraries, [x for x in e.define_macros if x[0] in ('PLAIN', 'VALUE', 'PAIR')])\n"
+    )
+    done = subprocess.run(
+        [sys.executable, "-c", probe], cwd=project, env=env, capture_output=True, text=True, check=False
+    )
+    assert done.returncode == 0, done.stderr[-600:]
+    assert done.stdout.strip() == "['-O1'] ['m'] [('PLAIN', None), ('VALUE', '2'), ('PAIR', '3')]"
+
+
+def test_a_macro_that_is_not_a_macro_is_refused(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        '[tool.wasmext.wasmize]\nmodule-list = "x"\ndefine-macros = [1]\n', encoding="utf-8"
+    )
+    with pytest.raises(TypeError, match="not NAME"):
+        pyproject_calls(tmp_path)

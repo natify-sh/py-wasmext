@@ -93,8 +93,8 @@ memory); an export with several results returns a tuple. A trap is `Trap` (a `Ru
 or wrong import is `LinkError`; an exported global is an attribute. The stub `<module>.pyi` written beside the `.wasm` says all that
 for the module at hand.
 
-The command line works in the manner of `cythonize`: `wasmext 'src/mypkg/*.wasm'` writes the C, `wasmext -i ...` also builds
-the extensions in place, `-b` under `build/` (`wasmext --help`).
+The command line has a command for each thing it does (`wasmext --help`). `wasmext natify 'src/mypkg/*.wasm'` writes the C, in the manner of
+`cythonize`; `wasmext natify -i ...` also builds the extensions in place, `-b` under `build/`.
 
 `wasmext inspect 'src/mypkg/*.wasm'` says what a module imports (what the host has to provide) and exports, which exports become
 methods of `Instance` and which are left out, and why. It writes nothing and needs no `wasm2c`; the exit status is 1 for a module

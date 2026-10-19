@@ -1,5 +1,5 @@
 """Which WebAssembly features a module can use: one small module for each, through the whole path (`wat2wasm`, then
-`wasmext -i`, then import and call). The cases marked `xfail` are the known gaps: they are strict, so that the day
+`wasmext natify -i`, then import and call). The cases marked `xfail` are the known gaps: they are strict, so that the day
 one is closed the test says so and the mark goes."""
 
 from __future__ import annotations
@@ -196,7 +196,7 @@ def test_feature(case: Case, tmp_path: Path, wabt: Path) -> None:
     (package / "m.wat").write_text(case.wat, encoding="utf-8")
     subprocess.run([wabt / "bin" / "wat2wasm", *case.flags, "m.wat", "-o", "m.wasm"], cwd=package, check=True)
 
-    built = wasmext(tmp_path, wabt, "-i", "-q", "pkg/m.wasm")
+    built = wasmext(tmp_path, wabt, "natify", "-i", "-q", "pkg/m.wasm")
     assert built.returncode == 0, built.stderr[-600:]
 
     code = f"import pkg.m\ninstance = pkg.m.Instance()\nprint(repr(instance.{case.call}(*{case.args!r})))\n"
@@ -215,7 +215,7 @@ def test_an_exception_nobody_catches_is_a_trap(tmp_path: Path, wabt: Path) -> No
         encoding="utf-8",
     )
     subprocess.run([wabt / "bin" / "wat2wasm", "m.wat", "-o", "m.wasm"], cwd=package, check=True)
-    built = wasmext(tmp_path, wabt, "-i", "-q", "pkg/m.wasm")
+    built = wasmext(tmp_path, wabt, "natify", "-i", "-q", "pkg/m.wasm")
     assert built.returncode == 0, built.stderr[-600:]
     code = (
         "import pkg.m\n"
@@ -243,7 +243,7 @@ def test_an_imported_function_returns_several_results_as_a_tuple(tmp_path: Path,
         encoding="utf-8",
     )
     subprocess.run([wabt / "bin" / "wat2wasm", "m.wat", "-o", "m.wasm"], cwd=package, check=True)
-    built = wasmext(tmp_path, wabt, "-i", "-q", "pkg/m.wasm")
+    built = wasmext(tmp_path, wabt, "natify", "-i", "-q", "pkg/m.wasm")
     assert built.returncode == 0, built.stderr[-600:]
     code = """
 import pkg.m
@@ -272,7 +272,7 @@ def test_an_exported_memory64_is_a_memoryview_too(tmp_path: Path, wabt: Path) ->
         encoding="utf-8",
     )
     subprocess.run([wabt / "bin" / "wat2wasm", "m.wat", "-o", "m.wasm"], cwd=package, check=True)
-    built = wasmext(tmp_path, wabt, "-i", "-q", "pkg/m.wasm")
+    built = wasmext(tmp_path, wabt, "natify", "-i", "-q", "pkg/m.wasm")
     assert built.returncode == 0, built.stderr[-600:]
     code = """
 import pkg.m
@@ -293,7 +293,7 @@ def _build_pkg(tmp_path: Path, wabt: Path, wat: str) -> None:
     (package / "__init__.py").write_text("", encoding="utf-8")
     (package / "m.wat").write_text(wat, encoding="utf-8")
     subprocess.run([wabt / "bin" / "wat2wasm", "m.wat", "-o", "m.wasm"], cwd=package, check=True)
-    built = wasmext(tmp_path, wabt, "-i", "-q", "pkg/m.wasm")
+    built = wasmext(tmp_path, wabt, "natify", "-i", "-q", "pkg/m.wasm")
     assert built.returncode == 0, built.stderr[-600:]
 
 
@@ -367,7 +367,9 @@ def test_a_limit_on_address_space(guard_pages: bool, tmp_path: Path, wabt: Path)
         '(module (memory (export "mem") 1) (func (export "f") (result i32) i32.const 7))', encoding="utf-8"
     )
     subprocess.run([wabt / "bin" / "wat2wasm", "m.wat", "-o", "m.wasm"], cwd=package, check=True)
-    built = wasmext(tmp_path, wabt, "-i", "-q", "--guard-pages" if guard_pages else "--no-guard-pages", "pkg/m.wasm")
+    built = wasmext(
+        tmp_path, wabt, "natify", "-i", "-q", "--guard-pages" if guard_pages else "--no-guard-pages", "pkg/m.wasm"
+    )
     assert built.returncode == 0, built.stderr[-600:]
     ran = _limited_run(tmp_path, "import pkg.m; i = pkg.m.Instance(); print(i.f(), len(i.mem))", 2048)
     if guard_pages:
@@ -461,14 +463,14 @@ for bad in ({'env2': {'scale': 1}, 'env': {'big': 1}},                      # mi
 
 
 def _build_modules(tmp_path: Path, wabt: Path, **wats: str) -> None:
-    """pkg/<name>.wat for each keyword, built into extensions by one `wasmext -i`."""
+    """pkg/<name>.wat for each keyword, built into extensions by one `wasmext natify -i`."""
     package = tmp_path / "pkg"
     package.mkdir()
     (package / "__init__.py").write_text("", encoding="utf-8")
     for name, wat in wats.items():
         (package / f"{name}.wat").write_text(wat, encoding="utf-8")
         subprocess.run([wabt / "bin" / "wat2wasm", f"{name}.wat", "-o", f"{name}.wasm"], cwd=package, check=True)
-    built = wasmext(tmp_path, wabt, "-i", "-q", *(f"pkg/{name}.wasm" for name in wats))
+    built = wasmext(tmp_path, wabt, "natify", "-i", "-q", *(f"pkg/{name}.wasm" for name in wats))
     assert built.returncode == 0, built.stderr[-600:]
 
 
@@ -789,10 +791,10 @@ def test_an_export_of_another_wasm2c_runtime_is_not_linked(
         (package / f"{name}.wat").write_text(wat, encoding="utf-8")
         subprocess.run([wabt / "bin" / "wat2wasm", f"{name}.wat", "-o", f"{name}.wasm"], cwd=package, check=True)
     monkeypatch.setenv("CFLAGS", "-DWASMEXT_RUNTIME=1u")  # a is built with another fingerprint
-    built = wasmext(tmp_path, wabt, "-i", "-q", "pkg/a.wasm")
+    built = wasmext(tmp_path, wabt, "natify", "-i", "-q", "pkg/a.wasm")
     assert built.returncode == 0, built.stderr[-600:]
     monkeypatch.delenv("CFLAGS")
-    built = wasmext(tmp_path, wabt, "-i", "-q", "pkg/b.wasm")
+    built = wasmext(tmp_path, wabt, "natify", "-i", "-q", "pkg/b.wasm")
     assert built.returncode == 0, built.stderr[-600:]
     code = """
 import pkg.a, pkg.b
@@ -836,14 +838,14 @@ for module, given in ((pkg.big, a.memory), (pkg.small, a.memory), (pkg.wide, a.m
 
 
 def test_a_wasi_module_is_built_with_the_wasi_header_of_wasmext(tmp_path: Path, wabt: Path) -> None:
-    """The whole path (`wasmext -i`, which runs on every platform of CI): wasi_preview1.h is copied beside the C of the module
+    """The whole path (`wasmext natify -i`, which runs on every platform of CI): wasi_preview1.h is copied beside the C of the module
     and included by its glue, and the module gets WASI without being given imports."""
     package = tmp_path / "pkg"
     package.mkdir()
     (package / "__init__.py").write_text("", encoding="utf-8")
     (package / "m.wat").write_text((Path(__file__).parent / "data" / "wasi_hello.wat").read_text("utf-8"), "utf-8")
     subprocess.run([wabt / "bin" / "wat2wasm", "m.wat", "-o", "m.wasm"], cwd=package, check=True)
-    built = wasmext(tmp_path, wabt, "-i", "-q", "pkg/m.wasm")
+    built = wasmext(tmp_path, wabt, "natify", "-i", "-q", "pkg/m.wasm")
     assert built.returncode == 0, built.stderr[-800:]
     assert (package / "m_wasmext" / "wasi_preview1.h").is_file()
     code = (
@@ -860,14 +862,14 @@ def test_a_wasi_module_is_built_with_the_wasi_header_of_wasmext(tmp_path: Path, 
 
 
 def test_wasi_files_work_on_every_platform_of_ci(tmp_path: Path, wabt: Path) -> None:
-    """Files through WASI, built the whole way (`wasmext -i`, which runs on Windows too): a preopen, a file read, a listing, and
+    """Files through WASI, built the whole way (`wasmext natify -i`, which runs on Windows too): a preopen, a file read, a listing, and
     a name that leaves the directory refused. On Windows the file system goes through Python, elsewhere through openat."""
     package = tmp_path / "pkg"
     package.mkdir()
     (package / "__init__.py").write_text("", encoding="utf-8")
     (package / "m.wat").write_text((Path(__file__).parent / "data" / "wasi_fs_probe.wat").read_text("utf-8"), "utf-8")
     subprocess.run([wabt / "bin" / "wat2wasm", "m.wat", "-o", "m.wasm"], cwd=package, check=True)
-    built = wasmext(tmp_path, wabt, "-i", "-q", "pkg/m.wasm")
+    built = wasmext(tmp_path, wabt, "natify", "-i", "-q", "pkg/m.wasm")
     assert built.returncode == 0, built.stderr[-800:]
     world = tmp_path / "world"
     (world / "sub").mkdir(parents=True)

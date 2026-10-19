@@ -41,7 +41,7 @@ def project(tmp_path: Path, wabt: Path) -> Path:
 
 
 def test_without_flags_it_writes_the_c_and_builds_nothing(project: Path, wabt: Path) -> None:
-    done = wasmext(project, wabt, "src/pkg/*.wasm")
+    done = wasmext(project, wabt, "natify", "src/pkg/*.wasm")
     assert done.returncode == 0, done.stderr
     assert "src/pkg/add.wasm -> pkg.add" in done.stdout
     generated = project / "src" / "pkg" / "add_wasmext"
@@ -50,7 +50,7 @@ def test_without_flags_it_writes_the_c_and_builds_nothing(project: Path, wabt: P
 
 
 def test_inplace_builds_next_to_the_wasm(project: Path, wabt: Path) -> None:
-    done = wasmext(project, wabt, "-q", "-i", "src/pkg/*.wasm")
+    done = wasmext(project, wabt, "natify", "-q", "-i", "src/pkg/*.wasm")
     assert done.returncode == 0, done.stderr
     [extension] = built(project / "src" / "pkg", "add")
     out = subprocess.run(
@@ -65,7 +65,7 @@ def test_inplace_builds_next_to_the_wasm(project: Path, wabt: Path) -> None:
 
 
 def test_build_goes_under_build(project: Path, wabt: Path) -> None:
-    done = wasmext(project, wabt, "-q", "-b", "src/pkg/*.wasm")
+    done = wasmext(project, wabt, "natify", "-q", "-b", "src/pkg/*.wasm")
     assert done.returncode == 0, done.stderr
     assert built(project / "src" / "build", "add", recursive=True)  # under build/ of the directory above the package
     assert not built(project / "src" / "pkg", "add")
@@ -73,22 +73,22 @@ def test_build_goes_under_build(project: Path, wabt: Path) -> None:
 
 def test_exclude_and_build_dir(project: Path, wabt: Path) -> None:
     shutil.copy(SIMPLE, project / "src" / "pkg" / "other.wasm")
-    done = wasmext(project, wabt, "-X", "src/pkg/other.wasm", "--build-dir", "gen", "src/pkg/*.wasm")
+    done = wasmext(project, wabt, "natify", "-X", "src/pkg/other.wasm", "--build-dir", "gen", "src/pkg/*.wasm")
     assert done.returncode == 0, done.stderr
     assert (project / "gen" / "pkg.add" / "add_glue.c").is_file()
     assert not (project / "gen" / "pkg.other").exists()
 
 
 def test_errors_have_a_message_and_a_nonzero_exit(project: Path, wabt: Path) -> None:
-    nothing = wasmext(project, wabt, "nope/*.wasm")
+    nothing = wasmext(project, wabt, "natify", "nope/*.wasm")
     assert nothing.returncode == 1 and "no .wasm files" in nothing.stderr
     (project / "src" / "pkg" / "bad.wasm").write_bytes(b"not wasm")
-    bad = wasmext(project, wabt, "src/pkg/bad.wasm")
+    bad = wasmext(project, wabt, "natify", "src/pkg/bad.wasm")
     assert bad.returncode == 1 and "bad.wasm: not a WebAssembly binary" in bad.stderr
     code = (
         "import sys; sys.modules['wabt_package'] = None\n"
         "from wasmext._cli import main\n"
-        "sys.exit(main(['src/pkg/add.wasm', '--build-dir', 'elsewhere']))\n"
+        "sys.exit(main(['natify', 'src/pkg/add.wasm', '--build-dir', 'elsewhere']))\n"
     )
     no_tools = subprocess.run(
         [sys.executable, "-c", code],
@@ -103,15 +103,15 @@ def test_errors_have_a_message_and_a_nonzero_exit(project: Path, wabt: Path) -> 
 
 def test_a_failed_build_exits_nonzero(project: Path, wabt: Path) -> None:
     glue = project / "src" / "pkg" / "add_wasmext"
-    assert wasmext(project, wabt, "src/pkg/add.wasm").returncode == 0
+    assert wasmext(project, wabt, "natify", "src/pkg/add.wasm").returncode == 0
     (glue / "add_glue.c").write_text("this is not C;\n", encoding="utf-8")
     # the first line says the C is current, so they are not written again: the compiler meets the broken one
-    done = wasmext(project, None, "-q", "-b", "src/pkg/add.wasm")
+    done = wasmext(project, None, "natify", "-q", "-b", "src/pkg/add.wasm")
     assert done.returncode == 1
 
 
 def test_help_lists_the_flags(project: Path, wabt: Path) -> None:
-    done = wasmext(project, wabt, "--help")
+    done = wasmext(project, wabt, "natify", "--help")
     assert done.returncode == 0
     for flag in ("--inplace", "--build", "--force", "--exclude", "--build-dir"):
         assert flag in done.stdout
@@ -121,22 +121,22 @@ def test_inplace_leaves_no_build_directory_and_handles_several_places(project: P
     other = project / "tools"
     other.mkdir()
     shutil.copy(SIMPLE, other / "calc.wasm")
-    done = wasmext(project, wabt, "-q", "-i", "src/pkg/add.wasm", "tools/calc.wasm")
+    done = wasmext(project, wabt, "natify", "-q", "-i", "src/pkg/add.wasm", "tools/calc.wasm")
     assert done.returncode == 0, done.stderr
     assert built(project / "src" / "pkg", "add") and built(other, "calc")
     assert not list(project.rglob("build")) and not list(project.rglob("tmp*"))
 
 
 def test_stubs_are_written_unless_asked_not_to(project: Path, wabt: Path) -> None:
-    assert wasmext(project, wabt, "-q", "src/pkg/add.wasm").returncode == 0
+    assert wasmext(project, wabt, "natify", "-q", "src/pkg/add.wasm").returncode == 0
     assert (project / "src" / "pkg" / "add.pyi").is_file()
     (project / "src" / "pkg" / "add.pyi").unlink()
-    assert wasmext(project, wabt, "-q", "--no-stubs", "src/pkg/add.wasm").returncode == 0
+    assert wasmext(project, wabt, "natify", "-q", "--no-stubs", "src/pkg/add.wasm").returncode == 0
     assert not (project / "src" / "pkg" / "add.pyi").exists()
 
 
 def test_abi3_builds_an_extension_that_runs(project: Path, wabt: Path) -> None:
-    done = wasmext(project, wabt, "-q", "-i", "--abi3", "src/pkg/add.wasm")
+    done = wasmext(project, wabt, "natify", "-q", "-i", "--abi3", "src/pkg/add.wasm")
     assert done.returncode == 0, done.stderr
     [extension] = built(project / "src" / "pkg", "add")
     assert ".abi3." in extension.name or extension.suffix == ".pyd"
@@ -154,10 +154,10 @@ def test_abi3_builds_an_extension_that_runs(project: Path, wabt: Path) -> None:
 def test_inplace_removes_the_stale_variant_that_would_shadow_the_new_one(project: Path, wabt: Path) -> None:
     """Python tries `.cpython-3xx-<platform>.so` before `.abi3.so`: a native file left by an earlier build wins."""
     folder = project / "src" / "pkg"
-    assert wasmext(project, wabt, "-q", "-i", "--no-abi3", "src/pkg/add.wasm").returncode == 0
+    assert wasmext(project, wabt, "natify", "-q", "-i", "--no-abi3", "src/pkg/add.wasm").returncode == 0
     [native] = built(folder, "add")
     assert ".abi3." not in native.name
-    done = wasmext(project, wabt, "-q", "-i", "--abi3", "src/pkg/add.wasm")
+    done = wasmext(project, wabt, "natify", "-q", "-i", "--abi3", "src/pkg/add.wasm")
     assert done.returncode == 0, done.stderr
     [only] = built(folder, "add")
     assert only != native and not native.exists()
@@ -222,3 +222,12 @@ def test_the_stub_names_the_version_of_a_release_only() -> None:
         assert _RELEASE_VERSION.fullmatch(release)
     for development in ("0.0.0.dev142+g192c448.d20261019", "0.1.0a1.dev3", "0.1.0+local", "0+unknown", "1.0.post1"):
         assert not _RELEASE_VERSION.fullmatch(development)
+
+
+def test_a_command_is_needed_and_a_file_is_not_one(tmp_path: Path) -> None:
+    bare = wasmext(tmp_path, None, "f.wasm")
+    assert bare.returncode == 2 and "invalid choice: 'f.wasm'" in bare.stderr and "natify" in bare.stderr
+    nothing = wasmext(tmp_path, None)
+    assert nothing.returncode == 2 and "COMMAND" in nothing.stderr
+    help_ = wasmext(tmp_path, None, "--help")
+    assert help_.returncode == 0 and "natify" in help_.stdout and "inspect" in help_.stdout

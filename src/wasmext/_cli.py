@@ -1,9 +1,9 @@
-"""The command line, in the manner of `cythonize`:
+"""The command line, with a command for each thing it does:
 
-wasmext src/mypkg/*.wasm          write the C beside each .wasm (what setup.py's natify() does), build nothing
-wasmext -i src/mypkg/*.wasm       ... and build the extensions in place, next to the .wasm files
-wasmext -b ...                    ... and build them under build/ (as `setup.py build_ext`)
-wasmext inspect src/mypkg/*.wasm  say what each module imports and exports, and what wasmext makes of it
+wasmext natify src/mypkg/*.wasm     write the C beside each .wasm (what natify() of setup.py does), build nothing
+wasmext natify -i src/mypkg/*.wasm  ... and build the extensions in place, next to the .wasm files
+wasmext natify -b ...               ... and build them under build/ (as `setup.py build_ext`)
+wasmext inspect src/mypkg/*.wasm    say what each module imports and exports, and what wasmext makes of it
 """
 
 from __future__ import annotations
@@ -40,12 +40,18 @@ def _version_text() -> str:
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    top = argparse.ArgumentParser(
         prog="wasmext",
+        description="Turn WebAssembly modules into native CPython extensions.",
+    )
+    top.add_argument("--version", action="version", version=_version_text())
+    commands = top.add_subparsers(dest="command", required=True, metavar="COMMAND")
+    parser = commands.add_parser(
+        "natify",
+        help="make native extensions of .wasm files",
         description="Turn WebAssembly modules into native CPython extensions: the C is written beside each .wasm "
         "(or under --build-dir); with -i or -b the extensions are built too.",
     )
-    parser.add_argument("--version", action="version", version=_version_text())
     parser.add_argument(
         "files", nargs="+", metavar="FILE", help=".wasm file or glob pattern (quote it to let wasmext expand it)"
     )
@@ -86,18 +92,18 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--build-dir", metavar="DIR", help="write the C to DIR/<module name>/ instead of beside the .wasm"
     )
-    return parser
-
-
-def _inspect_main(argv: Sequence[str]) -> int:
-    parser = argparse.ArgumentParser(
-        prog="wasmext inspect",
+    inspect = commands.add_parser(
+        "inspect",
+        help="say what a module imports and exports and what wasmext makes of it",
         description="Say what a WebAssembly module imports and exports and what wasmext would make of it "
         "(nothing is written; wasm2c is not needed). Exit status 1 if some module cannot be wrapped.",
     )
-    parser.add_argument("files", nargs="+", metavar="FILE", help=".wasm file or glob pattern")
-    args = parser.parse_args(argv)
-    paths = sorted({Path(p) for pattern in args.files for p in (glob.glob(pattern, recursive=True) or [pattern])})
+    inspect.add_argument("files", nargs="+", metavar="FILE", help=".wasm file or glob pattern")
+    return top
+
+
+def _inspect_main(files: Sequence[str]) -> int:
+    paths = sorted({Path(p) for pattern in files for p in (glob.glob(pattern, recursive=True) or [pattern])})
     status = 0
     for i, path in enumerate(paths):
         try:
@@ -111,9 +117,9 @@ def _inspect_main(argv: Sequence[str]) -> int:
 
 def main(argv: Sequence[str] | None = None) -> int:
     given = list(sys.argv[1:] if argv is None else argv)
-    if given[:1] == ["inspect"]:  # a file called `inspect` can still be given as ./inspect
-        return _inspect_main(given[1:])
     args = _parser().parse_args(given)
+    if args.command == "inspect":
+        return _inspect_main(args.files)
     try:
         made = _natify(
             args.files,

@@ -205,7 +205,8 @@ The package is **not published on PyPI yet**; until it is, build the wheel from 
 
 - **WebAssembly:** tables are not exposed or linked (a module that imports or exports one is refused); no threads or shared memory;
   `funcref` and `externref` cannot be in a signature; relaxed SIMD is not supported (`wasm2c` aborts on it).
-- **WASI** (0.1 only): 41 of 46 calls. `proc_raise` returns `ENOSYS`, and sockets are not there (`sock_*` return `ENOTSOCK`).
+- **WASI** (0.1 only): 41 of 46 calls. `proc_raise` returns `ENOSYS`, and there are no sockets (`sock_*` return `ENOTSOCK`): the specification lets the host give the program a socket, but wasmext
+  gives it only directories, so this is a gap of wasmext and not of WASI.
   `poll_oneoff` has no clocks of the process or the thread, and there are no signals. WASI 0.2 and 0.3 are not supported.
 - **Files on Windows** go through Python (`os`), which is slower for opening, `stat` and listing than the direct calls on POSIX, and
   has a gap between a check and a use that `openat` does not have; a native path is not written, and the cost was not measured.

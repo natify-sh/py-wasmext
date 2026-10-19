@@ -260,7 +260,7 @@ In this order (the first ones are small):
 7. `funcref`/`externref` in signatures (a design is needed first: who owns an `externref`); custom page sizes (`wasm2c` can, with a
    flag); the rest of the examples of other projects (below).
 8. ~~**WASI**~~ (`wasi_snapshot_preview1` and `wasi_unstable`): done for WASI 0.1. Part of wasmext, compiled into the native module as a header, `wasi_preview1.h`, the system
-   reached through `Python.h`; 41 of 46 calls, the official tests pass on Linux, macOS and Windows; see "Design: WASI". Left: the clocks of the process and the thread in `poll_oneoff`, signals, sockets (not possible in this snapshot), WASI 0.2 and 0.3.
+   reached through `Python.h`; 41 of 46 calls, the official tests pass on Linux, macOS and Windows; see "Design: WASI". Left: the clocks of the process and the thread in `poll_oneoff`, signals, sockets (the specification allows them, on a socket the host gives to the program; wasmext gives none: its `wasi=` has only directories), WASI 0.2 and 0.3.
 9. **A native path to files on Windows** (now through Python). `NtCreateFile` relative to a directory handle, as cap-std does: it would give the safety of `openat` there
    (no gap between a check and a use) and the speed. Not started; first measure what the Python way costs on Windows (it was not measured).
 

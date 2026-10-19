@@ -328,16 +328,50 @@ In this order (the first ones are small):
    ctypes callback that raises does **not** pass the exception on; ctypes prints `Exception ignored on calling ctypes callback function`, gives the C code
    an undefined value, and the C code goes on. The extension for CPython needs none of this (its callbacks are called with Python frames above them and
    `PY_ERROR_TRAP` unwinds C frames only), and the executable has no imports of the host but WASI. An exception of WebAssembly (the proposal of
-   exception handling; `wasm-rt-exceptions-impl.c`) that nothing in the module catches would be a result of its own for the host (a code and the tag):
-   not needed yet.
+   exception handling; `wasm-rt-exceptions-impl.c`) is not a trap: a module made from C++ with exceptions, or from Rust with unwinding, may `throw`
+   and `catch` inside itself. If a `throw` reaches the edge of the module and nothing in it catches, the call of the export ends with an exception
+   that carries a tag and values, which would be a result of its own for the host (wasm3 has it: `m3Err_trapUncaughtException`, with
+   `m3_GetExceptionTag` and `m3_GetExceptionArgs`). What the extension does with it today was not checked; not needed yet.
    What does not wait for any of it: the alpha of the extension, as it is. The public interface (`Instance`, `natify`, `wasi=`) does not change in
    stages 1 to 5; the files that a built extension carries do (the headers beside its C), which the cache of `wasmimport` and the stamp of the
    build already follow. Order and why: 1 before everything (the seams are the part that is expensive to redo); 2 and 3 together and first,
    because the core of WASI is the larger and the more tested piece and its one gap, the files of Windows, is what keeps it from being free of the
    interpreter; 4 after them, being the other half; 5 once both halves are complete, so that the cut is proved on all three systems with a second
    front end; 6 (the shared library, then the ctypes wrapper) and 7 last, because they add products, not structure.
-   Not decided: the size of each stage (it is not estimated); whether stages 6 and 7 are one release or two; the hooks being `static inline` or
-   function pointers (to be measured at stage 2 on a call that is on a hot path, the standard streams).
+   **Sizes (an estimate from the size of the code and from the pace of CI seen so far; not a promise).** S is a document or a few commits with one
+   round of CI, M is several commits and a few rounds, L is many rounds. A round on Windows (the build of the programs, 3 minutes, and the tests) is
+   about 5 to 6 minutes.
+   1. **S**: a document, no CI.
+   2. **M**: about 1 850 of the 2 860 lines of `wasi_common.h` move as they are; the 49 functions that touch Python become calls of hooks. The risk
+      is a hook with the wrong signature found late. 3 to 5 commits, 2 to 3 rounds on the three systems.
+   3. **L, the largest and the most uncertain**: the Python path to files is about 1 000 lines (the block `WASMEXT_WASI_PYTHON_FS`, a third of the
+      header) to be replaced by Win32, about twenty calls (`path_open`, `path_filestat_get`, `fd_readdir`, `path_rename`, `path_link`,
+      `path_symlink`, `path_readlink`, `path_unlink_file`, `path_remove_directory`, `path_create_directory`, the times, `pread`/`pwrite`, ...). Windows
+      cannot be run here, so every step is a round of CI: expect 8 to 15 rounds, 45 to 90 minutes of waiting in all, apart from the writing.
+      Symbolic links: creating one needs a privilege on Windows (an administrator, or Developer Mode); the runners of GitHub are administrators, as
+      far as is known here (the tests of links pass there now). `symlink_filestat` is expected to fail only because Python before 3.13 cannot set the
+      times of a link itself; natively `SetFileTime` on a handle opened with `FILE_FLAG_OPEN_REPARSE_POINT` can, so the expectation may go.
+   4. **M**: the generator (1 459 lines) gives about 230 generic lines to a header and the typed functions to `<name>_glue.h`; the 303 tests run
+      locally and fast, so few rounds of CI: 4 to 6 commits, 2 to 3 rounds.
+   5. **M**: a `main()`, the hooks in C, the way the test runner starts a program (a build of each program by `wasm2c` and the compiler of the machine,
+      on three systems). 4 to 6 commits, 4 to 6 rounds.
+   6. **6a M to L**, the generator of the C header of the API, the fixed `.c`, a host in C that tests the protocol of errors; **6b M**, the
+      generator of the wrapper and the proof that it is the same interface (the existing tests run against both front ends would be the proof).
+   7. **S to M**.
+   Not decided: whether stages 6 and 7 are one release or two; the hooks being `static inline` or function pointers (to be measured at stage 2 on a
+   call that is on a hot path, the standard streams).
+
+11. **Suspend, resume and snapshot** (an idea, later; nothing decided). wasm3 has it: `m3_SetSuspendable` (before the code is compiled, because only
+    code made that way has the pause checks), `m3_RequestSuspend` (it takes effect at the next point of a pause: the back edge of a loop or the
+    start of a function), `m3_IsSuspended`, `m3_ResumeRuntime`, and snapshots of a paused call (`m3_SaveSnapshot`/`m3_LoadSnapshot`, to a buffer,
+    or embedded in the module: `m3_SaveSnapshotToModule`), with hooks for the state of the host — read in its header, not tried. The example
+    `04-suspend-resume` of pywasm3 (a pause when the gas runs out, a snapshot of the paused call) is in the table of examples. **It does not carry
+    over as it is**: wasm3 is an interpreter with a stack of its own that it can stop and write down, while the C of `wasm2c` runs on the stack of
+    the machine. The ways that exist for us, to be weighed when it is taken up: (a) a pass of Binaryen before `wasm2c` (`wasm-opt --asyncify`, the
+    example `03-asyncified` of pywasm3 is made that way): the module saves and rebuilds its own stack, at a cost in speed and size; (b) a snapshot
+    only between calls, of the linear memory, the globals and the tables, with no stack (simple; it cannot stop a call in the middle); (c) a
+    thread or a switch of stacks for each instance, to pause a call without writing it down (no snapshot). A pause also has to cross the layers of
+    "C first": a hook of the host that asks for it, and the state of WASI (the table of descriptors) in the snapshot.
 
 How to choose the next features: **on demand, not in advance**. The examples of [wasm2mpy](https://github.com/vshymanskyy/wasm2mpy)
 and [pywasm3](https://github.com/wasm3/pywasm3) are taken one by one, the simplest first, and added to this project as examples

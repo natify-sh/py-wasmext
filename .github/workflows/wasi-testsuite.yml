@@ -27,7 +27,7 @@ env:
 
 jobs:
   wasi-testsuite:
-    name: WASI test suite on ${{ matrix.os }}${{ matrix.python_fs && ' (files through Python)' || '' }}
+    name: WASI test suite on ${{ matrix.os }}${{ matrix.python_fs && ' (files through Python)' || '' }}${{ matrix.exe && ' (native executables)' || '' }}
     runs-on: ${{ matrix.os }}
     # a branch of this repository is run by its push; a pull request is run only when it comes from a fork (a push to a fork is not seen here)
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
@@ -43,6 +43,10 @@ jobs:
           # ... and through Python (os.stat, os.open ...): the way Windows had before the native one (wasi_files_win32.h)
           - { os: ubuntu-latest, python_fs: true }
           - { os: windows-latest, python_fs: true }
+          # ... and as native executables with no Python in them (wasmext._exe: the C of the module, its glue and the core of WASI): check (b) of the plan
+          - { os: ubuntu-latest, exe: true }
+          - { os: macos-latest, exe: true }
+          - { os: windows-latest, exe: true }
     steps:
       - uses: actions/checkout@v7
         with:
@@ -73,6 +77,7 @@ jobs:
         env:
           WASMEXT_TESTSUITE_CACHE: ${{ runner.temp }}/wasmext-testsuite
           WASMEXT_TESTSUITE_CFLAGS: ${{ matrix.python_fs && '-DWASMEXT_WASI_PYTHON_FS=1' || '' }}
+          WASMEXT_TESTSUITE_EXE: ${{ matrix.exe && '1' || '' }}
         run: |
           WORK="$GITHUB_WORKSPACE"
           if [ "$RUNNER_OS" = "Windows" ]; then PY="$WORK\\.venv\\Scripts\\python.exe"; else PY="$WORK/.venv/bin/python"; fi
@@ -83,6 +88,7 @@ jobs:
         env:
           WASMEXT_TESTSUITE_CACHE: ${{ runner.temp }}/wasmext-testsuite
           WASMEXT_TESTSUITE_CFLAGS: ${{ matrix.python_fs && '-DWASMEXT_WASI_PYTHON_FS=1' || '' }}
+          WASMEXT_TESTSUITE_EXE: ${{ matrix.exe && '1' || '' }}
         run: |
           # paths in the form of the system (GITHUB_WORKSPACE has C:\ on Windows, $PWD in bash has /c/)
           WORK="$GITHUB_WORKSPACE"
@@ -101,7 +107,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: wasi-testsuite-${{ matrix.os }}${{ matrix.python_fs && '-python-fs' || '' }}
+          name: wasi-testsuite-${{ matrix.os }}${{ matrix.python_fs && '-python-fs' || '' }}${{ matrix.exe && '-exe' || '' }}
           path: ${{ runner.temp }}/wasi-testsuite.json
           retention-days: 7
           if-no-files-found: ignore

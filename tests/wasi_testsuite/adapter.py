@@ -10,7 +10,11 @@ import sys
 from pathlib import Path
 
 RUN = Path(__file__).parent / "run_wasmext.py"
-
+EXE = (
+    os.environ.get("WASMEXT_TESTSUITE_EXE") == "1"
+)  # the programs are native executables (exe_build.py), not extensions of Python
+sys.path.insert(0, str(Path(__file__).parent))
+import exe_build  # pyright: ignore[reportMissingImports]
 
 # The tests expect other errors on other systems, and the suite asks for the system to be said with the environment of the
 # program (tests/rust/wasm32-wasip1/src/config.rs): without it any of the errors the systems give is taken.
@@ -59,7 +63,10 @@ def compute_argv(
     wasi_version: str,
 ) -> list[str]:
     args, env, root = args_env_root
-    argv = [os.environ.get("WASMEXT_PYTHON", sys.executable), str(RUN)]
+    if EXE:  # a native executable of the program (prebuild.py made it): no interpreter in between
+        argv = [str(exe_build.exe_path(Path(test_path)))]
+    else:
+        argv = [os.environ.get("WASMEXT_PYTHON", sys.executable), str(RUN)]
     if root:  # a test of files: the tests of the environment look at all of it
         env = {**PLATFORM, **env}
     for key, value in env.items():

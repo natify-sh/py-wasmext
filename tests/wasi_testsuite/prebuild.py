@@ -16,8 +16,25 @@ from pathlib import Path
 RUN = Path(__file__).parent / "run_wasmext.py"
 
 
+EXE = (
+    os.environ.get("WASMEXT_TESTSUITE_EXE") == "1"
+)  # native executables (exe_build.py) instead of extensions of Python
+EXE_BUILD = Path(__file__).parent / "exe_build.py"
+
+
 def build(program: Path) -> tuple[Path, int, float]:
     started = time.monotonic()
+    if EXE:
+        made = subprocess.run(
+            [sys.executable, str(EXE_BUILD), "--build", str(program)],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        if made.returncode:
+            print(f"{program}: {made.stderr[-600:]}", file=sys.stderr)
+        return program, made.returncode, time.monotonic() - started
     # the module is imported by a process of its own (as the runner does), which builds it; no arguments: it fails to run
     # `_start` at once with a directory the program wants, and that is not what is looked at here
     code = subprocess.run(

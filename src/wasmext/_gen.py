@@ -1027,6 +1027,23 @@ def generate(module: Module, name: str, *, version: str | None = None) -> Glue:
     hadd("    return 0;")
     hadd("}")
     hadd("")
+    # what a host that is not Python needs to run a command: WASI by itself (the functions of the core for the imports of WASI) and `_start`
+    hadd(f"#define {last.upper()}_WASI {1 if uses_wasi else 0}")
+    hadd(f"#define {last.upper()}_ONLY_WASI {0 if needs_imports else 1}  /* every import is a function of WASI */")
+    start = next((i for i, (n_, f_) in enumerate(funcs) if n_ == "_start" and not f_.params and not f_.results), None)
+    if start is not None:
+        hadd(f"#define {last.upper()}_START {last}_call{start}")
+    if uses_wasi:
+        hadd("/* the imports of WASI over the functions of the core, with the state `self->wasi` (made first): 0 */")
+        hadd(f"static int {last}_wasi_bind({last}_instance *self) {{")
+        for imp in imports:
+            if imp.module in _WASI_HEADERS:
+                own = imp.module == _WASI_UNSTABLE and imp.field in _WASI_UNSTABLE_OWN
+                hadd(f"    self->host{imp.host}.fn[{imp.slot}] = (void *)wasi_{'unstable_' if own else ''}{imp.field};")
+                hadd(f"    self->host{imp.host}.user[{imp.slot}] = self->wasi;")
+        hadd("    return 0;")
+        hadd("}")
+        hadd("")
     hadd(f"static void {last}_free({last}_instance *self) {{")
     hadd(f"    if (self->instantiated) wasm2c_{prefix}_free(&self->inst);")
     hadd("    self->instantiated = 0;")

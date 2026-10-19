@@ -317,7 +317,7 @@ In this order (the first ones are small):
        working), the `.pyi` names it, and a test with a module that has a tag (a `throw` that is caught inside and one that is not) is the proof;
        the C API of the shared library gives the same three outcomes. The WASI half
       (2 and 3) and the glue half (4) do not depend on each other; the WASI half goes first because the blocker (Windows) is there.
-   5. **The first front end that is not Python, on the three systems**: the C runner (`wasmext-run module.wasm`, the idea of `natify --exe`):
+   5. **The first front end that is not Python, on the three systems** (written; Linux checked, the other two in CI, see "Stage 5 ... as built"): the C runner (`wasmext-run module.wasm`, the idea of `natify --exe`):
       `main()`, the hooks of WASI in plain C, `_start`. It needs 2 to 4 (the core of WASI complete on every system, the core of the glue). It runs
       the official tests without the Python adapter (the cause of the slow Windows job) and is check (b). If the cut is wrong, it shows here.
    6. **The shared library and the ctypes wrapper**, both in the plan (the wrapper is the second half of this stage, on the first).
@@ -820,6 +820,18 @@ C of wasm2c, in the first (or the only) file, a table `wasmext_tags_<prefix>[]` 
 `_natify.py`; it reads the declarations `const wasm_tag_placeholder_t NAME;` that wasm2c writes, in that order). The payload is the value itself for a tag with
 one value and a struct of them for more (wasm2c's own `struct wasm_multi_<codes>` is not in the header, so the glue declares the same members in the
 same order). Limits: the runtime keeps at most 256 bytes of an exception; a tag with a reference type in its values is told by its index with no values.
+
+### Stage 5, the C runner (check (b)), as built
+
+`wasmext._exe` makes a native program from a WASI command: the C of wasm2c (by `_prepare` of natify, so the same repairs), `<name>_glue.h`, the core of WASI
+and a generated `main()` (`<name>_main.c`), compiled and linked by the compiler of `setuptools` (MSVC on Windows, `cc` elsewhere). No Python is in the program. The program takes
+`--env NAME=VALUE`, `--dir HOST::GUEST` (both repeated), the path of the module and its arguments, and ends with the code of `proc_exit` or 134 on a trap. Only the imports of
+WASI are served (`<name>_wasi_bind` in the glue); a module with any other import, or with no `_start`, is refused when it is made. On Windows the standard streams are put in
+binary mode and the host path of a directory is made whole (`_fullpath`).
+
+**Checked**: on Linux the 72 official tests of the suite pass with these programs (all built in 80 s, run in 1.5 s, against about 7 s through Python); three tests in `tests/test_exe.py`
+(exit code and bytes, a trap, the refusals). **Not yet run**: the same on macOS and Windows; the CI jobs `(native executables)` of `wasi-testsuite.yml` are the first run there.
+This is the tool of the test suite, not yet a command (`natify --exe` is stage 7).
 
 ## Decisions
 

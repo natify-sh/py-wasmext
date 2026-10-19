@@ -479,7 +479,7 @@ How it is now (after the decision "The configuration of WASI" below). "Plain C" 
 | `proc_exit` | raises `WasiExit` with the code; C through `Python.h`. The program is over: its descriptors are closed at once, a call after it is `WasiTerminated` | (the call) | yes |
 | `proc_raise` | `WasiSignal` (`.signal`, `.name`); a signal that nothing ends (none, the child, continue, the stops, urgent data, the window size) is a success and the program goes on | (the call) | yes |
 | Files and directories | none (the POSIX walker is plain C, on Windows C through `Python.h`) | `preopens`, `readonly` | yes |
-| Sockets | none now (`sock_*` give `ENOTSOCK`). Decided: addresses to listen on, the sockets made in C | `listen` | not yet |
+| Sockets | none (`sock_*` give `ENOTSOCK`) | (postponed, see "Decisions") | no |
 
 Whatever is not in `wasi=` can be replaced call by call through `imports`.
 
@@ -517,7 +517,7 @@ Whatever is not in `wasi=` can be replaced call by call through `imports`.
   nanoseconds, `random`: how many -> that many bytes; neither takes `None`, which would mean a clock that stands still), or call by call
   through `imports`. A text stream (sys.stdout, a `StringIO`) given explicitly works as the default does: it gets the bytes through its
   binary side, after its text layer is flushed, or as text where it has none.
-  *Built:* all of the above, and the end of the program (below). *Decided, not built yet:* sockets.
+  *Built:* all of the above, and the end of the program (below).
 - **The end of a program.** `proc_exit` and `proc_raise` end it, as on the operating system: the exception carries the code or the signal
   (`WasiExit`, `WasiSignal`, with a common base), the C closes at once every descriptor the program opened (files, directories and, when
   they are there, sockets; not what belongs to the user: `sys.stdout`, a stream the caller gave, the directories of the preopens are
@@ -526,8 +526,11 @@ Whatever is not in `wasi=` can be replaced call by call through `imports`.
   is called once by the specification; this replaces "the instance stays usable after `proc_exit`".) *Built.* What the exception says of the signal: `.signal` is
   the number in WASI 0.1 and `.name` is `SIGABRT` and so on; the signals that would not end a process (none, the child, continue, stop and the stops of a
   terminal, urgent data, the window size) are answered with success and the program goes on. The stub: `WasiTerminated`, `WasiExit`, `WasiSignal`.
-- **Sockets.** Like wasmtime's `--tcplisten` for the first snapshot: the user gives addresses to listen on (`listen`), the extension makes
-  the sockets in C, the program gets them as descriptors for `sock_accept`, `sock_recv`, `sock_send`, `sock_shutdown`. No connecting out
-  (the first snapshot has no call for it). *Not built yet.*
+- **Sockets: postponed.** The idea (addresses to listen on in `wasi=`, the sockets made in C, handed to the program as descriptors after the
+  preopened directories, for `sock_accept`, `sock_recv`, `sock_send`, `sock_shutdown`; no connecting out, the first snapshot has no call for it) was
+  not built, for want of anything to compare it to: the preview1 of today's wasmtime (`crates/wasi/src/p1.rs`) has no sockets ("sockets are not
+  currently supported"), `--tcplisten` of its CLI is "experimental, legacy wasip1 implementation only" (how that one numbered the descriptors was not
+  found out), and the official test suite has no test of sockets for WASI 0.1 (those it has are for 0.3). The design would be ours alone, and a public
+  interface that nothing checks. The four `sock_*` stay `ENOTSOCK`. To be taken up when a program needs them.
 - `wasmhost` is a different tool (a facade over engines); its API is a guide for names and errors, the reference for behaviour
   is the specification and the JavaScript API.

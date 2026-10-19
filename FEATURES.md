@@ -593,5 +593,14 @@ Whatever is not in `wasi=` can be replaced call by call through `imports`.
   do. **Not measured**: a call of `add(a, b)` in a loop is the case that would show it (the exports of `coremark` take no arguments). If it is
   more than a few percent, the typed wrapper that parses the Python arguments stays generated for the CPython extension (then that header
   includes `Python.h`, and the other front ends get their own tables). The measurement comes before the form is fixed.
+  *Measured with a prototype (a hand-made copy of the glue of `simple.wasm`: the typed `Instance_f0` against a method that packs the arguments by the
+  signature string `"ii>i"` into `wasmext_val[]` and calls a thunk of the uniform form).* `add(2, 3)` in a loop of 1 000 000 calls, 25 rounds
+  alternated, on a shared 4-core machine, GCC, the flags of setuptools: the typed call 40.4 ns (median; best round 27.3), the uniform one 44.6 ns
+  (28.7): **+4.2 ns, +10 % by the median, +1.4 ns, +5 % by the best rounds**; the noise between rounds was larger than that (a round of the uniform call
+  was faster than one of the typed call). For a scale, `max(2, 3)` in the same loop takes 50 to 70 ns. So: a cost of a few nanoseconds for a call that
+  does nothing, which a function that does any work does not see; not a reason in itself to keep a typed wrapper. What the prototype does not
+  cover: `i64`, `f32`, `f64` and several results, a trap, a call with many arguments, other compilers, and the call being inlined or not
+  when the thunk lives in a header of its own (here it was in the same file). The form is **not fixed** until the project owner says so.
+
 - `wasmhost` is a different tool (a facade over engines); its API is a guide for names and errors, the reference for behaviour
   is the specification and the JavaScript API.

@@ -591,8 +591,16 @@ Whatever is not in `wasi=` can be replaced call by call through `imports`.
         `.c` that the build compiles for the extension for CPython (so no fixed stub is needed);
      b. a shared library: a fixed `.c` that exports the functions of 2 as symbols, **and a generated ctypes wrapper** (`<name>_ctypes.py`, with a
         `.pyi`): it loads the `.so`/`.dll`, sets `argtypes`/`restype` from the signature strings, and gives a class `Instance` with the same
-        methods. The wheel then depends on the platform and not on the version of Python; it may serve interpreters with no CPython extensions
-        (PyPy, GraalPy: **not tried**). A call through ctypes costs much more than a call of the extension: an alternative, not a replacement;
+        methods. **The wrapper has the same interface as `Instance` of the extension** (decided): the same methods and attributes, the same arguments,
+        `imports` as Python callables, `wasi={...}` as the same dict, `__exports__`, the memory as a `memoryview`, the same exceptions (`Trap`,
+        `LinkError`, `WasiExit`, `WasiSignal`), so that code and the `.pyi` are the same for both (one stub, not two). The wheel then depends on the
+        platform and not on the version of Python; it may serve interpreters with no CPython extensions (PyPy, GraalPy: **not tried**). A call through
+        ctypes costs much more than a call of the extension: an alternative, not a replacement. To be settled when it is built, not decided: a Python
+        callable given as an import is called through a ctypes callback, which cannot let an exception pass through the C frames (the wrapper would catch
+        it, answer the core with a trap code, and raise it again after the call); the interruption of a sleep (`PyErr_CheckSignals` has no place in
+        the core: a hook); the link between two instances (the capsule `wasmext.export.v1` is a CPython object: a pointer to the record would be
+        carried by the wrapper in its own way, and whether an extension and a ctypes instance can link with each other is open); the GIL (ctypes
+        releases it during a call of a function of a `CDLL`);
      c. an executable: a `.c` with `main()` that gives the arguments and the environment of the process to the program, the hooks of WASI in plain C
         (standard streams are descriptors 0, 1, 2; `proc_exit` is `exit`; a signal is `raise`), and calls `_start` (`natify --exe`).
   WASI follows the same cut: `wasi_core.h` (plain C: descriptors, the walk of paths, arguments, environment, clocks, random bytes, `poll_oneoff`, the

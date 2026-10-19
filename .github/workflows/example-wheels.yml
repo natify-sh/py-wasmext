@@ -1,7 +1,7 @@
 name: Example wheels
 
 # examples/coremark and examples/lua are packages whose extension is made by wasmext from a .wasm: cibuildwheel builds their
-# wheels on every platform, with the wasmext of this checkout (it is not on PyPI yet) as the build tool.
+# wheels on every platform, with the wasmext of this checkout as the build tool.
 
 on:
   push:
@@ -100,5 +100,61 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.example }}-wheels-${{ matrix.os }}-${{ matrix.archs }}
+          path: ./wheelhouse
+          retention-days: 7
+
+  # The platforms that the desktop matrix above has not: the other Linux architectures (under QEMU where the runner has not the processor),
+  # Pyodide, and Android (built, not run: there is no emulator of arm64 on the runner). coremark only: it is small, and these are slow.
+  build-example-extra:
+    name: coremark on ${{ matrix.name }}
+    needs: build-wasmext
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: "Linux ARMv7", os: ubuntu-24.04-arm, platform: linux, archs: "armv7l" }
+          - { name: "Linux i686", os: ubuntu-latest, platform: linux, archs: "i686" }
+          - { name: "Linux ppc64le", os: ubuntu-latest, platform: linux, archs: "ppc64le", qemu: true }
+          - { name: "Linux riscv64", os: ubuntu-latest, platform: linux, archs: "riscv64", qemu: true }
+          - { name: "Pyodide", os: ubuntu-latest, platform: pyodide, archs: "wasm32", build: "cp313-*" }
+          - { name: "Android arm64", os: ubuntu-latest, platform: android, archs: "arm64_v8a", build: "cp313-*", skip_tests: true }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Download the wasmext wheel
+        uses: actions/download-artifact@v8
+        with:
+          name: wasmext-wheel
+          path: examples/coremark/deps
+
+      - name: Set up QEMU for the emulated architectures
+        if: ${{ matrix.qemu }}
+        uses: docker/setup-qemu-action@v4
+        with:
+          platforms: all
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          github-token: ${{ github.token }}
+
+      - name: Build the wheels
+        env:
+          CIBW_BUILD_FRONTEND: "build; args: --no-isolation"
+          CIBW_BEFORE_BUILD: pip install --find-links {package}/deps wasmext setuptools
+          CIBW_BUILD: ${{ matrix.build || 'cp311-* cp314t-*' }}
+          CIBW_TEST_SKIP: ${{ matrix.skip_tests && '*' || '' }}
+        run: uvx cibuildwheel examples/coremark --platform ${{ matrix.platform }} --archs ${{ matrix.archs }} --output-dir wheelhouse
+        shell: bash
+
+      - name: list ./wheelhouse
+        run: ls ./wheelhouse
+        shell: bash
+
+      - name: Upload the wheels
+        uses: actions/upload-artifact@v7
+        with:
+          name: coremark-wheels-${{ matrix.platform }}-${{ matrix.archs }}
           path: ./wheelhouse
           retention-days: 7

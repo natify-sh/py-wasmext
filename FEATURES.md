@@ -162,7 +162,7 @@ The cibuildwheel configuration of the example is `build = "cp311-* cp314t-*"`.
 
 ### Not confirmed
 
-- PyPy, iOS.
+- PyPy (iOS is not a target).
 - The Linux architectures above in CI (they were built by hand under QEMU, not in a workflow), the `cp314t` wheels on them, and
   `musllinux_1_2` x86-64 locally (the disk of the machine was full; CI built it in run #23, commit `0e251d8`).
 - Big-endian hosts (s390x): a module that exports its memory, or uses `v128` in a signature, does not work there (see above);

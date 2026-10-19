@@ -78,7 +78,7 @@ def test_an_externref_export_is_skipped_but_an_import_of_one_is_refused() -> Non
 def test_an_imported_memory_is_taken_from_another_instance_but_not_a_shared_one() -> None:
     data = module(section(2, vec(name("env") + name("mem") + b"\x02\x00" + leb(1))))
     glue = generate(parse(data), "m")
-    assert "wasm_rt_memory_t *w2c_env_mem(" in glue.source and "'mem': object" in glue.stub
+    assert "wasm_rt_memory_t *w2c_env_mem(" in glue.header and "'mem': object" in glue.stub
     shared = module(section(2, vec(name("env") + name("mem") + b"\x02\x03" + leb(1) + leb(2))))
     with pytest.raises(GenError, match="imported shared memory"):
         generate(parse(shared), "m")
@@ -94,10 +94,11 @@ def test_the_module_name_must_be_an_identifier() -> None:
 
 def test_the_dotted_name_is_the_type_name_and_the_last_part_the_init_function() -> None:
     data = module(section(1, vec(functype([], []))), HEADER_FUNC, code(b"\x00\x0b"))
-    source = generate(parse(data), "pkg.sub.fast").source
-    assert "PyMODINIT_FUNC PyInit_fast(void)" in source
-    assert '"pkg.sub.fast.Instance"' in source
-    assert '#include "fast_w2c.h"' in source
+    glue = generate(parse(data), "pkg.sub.fast")
+    assert "PyMODINIT_FUNC PyInit_fast(void)" in glue.source
+    assert '"pkg.sub.fast.Instance"' in glue.source
+    assert '#include "fast_glue.h"' in glue.source  # the Python layer includes the glue of the module ...
+    assert '#include "fast_w2c.h"' in glue.header and "#include <Python.h>" not in glue.header  # ... which has no Python in it
 
 
 def test_the_stub_describes_the_extension() -> None:

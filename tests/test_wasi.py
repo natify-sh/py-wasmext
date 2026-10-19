@@ -418,3 +418,54 @@ def test_the_clocks_are_those_of_the_system(build_extension: Builder) -> None:
     for clock_id in (2, 3):
         assert inst.clock_time_get(clock_id, 16) == 0
         assert inst.clock_res_get(clock_id, 24) == 0 and int.from_bytes(mem[24:32], "little") >= 1
+
+
+@pytest.mark.parametrize("source", ["wasi_hello.wat", "simple.wasm", "kitchen_sink.wasm"])
+def test_the_glue_of_a_module_compiles_with_no_python(source: str, wabt: Path, tmp_path: Path) -> None:
+    """Check (a) of the plan for the glue of a module (<name>_glue.h): it is C that only the runtime of wasm2c is needed for, so that
+    a host that is not Python can use it. The compiler is given no path to Python.h, and the header is not allowed to name it."""
+    import os
+    import platform
+    import shutil
+    import subprocess
+
+    from wasmext import generate, parse
+
+    cc = shutil.which(os.environ.get("CC", "cc")) or shutil.which("gcc") or shutil.which("clang")
+    if cc is None or platform.system() == "Windows":
+        pytest.skip("no C compiler of the cc kind")
+    wasm = tmp_path / "m.wasm"
+    if source.endswith(".wat"):
+        subprocess.run([wabt / "bin" / "wat2wasm", DATA / source, "-o", wasm], check=True)
+    else:
+        wasm.write_bytes((DATA / source).read_bytes())
+    glue = generate(parse(wasm.read_bytes()), "m")
+    (tmp_path / "m_glue.h").write_text(glue.header, encoding="utf-8")
+    c_dir = Path(__file__).parent.parent / "src" / "wasmext" / "c"
+    shared = [
+        "wasmext_glue.h",
+        *(("wasi_core.h", "wasi_files_win32.h", "wasi_python.h", *glue.wasi_headers) if glue.wasi_headers else ()),
+    ]
+    for name in shared:
+        (tmp_path / name).write_bytes((c_dir / name).read_bytes())
+    subprocess.run([wabt / "bin" / "wasm2c", wasm, "-o", tmp_path / "m_w2c.c", "--module-name=m"], check=True)
+    (tmp_path / "check.c").write_text('#include "m_glue.h"\nint main(void) { return 0; }\n', encoding="utf-8")
+    compiled = subprocess.run(
+        [
+            cc,
+            "-std=gnu11",
+            "-Wall",
+            "-Wno-unused-function",
+            "-Wno-unused-parameter",
+            "-fsyntax-only",
+            f"-I{tmp_path}",
+            f"-I{wabt / 'wasm2c'}",
+            f"-I{wabt / 'include'}",  # simde, for a module that uses SIMD
+            tmp_path / "check.c",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compiled.returncode == 0, compiled.stderr[-1500:]
+    assert "#include <Python.h>" not in glue.header

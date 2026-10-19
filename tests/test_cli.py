@@ -45,7 +45,7 @@ def test_without_flags_it_writes_the_c_and_builds_nothing(project: Path, wabt: P
     assert done.returncode == 0, done.stderr
     assert "src/pkg/add.wasm -> pkg.add" in done.stdout
     generated = project / "src" / "pkg" / "add_wasmext"
-    assert (generated / "add_glue.c").is_file() and (generated / "add_w2c.c").is_file()
+    assert (generated / "add_py.c").is_file() and (generated / "add_w2c.c").is_file()
     assert not built(project / "src", "add", recursive=True) and not (project / "src" / "build").exists()
 
 
@@ -75,7 +75,7 @@ def test_exclude_and_build_dir(project: Path, wabt: Path) -> None:
     shutil.copy(SIMPLE, project / "src" / "pkg" / "other.wasm")
     done = wasmext(project, wabt, "natify", "-X", "src/pkg/other.wasm", "--build-dir", "gen", "src/pkg/*.wasm")
     assert done.returncode == 0, done.stderr
-    assert (project / "gen" / "pkg.add" / "add_glue.c").is_file()
+    assert (project / "gen" / "pkg.add" / "add_py.c").is_file()
     assert not (project / "gen" / "pkg.other").exists()
 
 
@@ -104,7 +104,7 @@ def test_errors_have_a_message_and_a_nonzero_exit(project: Path, wabt: Path) -> 
 def test_a_failed_build_exits_nonzero(project: Path, wabt: Path) -> None:
     glue = project / "src" / "pkg" / "add_wasmext"
     assert wasmext(project, wabt, "natify", "src/pkg/add.wasm").returncode == 0
-    (glue / "add_glue.c").write_text("this is not C;\n", encoding="utf-8")
+    (glue / "add_py.c").write_text("this is not C;\n", encoding="utf-8")
     # the first line says the C is current, so they are not written again: the compiler meets the broken one
     done = wasmext(project, None, "natify", "-q", "-b", "src/pkg/add.wasm")
     assert done.returncode == 1

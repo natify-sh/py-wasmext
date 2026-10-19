@@ -309,7 +309,7 @@ In this order (the first ones are small):
       b. **`nt`** (`-DWASMEXT_WASI_WIN=nt`): the same primitive done with `NtCreateFile` and `RootDirectory`, handle-relative; own declarations and
          `GetProcAddress`, so that it builds in every compiler. CI runs the official tests with both variants. It comes after 3a is green and does not
          block the next stage.
-   4. **The glue as files**: `wasmext_glue.h` (the same for every module), `<name>_glue.h` (the module: typed C functions, the tables), `<name>_py.c`
+   4. **The glue as files** (first half built, see "Stage 4 ... as built"; the tags and the uncaught exception are the second half): `wasmext_glue.h` (the same for every module), `<name>_glue.h` (the module: typed C functions, the tables), `<name>_py.c`
       (the Python layer) — see "Decisions". The record `wasmext_export` and the fingerprint do not change. Check (a) covers them. **With it, the uncaught exception of WebAssembly**:
        the reader of modules (`_wasm.py`) reads the tag section (it checks its framing only now), `<name>_glue.h` gets a table of the tags of the
        module (the types of their values, the name when the tag is exported) and a function that decodes the payload of the runtime by those
@@ -783,6 +783,30 @@ What was checked, and what was not:
   expectation file now belongs to the job of the Python backend only (`expectations-windows-python-fs.toml`), and the job of the native
   backend has none. Whatever fails there is read from the first run.
 - Check (a) now includes MSVC on Windows (`core-without-python.yml`).
+
+### Stage 4 (the glue as files), first half: as built
+
+`generate()` makes three layers where it made one file. **Written and tested** (303 tests, 4 expected failures, plus a test that the glue of a module
+compiles with no path to `Python.h`); **not yet run in CI** at the time of writing.
+
+- `wasmext_glue.h` (static, no Python, copied beside every module): the trap codes that are not the runtime's (`WASMEXT_TRAP_HOST`,
+  `_NO_MEMORY`, `_ENDED`), the fingerprint `WASMEXT_RUNTIME`, how a call of WebAssembly code is guarded (`WASMEXT_ENTER` / `LEAVE`, the
+  jump buffer, the signals of a trap by guard pages).
+- `<name>_glue.h` (generated, no Python): what each import module holds (`fn[]`, `user[]`: the function to call and its first argument,
+  the values of imported globals, the pointers of imported memories), the instance `<name>_instance`, the functions the module imports in
+  the form the runtime wants (over `fn`/`user`), `<name>_instantiate`, `<name>_free`, and for each export a typed function
+  `<name>_call<i>(void *instance, parameters..., int *trapped)`: `*trapped` is the code of the trap, or 0.
+- `<name>_py.c` (generated, was `<name>_glue.c`): the Python layer: `Instance`, the conversion of arguments and results, `py_import<k>`
+  (a callable of the caller as a host function whose `user` is the callable), the capsule `wasmext.export.v1` (its record and fingerprint are
+  as they were), the memories and globals as attributes. `py_link<i>` is what a capsule gives another Python extension: the typed function,
+  with a trap turned into an exception of **this** extension before it is answered (so that `a.Trap` is still the exception of a trap in `a`).
+
+Notes: a call across two instances is now a call of a function pointer with `user`, the same for a function of another instance, one of WASI
+and a Python callable (the old `lf`/`li` and `fn` fork is gone). The protocol of errors is what the glue does: a host function answers
+nonzero through `trapped`, the frames of the module are unwound with `WASMEXT_TRAP_HOST`, and the Python layer finds its exception where Python
+keeps it. The check (a) in CI (`core-without-python.yml`) does not cover the new headers yet; `test_the_glue_of_a_module_compiles_with_no_python`
+does it for now, on systems with a `cc`. **Still to do in stage 4**: the tag section and the uncaught exception of WebAssembly with its
+tag and values (the second half), and the C API of the stage 6 that the typed functions are written for.
 
 ## Decisions
 

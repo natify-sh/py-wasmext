@@ -58,9 +58,11 @@ def build_extension(wabt: Path, tmp_path_factory: pytest.TempPathFactory) -> Cal
             wasm = out / f"{name}.wasm"
             subprocess.run([wabt / "bin" / "wat2wasm", source, "-o", wasm], check=True)
         glue = generate(parse(wasm.read_bytes()), name)
-        (out / f"{name}_glue.c").write_text(glue.source, encoding="utf-8")
+        (out / f"{name}_py.c").write_text(glue.source, encoding="utf-8")
+        (out / f"{name}_glue.h").write_text(glue.header, encoding="utf-8")
         for c_name in (
-            ("wasi_core.h", "wasi_files_win32.h", "wasi_python.h", *glue.wasi_headers) if glue.wasi_headers else ()
+            "wasmext_glue.h",
+            *(("wasi_core.h", "wasi_files_win32.h", "wasi_python.h", *glue.wasi_headers) if glue.wasi_headers else ()),
         ):  # beside the glue, which includes them
             (out / c_name).write_bytes((WASMEXT_C / c_name).read_bytes())
         subprocess.run(
@@ -72,7 +74,7 @@ def build_extension(wabt: Path, tmp_path_factory: pytest.TempPathFactory) -> Cal
         limited = ["-DPy_LIMITED_API=0x030B0000"] if abi3 else []
         so = out / (name + str(sysconfig.get_config_var("EXT_SUFFIX")))
         include = [f"-I{runtime}", f"-I{out}", f"-I{sysconfig.get_paths()['include']}"]
-        glue_object = out / f"{name}_glue.o"
+        glue_object = out / f"{name}_py.o"
         # The glue is ours, so it is built strictly: GCC 14 makes these errors (older ones warn), and the manylinux and
         # user machines have it. The C of wasm2c and its runtime are not ours to police.
         strict = [
@@ -91,7 +93,7 @@ def build_extension(wabt: Path, tmp_path_factory: pytest.TempPathFactory) -> Cal
                 *(f"-D{d}" for d in defines),
                 *include,
                 "-c",
-                out / f"{name}_glue.c",
+                out / f"{name}_py.c",
                 "-o",
                 glue_object,
             ],

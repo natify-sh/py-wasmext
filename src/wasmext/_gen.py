@@ -1320,7 +1320,7 @@ def _stub(
     if wasi:
         lines += ["class WasiExit(Exception):", "    code: int", ""]
         wasi_keys = "'args': list[str], 'env': dict[str, str], 'stdin': object, 'stdout': object, "
-        wasi_keys += "'stderr': object, 'preopens': dict[str, str]"
+        wasi_keys += "'stderr': object, 'preopens': dict[str, str], 'readonly': bool | str | list[str]"
         lines.append(f"Wasi = TypedDict('Wasi', {{{wasi_keys}}}, total=False)")
     lines.append("")
     by_module: dict[str, list[Import]] = {}

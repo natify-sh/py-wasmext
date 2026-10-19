@@ -224,6 +224,7 @@ and `uv run pytest` in its folder.
 | [`examples/coremark`](examples/coremark) | the CoreMark benchmark as a module (imports the clock and print from Python) |
 | [`examples/link`](examples/link) | two modules that use each other's memory, variable and function with no Python in between |
 | [`examples/lua`](examples/lua) | Lua 5.4, a WASI program: `luawasm.run(["script.lua"], root="dir")`, files in the directory it is given and nowhere else |
+| [`examples/wabt`](examples/wabt) | WABT itself: `wat2wasm` and `wasm2c` as WASI programs in extensions (`wabtwasm.wat2wasm(...)`), and a directory for `WASMEXT_WABT` made of them, so that wasmext translates with a `wasm2c` that wasmext built; the C they write is the same bytes as the native tools' |
 | [`examples/quickjs`](examples/quickjs) | QuickJS-ng, a JavaScript engine as a WASI program: `qjswasm.run(["script.js"], root="dir")`, an error of the script is code 1 and a message, as on the command line |
 
 What is supported, what is not yet, and the plan are in [FEATURES.md](FEATURES.md).

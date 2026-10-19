@@ -7,7 +7,8 @@
 
 It is a tool for development, as `pyximport` is: the first import of a module (and the first one after the `.wasm` or wasmext
 changed) runs `wasm2c` and a C compiler, and the result is kept in a cache directory (`~/.wasmbld`, or `build_dir`), so that
-the next imports only load it. A `.py` file or an extension of the same name wins over the `.wasm`: the finder is put at the end of
+the next imports only load it (until the file, wasmext, or how it is built, `guard_pages`, `limited_api`, `parts`, the flags of the
+compiler, changes: a stamp of those settings is kept beside the extension). A `.py` file or an extension of the same name wins over the `.wasm`: the finder is put at the end of
 `sys.meta_path`. Importing a `.wasm` compiles code that came with it, so it is for files you trust.
 
 As with `pyximport`, a file `<module>.wasmbld` beside the `.wasm` can say how the extension is made:
@@ -28,6 +29,7 @@ import hashlib
 import importlib.abc
 import importlib.machinery
 import importlib.util
+import json
 import os
 import shutil
 import sys
@@ -138,8 +140,10 @@ def build_module(name: str, wasmfilename: str, options: _Options) -> str:
         parts=options.parts,
     )
     lib = _package_root(wasm, name) if options.inplace else work / "lib"
+    stamp = work / "options"
+    fingerprint = _fingerprint(options, ext, special_args)
     existing = _find_built(lib, name)
-    if existing is not None and _up_to_date(existing, ext):
+    if existing is not None and _up_to_date(existing, ext) and _stamp_is(stamp, fingerprint):
         return str(existing)
 
     lib.mkdir(parents=True, exist_ok=True)
@@ -169,10 +173,14 @@ def build_module(name: str, wasmfilename: str, options: _Options) -> str:
     built = _find_built(lib, name)
     if built is None:
         raise RuntimeError(f"the build left no extension for {name} in {lib}")
-    if options.inplace:
-        from ._cli import _prune_stale  # pyright: ignore[reportPrivateUsage]
+    from ._cli import _prune_stale  # pyright: ignore[reportPrivateUsage]
 
-        _prune_stale(lib, name)
+    _prune_stale(
+        lib, name
+    )  # a native file and an abi3 one of earlier builds: only the newest is left, as Python would pick the first
+    built = _find_built(lib, name) or built
+    stamp.parent.mkdir(parents=True, exist_ok=True)
+    stamp.write_text(fingerprint, encoding="utf-8")
     return str(built)
 
 
@@ -207,6 +215,51 @@ def _find_built(lib: Path, name: str) -> Path | None:
         if candidate.is_file():
             return candidate
     return None
+
+
+# the environment that changes what the compiler is given
+_BUILD_ENVIRONMENT = (
+    "WASMEXT_GUARD_PAGES",
+    "WASMEXT_LIMITED_API",
+    "WASMEXT_PARTS",
+    "CC",
+    "CFLAGS",
+    "LDFLAGS",
+    "CPPFLAGS",
+)
+
+
+def _fingerprint(options: _Options, ext: Extension, special_args: dict[str, Any]) -> str:
+    """What the extension was built with besides the files: a change of any of it makes the cached one stale (the files say nothing of it)."""
+    settings = {
+        "guard_pages": options.guard_pages,
+        "limited_api": options.limited_api,
+        "parts": options.parts,
+        "setup_args": options.setup_args,
+        "special_args": special_args,
+        "extension": {
+            key: getattr(ext, key, None)
+            for key in (
+                "libraries",
+                "library_dirs",
+                "include_dirs",
+                "define_macros",
+                "undef_macros",
+                "extra_compile_args",
+                "extra_link_args",
+                "py_limited_api",
+            )
+        },
+        "environment": {key: os.environ.get(key) for key in _BUILD_ENVIRONMENT},
+    }
+    return json.dumps(settings, sort_keys=True, default=repr)
+
+
+def _stamp_is(stamp: Path, fingerprint: str) -> bool:
+    try:
+        return stamp.read_text(encoding="utf-8") == fingerprint
+    except OSError:
+        return False
 
 
 def _up_to_date(so: Path, ext: Extension) -> bool:

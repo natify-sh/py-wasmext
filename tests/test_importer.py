@@ -157,3 +157,32 @@ def test_what_the_compiler_prints_does_not_reach_the_standard_output(tmp_path: P
     done = subprocess.run([sys.executable, "-c", code], cwd=tmp_path, capture_output=True, text=True, check=False)
     assert done.returncode == 0, done.stderr
     assert done.stdout.split() == ["after"] and "from the compiler" in done.stderr
+
+
+def test_a_change_of_how_it_is_built_makes_the_extension_again(tmp_path: Path, env: dict[str, str]) -> None:
+    shutil.copy(SIMPLE, tmp_path / "fast.wasm")
+    use = "import fast\nprint(fast.Instance().add(2, 3), fast.__file__)"
+    first = python(tmp_path, env, f"wasmimport.install(guard_pages=True)\n{use}")
+    assert first.returncode == 0, first.stderr[-600:]
+    [so] = cached(tmp_path)
+    stamp = so.stat().st_mtime_ns
+    same = python(tmp_path, env, f"wasmimport.install(guard_pages=True)\n{use}")
+    assert same.returncode == 0 and so.stat().st_mtime_ns == stamp  # the same settings: loaded
+    changed = python(tmp_path, env, f"wasmimport.install(guard_pages=False)\n{use}")
+    assert changed.returncode == 0, changed.stderr[-600:]
+    assert changed.stdout.split()[0] == "5"
+    assert so.stat().st_mtime_ns != stamp  # other settings: made again
+
+
+def test_native_after_abi3_gives_the_native_extension_and_not_the_abi3_one_left_in_the_cache(
+    tmp_path: Path, env: dict[str, str]
+) -> None:
+    shutil.copy(SIMPLE, tmp_path / "fast.wasm")
+    use = "import fast\nprint(fast.__file__)"
+    abi3 = python(tmp_path, env, f"wasmimport.install(limited_api=True)\n{use}")
+    assert abi3.returncode == 0, abi3.stderr[-600:]
+    assert ".abi3." in abi3.stdout
+    native = python(tmp_path, env, f"wasmimport.install(limited_api=False)\n{use}")
+    assert native.returncode == 0, native.stderr[-600:]
+    assert ".abi3." not in native.stdout
+    assert len(cached(tmp_path)) == 1  # the stale one is gone, not left to shadow the new one

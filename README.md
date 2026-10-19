@@ -3,6 +3,12 @@
 Turn WebAssembly modules into **native CPython extensions**, in the manner of Cython: the module runs without a
 WebAssembly engine at run time (no `wasmtime`, no `node` to install next to it).
 
+[![license]][license-url]
+[![pypi version]][PyPiUrl]
+[![python versions]][PyPiUrl]
+[![Pre-commit]][pre-commit-workflow]
+[![coverage]][CodecovUrl]
+
 This is **ahead-of-time (AOT) compilation**: the WebAssembly is translated to C and compiled to machine code when the
 extension is built, not interpreted or compiled by a JIT while the program runs. So what you get is the speed of compiled
 C with little overhead of its own: what remains is what WebAssembly itself requires (every memory access is checked, by
@@ -272,3 +278,32 @@ installed, and the stub written beside a module names the version when it is a r
 ## License
 
 MIT, see `LICENSE`. The C that wasmext writes contains the runtime of `wasm2c` (Apache-2.0, from WABT): see `NOTICE.md`.
+
+<!-- REUSABLE LINKS -->
+
+[license]:
+https://img.shields.io/github/license/natify-sh/py-wasmext
+
+[license-url]:
+https://opensource.org/licenses/MIT
+
+[pypi version]:
+https://img.shields.io/pypi/v/wasmext?logo=pypi
+
+[python versions]:
+https://img.shields.io/pypi/pyversions/wasmext?logo=python
+
+[PyPiUrl]:
+https://pypi.org/project/wasmext/
+
+[Pre-commit]:
+https://github.com/natify-sh/py-wasmext/actions/workflows/pre-commit.yml/badge.svg
+
+[pre-commit-workflow]:
+https://github.com/natify-sh/py-wasmext/actions/workflows/pre-commit.yml
+
+[coverage]:
+https://codecov.io/gh/natify-sh/py-wasmext/graph/badge.svg
+
+[CodecovUrl]:
+https://codecov.io/gh/natify-sh/py-wasmext

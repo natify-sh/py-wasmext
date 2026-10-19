@@ -93,4 +93,4 @@ THE SOFTWARE.
 
 `examples/wabt/src/wabtwasm/_wat2wasm.wasm` and `_wasm2c.wasm` are built by `examples/wabt/build_wasm.py` from [WABT](https://github.com/WebAssembly/wabt)
 1.0.42 (Apache License 2.0; the text is in the repository of WABT), and `examples/wabt/src/wabtwasm/runtime/` holds the files `wasm-rt*` of its `wasm2c/`
-directory, as they are. WABT's `picosha2` (MIT License, Copyright (C) 2017 okdshin) is compiled into the tools, in a copy without the function for `std::ifstream`.
+directory, as they are. WABT's `picosha2` (MIT License, Copyright (c) 2017 okdshin) is compiled into the tools, in a copy without the function for `std::ifstream`.

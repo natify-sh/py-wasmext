@@ -131,7 +131,7 @@ def test_the_cli_takes_the_number_of_parts(tmp_path: Path, wabt: Path) -> None:
     project = _project(tmp_path)
     env = {**os.environ, "WASMEXT_WABT": str(wabt), "PYTHONPATH": str(ROOT / "src")}
     ran = subprocess.run(
-        [sys.executable, "-m", "wasmext", "-q", "--parts", "2", "src/pk/cm.wasm"],
+        [sys.executable, "-m", "wasmext", "natify", "-q", "--parts", "2", "src/pk/cm.wasm"],
         cwd=project,
         env=env,
         capture_output=True,

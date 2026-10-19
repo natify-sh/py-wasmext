@@ -62,7 +62,7 @@ class Glue:
     stub: str = ""  # the .pyi of the extension module
     wasi_headers: tuple[
         str, ...
-    ] = ()  # the headers of wasmext for WASI that the glue includes (and the two they share, wasi_core.h and wasi_python.h): copied beside it
+    ] = ()  # the headers of wasmext for WASI that the glue includes (and those they share: wasi_core.h, wasi_files_win32.h and wasi_python.h): copied beside it
 
 
 def mangle(name: str, *, module: bool = False) -> str:

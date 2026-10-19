@@ -88,9 +88,9 @@ class Fs:
         return code, bytes(self.mem[2000 : 2000 + self.u32(8)])
 
 
-@pytest.fixture(params=["openat", "python"])
+@pytest.fixture(params=["native", "python"])
 def probe(request: pytest.FixtureRequest, build_extension: Builder) -> Any:
-    """The probe module built for each way the file system is reached: the system (openat), and Python (what Windows uses)."""
+    """The probe module built for each way the file system is reached: the system (openat on POSIX, Win32 on Windows), and Python (os.stat, os.open)."""
     defines = ("WASMEXT_WASI_PYTHON_FS=1",) if request.param == "python" else ()
     return build_extension(DATA / "wasi_fs_probe.wat", f"wasi_fs_probe_{request.param}", defines=defines)
 

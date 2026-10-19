@@ -35,8 +35,10 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
         include:
-          # the way Windows reaches files (Python), tried where it is quick to read what went wrong
+          # the files through Python (os.stat, os.open ...): on Linux, where it is quick to read what went wrong, and on Windows, which had
+          # no other way before the native one (wasi_files_win32.h)
           - { os: ubuntu-latest, python_fs: true }
+          - { os: windows-latest, python_fs: true }
     steps:
       - uses: actions/checkout@v7
         with:
@@ -83,7 +85,7 @@ jobs:
           if [ "$RUNNER_OS" = "Windows" ]; then PY="$WORK\\.venv\\Scripts\\python.exe"; RUNNER="$WORK\\.runner\\Scripts\\python.exe"
           else PY="$WORK/.venv/bin/python"; RUNNER="$WORK/.runner/bin/python"; fi
           export WASMEXT_PYTHON="$PY"
-          EXPECT="tests/wasi_testsuite/expectations-$(echo "$RUNNER_OS" | tr 'A-Z' 'a-z').toml"
+          EXPECT="tests/wasi_testsuite/expectations-$(echo "$RUNNER_OS" | tr 'A-Z' 'a-z')${{ matrix.python_fs && '-python-fs' || '' }}.toml"
           ARGS=()
           if [ -f "$EXPECT" ]; then ARGS=(--expectations "$WORK/$EXPECT"); fi
           cd wasi-testsuite

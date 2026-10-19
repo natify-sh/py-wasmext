@@ -6,7 +6,7 @@
    There is no Python in this file: what the host decides (the standard streams, the clocks, the random bytes, the sleep, the end of
    the program) comes through the hooks of `wasmext_wasi_config`, and where a hook is absent the system's own is used. The host that
    has Python is wasi_python.h. Only the files of Windows, until they are native (stage 3 of the plan), come through Python:
-   with WASMEXT_WASI_PYTHON_FS the file backend is that of wasi_python.h, which must then be included as well.
+   on Windows the file backend is wasi_files_win32.h (Win32 only); with WASMEXT_WASI_PYTHON_FS it is that of wasi_python.h, which must then be included as well.
 
    First stage: arguments, environment, clocks, random bytes, the standard streams, proc_exit. The calls of the file system answer
    ENOSYS (the descriptors beyond 2 are not open, so BADF where the specification asks for it). Written from the specification
@@ -49,11 +49,14 @@
 #define WASI_LSEEK(fd, off, whence) lseek((fd), (off), (whence))
 #define WASI_CLOSE(fd) close(fd)
 #endif
-#if defined(_WIN32) && !defined(WASMEXT_WASI_PYTHON_FS)
-#define WASMEXT_WASI_PYTHON_FS 1  /* Windows has no openat: the file system goes through Python */
-#endif
 #ifndef WASMEXT_WASI_PYTHON_FS
-#define WASMEXT_WASI_PYTHON_FS 0
+#define WASMEXT_WASI_PYTHON_FS 0  /* 1: the file backend of wasi_python.h (os.stat, os.open ...); on Windows the default is wasi_files_win32.h */
+#endif
+/* Windows has no openat and cannot open a directory: there (and with the backend of Python, which is made for it) a directory is a path */
+#if WASMEXT_WASI_PYTHON_FS || defined(_WIN32)
+#define WASI_DIRS_ARE_PATHS 1
+#else
+#define WASI_DIRS_ARE_PATHS 0
 #endif
 #include <stdlib.h>
 #include <time.h>
@@ -62,7 +65,7 @@
 #include <bcrypt.h>
 #pragma comment(lib, "bcrypt")
 #endif
-#if !WASMEXT_WASI_PYTHON_FS
+#if !WASI_DIRS_ARE_PATHS
 #include <dirent.h>
 #include <sys/stat.h>
 #endif
@@ -282,7 +285,7 @@ static inline int wasi_release(wasi_entry *e) {
 
 /* the directory of a preopen, from its real path: an open descriptor, or (through Python) the path */
 static inline int wasi_fill_preopen(wasi_entry *e, const char *root) {
-#if WASMEXT_WASI_PYTHON_FS
+#if WASI_DIRS_ARE_PATHS
     e->root = wasi_copy(root, strlen(root));
     e->rel = wasi_copy("", 0);
     if (e->root == NULL || e->rel == NULL) {
@@ -1025,6 +1028,8 @@ static inline uint32_t wasi_be_symlink(wasmext_wasi *w, const unsigned char *tar
 static inline uint32_t wasi_be_readlink(wasmext_wasi *w, wasi_entry *dir, uint32_t path, uint32_t len, char *out, size_t cap,
                                         size_t *used, int *trapped);
 static inline uint32_t wasi_be_list(wasmext_wasi *w, wasi_entry *e, wasi_dirlist *list, int *trapped);
+#elif defined(_WIN32)
+#include "wasi_files_win32.h"
 #else
 /* ---- the file system through the system: openat and its kin (POSIX) ----------------------------------------------------
    A directory is an open descriptor, a path is walked from it one name at a time, and a symbolic link met on the way is read
@@ -1587,7 +1592,7 @@ static inline uint32_t wasi_sync_entry(wasmext_wasi *w, uint32_t fd, uint64_t ri
     uint32_t rc = wasi_entry_with(w, fd, right, &e);
     if (rc) return rc;
     if (e->kind == WASI_K_STD) return WASI_E_SUCCESS;  /* the stream is Python's: it flushes when it wants */
-#if WASMEXT_WASI_PYTHON_FS
+#if WASI_DIRS_ARE_PATHS
     (void)data_only;
     if (e->kind == WASI_K_DIR) return WASI_E_SUCCESS;  /* not an open descriptor: nothing to flush */
     return WASI_SYNC(e->osfd) < 0 ? wasi_errno(errno) : WASI_E_SUCCESS;

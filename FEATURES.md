@@ -300,7 +300,7 @@ In this order (the first ones are small):
       Files of Windows stay through Python, as the backend of `wasi_python.h` (`WASMEXT_WASI_PYTHON_FS` is that backend; it stays as a way to test
       the interface on Linux). Green on the three systems before the next stage starts, so that a failure of stage 3 is not taken for one of the cut.
       Check (a) begins here, on the core of WASI (on Windows it is incomplete until stage 3: no file backend without Python).
-   3. **The native path to files on Windows** (item 9), straight after, **before the glue is touched**: the Win32 backend of the interface of stage 1,
+   3. **The native path to files on Windows** (item 9; 3a written, see "Stage 3a, as built" below), straight after, **before the glue is touched**: the Win32 backend of the interface of stage 1,
       in the core. It goes here and not later because the core of WASI is not free of the interpreter on Windows without it, and because the interface
       of the backend should be shaped by both systems and not by `openat` alone. Two parts:
       a. **`portable`** (the default): documented Win32, wide-character functions. Verified by the official tests through the extension. After it the
@@ -572,7 +572,7 @@ of them at the same time first (the runner kills a program after its timeout, an
 runs it with `wasmext` on Python 3.11 and the runner on 3.12 (it needs it): **all 72 pass** on Linux (both ways of reaching files: `openat`, and Python, as a
 fourth job), macOS (the suite told to expect the errors of macOS, `ERRNO_MODE_MACOS`) and Windows. On Linux the suite is told `ERRNO_MODE_UNIX`; on Windows it
 is not told `ERRNO_MODE_WINDOWS` (that mode asks for the errors of a system that is not POSIX, where wasmext gives those of POSIX, so any error of the systems is
-taken) but `NO_RENAME_DIR_TO_EMPTY_DIR`. One test is expected to fail on Windows (`expectations-windows.toml`): `symlink_filestat`, because Python before 3.13 cannot set the
+taken) but `NO_RENAME_DIR_TO_EMPTY_DIR`. One test is expected to fail on Windows when the files go through Python (`expectations-windows-python-fs.toml`): `symlink_filestat`, because Python before 3.13 cannot set the
 times of a link itself.
 
 What they found, that our tests had not: the same function imported twice (AssemblyScript; a duplicate in the glue); a directory opened with all the rights of its
@@ -754,6 +754,35 @@ What differs from the table of stage 1:
 - **The glue** includes `wasi_python.h` after the header of the snapshot; `wasi_core.h` and `wasi_python.h` are copied beside the glue
   (`WASI_SHARED` in `_natify.py`).
 - Still open (stage 2 was to measure it): hooks as pointers or `static inline`. They are pointers now; nothing was measured.
+
+### Stage 3a, as built
+
+`wasi_files_win32.h` (about 880 lines, Win32 only, no Python, no POSIX layer) is the file backend of the core on Windows; it is chosen by
+`_WIN32` and replaced by the backend of Python with `-DWASMEXT_WASI_PYTHON_FS=1`. It has the twelve `wasi_be_*` functions of the interface
+and keeps the model of the Python backend (a directory is a path; a file is a descriptor of the C library made with `_open_osfhandle`, with its
+path kept), so `fd_read`, `fd_write`, seek, truncate and sync of the core are the same code on every system. The calls are the documented
+wide-character ones: `CreateFileW` (with the same sharing as the C library, read and write), `GetFileInformationByHandle` and `...Ex`
+(identity, size, times, link count, reparse tag), `FindFirstFileExW`, `MoveFileExW`, `CreateHardLinkW`, `CreateSymbolicLinkW`,
+`DeviceIoControl(FSCTL_GET_REPARSE_POINT)` for `readlink`, `SetFileTime`. Paths go as UTF-16 with the `\\?\` prefix. A name is resolved by
+hand below the directory; a link that leads out is found by comparing `GetFinalPathNameByHandleW` of what is used and of the directory (so the
+check and the use are two steps: what `openat` does not have, and what the `nt` variant of 3b is for). A link that leads nowhere is refused
+when a name is to be made through it (where it would lead is not known).
+
+What was checked, and what was not:
+
+- The same C test (`/tmp` scratch, not in the repository yet: about 100 calls of `path_open`, `fd_*`, `path_*` on a directory, the answers
+  printed) was run on POSIX and on Windows under wine (the C compiled by `zig cc -target x86_64-windows-gnu`, run by wine 9). The answers are
+  the same for creating, reading, writing, truncating, appending, `stat` with and without a trailing slash, `readdir`, `rename` (a file
+  over a file, a directory over an empty directory, the refusals), `unlink`, `rmdir`, hard links, `..` out of the directory, an absolute
+  name. They differ in the link count and size of a directory (Windows says 1 and 0), and in `a/../d1` where `a` does not exist (the name is
+  resolved without looking at the disk, as in the Python backend).
+- **Not checked at all**: symbolic links and `atim` of `path_filestat_set_times`. Wine does not do the reparse points of Windows (`lstat` of a
+  link answers "not found" there) and ignores the access time; they need a real Windows, so the CI is the first test. The official tests of
+  WASI on Windows run with the new backend and, as a second job, with the Python one.
+- The official tests expected `symlink_filestat` to fail on Windows with Python before 3.13; with this backend it should pass, so the
+  expectation file now belongs to the job of the Python backend only (`expectations-windows-python-fs.toml`), and the job of the native
+  backend has none. Whatever fails there is read from the first run.
+- Check (a) now includes MSVC on Windows (`core-without-python.yml`).
 
 ## Decisions
 

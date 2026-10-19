@@ -124,7 +124,7 @@ What is there, of the 46 calls of the specification (WASI 0.1):
 - **41 work**: arguments, environment, clocks, random bytes, `proc_exit`, the standard streams, and files and directories: reading,
   writing, creating, truncating, removing, renaming, hard and symbolic links, `pread`/`pwrite`, sizes, times, `fd_readdir`,
   `poll_oneoff` (clocks, and descriptors of files, which are always ready).
-- **`proc_raise` answers `ENOSYS`** and the four `sock_*` say `ENOTSOCK` (a program cannot make a socket in this snapshot), as the
+- **`proc_raise` answers `ENOSYS`** and the four `sock_*` say `ENOTSOCK` (wasmext gives the program no socket; the specification lets a host do it), as the
   specification allows. WASI 0.2 and 0.3 (components) are not supported: build for `wasm32-wasip1`.
 - A symbolic link is made only with a relative target, and one that leads out of the directory is not followed.
 - **How files are reached.** On POSIX the calls go straight to the system (`openat`: no interpreter, no gap between a check and a use).

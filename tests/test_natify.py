@@ -333,3 +333,58 @@ def test_the_locals_that_wasm2c_cuts_in_two_are_put_together() -> None:
     )
     whole = b"  u32 var_l3 = 0;\n  u32 var_i0, var_i1;\n  var_i0 = var_p0;\n"  # what a wasm2c without the bug writes
     assert _tail_call_locals(whole) == whole
+
+
+def _clean_toolchain_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in ("WASMEXT_WABT", "WASMEXT_WASM2C", "WASMEXT_WASM2C_RUNTIME", "WASMEXT_WASM2C_INCLUDE"):
+        monkeypatch.delenv(name, raising=False)
+
+
+def test_each_part_of_the_toolchain_has_its_own_variable(
+    wabt: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The executable and the runtime can come from different places, and with both given the wabt-package is not needed."""
+    from wasmext._toolchain import find_toolchain  # pyright: ignore[reportPrivateUsage]
+
+    _clean_toolchain_env(monkeypatch)
+    suffix = ".exe" if os.name == "nt" else ""
+    exe = wabt / "bin" / ("wasm2c" + suffix)
+    runtime = tmp_path / "rt"
+    runtime.mkdir()
+    (runtime / "wasm-rt.h").write_text("", encoding="utf-8")
+    simde = tmp_path / "inc"
+    (simde / "simde").mkdir(parents=True)
+
+    monkeypatch.setenv("WASMEXT_WASM2C", str(exe))
+    monkeypatch.setenv("WASMEXT_WASM2C_RUNTIME", str(runtime))
+    monkeypatch.setenv("WASMEXT_WASM2C_INCLUDE", str(simde))
+    monkeypatch.setitem(sys.modules, "wabt_package", None)  # an import of it fails: it is not looked for
+    found = find_toolchain()
+    assert (found.wasm2c, found.runtime, found.include) == (exe, runtime, simde)
+    assert found.version.split(".")[0].isdigit()  # what `wasm2c --version` says
+
+    monkeypatch.delenv("WASMEXT_WASM2C_RUNTIME")  # the runtime then has to come from somewhere else
+    with pytest.raises(RuntimeError, match="WASMEXT_WASM2C_RUNTIME"):
+        find_toolchain()
+    monkeypatch.setenv("WASMEXT_WABT", str(wabt))
+    assert find_toolchain().wasm2c == exe and find_toolchain().runtime != runtime
+
+
+def test_the_variables_of_the_toolchain_are_checked(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from wasmext._toolchain import find_toolchain  # pyright: ignore[reportPrivateUsage]
+
+    _clean_toolchain_env(monkeypatch)
+    monkeypatch.setenv("WASMEXT_WASM2C", str(tmp_path / "nope"))
+    monkeypatch.setenv("WASMEXT_WASM2C_RUNTIME", str(tmp_path))
+    with pytest.raises(RuntimeError, match="WASMEXT_WASM2C=.*not a file"):
+        find_toolchain()
+    (tmp_path / "wasm2c").write_text("", encoding="utf-8")
+    monkeypatch.setenv("WASMEXT_WASM2C", str(tmp_path / "wasm2c"))
+    with pytest.raises(RuntimeError, match=r"WASMEXT_WASM2C_RUNTIME=.*wasm-rt\.h"):
+        find_toolchain()
+    (tmp_path / "wasm-rt.h").write_text("", encoding="utf-8")
+    monkeypatch.setenv("WASMEXT_WASM2C_INCLUDE", str(tmp_path / "missing"))
+    with pytest.raises(RuntimeError, match="WASMEXT_WASM2C_INCLUDE=.*not a directory"):
+        find_toolchain()
+    monkeypatch.delenv("WASMEXT_WASM2C_INCLUDE")
+    assert find_toolchain().version == "unknown"  # an empty file is not a program that says its version

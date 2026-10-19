@@ -269,8 +269,6 @@ makes a GitHub Release (a pre-release for `a`, `b` and `rc`) and publishes to Py
 repository and a publisher for the project `wasmext` on PyPI); "Run workflow" with `testpypi` publishes to TestPyPI. `wasmext --version` and `wasmext.__version__` say which version is
 installed, and the stub written beside a module names the version when it is a release.
 
-`poc/` is the hand-written proof of concept this started from, with its measurements ([poc/README.md](poc/README.md)).
-
 ## License
 
 MIT, see `LICENSE`. The C that wasmext writes contains the runtime of `wasm2c` (Apache-2.0, from WABT): see `NOTICE.md`.

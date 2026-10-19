@@ -67,8 +67,7 @@ testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 120
-# The proof of concept (poc/) predates the package.
-extend-exclude = ["poc", "build"]
+extend-exclude = ["build"]
 
 [tool.pyright]
 include = ["src", "tests"]

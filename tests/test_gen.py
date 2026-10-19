@@ -98,7 +98,9 @@ def test_the_dotted_name_is_the_type_name_and_the_last_part_the_init_function() 
     assert "PyMODINIT_FUNC PyInit_fast(void)" in glue.source
     assert '"pkg.sub.fast.Instance"' in glue.source
     assert '#include "fast_glue.h"' in glue.source  # the Python layer includes the glue of the module ...
-    assert '#include "fast_w2c.h"' in glue.header and "#include <Python.h>" not in glue.header  # ... which has no Python in it
+    assert (
+        '#include "fast_w2c.h"' in glue.header and "#include <Python.h>" not in glue.header
+    )  # ... which has no Python in it
 
 
 def test_the_stub_describes_the_extension() -> None:

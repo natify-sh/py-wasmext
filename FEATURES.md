@@ -576,31 +576,25 @@ Whatever is not in `wasi=` can be replaced call by call through `imports`.
   glue, and it comes when something needs a host that is not Python (the runner, a shared library); the Python layer stays as it is, and the
   hooks are `static inline` so that the split costs no call (to be measured). The contract of the link between two instances keeps its form;
   a C host would carry the same record in its own way.
-  **The glue of a module as a header (a proposal, not decided; nothing built).** Today the generator (`_gen.py`) writes a whole `.c` from Python
-  string templates; of the 245 lines it writes for `simple.wasm` (one export) 16 mention the module or the export, the other 230 are the same
-  for every module (the traps, `set_trap_error`, the `wasmext_export` record and its layout fingerprint, the signals, the machinery of
-  `Instance`). Two steps, in this order: (a) the part that does not depend on the module moves to a header of the project (`wasmext_glue.h`,
-  shipped as `wasi_common.h` is, copied beside the C of the module), and the generator writes only what depends on the module; (b) that part
-  is written as a header too, `<name>_glue.h`: the tables of the exports, imports, memories and globals, and for each export a *thunk*, a plain C
-  function that calls `w2c_<name>_<export>` and catches the trap, with no `Python.h` in it. The extension is then a fixed `.c` of a few lines
-  (`#include "wasmext_python.h"`, `#include "<name>_glue.h"`, one macro for the init of the module); the shared library would be another fixed
-  `.c` that exports the same thunks as symbols, the executable a `main()`; the generator writes no translation unit, the build compiles the fixed
-  one (the parts of `wasm2c` stay separate `.c` files). What it does not do: the code of the glue is still compiled into every module (a header
-  gives no sharing, a shared library would), so the size of an extension does not change.
-  **Open: how the Python layer calls a thunk.** If a thunk knows nothing of Python it has one form, `int thunk(void *instance, const wasmext_val
-  *args, wasmext_val *results)`, and the Python layer, one for all modules, turns the arguments and results by the signature string (`"ij>i"`: the
-  string is in the record `wasmext_export` already). Cost: the values are packed and unpacked on every call, which the typed wrappers of today do not
-  do. **Not measured**: a call of `add(a, b)` in a loop is the case that would show it (the exports of `coremark` take no arguments). If it is
-  more than a few percent, the typed wrapper that parses the Python arguments stays generated for the CPython extension (then that header
-  includes `Python.h`, and the other front ends get their own tables). The measurement comes before the form is fixed.
-  *Measured with a prototype (a hand-made copy of the glue of `simple.wasm`: the typed `Instance_f0` against a method that packs the arguments by the
-  signature string `"ii>i"` into `wasmext_val[]` and calls a thunk of the uniform form).* `add(2, 3)` in a loop of 1 000 000 calls, 25 rounds
-  alternated, on a shared 4-core machine, GCC, the flags of setuptools: the typed call 40.4 ns (median; best round 27.3), the uniform one 44.6 ns
-  (28.7): **+4.2 ns, +10 % by the median, +1.4 ns, +5 % by the best rounds**; the noise between rounds was larger than that (a round of the uniform call
-  was faster than one of the typed call). For a scale, `max(2, 3)` in the same loop takes 50 to 70 ns. So: a cost of a few nanoseconds for a call that
-  does nothing, which a function that does any work does not see; not a reason in itself to keep a typed wrapper. What the prototype does not
-  cover: `i64`, `f32`, `f64` and several results, a trap, a call with many arguments, other compilers, and the call being inlined or not
-  when the thunk lives in a header of its own (here it was in the same file). The form is **not fixed** until the project owner says so.
+  **The glue of a module as a header (a proposal, not decided; nothing built).** Today the generator (`_gen.py`) writes the glue of a module as a
+  `.c` file, from Python string templates. The proposal is only the form of the file: the generator writes `<name>_glue.h` with the same code that
+  is in `<name>_glue.c` today (the typed wrappers of the exports, the init of the module; it includes `Python.h` as it does now), and the `.c`
+  that the build compiles is a fixed one of a line or two (`#include "<name>_glue.h"`). The generator then writes no translation unit. Nothing
+  inside the glue changes, and the size of an extension does not change (the glue is compiled into every module, as a header too). By itself it
+  gains little for the extension for CPython; it matters when something else wants the same code: a shared library or an executable (the
+  product of "C first" above) would be another fixed `.c` that includes the same header. A second, separate step is to move what is the same for
+  every module (of the 245 lines written for `simple.wasm`, 16 mention the module or the export: the traps, `set_trap_error`, the `wasmext_export`
+  record and its layout fingerprint, the signals, the machinery of `Instance`) into a header of the project (`wasmext_glue.h`, shipped and copied
+  beside the C of the module as `wasi_common.h` is), so that the generator writes only what depends on the module.
+  *Only if a core without `Python.h` is wanted later* (not part of the proposal): the part of a module that calls `w2c_<name>_<export>` would be
+  a *thunk* of one form, `int thunk(void *instance, const wasmext_val *args, wasmext_val *results)`, and the Python layer would turn arguments
+  and results by the signature string (`"ij>i"`, in `wasmext_export` already) instead of the typed wrappers. The cost of packing the values was
+  measured with a prototype (a hand-made copy of the glue of `simple.wasm`: `Instance_f0` against a method that packs by `"ii>i"` and calls such a
+  thunk): `add(2, 3)` in a loop of 1 000 000 calls, 25 alternated rounds, a shared 4-core machine, GCC, the flags of setuptools: typed 40.4 ns
+  (median; best round 27.3), uniform 44.6 ns (28.7): **+4.2 ns, +10 % by the median; +1.4 ns, +5 % by the best rounds**, within the noise
+  between rounds (a round of the uniform call was faster than one of the typed call); `max(2, 3)` in the same loop takes 50 to 70 ns. Not
+  covered: `i64`, `f32`, `f64` and several results, a trap, many arguments, other compilers, a thunk in a header of its own (inlined or not).
+  Nothing is decided about it.
 
 - `wasmhost` is a different tool (a facade over engines); its API is a guide for names and errors, the reference for behaviour
   is the specification and the JavaScript API.

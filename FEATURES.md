@@ -263,8 +263,11 @@ In this order (the first ones are small):
    flag); the rest of the examples of other projects (below).
 8. ~~**WASI**~~ (`wasi_snapshot_preview1` and `wasi_unstable`): done for WASI 0.1. Part of wasmext, compiled into the native module as a header, `wasi_preview1.h`, the system
    reached through `Python.h`; 42 of 46 calls, the official tests pass on Linux, macOS and Windows; see "Design: WASI". Left: the clocks of the process and the thread in `poll_oneoff`, sockets (the specification allows them, on a socket the host gives to the program; wasmext gives none: its `wasi=` has only directories), WASI 0.2 and 0.3.
-9. **A native path to files on Windows** (now through Python). `NtCreateFile` relative to a directory handle, as cap-std does: it would give the safety of `openat` there
+9. **A native path to files on Windows** (now through Python; with the split of the layers, below, the core of WASI needs no interpreter). `NtCreateFile` relative to a directory handle, as cap-std does: it would give the safety of `openat` there
    (no gap between a check and a use) and the speed. Not started; first measure what the Python way costs on Windows (it was not measured).
+10. **C first** (decided, not started): the core of the glue and the core of WASI as plain C with hooks, the exports and the hooks in a Python layer
+   (see "Decisions"). The first step is the split of `wasi_common.h`; a shared library and a C runner for the WASI test suite follow when
+   something needs them.
 
 How to choose the next features: **on demand, not in advance**. The examples of [wasm2mpy](https://github.com/vshymanskyy/wasm2mpy)
 and [pywasm3](https://github.com/wasm3/pywasm3) are taken one by one, the simplest first, and added to this project as examples
@@ -534,5 +537,29 @@ Whatever is not in `wasi=` can be replaced call by call through `imports`.
   currently supported"), `--tcplisten` of its CLI is "experimental, legacy wasip1 implementation only" (how that one numbered the descriptors was not
   found out), and the official test suite has no test of sockets for WASI 0.1 (those it has are for 0.3). The design would be ours alone, and a public
   interface that nothing checks. The four `sock_*` stay `ENOTSOCK`. To be taken up when a program needs them.
+- **C first: the layers do not depend on `Python.h`; only the exports of the module and the hooks do (the direction is decided, nothing of
+  it is built).** Four layers, each knowing only those below it:
+  1. the C of `wasm2c` (already plain C: the instance, the exports as C functions, the imports as C functions, the memory);
+  2. the **core of the glue**, plain C: the life of an instance, the traps (`setjmp`), the table of the imports (`h->lf[]`, `h->li[]`), the
+     export record of the link (`wasmext_export` is a C struct already: the capsule `wasmext.export.v1` is only how Python carries the
+     pointer), memory and tables as C views;
+  3. the **core of WASI** (`wasi_core.h`), plain C: the table of descriptors, the walk of paths (`openat`; a native path for Windows),
+     arguments, environment, clocks, random bytes, `poll_oneoff`, the end of a program. Whatever needs the world outside it is a **hook**
+     (a table of function pointers the host fills in): reading and writing the standard streams, a function that replaces a clock or the random
+     bytes, the report of an error, the end of a program (`proc_exit`, `proc_raise`), the check that the host wants to interrupt a sleep;
+  4. the **Python layer** (needs `Python.h`): the types `Instance` and `Memory`, the methods of the exports (the conversion of arguments and
+     results), the imports given as Python callables, the memory as a `memoryview`, the exceptions (`Trap`, `LinkError`, `WasiExit`,
+     `WasiSignal`), the dict `wasi=` turned into the configuration of the core, the capsule, and the **implementation of the hooks** with the
+     Python API (`sys.stdout`, an object with `write`, the exceptions, `PyErr_CheckSignals`).
+  What it is for: the same layers 1 to 3 give a **shared library** (`.so`/`.dll`: a module with a C API for `ctypes`/`cffi`, Rust, Go, with no
+  Python in it) and a **C runner** (`wasmext-run module.wasm`) that runs the official WASI test suite with no Python in between (the suite is
+  run through a Python adapter now, which is what made the Windows job slow), as well as the extension for CPython that the project is for.
+  Where it stands now: in `wasi_common.h` (2860 lines) 49 of the 135 functions mention Python (stdio through `sys.stdout`, the configuration, the
+  exceptions, the files of Windows through `os`, the user functions for the clock and the random bytes); the rest is plain C already. The
+  files of Windows are the last place where the core needs the interpreter for data, which is why the native path to files on Windows
+  (the plan, item 9) and this split are one piece of work from two sides. The first step is the split of the WASI header, not of the whole
+  glue, and it comes when something needs a host that is not Python (the runner, a shared library); the Python layer stays as it is, and the
+  hooks are `static inline` so that the split costs no call (to be measured). The contract of the link between two instances keeps its form;
+  a C host would carry the same record in its own way.
 - `wasmhost` is a different tool (a facade over engines); its API is a guide for names and errors, the reference for behaviour
   is the specification and the JavaScript API.

@@ -1,0 +1,60 @@
+name: Coverage
+
+# The test suite with coverage of src/wasmext, uploaded to Codecov. The tests build real extensions (a C compiler is needed): the code of
+# wasmext that only runs in the build process of such a project (setup.py or the hook of pyproject.toml, in a subprocess) is not counted.
+# Codecov is told who is uploading by OIDC (no token in the secrets); the repository has to be added to Codecov once.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "pyproject.toml"
+      - "src/**"
+      - "tests/**"
+      - ".github/workflows/coverage.yml"
+  pull_request:
+    paths:
+      - "pyproject.toml"
+      - "src/**"
+      - "tests/**"
+      - ".github/workflows/coverage.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: coverage-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # Codecov, by OIDC
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # setuptools-scm has to see the tags
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          python-version: "3.11"
+          enable-cache: true
+          github-token: ${{ github.token }}
+
+      - name: Install
+        run: uv sync
+
+      - name: Test with coverage
+        run: uv run pytest --cov --cov-report=xml --cov-report=term
+
+      - name: Upload to Codecov
+        uses: codecov/codecov-action@v7
+        with:
+          files: ./coverage.xml
+          use_oidc: true
+          fail_ci_if_error: true

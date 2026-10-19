@@ -60,6 +60,13 @@ wasmext = ["py.typed", "c/*.h"]
 root = "."
 fallback_version = "0.0.0.dev0"
 
+[tool.coverage.run]
+source = ["wasmext"]
+branch = true
+
+[tool.coverage.report]
+exclude_also = ["if TYPE_CHECKING:", "raise NotImplementedError", "pragma: no cover"]
+
 [tool.pytest.ini_options]
 minversion = "9"
 addopts = "-rf"
@@ -77,6 +84,7 @@ typeCheckingMode = "strict"
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
+    "pytest-cov>=6",
     "pyright>=1.1.400",
     "ruff>=0.16.0",
     "setuptools>=77",

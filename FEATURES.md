@@ -502,22 +502,30 @@ caller able to narrow it, and to widen it only on purpose. See the entry in "Dec
 - WASI is hand-written C in the module (see "Design: WASI"): not a shim in Python, and not an existing C implementation (uvwasi, which WABT uses
   itself for `wasm-interp`, was named here as the option if WASI came back; what was decided instead is header-only C compiled into the module, so
   that a built module needs nothing at run time).
-- **The configuration of WASI (`wasi=`), decided, not built yet.** One rule: every part of the world of the program has a default, given
-  by the extension itself (C, compiled into the module), and the user may replace any of it. What needs no Python is plain C (clocks,
-  random bytes, arguments, an empty environment, the files of POSIX); what needs the interpreter is C through `Python.h` (`sys.stdout` and
+- **The configuration of WASI (`wasi=`).** One rule: every part of the world of the program has a default, given by the extension itself (C,
+  compiled into the module), and the user may replace any of it. What needs no Python is plain C (the clocks, the random bytes, sleeping in
+  `poll_oneoff`, the arguments, an empty environment, the files of POSIX); what needs the interpreter is C through `Python.h` (`sys.stdout` and
   the other standard streams, the exception of `proc_exit`, the files of Windows); only what cannot be guessed comes from the user (which
-  directories, which addresses). Nothing is required of the user.
-  The form stays a plain `dict`: an absent key is the default, an explicit `None` is *nothing* (arguments: none, output: thrown away,
-  input: empty, files: none), so the two never mean the same. The default is worked out in C at the time it is used (so a stream is
-  `sys.stdout` of that moment, and a capture in a test or a notebook sees it): no Python object, class or factory is part of the built module,
-  and a built module needs nothing of wasmext, nor of any other package, when it runs. `wasi=` is typed only in the `.pyi`: a `TypedDict` with
-  `NotRequired[...]` keys, the same for every module that uses WASI, whatever it imports (it is not made narrower per module: the
-  imports say which calls a module *can* make, not what it needs). Streams are typed with `_typeshed.SupportsRead[bytes]` and
-  `SupportsWrite[bytes]` (or a `Callable[[bytes], object]` for output), not with protocols of our own. A key the module does not use is
-  accepted and ignored, as now; an unknown key is a `TypeError`, as now. Nothing is `Required`.
-  Changes this asks for in the code: `None` stops meaning "the default" (it is now), `stdout=sys.stdout` given explicitly works as the
-  default does (a text stream gets the text), clocks, random bytes and sleeping in `poll_oneoff` become plain C. Open: who fixes the policy
-  (the build, the call, both), whether `clock`/`random` are keys or only a replaced call, sockets (an address in the configuration, the socket
-  made in C, as `--tcplisten` of wasmtime does for the first snapshot), `proc_raise`.
+  directories, which addresses). Nothing is required of the user, and only the call can configure it (not the build, at least in the alpha).
+  The form is a plain `dict`: an absent key is the default, an explicit `None` is *nothing* (arguments: none; output: thrown away; input:
+  empty; files: none), so the two never mean the same. The default is worked out in C when it is used (a stream is `sys.stdout` *of that
+  moment*, so a capture in a test or a notebook sees it): no Python object, class or factory is part of the built module, and a built module
+  needs nothing of wasmext, nor of any other package, when it runs. `wasi=` is typed only in the `.pyi`, as a `TypedDict` with
+  `NotRequired[...]` keys, the same for every module that uses WASI whatever it imports (the imports say which calls a module *can* make, not
+  what it needs; a key the module does not use is accepted and ignored, an unknown key is a `TypeError`). Streams are typed with
+  `_typeshed.SupportsRead[bytes]` and `SupportsWrite[bytes]` (output may also be a `Callable[[bytes], object]`), not with protocols of our own.
+  Nothing is `Required`. Every other part of the program's world is replaced the same way: through a key (`clock`: id of the clock ->
+  nanoseconds, `random`: how many -> that many bytes; neither takes `None`, which would mean a clock that stands still), or call by call
+  through `imports`. A text stream (sys.stdout, a `StringIO`) given explicitly works as the default does: it gets the bytes through its
+  binary side, after its text layer is flushed, or as text where it has none.
+  *Built:* all of the above. *Decided, not built yet:* the end of the program (below), and sockets.
+- **The end of a program.** `proc_exit` and `proc_raise` end it, as on the operating system: the exception carries the code or the signal
+  (`WasiExit`, `WasiSignal`, with a common base), the C closes at once every descriptor the program opened (files, directories and, when
+  they are there, sockets; not what belongs to the user: `sys.stdout`, a stream the caller gave, the directories of the preopens are
+  flushed, not closed), the instance is marked finished, and a call into it afterwards raises an error that says so. A trap ends the
+  program too. (A command, `_start`, is called once by the specification; this replaces "the instance stays usable after `proc_exit`".)
+- **Sockets.** Like wasmtime's `--tcplisten` for the first snapshot: the user gives addresses to listen on (`listen`), the extension makes
+  the sockets in C, the program gets them as descriptors for `sock_accept`, `sock_recv`, `sock_send`, `sock_shutdown`. No connecting out
+  (the first snapshot has no call for it). *Not built yet.*
 - `wasmhost` is a different tool (a facade over engines); its API is a guide for names and errors, the reference for behaviour
   is the specification and the JavaScript API.

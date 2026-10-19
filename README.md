@@ -109,11 +109,15 @@ except mypkg.lua.WasiExit as exit:  # proc_exit(code): the instance stays usable
     print("exit code", exit.code)
 ```
 
-`wasi=` is optional and takes `args` (default: the name of the module), `env` (default: empty, the environment of the host is not
-passed on), `stdin`, `stdout`, `stderr` (default: `sys.stdin`, `sys.stdout`, `sys.stderr`, so that `print` and a capture in a test or a
-notebook keep their order; or bytes / an object with `read` / `write`), `preopens` (`{name the program sees: directory of the host}`;
-default: none, the program sees no files) and `readonly` (`True`, a name or a list of names of the preopens that cannot be changed). A call
-can be replaced as any import can: `Instance({"wasi_snapshot_preview1": {"clock_time_get": my_clock}})`; what you give wins, call by call.
+`wasi=` is optional. A key you leave out has its default, which the extension works out itself when it is needed; `None` is *nothing*.
+`args` (default: the name of the module; `None`: no arguments), `env` (default: empty, the environment of the host is not passed on),
+`stdin`, `stdout`, `stderr` (default: `sys.stdin`, `sys.stdout`, `sys.stderr` as they are when the program reads or writes, so that `print`
+and a capture in a test or a notebook keep their order; or bytes / an object with `read` / `write` / a function for output; `None`: an empty
+input, an output thrown away), `preopens` (`{name the program sees: directory of the host}`; default: none, the program sees no files),
+`readonly` (`True`, a name or a list of names of the preopens that cannot be changed), `clock` (a function: the id of the clock ->
+nanoseconds; default: the clocks of the system) and `random` (a function: how many -> that many bytes; default: the random bytes of the
+system). The types are in the `.pyi` that is written beside the module. A call can also be replaced as any import can:
+`Instance({"wasi_snapshot_preview1": {"clock_time_get": my_clock}})`; what you give wins, call by call.
 
 A program is kept inside the directories it was given: `..` out of a directory, an absolute name, or a symbolic link that leads out is
 `ENOTCAPABLE`. A directory the program opens is a capability for that directory only. A program built with an old libc finds a relative path

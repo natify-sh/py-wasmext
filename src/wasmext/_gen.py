@@ -1297,6 +1297,32 @@ def _callable_type(func: FuncType) -> str:
     return f"Callable[[{params}], {result}]"
 
 
+# `wasi=` as the stub shows it: the same for every module that uses WASI. A key that is absent has its default (worked out by the
+# extension when it is used); None is nothing.
+_WASI_STUB = [
+    "class Wasi(TypedDict):",
+    "    args: NotRequired[Sequence[str] | None]",
+    '    """absent: [the name of the program]. None: no arguments."""',
+    "    env: NotRequired[Mapping[str, str] | None]",
+    '    """absent: empty. None: empty (os.environ only if you give it)."""',
+    "    stdin: NotRequired[SupportsRead[bytes] | bytes | None]",
+    '    """absent: sys.stdin, when the program reads. None: an empty input."""',
+    "    stdout: NotRequired[SupportsWrite[bytes] | Callable[[bytes], object] | None]",
+    '    """absent: sys.stdout, when the program writes (so that a capture sees it). None: thrown away."""',
+    "    stderr: NotRequired[SupportsWrite[bytes] | Callable[[bytes], object] | None]",
+    '    """absent: sys.stderr, when the program writes. None: thrown away."""',
+    "    preopens: NotRequired[Mapping[str, str | PathLike[str]] | None]",
+    '    """absent: no files. None: no files."""',
+    "    readonly: NotRequired[bool | str | Sequence[str]]",
+    '    """True, a name or a list of names of the preopens that cannot be changed."""',
+    "    clock: NotRequired[Callable[[int], int]]",
+    '    """absent: the clocks of the system. A function (id of the clock: 0 real time, 1 monotonic, 2 process, 3 thread) -> nanoseconds."""',
+    "    random: NotRequired[Callable[[int], bytes]]",
+    '    """absent: the random bytes of the system. A function (how many) -> that many bytes."""',
+    "",
+]
+
+
 def _stub(
     last: str,
     funcs: list[tuple[str, FuncType]],
@@ -1314,14 +1340,19 @@ def _stub(
         "# ruff: noqa: PGH004",
         "# fmt: off",
     ]
-    if imports or wasi:
+    if wasi:
+        lines += [
+            "from _typeshed import SupportsRead, SupportsWrite",
+            "from collections.abc import Callable, Mapping, Sequence",
+            "from os import PathLike",
+            "from typing import NotRequired, TypedDict",
+        ]
+    elif imports:
         lines += ["from collections.abc import Callable", "from typing import TypedDict"]
     lines += ["", "class Trap(RuntimeError): ...", "class LinkError(Exception): ..."]
     if wasi:
         lines += ["class WasiExit(Exception):", "    code: int", ""]
-        wasi_keys = "'args': list[str], 'env': dict[str, str], 'stdin': object, 'stdout': object, "
-        wasi_keys += "'stderr': object, 'preopens': dict[str, str], 'readonly': bool | str | list[str]"
-        lines.append(f"Wasi = TypedDict('Wasi', {{{wasi_keys}}}, total=False)")
+        lines += _WASI_STUB
     lines.append("")
     by_module: dict[str, list[Import]] = {}
     for imp in imports:

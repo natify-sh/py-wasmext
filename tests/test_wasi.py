@@ -273,3 +273,84 @@ def test_a_function_imported_twice_is_one_function(build_extension: Builder) -> 
 
     again = mod.Instance({"wasi_snapshot_preview1": {"fd_write": fd_write}})
     assert again.first(5) == 0 and again.second(6) == 0 and seen == [5, 6]
+
+
+def test_none_is_nothing_and_an_absent_key_is_the_default(
+    build_extension: Builder, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _, inst = probe(build_extension, args=None, stdout=None, stdin=None, stderr=None, env=None)
+    mem = inst.memory
+    assert inst.args_sizes_get(0, 4) == 0
+    assert (u32(mem, 0), u32(mem, 4)) == (0, 0)  # no arguments: not the name of the program
+    assert inst.environ_sizes_get(0, 4) == 0 and u32(mem, 0) == 0
+    mem[100:105] = b"lost!"
+    mem[0:8] = (100).to_bytes(4, "little") + (5).to_bytes(4, "little")
+    assert inst.fd_write(1, 0, 1, 32) == 0 and u32(mem, 32) == 5  # thrown away, as written
+    assert inst.fd_write(2, 0, 1, 32) == 0
+    captured = capsys.readouterr()
+    assert captured.out == "" and captured.err == ""
+    mem[0:8] = (200).to_bytes(4, "little") + (4).to_bytes(4, "little")
+    assert inst.fd_read(0, 0, 1, 32) == 0 and u32(mem, 32) == 0  # an empty input
+    _, absent = probe(build_extension, stdout=None)  # the other streams of this one are the default
+    absent.memory[100:102] = b"ok"
+    absent.memory[0:8] = (100).to_bytes(4, "little") + (2).to_bytes(4, "little")
+    assert absent.fd_write(2, 0, 1, 32) == 0
+    assert capsys.readouterr().err == "ok"
+
+
+def test_the_system_streams_can_be_given_explicitly(build_extension: Builder, capsys: pytest.CaptureFixture[str]) -> None:
+    import io
+    import sys
+
+    _, inst = probe(build_extension, stdout=sys.stdout, stderr=io.StringIO(), stdin=io.StringIO("héllo"))
+    mem = inst.memory
+    mem[100:106] = b"wasm!\n"
+    mem[0:8] = (100).to_bytes(4, "little") + (6).to_bytes(4, "little")
+    print("before", end="")
+    assert inst.fd_write(1, 0, 1, 32) == 0  # a text stream gets the bytes through its binary side, in order
+    print("after")
+    assert capsys.readouterr().out == "beforewasm!\nafter\n"
+    assert inst.fd_write(2, 0, 1, 32) == 0  # a StringIO has none: it gets the text
+    mem[0:8] = (200).to_bytes(4, "little") + (16).to_bytes(4, "little")
+    assert inst.fd_read(0, 0, 1, 32) == 0
+    assert bytes(mem[200 : 200 + u32(mem, 32)]) == "héllo".encode()
+
+
+def test_the_clock_and_the_random_bytes_can_be_replaced(build_extension: Builder) -> None:
+    asked: list[int] = []
+
+    def clock(clock_id: int) -> int:
+        asked.append(clock_id)
+        return 1_234_567_890_123 + clock_id
+
+    _, inst = probe(build_extension, clock=clock, random=lambda n: b"\x07" * n)
+    mem = inst.memory
+    assert inst.clock_time_get(1, 16) == 0
+    assert int.from_bytes(mem[16:24], "little") == 1_234_567_890_124 and asked == [1]
+    assert inst.random_get(64, 5) == 0 and bytes(mem[64:69]) == b"\x07" * 5
+    _, short = probe(build_extension, random=lambda n: b"x")
+    with pytest.raises(ValueError, match="'random' gave 1 bytes, 4 were asked for"):
+        short.random_get(64, 4)
+    mod = build_extension(DATA / "wasi_probe.wat", "wasi_probe")
+    with pytest.raises(TypeError, match="'clock' must be a function"):
+        mod.Instance(wasi={"clock": None})
+    with pytest.raises(TypeError, match="'random' must be a function"):
+        mod.Instance(wasi={"random": 5})
+
+
+def test_the_clocks_are_those_of_the_system(build_extension: Builder) -> None:
+    import time
+
+    _, inst = probe(build_extension)
+    mem = inst.memory
+    before = time.time_ns()
+    assert inst.clock_time_get(0, 16) == 0
+    real = int.from_bytes(mem[16:24], "little")
+    after = time.time_ns()
+    assert before - 1_000_000_000 <= real <= after + 1_000_000_000
+    assert inst.clock_time_get(1, 16) == 0
+    first = int.from_bytes(mem[16:24], "little")
+    assert inst.clock_time_get(1, 16) == 0 and int.from_bytes(mem[16:24], "little") >= first > 0
+    for clock_id in (2, 3):
+        assert inst.clock_time_get(clock_id, 16) == 0
+        assert inst.clock_res_get(clock_id, 24) == 0 and int.from_bytes(mem[24:32], "little") >= 1

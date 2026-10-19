@@ -47,6 +47,12 @@
 #define WASMEXT_WASI_PYTHON_FS 0
 #endif
 #include <stdlib.h>
+#include <time.h>
+#ifdef _WIN32
+#include <windows.h>
+#include <bcrypt.h>
+#pragma comment(lib, "bcrypt")
+#endif
 #if !WASMEXT_WASI_PYTHON_FS
 #include <dirent.h>
 #include <sys/stat.h>
@@ -153,6 +159,8 @@ struct wasmext_wasi {
     PyObject *exit_type;
     PyObject *time_module;
     PyObject *os_module;
+    PyObject *text_base;  /* io.TextIOBase, to tell a text stream from a binary one */
+    PyObject *clock_fn, *random_fn;  /* what the caller gave in place of the clocks and of the random bytes (NULL: those of the system) */
     wasm_rt_memory_t *memory;
     wasi_entry *entries;  /* the descriptors, by number */
     uint32_t nentries;
@@ -233,6 +241,28 @@ static inline int wasi_pack_strings(PyObject *seq, const char *what, char **out,
 
 static inline int wasi_config_stream(PyObject *value, PyObject **slot) {
     if (value == Py_None) return 0;
+    Py_INCREF(value);
+    *slot = value;
+    return 0;
+}
+
+/* stdin, stdout, stderr: None is nothing (an empty input, an output that is thrown away); an absent key is sys.stdin, sys.stdout, sys.stderr */
+static inline int wasi_config_std(PyObject *value, PyObject **slot, int input) {
+    if (value == Py_None && input) {
+        *slot = PyBytes_FromStringAndSize("", 0);
+        return *slot ? 0 : -1;
+    }
+    Py_INCREF(value);
+    *slot = value;
+    return 0;
+}
+
+/* clock, random: a function; None is not an answer for either */
+static inline int wasi_config_function(PyObject *value, const char *name, PyObject **slot) {
+    if (!PyCallable_Check(value)) {
+        PyErr_Format(PyExc_TypeError, "wasi: '%s' must be a function", name);
+        return -1;
+    }
     Py_INCREF(value);
     *slot = value;
     return 0;
@@ -405,8 +435,18 @@ done:
 
 /* one key of the config; 0, or -1 with an exception set */
 static inline int wasi_apply_option(wasmext_wasi *w, const char *name, PyObject *value) {
-    if (strcmp(name, "args") == 0) return wasi_pack_strings(value, "args", &w->args, &w->args_size, &w->argc);
+    if (strcmp(name, "args") == 0) {
+        if (value == Py_None) {  /* none, which is not the name of the program */
+            w->args = (char *)PyMem_Malloc(1);
+            if (w->args == NULL) return (PyErr_NoMemory(), -1);
+            w->args_size = 0;
+            w->argc = 0;
+            return 0;
+        }
+        return wasi_pack_strings(value, "args", &w->args, &w->args_size, &w->argc);
+    }
     if (strcmp(name, "env") == 0) {
+        if (value == Py_None) return 0;  /* empty, as when it is absent */
         PyObject *items = PyMapping_Items(value), *strings = NULL;
         if (items == NULL) return -1;
         strings = PyList_New(0);
@@ -427,9 +467,11 @@ static inline int wasi_apply_option(wasmext_wasi *w, const char *name, PyObject 
         Py_DECREF(strings);
         return rc;
     }
-    if (strcmp(name, "stdin") == 0) return wasi_config_stream(value, &w->stream[0]);
-    if (strcmp(name, "stdout") == 0) return wasi_config_stream(value, &w->stream[1]);
-    if (strcmp(name, "stderr") == 0) return wasi_config_stream(value, &w->stream[2]);
+    if (strcmp(name, "stdin") == 0) return wasi_config_std(value, &w->stream[0], 1);
+    if (strcmp(name, "stdout") == 0) return wasi_config_std(value, &w->stream[1], 0);
+    if (strcmp(name, "stderr") == 0) return wasi_config_std(value, &w->stream[2], 0);
+    if (strcmp(name, "clock") == 0) return wasi_config_function(value, "clock", &w->clock_fn);
+    if (strcmp(name, "random") == 0) return wasi_config_function(value, "random", &w->random_fn);
     if (strcmp(name, "preopens") == 0) return wasi_config_stream(value, &w->cfg_preopens);
     if (strcmp(name, "readonly") == 0) return wasi_config_stream(value, &w->cfg_readonly);
     PyErr_Format(PyExc_TypeError, "wasi: unknown option '%s'", name);
@@ -504,6 +546,9 @@ static inline int wasmext_wasi_traverse(wasmext_wasi *w, visitproc visit, void *
     Py_VISIT(w->exit_type);
     Py_VISIT(w->time_module);
     Py_VISIT(w->os_module);
+    Py_VISIT(w->text_base);
+    Py_VISIT(w->clock_fn);
+    Py_VISIT(w->random_fn);
     return 0;
 }
 
@@ -512,6 +557,9 @@ static inline void wasmext_wasi_clear(wasmext_wasi *w) {
     Py_CLEAR(w->exit_type);
     Py_CLEAR(w->time_module);
     Py_CLEAR(w->os_module);
+    Py_CLEAR(w->text_base);
+    Py_CLEAR(w->clock_fn);
+    Py_CLEAR(w->random_fn);
     Py_CLEAR(w->cfg_preopens);
     Py_CLEAR(w->cfg_readonly);
 }
@@ -626,54 +674,179 @@ static inline uint32_t wasi_environ_get(void *s, uint32_t environ_, uint32_t buf
     return wasi_strings_get(w, w->env, w->env_size, w->envc, environ_, buf);
 }
 
-/* ---- clocks and random bytes (through Python: the sources differ between systems) --------------------------------------- */
+/* ---- clocks and random bytes (plain C: the system's own; a function given by the caller takes the place of either) ---------- */
 
-static const struct { const char *function, *info; } wasi_clocks[] = {
-    {"time_ns", "time"}, {"monotonic_ns", "monotonic"}, {"process_time_ns", "process_time"}, {"thread_time_ns", "thread_time"},
-};
+/* the clock `id` of WASI (0 real time, 1 monotonic, 2 of the process, 3 of the thread) in nanoseconds; 0 on success */
+#ifdef _WIN32
+static inline uint64_t wasi_filetime_ns(FILETIME t) {
+    return ((((uint64_t)t.dwHighDateTime << 32) | t.dwLowDateTime)) * 100u;
+}
+
+static inline int wasi_clock_system(uint32_t id, uint64_t *ns) {
+    FILETIME created, exited, kernel, user, now;
+    LARGE_INTEGER counter, frequency;
+    switch (id) {
+    case 0:
+        GetSystemTimePreciseAsFileTime(&now);
+        *ns = wasi_filetime_ns(now) - 11644473600ull * 1000000000ull;  /* from 1601 to 1970 */
+        return 0;
+    case 1:
+        if (!QueryPerformanceFrequency(&frequency) || !QueryPerformanceCounter(&counter)) return -1;
+        *ns = (uint64_t)(counter.QuadPart / frequency.QuadPart) * 1000000000ull +
+              (uint64_t)(counter.QuadPart % frequency.QuadPart) * 1000000000ull / (uint64_t)frequency.QuadPart;
+        return 0;
+    case 2:
+        if (!GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user)) return -1;
+        *ns = wasi_filetime_ns(kernel) + wasi_filetime_ns(user);
+        return 0;
+    case 3:
+        if (!GetThreadTimes(GetCurrentThread(), &created, &exited, &kernel, &user)) return -1;
+        *ns = wasi_filetime_ns(kernel) + wasi_filetime_ns(user);
+        return 0;
+    default: return -1;
+    }
+}
+
+static inline int wasi_clock_resolution(uint32_t id, uint64_t *ns) {
+    LARGE_INTEGER frequency;
+    if (id == 1) {
+        if (!QueryPerformanceFrequency(&frequency)) return -1;
+        *ns = (1000000000ull + (uint64_t)frequency.QuadPart - 1) / (uint64_t)frequency.QuadPart;
+        return 0;
+    }
+    *ns = 100;  /* the unit of a FILETIME */
+    return id > 3 ? -1 : 0;
+}
+#else
+static inline clockid_t wasi_clock_id(uint32_t id) {
+    switch (id) {
+    case 0: return CLOCK_REALTIME;
+    case 1: return CLOCK_MONOTONIC;
+    case 2: return CLOCK_PROCESS_CPUTIME_ID;
+    default: return CLOCK_THREAD_CPUTIME_ID;
+    }
+}
+
+static inline int wasi_clock_system(uint32_t id, uint64_t *ns) {
+    struct timespec t;
+    if (id > 3 || clock_gettime(wasi_clock_id(id), &t) != 0) return -1;
+    *ns = (uint64_t)t.tv_sec * 1000000000ull + (uint64_t)t.tv_nsec;
+    return 0;
+}
+
+static inline int wasi_clock_resolution(uint32_t id, uint64_t *ns) {
+    struct timespec t;
+    if (id > 3 || clock_getres(wasi_clock_id(id), &t) != 0) return -1;
+    *ns = (uint64_t)t.tv_sec * 1000000000ull + (uint64_t)t.tv_nsec;
+    if (*ns == 0) *ns = 1;
+    return 0;
+}
+#endif
+
+/* the time of a clock: the function of the caller (id -> nanoseconds) or the system's */
+static inline uint32_t wasi_clock_ns(wasmext_wasi *w, uint32_t id, uint64_t *ns, int *trapped) {
+    if (id > 3) return WASI_E_INVAL;
+    if (w->clock_fn != NULL) {
+        PyObject *value = PyObject_CallFunction(w->clock_fn, "I", id);
+        if (value == NULL) return wasi_python_error(trapped);
+        unsigned long long n = PyLong_AsUnsignedLongLong(value);
+        Py_DECREF(value);
+        if (n == (unsigned long long)-1 && PyErr_Occurred()) return wasi_python_error(trapped);
+        *ns = n;
+        return WASI_E_SUCCESS;
+    }
+    return wasi_clock_system(id, ns) == 0 ? WASI_E_SUCCESS : WASI_E_NOTSUP;
+}
 
 static inline uint32_t wasi_clock_res_get(void *s, uint32_t id, uint32_t ptr, int *trapped) {
     WASI_STATE(s);
+    (void)trapped;
+    uint64_t ns;
     if (id > 3) return WASI_E_INVAL;
-    PyObject *time = wasi_module_of(&w->time_module, "time");
-    PyObject *info = time ? PyObject_CallMethod(time, "get_clock_info", "s", wasi_clocks[id].info) : NULL;
-    PyObject *res = info ? PyObject_GetAttrString(info, "resolution") : NULL;
-    Py_XDECREF(info);
-    double seconds = res ? PyFloat_AsDouble(res) : -1.0;
-    Py_XDECREF(res);
-    if (seconds < 0 && PyErr_Occurred()) return wasi_python_error(trapped);
-    uint64_t ns = seconds * 1e9 < 1.0 ? 1 : (uint64_t)(seconds * 1e9);
+    if (wasi_clock_resolution(id, &ns) != 0) return WASI_E_NOTSUP;
     return wasi_put_u64(w, ptr, ns) ? WASI_E_SUCCESS : WASI_E_FAULT;
 }
 
 static inline uint32_t wasi_clock_time_get(void *s, uint32_t id, uint64_t precision, uint32_t ptr, int *trapped) {
     WASI_STATE(s);
     (void)precision;
-    if (id > 3) return WASI_E_INVAL;
-    PyObject *time = wasi_module_of(&w->time_module, "time");
-    PyObject *value = time ? PyObject_CallMethod(time, wasi_clocks[id].function, NULL) : NULL;
-    if (value == NULL) return wasi_python_error(trapped);
-    unsigned long long ns = PyLong_AsUnsignedLongLongMask(value);
-    Py_DECREF(value);
+    uint64_t ns = 0;
+    uint32_t rc = wasi_clock_ns(w, id, &ns, trapped);
+    if (rc != WASI_E_SUCCESS) return rc;
     return wasi_put_u64(w, ptr, ns) ? WASI_E_SUCCESS : WASI_E_FAULT;
+}
+
+/* `size` random bytes from the system; 0 on success */
+static inline int wasi_random_system(unsigned char *buf, size_t size) {
+#if defined(_WIN32)
+    return BCryptGenRandom(NULL, buf, (ULONG)size, BCRYPT_USE_SYSTEM_PREFERRED_RNG) == 0 ? 0 : -1;
+#elif defined(__APPLE__)
+    arc4random_buf(buf, size);
+    return 0;
+#else
+    int fd = open("/dev/urandom", O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return -1;
+    size_t done = 0;
+    while (done < size) {
+        ssize_t n = read(fd, buf + done, size - done);
+        if (n < 0 && errno == EINTR) continue;
+        if (n <= 0) {
+            close(fd);
+            return -1;
+        }
+        done += (size_t)n;
+    }
+    close(fd);
+    return 0;
+#endif
 }
 
 static inline uint32_t wasi_random_get(void *s, uint32_t buf, uint32_t size, int *trapped) {
     WASI_STATE(s);
     if (!wasi_in_memory(w, buf, size)) return WASI_E_FAULT;
     if (size == 0) return WASI_E_SUCCESS;
-    PyObject *os = wasi_module_of(&w->os_module, "os");
-    PyObject *bytes = os ? PyObject_CallMethod(os, "urandom", "I", size) : NULL;
+    if (w->random_fn == NULL) return wasi_random_system(w->memory->data + buf, size) == 0 ? WASI_E_SUCCESS : WASI_E_IO;
+    PyObject *bytes = PyObject_CallFunction(w->random_fn, "I", size);
     if (bytes == NULL) return wasi_python_error(trapped);
     char *data;
     Py_ssize_t len;
     if (PyBytes_AsStringAndSize(bytes, &data, &len) < 0 || (uint64_t)len != size) {
+        if (!PyErr_Occurred()) PyErr_Format(PyExc_ValueError, "wasi: 'random' gave %zd bytes, %u were asked for", len, (unsigned)size);
         Py_DECREF(bytes);
         return wasi_python_error(trapped);
     }
     memcpy(w->memory->data + buf, data, (size_t)len);
     Py_DECREF(bytes);
     return WASI_E_SUCCESS;
+}
+
+/* waits `ns` nanoseconds on the monotonic clock without holding the interpreter, in slices so that a signal (Ctrl+C) is seen; 0, or -1 with an exception */
+static inline int wasi_sleep_ns(uint64_t ns) {
+    uint64_t start;
+    if (wasi_clock_system(1, &start) != 0) {
+        PyErr_SetString(PyExc_OSError, "wasi: the monotonic clock cannot be read");
+        return -1;
+    }
+    for (;;) {
+        uint64_t now;
+        if (wasi_clock_system(1, &now) != 0) return 0;
+        uint64_t spent = now - start;
+        if (spent >= ns) return 0;
+        uint64_t left = ns - spent, slice = left < 100000000ull ? left : 100000000ull;
+        Py_BEGIN_ALLOW_THREADS
+#ifdef _WIN32
+        Sleep((DWORD)((slice + 999999u) / 1000000u));
+#else
+        {
+            struct timespec t;
+            t.tv_sec = (time_t)(slice / 1000000000ull);
+            t.tv_nsec = (long)(slice % 1000000000ull);
+            nanosleep(&t, NULL);
+        }
+#endif
+        Py_END_ALLOW_THREADS
+        if (PyErr_CheckSignals() < 0) return -1;
+    }
 }
 
 static inline uint32_t wasi_sched_yield(void *s, int *trapped) {
@@ -720,31 +893,53 @@ static inline char *wasi_join(const char *root, const char *rel) {
 /* ---- the standard streams (through Python by default, so that the order against print() and a capture in a notebook or a test
    are right) --------------------------------------------------------------------------------------------------------- */
 
-/* the binary side of sys.stdout (after flushing its text layer), or the object the caller gave */
-static inline int wasi_write_bytes(wasmext_wasi *w, uint32_t fd, const char *data, Py_ssize_t size) {
-    PyObject *given = w->stream[fd], *target = given, *r;
-    if (given == NULL) {
-        PyObject *sys_stream = PySys_GetObject(fd == 1 ? "stdout" : "stderr");  /* borrowed */
-        if (sys_stream == NULL || sys_stream == Py_None) return 0;
-        PyObject *flushed = PyObject_CallMethod(sys_stream, "flush", NULL);
-        if (flushed == NULL) return -1;
-        Py_DECREF(flushed);
-        PyObject *buffer = PyObject_GetAttrString(sys_stream, "buffer");
-        if (buffer == NULL) {  /* a text stream with no binary side: it gets the text */
-            PyErr_Clear();
-            PyObject *text = PyUnicode_DecodeUTF8(data, size, "replace");
-            r = text ? PyObject_CallMethod(sys_stream, "write", "O", text) : NULL;
-            Py_XDECREF(text);
-            Py_XDECREF(r);
-            return r ? 0 : -1;
-        }
-        PyObject *bytes = PyBytes_FromStringAndSize(data, size);
-        r = bytes ? PyObject_CallMethod(buffer, "write", "O", bytes) : NULL;
-        Py_XDECREF(bytes);
-        Py_DECREF(buffer);
+/* is `stream` a text stream (an io.TextIOBase): 1, 0, or -1 with an exception */
+static inline int wasi_is_text(wasmext_wasi *w, PyObject *stream) {
+    if (w->text_base == NULL) {
+        PyObject *io = PyImport_ImportModule("io");
+        if (io == NULL) return -1;
+        w->text_base = PyObject_GetAttrString(io, "TextIOBase");
+        Py_DECREF(io);
+        if (w->text_base == NULL) return -1;
+    }
+    return PyObject_IsInstance(stream, w->text_base);
+}
+
+/* bytes to a text stream (sys.stdout, or any text stream the caller gave): through its binary side after flushing its text layer, or
+   as text where it has none */
+static inline int wasi_write_text_stream(PyObject *stream, const char *data, Py_ssize_t size) {
+    PyObject *r, *flushed = PyObject_CallMethod(stream, "flush", NULL);
+    if (flushed == NULL) return -1;
+    Py_DECREF(flushed);
+    PyObject *buffer = PyObject_GetAttrString(stream, "buffer");
+    if (buffer == NULL) {  /* a text stream with no binary side: it gets the text */
+        PyErr_Clear();
+        PyObject *text = PyUnicode_DecodeUTF8(data, size, "replace");
+        r = text ? PyObject_CallMethod(stream, "write", "O", text) : NULL;
+        Py_XDECREF(text);
         Py_XDECREF(r);
         return r ? 0 : -1;
     }
+    PyObject *bytes = PyBytes_FromStringAndSize(data, size);
+    r = bytes ? PyObject_CallMethod(buffer, "write", "O", bytes) : NULL;
+    Py_XDECREF(bytes);
+    Py_DECREF(buffer);
+    Py_XDECREF(r);
+    return r ? 0 : -1;
+}
+
+/* the stream the caller gave (None: thrown away), or sys.stdout / sys.stderr as they are now */
+static inline int wasi_write_bytes(wasmext_wasi *w, uint32_t fd, const char *data, Py_ssize_t size) {
+    PyObject *target = w->stream[fd], *r;
+    if (target == Py_None) return 0;
+    if (target == NULL) {
+        target = PySys_GetObject(fd == 1 ? "stdout" : "stderr");  /* borrowed */
+        if (target == NULL || target == Py_None) return 0;
+        return wasi_write_text_stream(target, data, size);
+    }
+    int text = wasi_is_text(w, target);
+    if (text < 0) return -1;
+    if (text) return wasi_write_text_stream(target, data, size);
     PyObject *bytes = PyBytes_FromStringAndSize(data, size);
     if (bytes == NULL) return -1;
     if (PyObject_HasAttrString(target, "write")) r = PyObject_CallMethod(target, "write", "O", bytes);
@@ -782,23 +977,26 @@ static inline PyObject *wasi_read_bytes(wasmext_wasi *w, Py_ssize_t size) {
         return slice;
     }
     PyObject *source = given;
+    int text = 1;
     if (source == NULL) {
         source = PySys_GetObject("stdin");  /* borrowed */
         if (source == NULL || source == Py_None) return PyBytes_FromStringAndSize("", 0);
-        PyObject *buffer = PyObject_GetAttrString(source, "buffer");
-        if (buffer == NULL) {  /* a text stream: its text, as UTF-8 */
-            PyErr_Clear();
-            PyObject *text = PyObject_CallMethod(source, "read", "n", size);
-            PyObject *bytes = text ? PyUnicode_AsUTF8String(text) : NULL;
-            Py_XDECREF(text);
-            return bytes;
-        }
-        PyObject *bytes = PyObject_HasAttrString(buffer, "read1") ? PyObject_CallMethod(buffer, "read1", "n", size)
-                                                                  : PyObject_CallMethod(buffer, "read", "n", size);
-        Py_DECREF(buffer);
+    } else if ((text = wasi_is_text(w, source)) < 0) {
+        return NULL;
+    }
+    if (!text) return PyObject_CallMethod(source, "read", "n", size);
+    PyObject *buffer = PyObject_GetAttrString(source, "buffer");
+    if (buffer == NULL) {  /* a text stream with no binary side: its text, as UTF-8 */
+        PyErr_Clear();
+        PyObject *chars = PyObject_CallMethod(source, "read", "n", size);
+        PyObject *bytes = chars ? PyUnicode_AsUTF8String(chars) : NULL;
+        Py_XDECREF(chars);
         return bytes;
     }
-    return PyObject_CallMethod(source, "read", "n", size);
+    PyObject *bytes = PyObject_HasAttrString(buffer, "read1") ? PyObject_CallMethod(buffer, "read1", "n", size)
+                                                              : PyObject_CallMethod(buffer, "read", "n", size);
+    Py_DECREF(buffer);
+    return bytes;
 }
 
 static inline uint32_t wasi_read_std(wasmext_wasi *w, uint32_t iovs, uint32_t count, uint32_t nread, int *trapped) {
@@ -2480,17 +2678,8 @@ static inline uint32_t wasi_path_readlink(void *s, uint32_t fd, uint32_t path, u
     return wasi_put_u32(w, used, (uint32_t)n) ? WASI_E_SUCCESS : WASI_E_FAULT;
 }
 
-/* poll_oneoff: the descriptors of files are always ready; what makes the program wait is a clock, and it sleeps (in Python, which
-   lets other threads run) until the first one. `legacy`: the first snapshot, whose clock subscription starts with an identifier. */
-static inline uint32_t wasi_clock_ns(wasmext_wasi *w, uint32_t id, uint64_t *ns, int *trapped) {
-    PyObject *time = wasi_module_of(&w->time_module, "time");
-    PyObject *value = time ? PyObject_CallMethod(time, wasi_clocks[id].function, NULL) : NULL;
-    if (value == NULL) return wasi_python_error(trapped);
-    *ns = PyLong_AsUnsignedLongLongMask(value);
-    Py_DECREF(value);
-    return WASI_E_SUCCESS;
-}
-
+/* poll_oneoff: the descriptors of files are always ready; what makes the program wait is a clock, and it sleeps (in C, without the
+   interpreter, so that other threads run) until the first one. `legacy`: the first snapshot, whose clock subscription starts with an identifier. */
 /* how long a clock subscription still has to wait (0: it is due), or an errno of WASI */
 static inline uint32_t wasi_subscription_wait(wasmext_wasi *w, uint32_t sub, int legacy, uint64_t entry_now[2], int have[2],
                                               uint64_t *wait, int *trapped) {
@@ -2541,10 +2730,7 @@ static inline uint32_t wasi_poll(wasmext_wasi *w, uint32_t in, uint32_t out, uin
     }
     uint64_t waited = 0;
     if (!immediate && shortest != UINT64_MAX && shortest > 0) {
-        PyObject *time = wasi_module_of(&w->time_module, "time");
-        PyObject *slept = time ? PyObject_CallMethod(time, "sleep", "d", (double)shortest / 1e9) : NULL;
-        if (slept == NULL) return wasi_python_error(trapped);
-        Py_DECREF(slept);
+        if (wasi_sleep_ns(shortest) < 0) return wasi_python_error(trapped);
         waited = shortest;
     }
     uint32_t made = 0;

@@ -63,6 +63,9 @@ class Glue:
     wasi_headers: tuple[
         str, ...
     ] = ()  # the headers of wasmext for WASI that the glue includes (and those they share: wasi_core.h, wasi_files_win32.h and wasi_python.h): copied beside it
+    api_header: str = ""  # the public header of the C API of the shared library (<name>_api.h), no Python in it
+    shared: str = ""  # the C of the shared library (<name>_shared.c); both are empty when `shared_unsupported` says why
+    shared_unsupported: str = ""
     header: str = ""  # the C of the glue of the module (<name>_glue.h): typed functions, no Python; the Python layer (`source`, <name>_py.c) includes it
 
 
@@ -708,7 +711,7 @@ def generate(module: Module, name: str, *, version: str | None = None) -> Glue:
     add("    PyTypeObject *tp = Py_TYPE((PyObject *)self);")
     add("    PyObject_GC_UnTrack(self);")
     add("    if (self->weakreflist != NULL) PyObject_ClearWeakRefs((PyObject *)self);")
-    add(f"    {last}_free(&self->core);")
+    add(f"    {last}_glue_free(&self->core);")
     add("    Instance_clear(self);")
     if uses_wasi:
         add("    wasmext_wasi_free(self->core.wasi);")
@@ -960,7 +963,7 @@ def generate(module: Module, name: str, *, version: str | None = None) -> Glue:
         add("            return NULL;")
         add("        }")
         add("    }")
-    add(f"    int trapped = {last}_instantiate(&self->core);")
+    add(f"    int trapped = {last}_glue_instantiate(&self->core);")
     add("    if (trapped) { raise_trap(self, trapped); Py_DECREF(self); return NULL; }")
     add("    return (PyObject *)self;")
     add("}")
@@ -1018,7 +1021,7 @@ def generate(module: Module, name: str, *, version: str | None = None) -> Glue:
     is_command = any(exp_name == "_start" for exp_name, _ in funcs)
     finish_on_trap = "wasmext_wasi_finish(self->wasi, WASI_END_TRAP, 0); " if uses_wasi and is_command else ""
     hadd("/* instantiation: 0, or the code of the trap of the start function */")
-    hadd(f"static int {last}_instantiate({last}_instance *self) {{")
+    hadd(f"static int {last}_glue_instantiate({last}_instance *self) {{")
     hadd("    WASMEXT_ENTER(trap_, return (int)trap_)")
     host_args = "".join(f", &self->host{i}" for i in range(len(hosts)))
     hadd(f"    wasm2c_{prefix}_instantiate(&self->inst{host_args});")
@@ -1044,7 +1047,7 @@ def generate(module: Module, name: str, *, version: str | None = None) -> Glue:
         hadd("    return 0;")
         hadd("}")
         hadd("")
-    hadd(f"static void {last}_free({last}_instance *self) {{")
+    hadd(f"static void {last}_glue_free({last}_instance *self) {{")
     hadd(f"    if (self->instantiated) wasm2c_{prefix}_free(&self->inst);")
     hadd("    self->instantiated = 0;")
     hadd("}")
@@ -1430,12 +1433,33 @@ def generate(module: Module, name: str, *, version: str | None = None) -> Glue:
     add("    return NULL;")
     add("}")
     stub_imports = [imp for imp in module.imports if imp.module not in _WASI_HEADERS]
+    from ._shared import generate_shared, unsupported
+
+    reason = unsupported(
+        [(i.module, i.field, i.func) for i in imports],
+        global_imports=bool(global_imports),
+        memory_imports=bool(memory_imports),
+    )
+    api_header = shared = ""
+    if reason is None:
+        api_header, shared = generate_shared(
+            last,
+            prefix,
+            funcs,
+            memories,
+            [(i.module, i.field, i.func, i.module in _WASI_HEADERS, i.host, i.slot) for i in imports],
+            uses_wasi,
+            len(tags),
+        )
     return Glue(
         "\n".join(w) + "\n",
         skipped,
         _stub(last, funcs, memories, globals_, stub_imports, uses_wasi, version, param_names, bool(tags)),
         tuple(_WASI_HEADERS[m] for m in wasi_modules),
-        "\n".join(h) + "\n",
+        api_header=api_header,
+        shared=shared,
+        shared_unsupported=reason or "",
+        header="\n".join(h) + "\n",
     )
 
 

@@ -124,7 +124,7 @@ int main(int argc, char **argv) {
     }
     wasmext_wasi_bind(instance.wasi, w2c_@PREFIX@_memory(&instance.inst));
     @LAST@_wasi_bind(&instance);
-    int trapped = @LAST@_instantiate(&instance);
+    int trapped = @LAST@_glue_instantiate(&instance);
     if (!trapped) {
         @LAST_U@_START(&instance.inst, &trapped);
     }
@@ -136,7 +136,7 @@ int main(int argc, char **argv) {
         code = 134;
     }
     fflush(stdout);
-    @LAST@_free(&instance);
+    @LAST@_glue_free(&instance);
     wasmext_wasi_destroy(instance.wasi);
     return code;
 }
@@ -155,6 +155,65 @@ def _compiler() -> object:
     compiler = new_compiler()
     sysconfig.customize_compiler(compiler)
     return compiler
+
+
+def _compile_sources(
+    sources: list[str], prepared: object, out_dir: Path, *, optimize: bool
+) -> tuple[object, list[str], bool]:
+    """Compile `sources` with the compiler of setuptools; returns the compiler, the objects and whether it is MSVC."""
+    compiler = _compiler()
+    msvc = compiler.compiler_type == "msvc"  # type: ignore[attr-defined]
+    # no warnings: the C of wasm2c and its runtime are not ours to police
+    flags: list[str] = ["/w"] if msvc else ["-w"]
+    if not optimize:
+        flags += ["/Od"] if msvc else ["-O0"]
+    elif not msvc:
+        flags += ["-O1"]
+    objects = compiler.compile(  # type: ignore[attr-defined]
+        sources,
+        output_dir=str(out_dir / "obj"),
+        include_dirs=[prepared.include_dir, *prepared.extra_include_dirs],  # type: ignore[attr-defined]
+        extra_postargs=flags,
+    )
+    return compiler, objects, msvc
+
+
+def build_shared(
+    wasm: str | os.PathLike[str],
+    library: str | os.PathLike[str],
+    *,
+    name: str | None = None,
+    work: str | os.PathLike[str] | None = None,
+    parts: int | None = None,
+    optimize: bool = True,
+) -> Path:
+    """Make the shared library `library` of the module `wasm`; beside the C, in `work`, is its header `<name>_api.h`: the C API for a host that is not
+    Python (see _shared.py)."""
+    from ._gen import GenError, generate
+    from ._wasm import parse
+
+    wasm_path, library_path = Path(wasm), Path(library)
+    last = name or "".join(c if c.isalnum() else "_" for c in wasm_path.stem)
+    if not last or last[0].isdigit():
+        last = f"m_{last}"
+    out_dir = Path(work) if work is not None else library_path.parent / f"{library_path.stem}_wasmext"
+    glue = generate(parse(wasm_path.read_bytes()), last)
+    if glue.shared_unsupported:
+        raise GenError(f"{wasm_path}: no shared library yet: {glue.shared_unsupported}")
+    prepared = _prepare(wasm_path, last, out_dir, force=False, quiet=True, stubs=False, parts=parts)
+    for file, text in ((f"{last}_api.h", glue.api_header), (f"{last}_shared.c", glue.shared)):
+        target = out_dir / file
+        if not target.is_file() or target.read_text("utf-8") != text:
+            target.write_text(text, encoding="utf-8")
+    sources = [s for s in prepared.sources if not s.endswith(f"{last}_py.c")] + [
+        (out_dir / f"{last}_shared.c").as_posix()
+    ]
+    compiler, objects, msvc = _compile_sources(sources, prepared, out_dir, optimize=optimize)
+    library_path.parent.mkdir(parents=True, exist_ok=True)
+    compiler.link_shared_object(  # type: ignore[attr-defined]
+        objects, str(library_path), libraries=[] if msvc else ["m"], extra_postargs=[]
+    )
+    return library_path
 
 
 def build(
@@ -189,20 +248,7 @@ def build(
     if not main_path.is_file() or main_path.read_text("utf-8") != text:
         main_path.write_text(text, encoding="utf-8")
     sources = [s for s in prepared.sources if not s.endswith(f"{last}_py.c")] + [main_path.as_posix()]
-    compiler = _compiler()
-    msvc = compiler.compiler_type == "msvc"  # type: ignore[attr-defined]
-    # no warnings: the C of wasm2c and its runtime are not ours to police
-    flags: list[str] = ["/w"] if msvc else ["-w"]
-    if not optimize:
-        flags += ["/Od"] if msvc else ["-O0"]
-    elif not msvc:
-        flags += ["-O1"]
-    objects = compiler.compile(  # type: ignore[attr-defined]
-        sources,
-        output_dir=str(out_dir / "obj"),
-        include_dirs=[prepared.include_dir, *prepared.extra_include_dirs],
-        extra_postargs=flags,
-    )
+    compiler, objects, msvc = _compile_sources(sources, prepared, out_dir, optimize=optimize)
     program_path.parent.mkdir(parents=True, exist_ok=True)
     compiler.link_executable(  # type: ignore[attr-defined]
         objects, str(program_path), libraries=[] if msvc else ["m"], extra_postargs=[]

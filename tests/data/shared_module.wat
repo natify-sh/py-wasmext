@@ -1,0 +1,10 @@
+(module
+  (import "env" "log" (func $log (param i32) (result i32)))
+  (tag $t (param i32))
+  (memory (export "mem") 1)
+  (data (i32.const 0) "hi")
+  (func (export "add") (param i32 i32) (result i32) local.get 0 local.get 1 i32.add)
+  (func (export "twice") (param i32) (result i32 i32) local.get 0 local.get 0)
+  (func (export "call_log") (param i32) (result i32) local.get 0 call $log)
+  (func (export "boom") (param i32) local.get 0 throw $t)
+  (func (export "trap") unreachable))

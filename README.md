@@ -240,8 +240,8 @@ wasm2c and WABT tools as wheels, is [natify-sh/wabt-package](https://github.com/
 
 Releasing: the version is the tag (`setuptools-scm`; nothing is written in `pyproject.toml`). A tag `v0.1.0a1` makes the sdist and the wheel
 `0.1.0a1` and starts `.github/workflows/publish.yml`, which builds them, checks the metadata, installs the wheel on the three systems and
-makes a GitHub Release (a pre-release for `a`, `b` and `rc`). It publishes to PyPI only when the repository variable `PUBLISH_TO_PYPI` is
-`true` (it is not set); "Run workflow" with `testpypi` publishes to TestPyPI. `wasmext --version` and `wasmext.__version__` say which version is
+makes a GitHub Release (a pre-release for `a`, `b` and `rc`) and publishes to PyPI (trusted publishing: the environment `pypi` of the
+repository and a publisher for the project `wasmext` on PyPI); "Run workflow" with `testpypi` publishes to TestPyPI. `wasmext --version` and `wasmext.__version__` say which version is
 installed, and the stub written beside a module names the version when it is a release.
 
 `poc/` is the hand-written proof of concept this started from, with its measurements ([poc/README.md](poc/README.md)).

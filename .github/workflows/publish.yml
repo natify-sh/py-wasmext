@@ -3,8 +3,8 @@ name: Release
 # wasmext is a pure Python package (py3-none-any): one sdist and one wheel, whatever the platform. The version is the tag, through
 # setuptools-scm (a tag v0.1.0a1 makes 0.1.0a1); nothing is written in pyproject.toml.
 #
-#   push of a tag v*       build, check, GitHub Release (a pre-release when the version has a/b/rc); PyPI too, but only when
-#                          the repository variable PUBLISH_TO_PYPI is "true" (it is not set: wasmext is not published yet)
+#   push of a tag v*       build, check, GitHub Release (a pre-release when the version has a/b/rc) and PyPI (trusted publishing,
+#                          the environment "pypi"); pip does not install an a/b/rc version unless it is asked to (--pre)
 #   pull_request           build and check only: nothing is published, no permission for it is used
 #   workflow_dispatch      the same build; with "testpypi", it publishes to TestPyPI
 
@@ -151,7 +151,7 @@ jobs:
           files: ./dist/*
 
       - name: Publish to PyPI
-        if: ${{ github.event_name == 'push' && vars.PUBLISH_TO_PYPI == 'true' }}
+        if: ${{ github.event_name == 'push' }}
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           skip-existing: true

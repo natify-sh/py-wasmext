@@ -730,7 +730,10 @@ the exact errno for a host function that cannot report one; the interruption of 
 `wasi_common.h` is now `wasi_core.h` (1959 lines, no Python) and `wasi_python.h` (1193 lines). Checked: the 303 tests and 4 expected
 failures as before (the tests of the files run the POSIX backend and the Python one); the core with `wasi_preview1.h` and
 `wasi_unstable.h` compiles with gcc and clang (`-std=c11 -Wall -Wextra`) with **no Python on the include path** (check (a), Linux).
-Not yet run in CI at the time of writing: the official WASI tests on the three systems.
+CI: the official WASI tests on the three systems pass on this stage (`1c5a8b8`). Check (a) is its own workflow, `core-without-python.yml`: the
+core with the two snapshots compiled by gcc and clang on Linux and by clang on macOS with only the runtime of wasm2c on the include path, and
+a search that the core files do not name the Python C API. Windows (MSVC) joins at stage 3: until the file backend there is native, the core
+there takes the one of `wasi_python.h`.
 
 What differs from the table of stage 1:
 

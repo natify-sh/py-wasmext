@@ -24,7 +24,7 @@
 
 #ifndef _WIN32
 #ifndef _GNU_SOURCE
-#define _GNU_SOURCE 1  /* what Python.h sets, for a host that does not include it */
+#define _GNU_SOURCE 1  /* what the headers of Python set, for a host that does not include them */
 #endif
 #ifndef _DARWIN_C_SOURCE
 #define _DARWIN_C_SOURCE 1

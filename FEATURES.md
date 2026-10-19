@@ -45,7 +45,7 @@ What each line says is tested (`tests/test_features.py`), not read from those do
 | Multi-memory | done | `3.0 multi-memory` |
 | memory64 | done | inside the module, exported as a `memoryview`, addresses above 4 GiB (Linux): `3.0 memory64`, `test_an_exported_memory64_is_a_memoryview_too`, `test_memory64_addresses_above_4_gib` |
 | 64-bit tables (the address type of tables, with memory64) | done inside the module | `3.0 memory64, a 64-bit table`; a table is not exported yet |
-| Exception handling, legacy `try`/`catch` | done | `3.0 exceptions`; an exception nobody catches is a `Trap`: `test_an_exception_nobody_catches_is_a_trap`. This form is not in the specification, but compilers still make it |
+| Exception handling, legacy `try`/`catch` | done | `3.0 exceptions`; an exception nobody catches is a `Trap`: `test_an_exception_nobody_catches_is_a_trap`. This form is not in the specification, but compilers still make it; **the tag and the values of that exception are not given to the caller yet** (the `Trap` says `Uncaught exception` and no more): planned, stage 4 of item 10 |
 | Exception handling, `try_table`, `throw_ref`, `exnref` | done | the form of the specification: `3.0 exceptions, try_table`, `3.0 exceptions, exnref (catch_all_ref and throw_ref)`; `exnref` in a signature and exported tags: not yet |
 | Relaxed SIMD | no (wasm2c) | `wasm2c` 1.0.42 itself aborts (signal 6, no message) on `i32x4.relaxed_trunc_f32x4_s`, `f32x4.relaxed_madd`, `i8x16.relaxed_swizzle` and `i32x4.relaxed_laneselect` (the others were not tried; reported: [WABT #2886](https://github.com/WebAssembly/wabt/issues/2886)), so it is not a matter of headers; strict xfail `3.0 relaxed SIMD…`. Its README says the same: wasm2c is not ticked for relaxed SIMD |
 | Typed function references | no (wasm2c) | `wat2wasm --enable-function-references` makes the binary, `wasm2c` stops at `call_ref` (unexpected opcode 0x14); the README of WABT does not tick wasm2c for it; strict xfail `3.0 typed function references` |
@@ -287,7 +287,7 @@ In this order (the first ones are small):
    extension does:
    1. **Inventory and the seams, on paper.** Sort the 49 functions of `wasi_common.h` that mention Python (stdio, the configuration `wasi=`, the
       exceptions, the files of Windows, the user functions for the clock and the random bytes); fix the table of hooks (names, signatures, who owns
-      the state), the interface of the file backend (open one component, stat, list, rename, link; shaped by POSIX and by Win32, see stage 3), the protocol of errors of host functions (below), the names of the files, and what
+      the state), the interface of the file backend (open one component, stat, list, rename, link; shaped by POSIX and by Win32, see stage 3), the protocol of errors of host functions (below) and the three outcomes of a call (a value, a trap, an uncaught exception with its tag and values), the names of the files, and what
       the shared library and the executable need from the core (the entry points, `_start` and the exports of a reactor, the instance). Output: this
       document, no code. The cheap stage that stops later ones from being done twice.
    2. **The core of WASI, cut** (`wasi_core.h`, no `Python.h`) and the hooks of Python (`wasi_python.h`). POSIX files stay in the core (`openat`).
@@ -300,7 +300,12 @@ In this order (the first ones are small):
       files of Windows are in `wasi_core.h` too, `wasi_python.h` keeps its Python backend only for tests, and check (a) is complete on Windows
       (MSVC; the compile with MinGW or `zig cc` where it is at hand).
    4. **The glue as files**: `wasmext_glue.h` (the same for every module), `<name>_glue.h` (the module: typed C functions, the tables), `<name>_py.c`
-      (the Python layer) — see "Decisions". The record `wasmext_export` and the fingerprint do not change. Check (a) covers them. The WASI half
+      (the Python layer) — see "Decisions". The record `wasmext_export` and the fingerprint do not change. Check (a) covers them. **With it, the uncaught exception of WebAssembly**:
+       the reader of modules (`_wasm.py`) reads the tag section (it checks its framing only now), `<name>_glue.h` gets a table of the tags of the
+       module (the types of their values, the name when the tag is exported) and a function that decodes the payload of the runtime by those
+       types; the Python layer raises `UncaughtException`, a subclass of `Trap`, with `.tag` and `.values` (so that code that catches `Trap` goes on
+       working), the `.pyi` names it, and a test with a module that has a tag (a `throw` that is caught inside and one that is not) is the proof;
+       the C API of the shared library gives the same three outcomes. The WASI half
       (2 and 3) and the glue half (4) do not depend on each other; the WASI half goes first because the blocker (Windows) is there.
    5. **The first front end that is not Python, on the three systems**: the C runner (`wasmext-run module.wasm`, the idea of `natify --exe`):
       `main()`, the hooks of WASI in plain C, `_start`. It needs 2 to 4 (the core of WASI complete on every system, the core of the glue). It runs
@@ -331,7 +336,11 @@ In this order (the first ones are small):
    exception handling; `wasm-rt-exceptions-impl.c`) is not a trap: a module made from C++ with exceptions, or from Rust with unwinding, may `throw`
    and `catch` inside itself. If a `throw` reaches the edge of the module and nothing in it catches, the call of the export ends with an exception
    that carries a tag and values, which would be a result of its own for the host (wasm3 has it: `m3Err_trapUncaughtException`, with
-   `m3_GetExceptionTag` and `m3_GetExceptionArgs`). What the extension does with it today was not checked; not needed yet.
+   `m3_GetExceptionTag` and `m3_GetExceptionArgs`). Today (tried on a module with a tag, a `throw` that is caught inside it and one that is not): the one
+   caught inside returns its value, the other raises `Trap('Uncaught exception')` and the instance stays usable; the tag and the values are lost,
+   though the runtime keeps them (`wasm_rt_exception_tag()`, `wasm_rt_exception_size()` and `wasm_rt_exception()`, the payload at most
+   `WASM_EXN_MAX_SIZE` = 256 bytes). So **the result of a call has three outcomes in the protocol: a value, a trap (a code), an uncaught exception
+   (a tag and values)**, and it goes in the plan (stages 1 and 4), not "later".
    What does not wait for any of it: the alpha of the extension, as it is. The public interface (`Instance`, `natify`, `wasi=`) does not change in
    stages 1 to 5; the files that a built extension carries do (the headers beside its C), which the cache of `wasmimport` and the stamp of the
    build already follow. Order and why: 1 before everything (the seams are the part that is expensive to redo); 2 and 3 together and first,

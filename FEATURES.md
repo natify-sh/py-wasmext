@@ -273,8 +273,14 @@ In this order (the first ones are small):
    is the one place that still goes through Python. Safety is not the aim: the walk that confines a path stays because the official tests and the behaviour of POSIX ask for it, not as a promise of a
    race-free sandbox (the way uvwasi and wasm3 resolve a path as a string, not as wasmtime does with a handle). How: the same walk, with its primitive (open one component) behind one small interface; the primitives
    are documented Win32 with wide-character functions (UTF-8 to UTF-16, never the ANSI ones): `CreateFileW` with `FILE_FLAG_BACKUP_SEMANTICS` and `FILE_FLAG_OPEN_REPARSE_POINT`, `FindFirstFileW`, `MoveFileExW`,
-   `CreateSymbolicLinkW`, `SetFileInformationByHandle`; no `ntdll`, no `GetProcAddress`, the same headers in MSVC and MinGW. A handle-relative open (`NtCreateFile` with `RootDirectory`, as cap-std) could replace
-   the primitive later if a race-free sandbox is ever wanted; it is not planned. If it is built, it is chosen by a define (for example `WASMEXT_WASI_WIN=portable|nt`), not by the compiler: ntdll is a matter of the system, and with declarations of its own and `GetProcAddress` the variant builds the same in MSVC, MinGW and `zig cc`; `portable` is the default, and CI would run both, as it runs the Python path of the files on Linux (`WASMEXT_WASI_PYTHON_FS`). Checked by the official tests on Windows (x64, ARM64, x86) in CI; Windows cannot be run here, so only CI tells. Not measured: what the Python way costs.
+   `CreateSymbolicLinkW`, `SetFileInformationByHandle`; no `ntdll`, no `GetProcAddress`, the same headers in MSVC and MinGW. Two variants of that primitive, chosen by a define and not by the compiler (ntdll is a matter of the system, not of the compiler):
+   **`portable`** (stage 3a, the default): the Win32 above, path by path with the walk of the components, no race-free guarantee; and **`nt`** (stage
+   3b): a handle-relative open, `NtCreateFile` with `RootDirectory` as cap-std does, which closes the gap between a check and a use that `portable`
+   has. `-DWASMEXT_WASI_WIN=nt` selects it; `portable` stays the default. The `nt` variant has declarations of its own (names of its own, such
+   as `wasi_nt_*`, so that no header of MSVC, MinGW or `zig cc` collides) and takes the functions of `ntdll.dll` once with `GetProcAddress`: no import
+   library, no flag of the linker, the same source in the three compilers. It is an addition, not the aim: the aim (portability) is met by `portable`.
+   CI runs both on Windows, as it runs the Python path of the files on Linux (`WASMEXT_WASI_PYTHON_FS`). Checked by the official tests on Windows
+   (x64, ARM64, x86); Windows cannot be run here, so only CI tells. Not measured: what the Python way costs.
 10. **C first** (decided, not started; **the plan, final**). One work, of which item 9 (the native path to files on Windows) and the glue as files (see
    "Decisions") are parts: the core of the glue and the core of WASI become plain C with hooks, and everything that uses them is a front end: the
    extension for CPython, the shared library with its ctypes wrapper, the executable, the C runner of the test suite. The shared library and the
@@ -296,9 +302,13 @@ In this order (the first ones are small):
       Check (a) begins here, on the core of WASI (on Windows it is incomplete until stage 3: no file backend without Python).
    3. **The native path to files on Windows** (item 9), straight after, **before the glue is touched**: the Win32 backend of the interface of stage 1,
       in the core. It goes here and not later because the core of WASI is not free of the interpreter on Windows without it, and because the interface
-      of the backend should be shaped by both systems and not by `openat` alone. Verified by the official tests through the extension. After it the
-      files of Windows are in `wasi_core.h` too, `wasi_python.h` keeps its Python backend only for tests, and check (a) is complete on Windows
-      (MSVC; the compile with MinGW or `zig cc` where it is at hand).
+      of the backend should be shaped by both systems and not by `openat` alone. Two parts:
+      a. **`portable`** (the default): documented Win32, wide-character functions. Verified by the official tests through the extension. After it the
+         files of Windows are in `wasi_core.h` too, `wasi_python.h` keeps its Python backend only for tests, and check (a) is complete on Windows
+         (MSVC; the compile with MinGW or `zig cc` where it is at hand).
+      b. **`nt`** (`-DWASMEXT_WASI_WIN=nt`): the same primitive done with `NtCreateFile` and `RootDirectory`, handle-relative; own declarations and
+         `GetProcAddress`, so that it builds in every compiler. CI runs the official tests with both variants. It comes after 3a is green and does not
+         block the next stage.
    4. **The glue as files**: `wasmext_glue.h` (the same for every module), `<name>_glue.h` (the module: typed C functions, the tables), `<name>_py.c`
       (the Python layer) — see "Decisions". The record `wasmext_export` and the fingerprint do not change. Check (a) covers them. **With it, the uncaught exception of WebAssembly**:
        the reader of modules (`_wasm.py`) reads the tag section (it checks its framing only now), `<name>_glue.h` gets a table of the tags of the
@@ -343,7 +353,7 @@ In this order (the first ones are small):
    (a tag and values)**, and it goes in the plan (stages 1 and 4), not "later".
    What does not wait for any of it: the alpha of the extension, as it is. The public interface (`Instance`, `natify`, `wasi=`) does not change in
    stages 1 to 5; the files that a built extension carries do (the headers beside its C), which the cache of `wasmimport` and the stamp of the
-   build already follow. Order and why: 1 before everything (the seams are the part that is expensive to redo); 2 and 3 together and first,
+   build already follow. Order and why: 1 before everything (the seams are the part that is expensive to redo); 2 and 3 (3a, then 3b) together and first,
    because the core of WASI is the larger and the more tested piece and its one gap, the files of Windows, is what keeps it from being free of the
    interpreter; 4 after them, being the other half; 5 once both halves are complete, so that the cut is proved on all three systems with a second
    front end; 6 (the shared library, then the ctypes wrapper) and 7 last, because they add products, not structure.
@@ -353,13 +363,15 @@ In this order (the first ones are small):
    1. **S**: a document, no CI.
    2. **M**: about 1 850 of the 2 860 lines of `wasi_common.h` move as they are; the 49 functions that touch Python become calls of hooks. The risk
       is a hook with the wrong signature found late. 3 to 5 commits, 2 to 3 rounds on the three systems.
-   3. **L, the largest and the most uncertain**: the Python path to files is about 1 000 lines (the block `WASMEXT_WASI_PYTHON_FS`, a third of the
+   3. **3a L, the largest and the most uncertain**: the Python path to files is about 1 000 lines (the block `WASMEXT_WASI_PYTHON_FS`, a third of the
       header) to be replaced by Win32, about twenty calls (`path_open`, `path_filestat_get`, `fd_readdir`, `path_rename`, `path_link`,
       `path_symlink`, `path_readlink`, `path_unlink_file`, `path_remove_directory`, `path_create_directory`, the times, `pread`/`pwrite`, ...). Windows
       cannot be run here, so every step is a round of CI: expect 8 to 15 rounds, 45 to 90 minutes of waiting in all, apart from the writing.
       Symbolic links: creating one needs a privilege on Windows (an administrator, or Developer Mode); the runners of GitHub are administrators, as
       far as is known here (the tests of links pass there now). `symlink_filestat` is expected to fail only because Python before 3.13 cannot set the
       times of a link itself; natively `SetFileTime` on a handle opened with `FILE_FLAG_OPEN_REPARSE_POINT` can, so the expectation may go.
+      **3b M**: the primitive is one small interface, so the variant is the part that opens, lists and renames by handle (a few hundred lines);
+      the risk is the semantics of `NtCreateFile` (flags, reparse points, the sharing of the file), found by CI rounds, 4 to 8 of them.
    4. **M**: the generator (1 459 lines) gives about 230 generic lines to a header and the typed functions to `<name>_glue.h`; the 303 tests run
       locally and fast, so few rounds of CI: 4 to 6 commits, 2 to 3 rounds.
    5. **M**: a `main()`, the hooks in C, the way the test runner starts a program (a build of each program by `wasm2c` and the compiler of the machine,

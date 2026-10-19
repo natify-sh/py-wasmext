@@ -1551,6 +1551,7 @@ static inline uint32_t wasi_path_open(void *s, uint32_t fd, uint32_t dirflags, u
     if ((oflags & WASI_O_TRUNC) && !(dir->rights & WASI_R_PATH_FILESTAT_SET_SIZE)) return WASI_E_NOTCAPABLE;
     int64_t number = wasi_new_fd(w);
     if (number < 0) return WASI_E_NOMEM;
+    dir = &w->entries[fd];  /* the table may have moved when it grew */
     wasi_entry *e = &w->entries[number];
     memset(e, 0, sizeof *e);
     uint32_t rc = wasi_be_open(w, dir, path, len, (dirflags & WASI_LOOKUP_FOLLOW) != 0, oflags, base, fdflags, e, trapped);

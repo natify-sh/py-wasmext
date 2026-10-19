@@ -385,7 +385,7 @@ run on it in CI (Linux both ways, macOS, Windows):
 | Way | Calls | Why |
 | --- | --- | --- |
 | direct | `args_*`, `environ_*`, `sched_yield`, `fd_prestat_*`, the bookkeeping of descriptors, `fd_seek`/`fd_tell`, `fd_read`/`fd_write` on the descriptors it opened | data of the instance, or the same call on both |
-| through Python | `random_get`, `clock_*` | the source differs (`getrandom`, `BCryptGenRandom`, `clock_gettime`, `QueryPerformanceCounter`); `os.urandom`, `time.time_ns`, `time.monotonic_ns` are cheap |
+| plain C (was through Python until the decision on `wasi=`) | `random_get`, `clock_*`, the sleep of `poll_oneoff` | the source differs between systems and none of it needs the interpreter: `/dev/urandom` (`arc4random_buf` on macOS, `BCryptGenRandom` on Windows), `clock_gettime` (`QueryPerformanceCounter`, `GetSystemTimePreciseAsFileTime`, `GetProcessTimes`, `GetThreadTimes` on Windows), `nanosleep` (`Sleep`) in slices of 100 ms with the interpreter released, so that Ctrl+C is seen. A function the caller gives (`clock`, `random`) replaces them |
 | directly, where the system has `openat` (decided on a measurement, see below) | `path_open`, `path_filestat_get`, `fd_filestat_get`, `fd_readdir` | a directory is an open descriptor and a path is walked from it one name at a time; no interpreter |
 | through Python (Windows; and anywhere with `-DWASMEXT_WASI_PYTHON_FS=1`, for the tests) | the same calls, and the ones of the later stages | Windows has no `openat`; it cannot open a directory with `open`, has its own `stat` (no inode), `FindFirstFile` for a listing, other rules for renaming over a file; symbolic links need a privilege |
 | through Python (decided) | `fd_read`/`fd_write` on the standard streams | direct writes to descriptors 1 and 2 bypass the buffer of `sys.stdout` (the order against Python's `print`, a capture in a notebook or a test), so by default they go to `sys.stdout.buffer` after a flush of `sys.stdout` |
@@ -427,7 +427,7 @@ that work: `args_*`, `environ_*`, `clock_res_get`, `clock_time_get`, `random_get
 `fd_allocate`, `fd_filestat_set_size`, `fd_filestat_set_times`, `path_filestat_set_times`, `fd_fdstat_set_flags`, `fd_fdstat_set_rights` (rights can only
 be given up), `path_create_directory`, `path_remove_directory`, `path_unlink_file`, and (stage 3) `fd_pread`, `fd_pwrite`, `path_rename`, `path_link`, `path_symlink`, `path_readlink`, `poll_oneoff`: 41 of the 46 calls
 and, with the answers the specification allows, all of them: `proc_raise` is `ENOSYS` and the four `sock_*` are `ENOTSOCK` (`EBADF` for no such descriptor), as in
-wasmhost. `poll_oneoff` sleeps in Python (`time.sleep`) until the first clock; descriptors of files, directories and standard streams are always ready;
+wasmhost. `poll_oneoff` sleeps in C (the interpreter released, a signal seen every 100 ms) until the first clock; descriptors of files, directories and standard streams are always ready;
 the first snapshot has its own (a clock subscription with an identifier, 56 bytes). A symbolic link is made with a relative target only (an absolute one is
 `ENOTCAPABLE`), and one that points out is not followed. `pread`/`pwrite` use the system calls; Windows seeks, does it and seeks back; `rename` replaces
 a file in the way (`os.replace` on the Python path). On POSIX these go straight to the system (`write`, `mkdirat`, `unlinkat`, `utimensat`, ...) after the same walk that confines a path. Rights are kept per descriptor (`readonly` takes the
@@ -459,30 +459,29 @@ and `test_wasi_files_work_on_every_platform_of_ci` (the whole path, every platfo
 where every path went through Python (`os.stat`, `os.path.realpath` for the check of the limits): `path_filestat_get` 17.5 us, `path_open` +
 `fd_close` 18.9 us, `fd_readdir` of 101 names 224 us; 13 us of the first were the `realpath` of the check alone. After the move to `openat`:
 0.87 us, 1.6 us and 30 us (the floor in C for the listing is about 18 us). `fd_read`/`fd_seek` on a file (direct since the beginning) 0.1 us;
-`clock_time_get` (Python, `time.time_ns`) 0.14 us; a call of WebAssembly into a C function 3 ns. The way through Python costs 0.1 to 0.9 us
-over the system call itself for a simple call, which is why the clocks and the random bytes stay there. (An earlier figure of "190 times"
+`clock_time_get` (measured when it went through Python, `time.time_ns`; it is plain C now and was not measured again) 0.14 us; a call of WebAssembly into a C function 3 ns. The way through Python costs 0.1 to 0.9 us
+over the system call itself for a simple call; that was the reason to keep the clocks and the random bytes there, until the decision that what needs no Python is C. (An earlier figure of "190 times"
 for the listing came from a wrong baseline and is withdrawn.) Windows is on the Python way and was not measured; a native path for it (`NtCreateFile` relative to a directory handle, as cap-std does) is possible, would be 600 to 900 lines of C that can be tried only in CI, and is not written.
 
 ### What the C layer does by itself, and what waits for `wasi=`
 
-The state of the code now. The last column is an idea, not a decision (nothing of it is built): the extension is its own host, so it could
-do more of this without the caller.
+How it is now (after the decision "The configuration of WASI" below). "Plain C" needs no interpreter, "C through `Python.h`" calls it; a key of
+`wasi=` that is absent has the default of this table, `None` is nothing, and any part can be replaced.
 
-| Part of the program's world | By itself, in the C of the extension | Only if the caller gives it (`wasi=`) | Could the C do it without the caller |
+| Part of the program's world | The default, and who gives it | `wasi=` | Built |
 | --- | --- | --- | --- |
-| Arguments (`args_*`) | the name of the program (the module) | `args` | `sys.argv`, for a program that is a command line tool |
-| Environment (`environ_*`) | nothing: the program gets an empty environment | `env` | `os.environ`, but a program would then see secrets of the process: it should be a choice made once, at the build |
-| `stdin`, `stdout`, `stderr` | `sys.stdin`, `sys.stdout`, `sys.stderr`, read and written in the binary layer of Python | `stdin`, `stdout`, `stderr` (bytes, or an object with `read`/`write`) | already so |
-| Clocks (`clock_*`) | yes, through Python's `time` module | a replacement of the call | yes, in plain C (`clock_gettime`, `QueryPerformanceCounter`) |
-| Random bytes (`random_get`) | yes, through `os.urandom` | a replacement of the call | yes, in plain C (`getrandom`, `BCryptGenRandom`) |
-| `proc_exit` | yes: raises `WasiExit` with the code | (the exception type is part of the glue) | already so |
-| `sched_yield`, `poll_oneoff` | yes (a clock is slept in Python; descriptors of files are always ready) | a replacement of the call | sleeping in C; the process clocks |
-| Files and directories | none: the program sees no file | `preopens`, `readonly` | a directory fixed at the build; the policy of the whole is the open question |
-| Sockets | none: no descriptor is a socket (`sock_*` give `ENOTSOCK`) | not possible yet | listen sockets made in C from an address, as `--tcplisten` of wasmtime does for the first snapshot |
-| `proc_raise` | `ENOSYS` | (a replacement of the call) | `raise()`, which can kill the interpreter: a decision about what a signal is |
+| Arguments (`args_*`) | `[the name of the program]`; plain C | `args` (`None`: none) | yes |
+| Environment (`environ_*`) | empty; plain C | `env` | yes |
+| `stdin`, `stdout`, `stderr` | `sys.stdin`, `sys.stdout`, `sys.stderr` of the moment; C through `Python.h`, in the binary layer, after a flush of the text layer | `stdin`, `stdout`, `stderr` (`None`: an empty input, an output thrown away; a text stream given explicitly works the same way) | yes |
+| Clocks (`clock_*`) | those of the system; plain C | `clock` (a function: id -> nanoseconds; no `None`) | yes |
+| Random bytes (`random_get`) | those of the system; plain C | `random` (a function: how many -> bytes; no `None`) | yes |
+| Sleeping in `poll_oneoff` | the interpreter released, slices of 100 ms; plain C | (the call) | yes |
+| `proc_exit` | raises `WasiExit` with the code; C through `Python.h`. Decided: the program is over, its descriptors are closed, a call after it is an error | (the call) | the exception yes; the end of the program not yet |
+| `proc_raise` | now `ENOSYS`. Decided: `WasiSignal`, as `proc_exit` | (the call) | not yet |
+| Files and directories | none (the POSIX walker is plain C, on Windows C through `Python.h`) | `preopens`, `readonly` | yes |
+| Sockets | none now (`sock_*` give `ENOTSOCK`). Decided: addresses to listen on, the sockets made in C | `listen` | not yet |
 
-The whole table is about one question that is open: the default policy (what a program may see) could be fixed at the build, with the
-caller able to narrow it, and to widen it only on purpose. See the entry in "Decisions" when it is made.
+Whatever is not in `wasi=` can be replaced call by call through `imports`.
 
 ## Decisions
 

@@ -23,3 +23,8 @@ linkdemo = ["py.typed", "*.pyi"]
 build = "cp311-* cp314t-*"
 test-requires = "pytest"
 test-command = "pytest {package}/tests"
+
+[tool.uv.sources]
+# For `uv build` / `uv sync` in a checkout: wasmext (not on PyPI yet) comes from the root of this repository, build requirement included.
+# pip and cibuildwheel ignore this table (CI gives them the wheel with --find-links).
+wasmext = { path = "../..", editable = false }

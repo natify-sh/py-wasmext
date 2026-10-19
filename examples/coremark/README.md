@@ -6,14 +6,14 @@
 
 ```sh
 # wasmext (and with it wabt-package) is a build requirement, and a C compiler is needed. wasmext is not on PyPI yet.
-# From a checkout, uv takes wasmext from the root of the repository (`[tool.uv.sources]` in pyproject.toml):
-uv build --wheel -o dist
-uv venv && uv pip install dist/*.whl
-.venv/bin/python -c "import coremark; print(coremark.run())"
-
-# With pip, build the wheel of wasmext in the root of the repository (`uv build --wheel -o dist`) and give it as a source:
-pip install --find-links ../../dist .
+# From a checkout, uv takes wasmext from the root of the repository (`[tool.uv.sources]` in pyproject.toml). This is the way to
+# build the example:
+uv sync --reinstall      # --reinstall: build the extension again (uv keeps what it built before)
+uv run python -c "import coremark; print(coremark.run())"
 ```
+
+With pip, build the wheel of wasmext in the root of the repository (`uv build --wheel -o dist`) and give it as a source:
+`pip install --find-links ../../dist .`. A wheel of the example itself: `uv build --wheel -o dist`.
 
 `setup.py` is the whole integration:
 

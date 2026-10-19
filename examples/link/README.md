@@ -5,10 +5,14 @@ Two WebAssembly modules built into two native CPython extensions that **use each
 calls `bump` of `_counter` as a C function, and reads and writes the same bytes and the same variable.
 
 ```sh
-# as in ../coremark: a C compiler, and the wheel of wasmext (`uv build --wheel -o dist` in the root of the repository)
-pip install --find-links ../../dist .
-python -m linkdemo
+# a C compiler is needed; wasmext is not on PyPI yet, so uv takes it from the root of the repository
+# (`[tool.uv.sources]` in pyproject.toml). This is the way to build the example:
+uv sync --reinstall      # --reinstall: build the extensions again (uv keeps what it built before)
+uv run python -m linkdemo
 ```
+
+With pip, build the wheel of wasmext in the root of the repository (`uv build --wheel -o dist`) and give it as a source:
+`pip install --find-links ../../dist .`.
 
 ```python
 counter = _counter.Instance()

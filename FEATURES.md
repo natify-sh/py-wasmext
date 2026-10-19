@@ -463,6 +463,27 @@ where every path went through Python (`os.stat`, `os.path.realpath` for the chec
 over the system call itself for a simple call, which is why the clocks and the random bytes stay there. (An earlier figure of "190 times"
 for the listing came from a wrong baseline and is withdrawn.) Windows is on the Python way and was not measured; a native path for it (`NtCreateFile` relative to a directory handle, as cap-std does) is possible, would be 600 to 900 lines of C that can be tried only in CI, and is not written.
 
+### What the C layer does by itself, and what waits for `wasi=`
+
+The state of the code now. The last column is an idea, not a decision (nothing of it is built): the extension is its own host, so it could
+do more of this without the caller.
+
+| Part of the program's world | By itself, in the C of the extension | Only if the caller gives it (`wasi=`) | Could the C do it without the caller |
+| --- | --- | --- | --- |
+| Arguments (`args_*`) | the name of the program (the module) | `args` | `sys.argv`, for a program that is a command line tool |
+| Environment (`environ_*`) | nothing: the program gets an empty environment | `env` | `os.environ`, but a program would then see secrets of the process: it should be a choice made once, at the build |
+| `stdin`, `stdout`, `stderr` | `sys.stdin`, `sys.stdout`, `sys.stderr`, read and written in the binary layer of Python | `stdin`, `stdout`, `stderr` (bytes, or an object with `read`/`write`) | already so |
+| Clocks (`clock_*`) | yes, through Python's `time` module | a replacement of the call | yes, in plain C (`clock_gettime`, `QueryPerformanceCounter`) |
+| Random bytes (`random_get`) | yes, through `os.urandom` | a replacement of the call | yes, in plain C (`getrandom`, `BCryptGenRandom`) |
+| `proc_exit` | yes: raises `WasiExit` with the code | (the exception type is part of the glue) | already so |
+| `sched_yield`, `poll_oneoff` | yes (a clock is slept in Python; descriptors of files are always ready) | a replacement of the call | sleeping in C; the process clocks |
+| Files and directories | none: the program sees no file | `preopens`, `readonly` | a directory fixed at the build; the policy of the whole is the open question |
+| Sockets | none: no descriptor is a socket (`sock_*` give `ENOTSOCK`) | not possible yet | listen sockets made in C from an address, as `--tcplisten` of wasmtime does for the first snapshot |
+| `proc_raise` | `ENOSYS` | (a replacement of the call) | `raise()`, which can kill the interpreter: a decision about what a signal is |
+
+The whole table is about one question that is open: the default policy (what a program may see) could be fixed at the build, with the
+caller able to narrow it, and to widen it only on purpose. See the entry in "Decisions" when it is made.
+
 ## Decisions
 
 - **Platforms.** `wasmext` is a pure Python wheel (`py3-none-any`) that depends on the wabt-package, so it installs wherever the

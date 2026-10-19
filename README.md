@@ -64,7 +64,7 @@ inst.add(2, 3)  # the exports are methods; an exported memory is a memoryview at
 
 The values are Python's own: an `i32` or `i64` is an `int` (a result comes back signed, an argument is wrapped to the width, as the
 JavaScript API does), an `f32` or `f64` a `float`, a `v128` 16 bytes (`bytes`, or any bytes-like object, in the order of WebAssembly
-memory); an export with several results returns a tuple. A trap is `Trap` (a `RuntimeError`) and the instance stays usable; a missing
+memory); an export with several results returns a tuple. A trap is `Trap` (a `RuntimeError`) and the instance stays usable (a WASI command, which exports `_start`, is over after one); a missing
 or wrong import is `LinkError`; an exported global is an attribute. The stub `<module>.pyi` written beside the `.wasm` says all that
 for the module at hand.
 
@@ -105,7 +105,7 @@ import mypkg.lua  # lua.wasm, a command built for WASI
 lua = mypkg.lua.Instance(wasi={"args": ["lua", "/hello.lua"], "preopens": {"/": "scripts"}, "readonly": True})
 try:
     lua._start()
-except mypkg.lua.WasiExit as exit:  # proc_exit(code): the instance stays usable
+except mypkg.lua.WasiExit as exit:  # proc_exit(code): the program is over, and what it opened is closed
     print("exit code", exit.code)
 ```
 
@@ -125,10 +125,10 @@ only through a preopen named `"."`.
 
 What is there, of the 46 calls of the specification (WASI 0.1):
 
-- **41 work**: arguments, environment, clocks, random bytes, `proc_exit`, the standard streams, and files and directories: reading,
+- **42 work**: arguments, environment, clocks, random bytes, `proc_exit`, `proc_raise`, the standard streams, and files and directories: reading,
   writing, creating, truncating, removing, renaming, hard and symbolic links, `pread`/`pwrite`, sizes, times, `fd_readdir`,
   `poll_oneoff` (clocks, and descriptors of files, which are always ready).
-- **`proc_raise` answers `ENOSYS`** and the four `sock_*` say `ENOTSOCK` (wasmext gives the program no socket; the specification lets a host do it), as the
+- **The four `sock_*` say `ENOTSOCK`** (wasmext gives the program no socket; the specification lets a host do it), as the
   specification allows. WASI 0.2 and 0.3 (components) are not supported: build for `wasm32-wasip1`.
 - A symbolic link is made only with a relative target, and one that leads out of the directory is not followed.
 - **How files are reached.** On POSIX the calls go straight to the system (`openat`: no interpreter, no gap between a check and a use).
@@ -209,9 +209,9 @@ The package is **not published on PyPI yet**; until it is, build the wheel from 
 
 - **WebAssembly:** tables are not exposed or linked (a module that imports or exports one is refused); no threads or shared memory;
   `funcref` and `externref` cannot be in a signature; relaxed SIMD is not supported (`wasm2c` aborts on it).
-- **WASI** (0.1 only): 41 of 46 calls. `proc_raise` returns `ENOSYS`, and there are no sockets (`sock_*` return `ENOTSOCK`): the specification lets the host give the program a socket, but wasmext
+- **WASI** (0.1 only): 42 of 46 calls. There are no sockets (`sock_*` return `ENOTSOCK`): the specification lets the host give the program a socket, but wasmext
   gives it only directories, so this is a gap of wasmext and not of WASI.
-  `poll_oneoff` has no clocks of the process or the thread, and there are no signals. WASI 0.2 and 0.3 are not supported.
+  `poll_oneoff` has no clocks of the process or the thread. WASI 0.2 and 0.3 are not supported.
 - **Files on Windows** go through Python (`os`), which is slower for opening, `stat` and listing than the direct calls on POSIX, and
   has a gap between a check and a use that `openat` does not have; a native path is not written, and the cost was not measured.
   Setting the times of a symbolic link needs Python 3.13.

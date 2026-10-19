@@ -63,7 +63,7 @@ What each line says is tested (`tests/test_features.py`), not read from those do
 | Custom page sizes | not yet | `wasm2c` supports it with `--enable-custom-page-sizes` (checked: it reads a module with `(pagesize 1)` only with the flag); wasmext does not pass the flag, and its `memoryview` assumes 64 KiB pages; not tried through wasmext |
 | Wide arithmetic | no (wasm2c) | `wasm2c --enable-wide-arithmetic`: "currently only supports a limited set of features" (checked), as its README says |
 | Compact imports | not yet | the README of WABT: `wasm2c` is not ticked; not tried |
-| WASI 0.1 (`wasi_snapshot_preview1`, `wasi_unstable`) | done | in the module, in C (wasm2c has none): 41 of the 46 calls work, the rest answers as the specification allows; the 72 programs of the official test suite pass (see "Design: WASI"). WASI 0.2 and 0.3 (components): no |
+| WASI 0.1 (`wasi_snapshot_preview1`, `wasi_unstable`) | done | in the module, in C (wasm2c has none): 42 of the 46 calls work, the rest answers as the specification allows; the 72 programs of the official test suite pass (see "Design: WASI"). WASI 0.2 and 0.3 (components): no |
 
 ## The Python side
 
@@ -260,7 +260,7 @@ In this order (the first ones are small):
 7. `funcref`/`externref` in signatures (a design is needed first: who owns an `externref`); custom page sizes (`wasm2c` can, with a
    flag); the rest of the examples of other projects (below).
 8. ~~**WASI**~~ (`wasi_snapshot_preview1` and `wasi_unstable`): done for WASI 0.1. Part of wasmext, compiled into the native module as a header, `wasi_preview1.h`, the system
-   reached through `Python.h`; 41 of 46 calls, the official tests pass on Linux, macOS and Windows; see "Design: WASI". Left: the clocks of the process and the thread in `poll_oneoff`, signals, sockets (the specification allows them, on a socket the host gives to the program; wasmext gives none: its `wasi=` has only directories), WASI 0.2 and 0.3.
+   reached through `Python.h`; 42 of 46 calls, the official tests pass on Linux, macOS and Windows; see "Design: WASI". Left: the clocks of the process and the thread in `poll_oneoff`, sockets (the specification allows them, on a socket the host gives to the program; wasmext gives none: its `wasi=` has only directories), WASI 0.2 and 0.3.
 9. **A native path to files on Windows** (now through Python). `NtCreateFile` relative to a directory handle, as cap-std does: it would give the safety of `openat` there
    (no gap between a check and a use) and the speed. Not started; first measure what the Python way costs on Windows (it was not measured).
 
@@ -413,7 +413,7 @@ renaming and `poll_oneoff`.
   "stdin": ..., "stdout": ..., "stderr": ...})`.
 - Standard streams go to `sys.stdin.buffer`, `sys.stdout.buffer` and `sys.stderr.buffer` by default, so that capturing in a notebook or
   a test works, and an object with `write(bytes)` replaces one.
-- `proc_exit(n)` is an exception (`WasiExit`, carrying the code) out of the call that led to it; the instance stays usable.
+- `proc_exit(n)` is an exception (`WasiExit`, carrying the code) out of the call that led to it; `proc_raise(signal)` is `WasiSignal` (`.signal`, `.name`); both are a `WasiTerminated`. The program is over: see "The end of a program" in "Decisions".
 - The command `_start` is called as an export, as any other (no `run()` helper in the first version).
 - Test modules: `lua.wasm` (wasi_unstable, 19 imports) first, then `coreutils.wasm` (preview1, 32 imports, 10.8 MB, which makes a very large
   C file and a long build). Both were built and run: `lua.wasm` is `examples/lua`, `coreutils.wasm` was run by hand (built in 16 files).
@@ -425,8 +425,8 @@ that work: `args_*`, `environ_*`, `clock_res_get`, `clock_time_get`, `random_get
 (`wasi={"preopens": {name: directory}, "readonly": ...}`), `path_open` (reading, creating, truncating, writing, append), `fd_read`, `fd_write`, `fd_seek`, `fd_tell`, `fd_close`, `fd_renumber`,
 `fd_advise`, `fd_fdstat_get`, `fd_filestat_get`, `path_filestat_get`, `fd_readdir`, `fd_prestat_get`, `fd_prestat_dir_name`, and (stage 2) `fd_sync`, `fd_datasync`,
 `fd_allocate`, `fd_filestat_set_size`, `fd_filestat_set_times`, `path_filestat_set_times`, `fd_fdstat_set_flags`, `fd_fdstat_set_rights` (rights can only
-be given up), `path_create_directory`, `path_remove_directory`, `path_unlink_file`, and (stage 3) `fd_pread`, `fd_pwrite`, `path_rename`, `path_link`, `path_symlink`, `path_readlink`, `poll_oneoff`: 41 of the 46 calls
-and, with the answers the specification allows, all of them: `proc_raise` is `ENOSYS` and the four `sock_*` are `ENOTSOCK` (`EBADF` for no such descriptor), as in
+be given up), `path_create_directory`, `path_remove_directory`, `path_unlink_file`, and (stage 3) `fd_pread`, `fd_pwrite`, `path_rename`, `path_link`, `path_symlink`, `path_readlink`, `poll_oneoff`, and (stage 4) `proc_raise`: 42 of the 46 calls
+and, with the answers the specification allows, all of them: the four `sock_*` are `ENOTSOCK` (`EBADF` for no such descriptor), as in
 wasmhost. `poll_oneoff` sleeps in C (the interpreter released, a signal seen every 100 ms) until the first clock; descriptors of files, directories and standard streams are always ready;
 the first snapshot has its own (a clock subscription with an identifier, 56 bytes). A symbolic link is made with a relative target only (an absolute one is
 `ENOTCAPABLE`), and one that points out is not followed. `pread`/`pwrite` use the system calls; Windows seeks, does it and seeks back; `rename` replaces
@@ -451,7 +451,7 @@ preopen (a retry as a directory on `EISDIR`); the rights of an opened directory 
 `os.utime` of a file by its descriptor (it has none: the path is kept), the inode of `.` and `..` in a listing, no `O_NOFOLLOW` (a link is not opened without following it: `ELOOP`, checked by hand), links made with `/`,
 `O_APPEND` (it cannot be taken off again: `fd_write` seeks to the end), `os.link` that does not follow a link, and the times of a link (`follow_symlinks=False` only for a link).
 It also found that the runner kills a program after 5 s unless the adapter says more, and that what a killed program started goes on on Windows and held the runner for 30 minutes.
-Not built: signals (`proc_raise`), sockets, threads, and the clocks of the process and the thread in `poll_oneoff`. Tests: `tests/test_wasi.py` and `tests/test_wasi_fs.py` (through `build_extension`, not on
+Not built: sockets, threads, and the clocks of the process and the thread in `poll_oneoff`. Tests: `tests/test_wasi.py` and `tests/test_wasi_fs.py` (through `build_extension`, not on
 Windows; the file tests are run for both ways of reaching the file system), `test_a_wasi_module_is_built_with_the_wasi_header_of_wasmext`
 and `test_wasi_files_work_on_every_platform_of_ci` (the whole path, every platform of CI). `lua.wasm` (imports `wasi_unstable`) is built and run by `examples/lua` (its tests, and the wheels of CI).
 
@@ -476,8 +476,8 @@ How it is now (after the decision "The configuration of WASI" below). "Plain C" 
 | Clocks (`clock_*`) | those of the system; plain C | `clock` (a function: id -> nanoseconds; no `None`) | yes |
 | Random bytes (`random_get`) | those of the system; plain C | `random` (a function: how many -> bytes; no `None`) | yes |
 | Sleeping in `poll_oneoff` | the interpreter released, slices of 100 ms; plain C | (the call) | yes |
-| `proc_exit` | raises `WasiExit` with the code; C through `Python.h`. Decided: the program is over, its descriptors are closed, a call after it is an error | (the call) | the exception yes; the end of the program not yet |
-| `proc_raise` | now `ENOSYS`. Decided: `WasiSignal`, as `proc_exit` | (the call) | not yet |
+| `proc_exit` | raises `WasiExit` with the code; C through `Python.h`. The program is over: its descriptors are closed at once, a call after it is `WasiTerminated` | (the call) | yes |
+| `proc_raise` | `WasiSignal` (`.signal`, `.name`); a signal that nothing ends (none, the child, continue, the stops, urgent data, the window size) is a success and the program goes on | (the call) | yes |
 | Files and directories | none (the POSIX walker is plain C, on Windows C through `Python.h`) | `preopens`, `readonly` | yes |
 | Sockets | none now (`sock_*` give `ENOTSOCK`). Decided: addresses to listen on, the sockets made in C | `listen` | not yet |
 
@@ -517,12 +517,15 @@ Whatever is not in `wasi=` can be replaced call by call through `imports`.
   nanoseconds, `random`: how many -> that many bytes; neither takes `None`, which would mean a clock that stands still), or call by call
   through `imports`. A text stream (sys.stdout, a `StringIO`) given explicitly works as the default does: it gets the bytes through its
   binary side, after its text layer is flushed, or as text where it has none.
-  *Built:* all of the above. *Decided, not built yet:* the end of the program (below), and sockets.
+  *Built:* all of the above, and the end of the program (below). *Decided, not built yet:* sockets.
 - **The end of a program.** `proc_exit` and `proc_raise` end it, as on the operating system: the exception carries the code or the signal
   (`WasiExit`, `WasiSignal`, with a common base), the C closes at once every descriptor the program opened (files, directories and, when
   they are there, sockets; not what belongs to the user: `sys.stdout`, a stream the caller gave, the directories of the preopens are
   flushed, not closed), the instance is marked finished, and a call into it afterwards raises an error that says so. A trap ends the
-  program too. (A command, `_start`, is called once by the specification; this replaces "the instance stays usable after `proc_exit`".)
+  program too, but only a command (a module that exports `_start`): the trap of a function of a library is a trap, and the instance goes on. (A command
+  is called once by the specification; this replaces "the instance stays usable after `proc_exit`".) *Built.* What the exception says of the signal: `.signal` is
+  the number in WASI 0.1 and `.name` is `SIGABRT` and so on; the signals that would not end a process (none, the child, continue, stop and the stops of a
+  terminal, urgent data, the window size) are answered with success and the program goes on. The stub: `WasiTerminated`, `WasiExit`, `WasiSignal`.
 - **Sockets.** Like wasmtime's `--tcplisten` for the first snapshot: the user gives addresses to listen on (`listen`), the extension makes
   the sockets in C, the program gets them as descriptors for `sock_accept`, `sock_recv`, `sock_send`, `sock_shutdown`. No connecting out
   (the first snapshot has no call for it). *Not built yet.*

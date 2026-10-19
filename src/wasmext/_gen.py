@@ -299,6 +299,7 @@ def generate(module: Module, name: str, *, version: str | None = None) -> Glue:
 
     # exports: functions and memories; the rest is left out, and reported
     funcs: list[tuple[str, FuncType]] = []
+    param_names: dict[str, tuple[str | None, ...]] = {}
     memories: list[str] = []
     memory_limits: list[Limits] = []
     globals_: list[tuple[str, GlobalType]] = []
@@ -317,6 +318,7 @@ def generate(module: Module, name: str, *, version: str | None = None) -> Glue:
                 skipped.append(f"function {exp.name!r} {reason}")
             else:
                 funcs.append((exp.name, func))
+                param_names[exp.name] = module.param_names(exp.index)
         elif exp.kind == "memory":
             memories.append(exp.name)  # a memory64 is the same buffer: only its address type differs
             memory_limits.append(module.all_memories[exp.index])
@@ -1280,7 +1282,7 @@ def generate(module: Module, name: str, *, version: str | None = None) -> Glue:
     return Glue(
         "\n".join(w) + "\n",
         skipped,
-        _stub(last, funcs, memories, globals_, stub_imports, uses_wasi, version),
+        _stub(last, funcs, memories, globals_, stub_imports, uses_wasi, version, param_names),
         tuple(_WASI_HEADERS[m] for m in wasi_modules),
     )
 
@@ -1359,6 +1361,7 @@ def _stub(
     imports: list[Import],
     wasi: bool = False,
     version: str | None = None,
+    param_names: dict[str, tuple[str | None, ...]] | None = None,
 ) -> str:
     """The `.pyi` for the extension module: what a type checker and an editor can know of an extension."""
     # The formatter and the linter of the project the stub lands in leave a generated file alone (the second noqa is
@@ -1420,7 +1423,8 @@ def _stub(
         "    def __getitem__(self, name: str, /) -> object: ...",
     ]
     for name, func in funcs:
-        params = "".join(f"arg{i}: {_PY_TYPE[t]}, " for i, t in enumerate(func.params))
+        given = _param_names(func, (param_names or {}).get(name, ()))
+        params = "".join(f"{given[i]}: {_PY_TYPE[t]}, " for i, t in enumerate(func.params))
         params = f", {params}/" if func.params else ""
         result = _result_type(func)
         if _usable(name):
@@ -1440,6 +1444,28 @@ def _stub(
         else:
             lines.append(_not_a_name("memory ", name))
     return "\n".join(lines) + "\n"
+
+
+def _param_names(func: FuncType, wanted: tuple[str | None, ...]) -> list[str]:
+    """The names for the parameters of a method in the stub: those of the "name" section where each can be one (an identifier, not a
+    keyword, not `self`, not twice), else `argN` for all of them: a stub that names some and not others reads worse than either."""
+    fallback = [f"arg{i}" for i in range(len(func.params))]
+    if len(wanted) != len(fallback):
+        return fallback
+    seen: set[str] = set()
+    for n in wanted:
+        if (
+            n is None
+            or not n.isidentifier()
+            or not n.isascii()
+            or keyword.iskeyword(n)
+            or n == "self"
+            or n.startswith("__")
+            or n in seen
+        ):
+            return fallback
+        seen.add(n)
+    return [n for n in wanted if n is not None]
 
 
 def _import_type(thing: FuncType | GlobalType | Limits) -> str:

@@ -5,7 +5,7 @@
     module.imports               # [Import(module="wiring", name="millis", kind="func", type=FuncType(...)), ...]
 
 The signatures of the imports and exports, the memories, tables and globals; not the code (`wasm2c` translates that).
-Sections that carry code or data are skipped after a check of their framing. Raises `WasmError` for anything that is not
+The names of parameters come from the "name" section when there is one. Sections that carry code or data are skipped after a check of their framing. Raises `WasmError` for anything that is not
 a well-formed module of the core specification (with the multi-memory, memory64 and extended-const proposals) and for
 the value types it does not know (GC references, exceptions).
 """
@@ -126,6 +126,8 @@ class Module:
     globals: list[GlobalType] = field(default_factory=list[GlobalType])
     exports: list[Export] = field(default_factory=list[Export])
     start: int | None = None
+    # From the "name" section, which is only a help for people: function index -> {local index -> name}; the parameters are the first locals.
+    local_names: dict[int, dict[int, str]] = field(default_factory=dict[int, dict[int, str]])
 
     def _imported(self, kind: ExternKind) -> list[FuncType | TableType | Limits | GlobalType]:
         return [i.type for i in self.imports if i.kind == kind]
@@ -151,6 +153,12 @@ class Module:
         """The exported functions with their signatures, in the order of the export section."""
         funcs = self.all_functions
         return [(e.name, funcs[e.index]) for e in self.exports if e.kind == "func"]
+
+    def param_names(self, func_index: int) -> tuple[str | None, ...]:
+        """The names the "name" section gives to the parameters of a function, `None` for one it does not name."""
+        named = self.local_names.get(func_index, {})
+        count = len(self.all_functions[func_index].params)
+        return tuple(named.get(i) for i in range(count))
 
     def memory_exports(self) -> list[tuple[str, Limits]]:
         memories = self.all_memories
@@ -314,7 +322,8 @@ def parse(data: bytes) -> Module:
         section_id = reader.byte()
         body = reader.sub(reader.uleb())
         if section_id == 0:  # custom: the name and then anything
-            body.name()
+            if body.name() == "name":
+                module.local_names = _local_names(body)
             continue
         if section_id not in _ORDER:
             raise WasmError(f"unknown section id {section_id}")
@@ -329,6 +338,32 @@ def parse(data: bytes) -> Module:
         raise WasmError(f"{len(module.functions)} functions declared, {code_count} bodies in the code section")
     _check_indices(module)
     return module
+
+
+def _local_names(r: _Reader) -> dict[int, dict[int, str]]:
+    """The names of locals in the "name" section (subsection 2). The section is a hint: if it is malformed, there are no names (the
+    specification does not let it invalidate the module)."""
+    names: dict[int, dict[int, str]] = {}
+    try:
+        while not r.at_end():
+            kind = r.byte()
+            part = r.sub(r.uleb())
+            if kind == 2:
+                _local_name_map(part, names)
+    except WasmError:
+        return {}
+    return names
+
+
+def _local_name_map(part: _Reader, names: dict[int, dict[int, str]]) -> None:
+    def pair() -> tuple[int, str]:
+        return part.uleb(), part.name()
+
+    def function() -> tuple[int, list[tuple[int, str]]]:
+        return part.uleb(), part.vec(pair)
+
+    for func_index, local_map in part.vec(function):
+        names[func_index] = dict(local_map)
 
 
 def _section(module: Module, section_id: int, body: _Reader) -> None:

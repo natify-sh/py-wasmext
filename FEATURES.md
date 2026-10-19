@@ -87,6 +87,7 @@ What each line says is tested (`tests/test_features.py`), not read from those do
 | Traps | done | `Trap` (a `RuntimeError`), the instance stays usable; `LinkError` for bad imports |
 | GC and weak references | done | `Instance` takes part in the cycle collector and can be weakly referenced |
 | Type stubs | done | `<module>.pyi` written beside the `.wasm`, with `# fmt: off` and `# ruff: noqa` |
+| Parameter names in the stub | done | The parameters of an exported function are named as the "name" section of the module names them (`wat2wasm --debug-names`; compilers write it in a build with debug info), as `add(self, left: int, right: int, /)`; else `arg0, arg1, ...`. The name section is only a hint, and a module with a broken one is read as one without. The names are used all or none: if one parameter has no name, is not an ASCII identifier, is a keyword, `self` or starts with `__`, or two are the same, all of the function get `argN`. They are positional-only (`/`), so the names are for the reader and the editor: a call by keyword is not possible |
 | `wasmext natify` and `wasmext inspect`, commands (`wasmext --help`) | done | `natify` writes the C and, with `-i` or `-b`, builds; there is no command by file names alone. A place for the next ones: `natify --shared` (a shared library with no `Python.h`, see "C first") and the bindings for `ctypes` |
 | `wasmext inspect` | done | what a module imports and exports and what wasmext makes of it; writes nothing |
 

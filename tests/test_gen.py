@@ -156,3 +156,61 @@ def test_names_that_are_not_identifiers_are_left_out_of_the_stub_with_a_comment(
     assert "def a-b" not in stub and "def class" not in stub
     assert "'a-b' is not an identifier" in stub and "'class' is not an identifier" in stub
     compile(stub, "m.pyi", "exec")
+
+
+def _named(*names: str | None, extra: bytes = b"") -> bytes:
+    """A module exporting `add(i32, i32) -> i32` whose "name" section names the parameters `names` (None: not named)."""
+    local_map = vec(*(leb(i) + name(n) for i, n in enumerate(names) if n is not None))
+    sub = vec(leb(0) + local_map)
+    custom = name("name") + b"\x02" + leb(len(sub)) + sub + extra
+    return module(
+        section(1, vec(functype([I32, I32], [I32]))),
+        HEADER_FUNC,
+        section(7, vec(name("add") + b"\x00" + leb(0))),
+        code(b"\x00\x20\x00\x20\x01\x6a\x0b"),
+        section(0, custom),
+    )
+
+
+def _add_line(wasm: bytes) -> str:
+    [line] = [x for x in generate(parse(wasm), "m").stub.splitlines() if x.lstrip().startswith("def add(")]
+    return line.strip()
+
+
+def test_the_stub_names_the_parameters_the_name_section_names() -> None:
+    assert _add_line(_named("left", "right")) == "def add(self, left: int, right: int, /) -> int: ..."
+
+
+@pytest.mark.parametrize(
+    "names",
+    [
+        ("a", None),  # one is not named
+        ("a", "a"),  # twice
+        ("a", "class"),  # a keyword
+        ("self", "b"),
+        ("a", "b-c"),  # not an identifier
+        ("__a", "b"),
+        ("a", "ж"),  # not ASCII
+    ],
+)
+def test_the_stub_keeps_argn_when_the_names_cannot_all_be_used(names: tuple[str | None, ...]) -> None:
+    assert _add_line(_named(*names)) == "def add(self, arg0: int, arg1: int, /) -> int: ..."
+
+
+def test_a_module_without_names_or_with_a_broken_name_section_is_as_before() -> None:
+    plain = module(
+        section(1, vec(functype([I32, I32], [I32]))),
+        HEADER_FUNC,
+        section(7, vec(name("add") + b"\x00" + leb(0))),
+        code(b"\x00\x20\x00\x20\x01\x6a\x0b"),
+    )
+    assert _add_line(plain) == "def add(self, arg0: int, arg1: int, /) -> int: ..."
+    broken = plain + section(0, name("name") + b"\x02\x7f")  # a subsection longer than the section
+    assert parse(broken).local_names == {}
+    assert _add_line(broken) == "def add(self, arg0: int, arg1: int, /) -> int: ..."
+
+
+def test_param_names_are_read_per_function() -> None:
+    m = parse(_named("x", None))
+    assert m.param_names(0) == ("x", None)
+    assert m.local_names == {0: {0: "x"}}

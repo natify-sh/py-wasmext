@@ -11,6 +11,14 @@ from pathlib import Path
 
 __all__ = ["Toolchain", "find_toolchain"]
 
+# What wasmext takes from the runtime directory (see _natify.py): the headers and sources of the runtime, as WABT 1.0.42 has them.
+_RUNTIME_FILES = (
+    "wasm-rt.h",
+    "wasm-rt-impl.c",
+    "wasm-rt-mem-impl.c",
+    "wasm-rt-mem-impl-helper.inc",
+    "wasm-rt-exceptions-impl.c",
+)
 _PARTS = ("WASMEXT_WASM2C", "WASMEXT_WASM2C_RUNTIME", "WASMEXT_WASM2C_INCLUDE")
 
 
@@ -32,6 +40,7 @@ def find_toolchain() -> Toolchain:
     exe = _executable(exe_env) if exe_env else base.wasm2c if base else None
     runtime = _runtime(runtime_env, "WASMEXT_WASM2C_RUNTIME") if runtime_env else base.runtime if base else None
     assert exe is not None and runtime is not None
+    _check_runtime(runtime)
     include = base.include if base else None
     if include_env:
         if not Path(include_env).is_dir():
@@ -39,6 +48,16 @@ def find_toolchain() -> Toolchain:
         include = Path(include_env)
     version = _version_of(exe) if exe_env else base.version if base else "unknown"
     return Toolchain(exe, runtime, version, include)
+
+
+def _check_runtime(runtime: Path) -> None:
+    missing = [name for name in _RUNTIME_FILES if not (runtime / name).is_file()]
+    if missing:
+        raise RuntimeError(
+            f"the runtime in {runtime} has not {', '.join(missing)}: wasmext needs the files of the runtime of WABT 1.0.42 or later, "
+            "all in one directory (a distribution may split them: headers in /usr/include, sources in /usr/share/wabt/wasm2c; "
+            "and WABT before 1.0.42 does not have them all)"
+        )
 
 
 def _executable(env: str) -> Path:

@@ -201,7 +201,7 @@ wheels. The build needs a C compiler and `wasm2c` (the wabt-package, or `WASMEXT
 `wasm2c/`). To use a `wasm2c` you have (a system one, or one built from source), name its parts: `WASMEXT_WASM2C` is the executable,
 `WASMEXT_WASM2C_RUNTIME` the directory with `wasm-rt.h` and the rest of the runtime of the same version, and `WASMEXT_WASM2C_INCLUDE` the
 one with `simde/` (only for modules with SIMD). Each part is taken from its variable, else from `WASMEXT_WABT`, else from the
-wabt-package, which is not needed when the executable and the runtime are given.
+wabt-package, which is not needed when the executable and the runtime are given. The runtime has to be that of WABT 1.0.42 or later and in one directory: the `wabt` of Debian/Ubuntu (1.0.34, the runtime in two places) does not do.
 
 To try a module without building a wheel, `wasmimport` works as `pyximport` does (a development tool: it runs a C compiler on import). The
 extension is kept in a cache, `~/.wasmbld` (or `WASMIMPORT_BUILD_DIR`, or `install(build_dir=...)`; `install(inplace=True)` puts it beside

@@ -303,7 +303,8 @@ def test_a_module_with_simd_gets_the_include_directory_of_simde(
     (root / "bin").mkdir(parents=True)
     (root / "bin" / ("wasm2c.exe" if os.name == "nt" else "wasm2c")).write_text("", encoding="utf-8")
     (root / "wasm2c").mkdir()
-    (root / "wasm2c" / "wasm-rt.h").write_text("", encoding="utf-8")
+    for name in RUNTIME_FILES:
+        (root / "wasm2c" / name).write_text("", encoding="utf-8")
     monkeypatch.setenv("WASMEXT_WABT", str(root))
     with pytest.raises(RuntimeError, match="simde"):
         _simde_include([c])
@@ -335,6 +336,15 @@ def test_the_locals_that_wasm2c_cuts_in_two_are_put_together() -> None:
     assert _tail_call_locals(whole) == whole
 
 
+RUNTIME_FILES = (
+    "wasm-rt.h",
+    "wasm-rt-impl.c",
+    "wasm-rt-mem-impl.c",
+    "wasm-rt-mem-impl-helper.inc",
+    "wasm-rt-exceptions-impl.c",
+)
+
+
 def _clean_toolchain_env(monkeypatch: pytest.MonkeyPatch) -> None:
     for name in ("WASMEXT_WABT", "WASMEXT_WASM2C", "WASMEXT_WASM2C_RUNTIME", "WASMEXT_WASM2C_INCLUDE"):
         monkeypatch.delenv(name, raising=False)
@@ -351,7 +361,14 @@ def test_each_part_of_the_toolchain_has_its_own_variable(
     exe = wabt / "bin" / ("wasm2c" + suffix)
     runtime = tmp_path / "rt"
     runtime.mkdir()
-    (runtime / "wasm-rt.h").write_text("", encoding="utf-8")
+    for name in (
+        "wasm-rt.h",
+        "wasm-rt-impl.c",
+        "wasm-rt-mem-impl.c",
+        "wasm-rt-mem-impl-helper.inc",
+        "wasm-rt-exceptions-impl.c",
+    ):
+        (runtime / name).write_text("", encoding="utf-8")
     simde = tmp_path / "inc"
     (simde / "simde").mkdir(parents=True)
 
@@ -382,9 +399,27 @@ def test_the_variables_of_the_toolchain_are_checked(tmp_path: Path, monkeypatch:
     monkeypatch.setenv("WASMEXT_WASM2C", str(tmp_path / "wasm2c"))
     with pytest.raises(RuntimeError, match=r"WASMEXT_WASM2C_RUNTIME=.*wasm-rt\.h"):
         find_toolchain()
-    (tmp_path / "wasm-rt.h").write_text("", encoding="utf-8")
+    for name in RUNTIME_FILES:
+        (tmp_path / name).write_text("", encoding="utf-8")
     monkeypatch.setenv("WASMEXT_WASM2C_INCLUDE", str(tmp_path / "missing"))
     with pytest.raises(RuntimeError, match="WASMEXT_WASM2C_INCLUDE=.*not a directory"):
         find_toolchain()
     monkeypatch.delenv("WASMEXT_WASM2C_INCLUDE")
     assert find_toolchain().version == "unknown"  # an empty file is not a program that says its version
+
+
+def test_a_runtime_that_lacks_files_is_refused_with_what_is_missing(
+    wabt: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The runtime of an older WABT (1.0.34 of Debian has no wasm-rt-mem-impl*) used to fail later, on a file that is not there."""
+    from wasmext._toolchain import find_toolchain  # pyright: ignore[reportPrivateUsage]
+
+    _clean_toolchain_env(monkeypatch)
+    runtime = tmp_path / "rt"
+    runtime.mkdir()
+    for name in ("wasm-rt.h", "wasm-rt-impl.c", "wasm-rt-exceptions-impl.c"):
+        (runtime / name).write_text("", encoding="utf-8")
+    monkeypatch.setenv("WASMEXT_WASM2C", str(wabt / "bin" / ("wasm2c.exe" if os.name == "nt" else "wasm2c")))
+    monkeypatch.setenv("WASMEXT_WASM2C_RUNTIME", str(runtime))
+    with pytest.raises(RuntimeError, match=r"has not wasm-rt-mem-impl\.c, wasm-rt-mem-impl-helper\.inc"):
+        find_toolchain()

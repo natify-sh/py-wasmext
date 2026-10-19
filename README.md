@@ -195,11 +195,27 @@ What is supported, what is not yet, and the plan are in [FEATURES.md](FEATURES.m
 
 ## Status
 
-A proof of concept that works. In CI the test suite passes on Linux, macOS and Windows, the three examples build into wheels on seven
-platforms, and the WASI programs of the official test suite run on all three systems. It is **not published on PyPI yet**; until it
-is, build the wheel from a checkout (`uv build`) and install it with `pip install --find-links <the folder of the wheel> wasmext`, as
-the examples do in CI. Open: tables and threads, `funcref`/`externref` in a signature, a native (not through Python) path to files on
-Windows; the list and the reasons are in [FEATURES.md](FEATURES.md).
+**Alpha.** The core works and is tested: in CI the test suite passes on Linux, macOS and Windows, the examples build into wheels on
+seven platforms, and the WASI programs of the official test suite run on all three systems. But the interface can still change
+(the format of the link between instances is `v1` and has not been in a release), and the rest of this section is what to expect.
+The package is **not published on PyPI yet**; until it is, build the wheel from a checkout (`uv build`) and install it with
+`pip install --find-links <the folder of the wheel> wasmext`, as the examples do in CI.
+
+### Known limitations
+
+- **WebAssembly:** tables are not exposed or linked (a module that imports or exports one is refused); no threads or shared memory;
+  `funcref` and `externref` cannot be in a signature; relaxed SIMD is not supported (`wasm2c` aborts on it).
+- **WASI** (0.1 only): 41 of 46 calls. `proc_raise` returns `ENOSYS`, and sockets are not there (`sock_*` return `ENOTSOCK`).
+  `poll_oneoff` has no clocks of the process or the thread, and there are no signals. WASI 0.2 and 0.3 are not supported.
+- **Files on Windows** go through Python (`os`), which is slower for opening, `stat` and listing than the direct calls on POSIX, and
+  has a gap between a check and a use that `openat` does not have; a native path is not written, and the cost was not measured.
+  Setting the times of a symbolic link needs Python 3.13.
+- **Big-endian hosts** (s390x): a memory cannot be exported as a `memoryview`, and `v128` in a signature is refused.
+- **Not tested in CI:** the Linux architectures other than x86-64 and ARM64 (armv7l, riscv64, ppc64le, i686 were run by hand under QEMU),
+  Android, Pyodide, PyPy, iOS. Speed figures are from one machine.
+- **Always:** the `.wasm` is fixed when the extension is built (no loading at run time), and building needs a C compiler.
+
+The full list, with the reasons and the plan, is in [FEATURES.md](FEATURES.md).
 
 ## Development
 

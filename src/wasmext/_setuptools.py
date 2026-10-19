@@ -3,7 +3,7 @@
 """setuptools hooks (entry points of wasmext): the wheel of an abi3 extension is tagged for it without any setting, and the files
 of a module whose C is split are compiled at the same time.
 
-`wasmize()` marks an abi3 extension with `py_limited_api` and the Py_LIMITED_API macro; setuptools names the file `.abi3.so`
+`natify()` marks an abi3 extension with `py_limited_api` and the Py_LIMITED_API macro; setuptools names the file `.abi3.so`
 but tags the wheel `cp311-cp311` unless `bdist_wheel --py-limited-api=cp311` says otherwise. This does that, for a project
 that has not said anything itself (a `[tool.distutils.bdist_wheel]` setting wins).
 """
@@ -16,7 +16,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
-from ._wasmize import LIMITED_API_VERSION, wasmize
+from ._natify import LIMITED_API_VERSION, natify
 
 
 def wheel_tag() -> str:
@@ -30,7 +30,7 @@ def _is_abi3(ext: Any) -> bool:
     return bool(getattr(ext, "py_limited_api", False)) and ("Py_LIMITED_API", LIMITED_API_VERSION) in macros
 
 
-# [tool.wasmext.wasmize] of pyproject.toml: the arguments of wasmize(), by the names that pyproject.toml has (kebab-case)
+# [tool.wasmext.ext-modules] of pyproject.toml: the arguments of natify(), by the names that pyproject.toml has (kebab-case)
 _WASMIZE_KEYS = {
     "module-list": "module_list",
     "exclude": "exclude",
@@ -67,7 +67,7 @@ def _macro(value: Any) -> tuple[str, str | None]:
 
 
 def pyproject_calls(root: Path) -> list[dict[str, Any]]:
-    """The calls of `wasmize()` that `pyproject.toml` in `root` asks for: `[tool.wasmext.wasmize]`, or several as `[[tool.wasmext.wasmize]]`,
+    """The calls of `natify()` that `pyproject.toml` in `root` asks for: `[tool.wasmext.ext-modules]`, or several as `[[tool.wasmext.ext-modules]]`,
     as the keyword arguments of the function, and under the key "extension" what is added to the extensions it makes. An empty list where
     the file or the table is not there."""
     path = root / "pyproject.toml"
@@ -80,25 +80,25 @@ def pyproject_calls(root: Path) -> list[dict[str, Any]]:
     if not isinstance(table, dict):
         raise TypeError(f"{path}: [tool.wasmext] must be a table")
     for key in table:
-        if key != "wasmize":
+        if key != "ext-modules":
             raise ValueError(
-                f"{path}: [tool.wasmext.{key}] is not something wasmext knows (it has [tool.wasmext.wasmize])"
+                f"{path}: [tool.wasmext.{key}] is not something wasmext knows (it has [tool.wasmext.ext-modules])"
             )
-    wanted = table.get("wasmize", [])
+    wanted = table.get("ext-modules", [])
     entries: list[Any] = [wanted] if isinstance(wanted, dict) else wanted
     calls: list[dict[str, Any]] = []
     for entry in entries:
         if not isinstance(entry, dict):
-            raise TypeError(f"{path}: [tool.wasmext.wasmize] must be a table, or an array of tables")
+            raise TypeError(f"{path}: [tool.wasmext.ext-modules] must be a table, or an array of tables")
         unknown = sorted(set(entry) - set(_WASMIZE_KEYS) - set(_EXTENSION_KEYS))
         if unknown:
             known = sorted([*_WASMIZE_KEYS, *_EXTENSION_KEYS])
             raise ValueError(
-                f"{path}: [tool.wasmext.wasmize] has no key {unknown[0]!r} (the keys are {', '.join(known)})"
+                f"{path}: [tool.wasmext.ext-modules] has no key {unknown[0]!r} (the keys are {', '.join(known)})"
             )
         if "module-list" not in entry:
             raise ValueError(
-                f"{path}: [tool.wasmext.wasmize] needs module-list (the .wasm files, as a glob pattern or a list of them)"
+                f"{path}: [tool.wasmext.ext-modules] needs module-list (the .wasm files, as a glob pattern or a list of them)"
             )
         call = {_WASMIZE_KEYS[key]: value for key, value in entry.items() if key in _WASMIZE_KEYS}
         extension = {_EXTENSION_KEYS[key]: value for key, value in entry.items() if key in _EXTENSION_KEYS}
@@ -111,7 +111,7 @@ def pyproject_calls(root: Path) -> list[dict[str, Any]]:
 
 
 def _add_extensions_from_pyproject(dist: Any) -> None:
-    """Put the extensions of `[tool.wasmext.wasmize]` into `dist.ext_modules`, after those that a `setup.py` gave (it is not needed;
+    """Put the extensions of `[tool.wasmext.ext-modules]` into `dist.ext_modules`, after those that a `setup.py` gave (it is not needed;
     one that has an extension of its own, a hand-written C one, goes with the table)."""
     root = Path(getattr(dist, "src_root", None) or os.getcwd())
     calls = pyproject_calls(root)
@@ -120,12 +120,12 @@ def _add_extensions_from_pyproject(dist: Any) -> None:
     extensions: list[Any] = list(getattr(dist, "ext_modules", None) or [])
     if any(getattr(e, "_wasmext_made", False) for e in extensions):
         raise ValueError(
-            "setup.py calls wasmize() and pyproject.toml has [tool.wasmext.wasmize]: use one of them "
+            "setup.py calls natify() and pyproject.toml has [tool.wasmext.ext-modules]: use one of them "
             "(an extension of another kind in setup.py goes with the table)"
         )
     for call in calls:
         settings = call.pop("extension", {})
-        for extension in wasmize(**call):
+        for extension in natify(**call):
             for attribute, value in settings.items():
                 setattr(extension, attribute, [*(getattr(extension, attribute, None) or []), *value])
             extensions.append(extension)
@@ -152,7 +152,7 @@ def _jobs(command: Any, count: int) -> int:
 
 
 def parallel_build_ext(base: type) -> type:
-    """A `build_ext` that compiles the sources of an extension from `wasmize()` that is split into files at the same time.
+    """A `build_ext` that compiles the sources of an extension from `natify()` that is split into files at the same time.
 
     setuptools compiles the sources of one extension one after the other. Here the sources are compiled first, in a pool of
     threads (the compilers are processes), and the extension is then built from the objects, which only links.

@@ -30,7 +30,7 @@ An error of the script is what `qjs` does on the command line: a message on `std
 There is no `setup.py`: the whole integration is this table of `pyproject.toml` (a hook of wasmext, which setuptools runs, reads it):
 
 ```toml
-[[tool.wasmext.wasmize]]
+[[tool.wasmext.ext-modules]]
 module-list = "src/qjswasm/*.wasm"
 parts = 4
 ```

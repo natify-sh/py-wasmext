@@ -52,32 +52,32 @@ compiler and the headers alone.
 
 ## Use
 
-`wasmize()` turns the `.wasm` files of a project into the `Extension`s of its `setup.py`:
+`natify()` turns the `.wasm` files of a project into the `Extension`s of its `setup.py`:
 
 ```python
 from setuptools import setup
-from wasmext import wasmize
+from wasmext import natify
 
-setup(ext_modules=wasmize("src/mypkg/*.wasm"))  # build-system.requires = ["setuptools", "wasmext"]
+setup(ext_modules=natify("src/mypkg/*.wasm"))  # build-system.requires = ["setuptools", "wasmext"]
 ```
 
 Or with no `setup.py` at all, in `pyproject.toml` (a hook of wasmext, an entry point of setuptools, reads the table). The keys are the
-arguments of `wasmize()` with dashes: `module-list` (a glob pattern, or a list of them), `exclude`, `build-dir`, `force`, `quiet`, `stubs`,
+arguments of `natify()` with dashes: `module-list` (a glob pattern, or a list of them), `exclude`, `build-dir`, `force`, `quiet`, `stubs`,
 `limited-api`, `guard-pages`, `parts`; and, added to each extension the table makes, those of `Extension`: `extra-compile-args`,
 `extra-link-args`, `define-macros` (`"NAME"`, `"NAME=value"` or `["NAME", "value"]`), `undef-macros`, `include-dirs`, `libraries`,
-`library-dirs`. (In a `setup.py` the same settings are those of an `Extension` given to `wasmize()`, as to `cythonize()`.)
+`library-dirs`. (In a `setup.py` the same settings are those of an `Extension` given to `natify()`, as to `cythonize()`.)
 
 ```toml
 [build-system]
 requires = ["setuptools>=77", "wasmext"]
 build-backend = "setuptools.build_meta"
 
-[[tool.wasmext.wasmize]]       # one table, or several for modules that need different settings
+[[tool.wasmext.ext-modules]]       # one table, or several for modules that need different settings
 module-list = "src/mypkg/*.wasm"
 parts = 4
 ```
 
-A project that calls `wasmize()` in its `setup.py` and has this table is refused with a message (use one of them); a `setup.py` with an extension of
+A project that calls `natify()` in its `setup.py` and has this table is refused with a message (use one of them); a `setup.py` with an extension of
 another kind (a hand-written C one) goes with the table. [`examples/quickjs`](examples/quickjs) is built this way.
 
 ```python
@@ -170,7 +170,7 @@ See [FEATURES.md](FEATURES.md#design-wasi) for the design.
 
 The C that `wasm2c` writes is about 13 times the size of the module, and one file of millions of lines is a very long job for a
 C compiler (the 10.8 MB `coreutils.wasm` was not done in half an hour). A module of 1 MiB or more is therefore written in several
-files, which are compiled at the same time (128 KiB of the module for each file, at most 256). `wasmize(..., parts=N)`, `wasmext
+files, which are compiled at the same time (128 KiB of the module for each file, at most 256). `natify(..., parts=N)`, `wasmext
 --parts N`, `WASMEXT_PARTS` and `wasmimport.install(parts=N)` set the number of files (1 keeps the module whole: the code of a split
 module is somewhat slower, as a call from one file to another is not inlined); `WASMEXT_JOBS` sets how many are compiled at once.
 
@@ -186,7 +186,7 @@ you get:
 build = "cp311-* cp314t-*"   # cp311: the abi3 wheel; cp314t: a native free-threaded one
 ```
 
-`limited_api=True`/`False` in `wasmize()` (or `--abi3` / `--no-abi3`) forces one or the other (`True` still builds native where
+`limited_api=True`/`False` in `natify()` (or `--abi3` / `--no-abi3`) forces one or the other (`True` still builds native where
 abi3 is impossible, and says so); `WASMEXT_LIMITED_API=0` turns abi3 off for a `None`. The wheel is tagged by a setuptools hook of
 wasmext, so nothing else needs to be set (a `[tool.distutils.bdist_wheel] py-limited-api` of the project wins). The glue uses only
 the limited API, so either kind builds from the same C.

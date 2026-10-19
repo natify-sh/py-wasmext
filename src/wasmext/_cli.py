@@ -1,6 +1,6 @@
 """The command line, in the manner of `cythonize`:
 
-wasmext src/mypkg/*.wasm          write the C beside each .wasm (what setup.py's wasmize() does), build nothing
+wasmext src/mypkg/*.wasm          write the C beside each .wasm (what setup.py's natify() does), build nothing
 wasmext -i src/mypkg/*.wasm       ... and build the extensions in place, next to the .wasm files
 wasmext -b ...                    ... and build them under build/ (as `setup.py build_ext`)
 wasmext inspect src/mypkg/*.wasm  say what each module imports and exports, and what wasmext makes of it
@@ -21,9 +21,9 @@ from typing import TYPE_CHECKING
 
 from ._gen import GenError
 from ._inspect import read
+from ._natify import _natify, _version  # pyright: ignore[reportPrivateUsage]
 from ._toolchain import find_toolchain
 from ._wasm import WasmError
-from ._wasmize import _version, _wasmize  # pyright: ignore[reportPrivateUsage]
 
 if TYPE_CHECKING:
     from setuptools import Extension
@@ -115,7 +115,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _inspect_main(given[1:])
     args = _parser().parse_args(given)
     try:
-        made = _wasmize(
+        made = _natify(
             args.files,
             args.exclude,
             build_dir=args.build_dir,

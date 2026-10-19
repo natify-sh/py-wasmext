@@ -1,4 +1,4 @@
-"""The examples are real projects: built by setuptools through wasmize(), then imported and run."""
+"""The examples are real projects: built by setuptools through natify(), then imported and run."""
 
 from __future__ import annotations
 

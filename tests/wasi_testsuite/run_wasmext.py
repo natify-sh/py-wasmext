@@ -57,7 +57,7 @@ def main(argv: list[str]) -> int:
     parser.add_argument("arguments", nargs=argparse.REMAINDER)
     options = parser.parse_args(argv)
     if options.version:
-        from wasmext._wasmize import _version  # pyright: ignore[reportPrivateUsage]
+        from wasmext._natify import _version  # pyright: ignore[reportPrivateUsage]
 
         print(f"wasmext {_version()}")
         return 0

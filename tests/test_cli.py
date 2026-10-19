@@ -210,7 +210,7 @@ def test_version_is_printed_and_a_release_is_named_in_the_stub(capsys: pytest.Ca
 
 def test_the_stub_names_the_version_of_a_release_only() -> None:
     from wasmext import generate, parse
-    from wasmext._wasmize import _RELEASE_VERSION  # pyright: ignore[reportPrivateUsage]
+    from wasmext._natify import _RELEASE_VERSION  # pyright: ignore[reportPrivateUsage]
 
     wasm = b"\x00asm\x01\x00\x00\x00"
     assert (

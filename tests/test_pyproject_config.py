@@ -1,4 +1,4 @@
-"""[tool.wasmext.wasmize] of pyproject.toml: the extensions of a project with no setup.py (src/wasmext/_setuptools.py)."""
+"""[tool.wasmext.ext-modules] of pyproject.toml: the extensions of a project with no setup.py (src/wasmext/_setuptools.py)."""
 
 from __future__ import annotations
 
@@ -58,7 +58,7 @@ def _build(project: Path, wabt: Path) -> subprocess.CompletedProcess[str]:
 
 def test_a_project_with_no_setup_py_gets_its_extensions_from_pyproject(tmp_path: Path, wabt: Path) -> None:
     project = _project(
-        tmp_path, BUILD + '\n[tool.wasmext.wasmize]\nmodule-list = "src/pk/*.wasm"\nparts = 2\nstubs = false\n'
+        tmp_path, BUILD + '\n[tool.wasmext.ext-modules]\nmodule-list = "src/pk/*.wasm"\nparts = 2\nstubs = false\n'
     )
     built = _build(project, wabt)
     assert built.returncode == 0, built.stderr[-800:]
@@ -69,7 +69,7 @@ def test_a_project_with_no_setup_py_gets_its_extensions_from_pyproject(tmp_path:
 
 def test_several_calls_as_an_array_of_tables(tmp_path: Path) -> None:
     (tmp_path / "pyproject.toml").write_text(
-        '[[tool.wasmext.wasmize]]\nmodule-list = ["a/*.wasm"]\nparts = 8\n[[tool.wasmext.wasmize]]\nmodule-list = "b/*.wasm"\nguard-pages = false\n',
+        '[[tool.wasmext.ext-modules]]\nmodule-list = ["a/*.wasm"]\nparts = 8\n[[tool.wasmext.ext-modules]]\nmodule-list = "b/*.wasm"\nguard-pages = false\n',
         encoding="utf-8",
     )
     assert pyproject_calls(tmp_path) == [
@@ -87,10 +87,10 @@ def test_without_the_table_there_is_nothing_to_do(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("text", "message"),
     [
-        ("[tool.wasmext.wasmize]\nparts = 2\n", "needs module-list"),
-        ('[tool.wasmext.wasmize]\nmodule-list = "x"\npartz = 2\n', "no key 'partz'"),
+        ("[tool.wasmext.ext-modules]\nparts = 2\n", "needs module-list"),
+        ('[tool.wasmext.ext-modules]\nmodule-list = "x"\npartz = 2\n', "no key 'partz'"),
         ("[tool.wasmext.other]\nx = 1\n", r"\[tool.wasmext.other\] is not something wasmext knows"),
-        ("[tool.wasmext]\nwasmize = [1]\n", "must be a table, or an array of tables"),
+        ("[tool.wasmext]\next-modules = [1]\n", "must be a table, or an array of tables"),
     ],
 )
 def test_a_wrong_table_is_refused_with_a_message(tmp_path: Path, text: str, message: str) -> None:
@@ -99,9 +99,9 @@ def test_a_wrong_table_is_refused_with_a_message(tmp_path: Path, text: str, mess
         pyproject_calls(tmp_path)
 
 
-def test_a_setup_py_that_calls_wasmize_and_a_table_are_a_mistake(tmp_path: Path, wabt: Path) -> None:
-    setup = "from setuptools import setup\nfrom wasmext import wasmize\nsetup(ext_modules=wasmize('src/pk/*.wasm'))\n"
-    project = _project(tmp_path, BUILD + '\n[tool.wasmext.wasmize]\nmodule-list = "src/pk/*.wasm"\n', setup)
+def test_a_setup_py_that_calls_natify_and_a_table_are_a_mistake(tmp_path: Path, wabt: Path) -> None:
+    setup = "from setuptools import setup\nfrom wasmext import natify\nsetup(ext_modules=natify('src/pk/*.wasm'))\n"
+    project = _project(tmp_path, BUILD + '\n[tool.wasmext.ext-modules]\nmodule-list = "src/pk/*.wasm"\n', setup)
     built = _build(project, wabt)
     assert built.returncode != 0
     assert "use one of them" in built.stderr
@@ -109,7 +109,7 @@ def test_a_setup_py_that_calls_wasmize_and_a_table_are_a_mistake(tmp_path: Path,
 
 def test_a_setup_py_with_an_extension_of_another_kind_goes_with_the_table(tmp_path: Path, wabt: Path) -> None:
     setup = "from setuptools import Extension, setup\nsetup(ext_modules=[Extension('pk.plain', ['src/pk/plain.c'])])\n"
-    project = _project(tmp_path, BUILD + '\n[tool.wasmext.wasmize]\nmodule-list = "src/pk/*.wasm"\n', setup)
+    project = _project(tmp_path, BUILD + '\n[tool.wasmext.ext-modules]\nmodule-list = "src/pk/*.wasm"\n', setup)
     (project / "src" / "pk" / "plain.c").write_text(
         "#include <Python.h>\n"
         'static struct PyModuleDef m = {PyModuleDef_HEAD_INIT, "plain", 0, -1, 0};\n'
@@ -124,7 +124,7 @@ def test_a_setup_py_with_an_extension_of_another_kind_goes_with_the_table(tmp_pa
 
 def test_flags_macros_and_libraries_are_added_to_the_extensions(tmp_path: Path, wabt: Path) -> None:
     table = (
-        '\n[tool.wasmext.wasmize]\nmodule-list = "src/pk/*.wasm"\nstubs = false\n'
+        '\n[tool.wasmext.ext-modules]\nmodule-list = "src/pk/*.wasm"\nstubs = false\n'
         'extra-compile-args = ["-O1"]\ndefine-macros = ["PLAIN", "VALUE=2", ["PAIR", "3"]]\nlibraries = ["m"]\n'
     )
     project = _project(tmp_path, BUILD + table)
@@ -144,7 +144,7 @@ def test_flags_macros_and_libraries_are_added_to_the_extensions(tmp_path: Path, 
 
 def test_a_macro_that_is_not_a_macro_is_refused(tmp_path: Path) -> None:
     (tmp_path / "pyproject.toml").write_text(
-        '[tool.wasmext.wasmize]\nmodule-list = "x"\ndefine-macros = [1]\n', encoding="utf-8"
+        '[tool.wasmext.ext-modules]\nmodule-list = "x"\ndefine-macros = [1]\n', encoding="utf-8"
     )
     with pytest.raises(TypeError, match="not NAME"):
         pyproject_calls(tmp_path)

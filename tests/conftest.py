@@ -18,7 +18,7 @@ from types import ModuleType
 import pytest
 
 from wasmext import generate, parse
-from wasmext._wasmize import _tail_call_locals  # pyright: ignore[reportPrivateUsage]
+from wasmext._natify import _tail_call_locals  # pyright: ignore[reportPrivateUsage]
 
 DATA = Path(__file__).parent / "data"
 WASMEXT_C = Path(__file__).parent.parent / "src" / "wasmext" / "c"
@@ -67,7 +67,7 @@ def build_extension(wabt: Path, tmp_path_factory: pytest.TempPathFactory) -> Cal
             [wabt / "bin" / "wasm2c", wasm, "-o", out / f"{name}_w2c.c", f"--module-name={name}"], check=True
         )
         w2c = out / f"{name}_w2c.c"
-        w2c.write_bytes(_tail_call_locals(w2c.read_bytes()))  # the same repair that wasmize() makes
+        w2c.write_bytes(_tail_call_locals(w2c.read_bytes()))  # the same repair that natify() makes
         runtime = wabt / "wasm2c"
         limited = ["-DPy_LIMITED_API=0x030B0000"] if abi3 else []
         so = out / (name + str(sysconfig.get_config_var("EXT_SUFFIX")))

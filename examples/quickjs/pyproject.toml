@@ -22,7 +22,7 @@ qjswasm = ["py.typed", "*.pyi"]
 
 # No setup.py: the hook of wasmext (an entry point of setuptools) reads this table and makes the extension from the .wasm. The C that wasm2c
 # writes for it is in 4 files, compiled at the same time.
-[[tool.wasmext.wasmize]]
+[[tool.wasmext.ext-modules]]
 module-list = "src/qjswasm/*.wasm"
 parts = 4
 

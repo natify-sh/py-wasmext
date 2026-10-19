@@ -36,7 +36,7 @@ def test_fibonacci(build_extension: Builder, tmp_path: Path) -> None:
 
 
 def test_coremark_minimal(build_extension: Builder) -> None:
-    # The file name has a hyphen: the module name is given by hand (wasmize() wants a name that can be imported).
+    # The file name has a hyphen: the module name is given by hand (natify() wants a name that can be imported).
     mod = build_extension(DATA / "coremark-minimal.wasm", "pw3_coremark")
     now = 0
 

@@ -21,9 +21,9 @@ With pip, build the wheel of wasmext in the root of the repository (`uv build --
 
 ```python
 from setuptools import setup
-from wasmext import wasmize
+from wasmext import natify
 
-setup(ext_modules=wasmize("src/coremark/*.wasm"))
+setup(ext_modules=natify("src/coremark/*.wasm"))
 ```
 
 `cibuildwheel` builds wheels of it as it does for any extension.

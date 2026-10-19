@@ -39,7 +39,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import TYPE_CHECKING, Any, cast
 
-from ._wasmize import _wasmize  # pyright: ignore[reportPrivateUsage]
+from ._natify import _natify  # pyright: ignore[reportPrivateUsage]
 
 if TYPE_CHECKING:
     from setuptools import Extension
@@ -128,7 +128,7 @@ def build_module(name: str, wasmfilename: str, options: _Options) -> str:
     template = template or _Extension(name, [str(wasm)])
     template.name = name
     work = _workdir(options, wasm, name)
-    [(_, ext)] = _wasmize(
+    [(_, ext)] = _natify(
         template,
         None,
         build_dir=work / "c" if options.build_in_temp else None,
@@ -333,7 +333,7 @@ def install(
         `build_dir`: easier to look at when something goes wrong, and it can meet files of the same name.
     :param setup_args: arguments for `setuptools.setup()`; a `.wasmbld` file can add to them.
     :param inplace: put the built extension (`.so` or `.pyd`) next to the `.wasm`.
-    :param guard_pages: and :param limited_api: and :param parts: as for `wasmize()`.
+    :param guard_pages: and :param limited_api: and :param parts: as for `natify()`.
     :param stubs: write a `<name>.pyi` beside each `.wasm` (not by default: the directory you import from stays as it is).
 
     A second call replaces the finder of the first (where `pyximport` keeps the first one).

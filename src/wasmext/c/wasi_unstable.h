@@ -1,10 +1,10 @@
-/* WASI 0.1, `wasi_unstable` (the first snapshot, "preview0"): the calls are those of wasi_common.h, named `wasi_<name>`, except
-   those that read or write what differs from `wasi_snapshot_preview1` (see wasi_common.h), which are `wasi_unstable_<name>` and
+/* WASI 0.1, `wasi_unstable` (the first snapshot, "preview0"): the calls are those of wasi_core.h, named `wasi_<name>`, except
+   those that read or write what differs from `wasi_snapshot_preview1` (see wasi_core.h), which are `wasi_unstable_<name>` and
    are defined here. `sock_accept` is not a call of this snapshot. */
 #ifndef WASMEXT_WASI_UNSTABLE_H
 #define WASMEXT_WASI_UNSTABLE_H
 
-#include "wasi_common.h"
+#include "wasi_core.h"
 
 /* the order of whence in this snapshot: cur, end, set */
 static inline uint32_t wasi_unstable_fd_seek(void *s, uint32_t fd, uint64_t offset, uint32_t whence, uint32_t ptr, int *trapped) {

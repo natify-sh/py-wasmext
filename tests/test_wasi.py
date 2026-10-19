@@ -224,7 +224,7 @@ def test_the_header_has_a_function_for_each_call_of_the_specification() -> None:
 
     from wasmext._gen import _WASI_PREVIEW1_SIGNATURES  # pyright: ignore[reportPrivateUsage]
 
-    header = (Path(__file__).parent.parent / "src" / "wasmext" / "c" / "wasi_common.h").read_text("utf-8")
+    header = (Path(__file__).parent.parent / "src" / "wasmext" / "c" / "wasi_core.h").read_text("utf-8")
     defined = set(re.findall(r"static inline (?:uint32_t|void) wasi_(\w+)\(", header))
     defined &= set(_WASI_PREVIEW1_SIGNATURES)  # the helpers that also begin with wasi_ are not calls
     defined |= set(re.findall(r"^WASI_(?:NOT_PROVIDED|SOCKET)\((\w+),", header, re.MULTILINE))

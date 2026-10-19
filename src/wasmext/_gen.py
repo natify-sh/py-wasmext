@@ -62,7 +62,7 @@ class Glue:
     stub: str = ""  # the .pyi of the extension module
     wasi_headers: tuple[
         str, ...
-    ] = ()  # the headers of wasmext for WASI that the glue includes (and wasi_common.h): copied beside it
+    ] = ()  # the headers of wasmext for WASI that the glue includes (and the two they share, wasi_core.h and wasi_python.h): copied beside it
 
 
 def mangle(name: str, *, module: bool = False) -> str:
@@ -351,6 +351,10 @@ def generate(module: Module, name: str, *, version: str | None = None) -> Glue:
     add('#include "wasm-rt-exceptions.h"')
     for module_name in wasi_modules:
         add(f'#include "{_WASI_HEADERS[module_name]}"')
+    if wasi_modules:
+        add(
+            '#include "wasi_python.h"'
+        )  # the host of the core of WASI: after it, since the file backend of Python needs its types
     add("#ifndef _WIN32")
     add("#include <signal.h>")
     add("#endif")

@@ -296,7 +296,7 @@ In this order (the first ones are small):
       the state), the interface of the file backend (open one component, stat, list, rename, link; shaped by POSIX and by Win32, see stage 3), the protocol of errors of host functions (below) and the three outcomes of a call (a value, a trap, an uncaught exception with its tag and values), the names of the files, and what
       the shared library and the executable need from the core (the entry points, `_start` and the exports of a reactor, the instance). Output: this
       document, no code. The cheap stage that stops later ones from being done twice.
-   2. **The core of WASI, cut** (`wasi_core.h`, no `Python.h`) and the hooks of Python (`wasi_python.h`). POSIX files stay in the core (`openat`).
+   2. **The core of WASI, cut** (done: see "Stage 2, as built" in the design below; `wasi_core.h`, no `Python.h`) and the hooks of Python (`wasi_python.h`). POSIX files stay in the core (`openat`).
       Files of Windows stay through Python, as the backend of `wasi_python.h` (`WASMEXT_WASI_PYTHON_FS` is that backend; it stays as a way to test
       the interface on Linux). Green on the three systems before the next stage starts, so that a failure of stage 3 is not taken for one of the cut.
       Check (a) begins here, on the core of WASI (on Windows it is incomplete until stage 3: no file backend without Python).
@@ -499,7 +499,7 @@ versioned (not a promise to others) until a second user of it exists.
 **Decided.** WASI is part of wasmext and is compiled into the native module; a built module needs nothing at run time (not wasmext
 either), so a shared library that modules call into was rejected. The code is hand-written C, **header only**, one header for each interface the module
 imports: `wasi_preview1.h` for `wasi_snapshot_preview1` and `wasi_unstable.h` for `wasi_unstable` (the first snapshot,
-"preview0"), which share `wasi_common.h`. The headers are copied into `<name>_wasmext/` and included by the glue of the module (both, if it
+"preview0"), which share `wasi_core.h`. The headers are copied into `<name>_wasmext/` and included by the glue of the module (both, if it
 imports both), so there is no second source file to build. Its functions are `static inline`: the glue names the ones the module imports, and the compiler drops
 the others, so a module has only the calls it imports. It is not generated each time, so it can be read, tested and fixed as ordinary C.
 `wasi_unstable` is not folded into `wasi_preview1`: the day a call differs between them, it gets its own function there.
@@ -527,7 +527,7 @@ specification allows (`ENOTSOCK`, `ENOSYS`). The first snapshot, `wasi_unstable`
 functions but `sock_accept`, and four differences in what it reads and writes: the order of `whence` (cur, end, set), one right less,
 `filestat` with a 32-bit link count (which moves its fields), and a clock subscription with an extra `identifier` (56 bytes). So the
 two files differ in the few calls that touch those (`fd_seek`, `fd_fdstat_get`, `fd_filestat_get`, `path_filestat_get`, `poll_oneoff`);
-the rest is common. A private header holds the common part, which both headers include, so that they cannot drift apart (`wasi_common.h`); the four that differ have a
+the rest is common. A private header holds the common part, which both headers include, so that they cannot drift apart (`wasi_core.h`); the four that differ have a
 function of their own in `wasi_unstable.h` (`fd_seek`, `fd_filestat_get`, `path_filestat_get`, `poll_oneoff`), and the rest serves both snapshots. A module gets only the functions it imports, so a module
 without WASI contains none of it. The state (file descriptors, preopens) is in the instance, not in globals.
 
@@ -548,7 +548,7 @@ renaming and `poll_oneoff`.
 - Test modules: `lua.wasm` (wasi_unstable, 19 imports) first, then `coreutils.wasm` (preview1, 32 imports, 10.8 MB, which makes a very large
   C file and a long build). Both were built and run: `lua.wasm` is `examples/lua`, `coreutils.wasm` was run by hand (built in 16 files).
 
-**Stages 1, 2 and 3 (built).** `src/wasmext/c/wasi_common.h` with `wasi_preview1.h` and `wasi_unstable.h`, copied beside the C of a module that
+**Stages 1, 2 and 3 (built).** `src/wasmext/c/wasi_core.h` with `wasi_preview1.h` and `wasi_unstable.h`, copied beside the C of a module that
 imports WASI and included by its glue (the glue calls the functions directly, through the slots that linking instances uses). The calls
 that work: `args_*`, `environ_*`, `clock_res_get`, `clock_time_get`, `random_get`, `sched_yield`, `proc_exit` (raises the module's `WasiExit`,
 `.code`), the standard streams (`fd_read` on stdin, `fd_write` on stdout and stderr), and for files and directories: preopens
@@ -615,7 +615,7 @@ Whatever is not in `wasi=` can be replaced call by call through `imports`.
 
 ## Design: C first, the seams (stage 1 of item 10)
 
-Written from a reading of `wasi_common.h` (2860 lines) and `_gen.py`; nothing here is built yet. The figure "49 of 135 functions mention
+Written from a reading of `wasi_common.h` (2860 lines; the name it had before stage 2 cut it into `wasi_core.h` and `wasi_python.h`) and `_gen.py`; nothing here is built yet. The figure "49 of 135 functions mention
 Python" came from a rough search; the groups below are what the reading found and are the figures to trust.
 
 ### Where Python is in the core of WASI today
@@ -725,6 +725,33 @@ A call to an export ends in one of these, and the C interface has to carry all t
 Hooks as pointers or `static inline` (stage 2 measures); one release for stages 6 and 7 or two; whether `wasi_files_python.h` stays;
 the exact errno for a host function that cannot report one; the interruption of a sleep in a library that has no signals.
 
+### Stage 2, as built
+
+`wasi_common.h` is now `wasi_core.h` (1959 lines, no Python) and `wasi_python.h` (1193 lines). Checked: the 303 tests and 4 expected
+failures as before (the tests of the files run the POSIX backend and the Python one); the core with `wasi_preview1.h` and
+`wasi_unstable.h` compiles with gcc and clang (`-std=c11 -Wall -Wextra`) with **no Python on the include path** (check (a), Linux).
+Not yet run in CI at the time of writing: the official WASI tests on the three systems.
+
+What differs from the table of stage 1:
+
+- **One more hook, `end`** (`proc_exit`, `proc_raise`), called before the program is marked as over. The plan said the core would only
+  record the end and the front end would make the exception later; the hook keeps the glue as it was (the exception is set at the
+  moment of the call, as before) and costs one pointer. Python's `end` raises `WasiExit` / `WasiSignal`.
+- **`wasmext_wasi_create(config, &err, &bad)`** is the plain-C constructor; it copies the configuration (the host may free it at once).
+  `wasmext_wasi_new` (the dict) stays for the glue and lives in `wasi_python.h`, with `_free`, `_clear`, `_traverse`, `_check`; the
+  core's own freeing is `wasmext_wasi_destroy`.
+- **The Python objects are in `wasmext_wasi_py`**, which the core sees only as `user`. A failed hook leaves its exception in the state
+  of the thread and returns `WASI_HOOK_TRAP`; an `OSError` becomes an errno of WASI (`wasi_python_status`).
+- **The file backend kept its form** (guest pointers and `trapped` in the `wasi_be_*` functions). Cleaning that up is left to stage 3,
+  where a second backend shows what the interface needs; for now the core declares the twelve functions and either its own POSIX half
+  or the Python half of `wasi_python.h` defines them (`WASMEXT_WASI_PYTHON_FS`, which is the default on Windows).
+- **Memory** is `malloc`/`free` (macros `WASI_MALLOC`…), not `PyMem_*`, so a host without Python links nothing else.
+- **Without hooks** the core reads descriptor 0 and writes 1 and 2 itself, sleeps in slices of 100 ms, and uses the system's clock and
+  random source; that is what the executable of stage 7 will run on.
+- **The glue** includes `wasi_python.h` after the header of the snapshot; `wasi_core.h` and `wasi_python.h` are copied beside the glue
+  (`WASI_SHARED` in `_natify.py`).
+- Still open (stage 2 was to measure it): hooks as pointers or `static inline`. They are pointers now; nothing was measured.
+
 ## Decisions
 
 - **Platforms.** `wasmext` is a pure Python wheel (`py3-none-any`) that depends on the wabt-package, so it installs wherever the
@@ -808,7 +835,7 @@ the exact errno for a host function that cannot report one; the interruption of 
   are the same for every module (the traps, `set_trap_error`, the `wasmext_export` record and its layout fingerprint, the signals, the machinery of
   `Instance`). The files that the layers of "C first" would become, the inner ones nested and the outer ones side by side on the same core:
   1. `wasmext_glue.h`, the glue that is the same for every module, **no `Python.h`**: the traps, the export record and its fingerprint, the
-     signals, the table of hooks. Shipped and copied beside the C of the module, as `wasi_common.h` is.
+     signals, the table of hooks. Shipped and copied beside the C of the module, as `wasi_core.h` is.
   2. `<name>_glue.h`, the glue of the module, generated, **no `Python.h`**: for each export a typed C function (as `link_call0` in the glue
      today: `result f(void *instance, parameters..., int *trapped)`), the tables of exports, imports, memories and globals with their signature strings,
      the instantiation and the release.

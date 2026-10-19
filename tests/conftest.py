@@ -60,7 +60,7 @@ def build_extension(wabt: Path, tmp_path_factory: pytest.TempPathFactory) -> Cal
         glue = generate(parse(wasm.read_bytes()), name)
         (out / f"{name}_glue.c").write_text(glue.source, encoding="utf-8")
         for c_name in (
-            ("wasi_common.h", *glue.wasi_headers) if glue.wasi_headers else ()
+            ("wasi_core.h", "wasi_python.h", *glue.wasi_headers) if glue.wasi_headers else ()
         ):  # beside the glue, which includes them
             (out / c_name).write_bytes((WASMEXT_C / c_name).read_bytes())
         subprocess.run(

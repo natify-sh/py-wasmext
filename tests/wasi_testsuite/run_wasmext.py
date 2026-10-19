@@ -33,10 +33,11 @@ def prepare(program: Path) -> str:
     # no optimizing: the programs are tests of what a call does, not of how fast it is, and the compilers are much quicker
     if os.name == "nt":
         # MSVC reads CL before the command line (setuptools' /O2 and /GL win over it) and _CL_ after it
-        os.environ.setdefault("_CL_", "/Od /GL-")
+        os.environ.setdefault("_CL_", f"/Od /GL- {os.environ.get('WASMEXT_TESTSUITE_CFLAGS', '')}".strip())
     else:
-        # WASMEXT_TESTSUITE_CFLAGS: more flags, such as -DWASMEXT_WASI_PYTHON_FS=1 for the files through Python (what Windows has)
         os.environ.setdefault("CFLAGS", f"-O0 {os.environ.get('WASMEXT_TESTSUITE_CFLAGS', '')}".strip())
+    # WASMEXT_TESTSUITE_CFLAGS: more flags, such as -DWASMEXT_WASI_PYTHON_FS=1 for the files through Python (on Windows, where the
+    # files are native, as well as elsewhere)
     from wasmext import _importer  # pyright: ignore[reportPrivateUsage]
 
     _importer.install(build_dir=cache / "build", parts=int(os.environ.get("WASMEXT_TESTSUITE_PARTS", "8")))

@@ -33,10 +33,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
         include:
-          # the files through Python (os.stat, os.open ...): on Linux, where it is quick to read what went wrong, and on Windows, which had
-          # no other way before the native one (wasi_files_win32.h)
+          # the files as the system gives them (openat on POSIX, Win32 on Windows) ...
+          - { os: ubuntu-latest }
+          - { os: macos-latest }
+          - { os: windows-latest }
+          # ... and through Python (os.stat, os.open ...): the way Windows had before the native one (wasi_files_win32.h)
           - { os: ubuntu-latest, python_fs: true }
           - { os: windows-latest, python_fs: true }
     steps:

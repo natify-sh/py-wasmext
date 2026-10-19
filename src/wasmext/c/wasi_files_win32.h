@@ -242,7 +242,7 @@ static inline int wasi_w_parent(char *path, size_t root_len) {
 }
 
 /* whether what `path` names is inside the directory `root`, links followed (`follow`: the last name too); a name that does not exist yet is
-   judged by the directory that holds it; a link that leads nowhere is refused, since where it would lead is not known */
+   judged by the directory that holds it; a link that leads nowhere is not followed to a place to be made, since where it would lead is not known (open() refuses it) */
 static inline int wasi_w_contained(const char *root, const char *path, int follow) {
     wchar_t *wroot = wasi_w_path(root), *froot = wroot ? wasi_w_final(wroot) : NULL;
     WASI_FREE(wroot);
@@ -263,7 +263,10 @@ static inline int wasi_w_contained(const char *root, const char *path, int follo
             DWORD error = GetLastError();
             if (error != ERROR_FILE_NOT_FOUND && error != ERROR_PATH_NOT_FOUND) break;  /* refused */
             wasi_stat info;
-            if (wasi_w_stat(check, 0, &info) == WASI_E_SUCCESS && info.filetype == WASI_FT_SYMLINK) break;  /* dangling */
+            if (wasi_w_stat(check, 0, &info) == WASI_E_SUCCESS && info.filetype == WASI_FT_SYMLINK) {
+                inside = 1;  /* a link that leads nowhere leads nowhere out: what follows it fails, and open() will not create through it */
+                break;
+            }
             if (!wasi_w_parent(check, root_len)) {
                 inside = 1;
                 break;
@@ -408,6 +411,11 @@ static inline uint32_t wasi_be_open(wasmext_wasi *w, wasi_entry *dir, uint32_t p
     int exists = 1;
     rc = wasi_w_stat(full, follow, &info);
     if (rc == WASI_E_NOENT && (oflags & WASI_O_CREAT)) {
+        wasi_stat link;
+        if (follow && wasi_w_stat(full, 0, &link) == WASI_E_SUCCESS && link.filetype == WASI_FT_SYMLINK) {
+            WASI_FREE(full);  /* a file would be made where the link leads, which is not known to be inside the directory */
+            return WASI_E_NOTCAPABLE;
+        }
         exists = 0;
         rc = WASI_E_SUCCESS;
     }

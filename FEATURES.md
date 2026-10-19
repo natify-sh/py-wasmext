@@ -268,7 +268,7 @@ In this order (the first ones are small):
    flag); the rest of the examples of other projects (below).
 8. ~~**WASI**~~ (`wasi_snapshot_preview1` and `wasi_unstable`): done for WASI 0.1. Part of wasmext, compiled into the native module as a header, `wasi_preview1.h`, the system
    reached through `Python.h`; 42 of 46 calls, the official tests pass on Linux, macOS and Windows; see "Design: WASI". Left: the clocks of the process and the thread in `poll_oneoff`, sockets (the specification allows them, on a socket the host gives to the program; wasmext gives none: its `wasi=` has only directories), WASI 0.2 and 0.3.
-9. **A native path to files on Windows** (decided, not started; stage 5 of the single work in item 10). The aim is portability: the core of WASI as plain C that needs no interpreter and no toolchain
+9. **A native path to files on Windows** (decided, not started; stage 3 of the single work in item 10). The aim is portability: the core of WASI as plain C that needs no interpreter and no toolchain
    beyond a C compiler, so that the layers can be split (item 10) and a shared library or an executable (`--shared`, `--exe`) can be built with MSVC, MinGW or `zig cc`. Linux and macOS are confirmed; Windows
    is the one place that still goes through Python. Safety is not the aim: the walk that confines a path stays because the official tests and the behaviour of POSIX ask for it, not as a promise of a
    race-free sandbox (the way uvwasi and wasm3 resolve a path as a string, not as wasmtime does with a handle). How: the same walk, with its primitive (open one component) behind one small interface; the primitives
@@ -279,26 +279,30 @@ In this order (the first ones are small):
    and the core of WASI become plain C with hooks, and everything that uses them is a front end: the extension for CPython, the shared library with
    its ctypes wrapper, the executable, the C runner of the test suite. The front ends are not only for Python: the shared library and the executable
    are meant for any host, so the work is **checked against a front end that has no Python from the first stage**, or it would be a refactor for the
-   extension alone. Two checks hold the layers in place from stage 2 on (both in CI): (a) the core headers compile with **no Python on the include
-   path**, on Linux, macOS and Windows (MSVC, and MinGW or `zig cc` where it is at hand); (b) the C runner of stage 4 runs the official WASI tests
+   extension alone. Two checks hold the layers in place (both in CI): (a) from stage 2 on, (b) from stage 5 on: (a) the core headers compile with **no Python on the include
+   path**, on Linux, macOS and Windows (MSVC, and MinGW or `zig cc` where it is at hand); (b) the C runner of stage 5 runs the official WASI tests
    with no interpreter in between. The stages, each leaving the repository green (the 303 tests, the 72 official tests on the three systems) and
    each its own commit(s), none changing what the extension does:
    1. **Inventory and the seams, on paper.** Sort the 49 functions of `wasi_common.h` that mention Python (stdio, the configuration `wasi=`, the
       exceptions, the files of Windows, the user functions for the clock and the random bytes); fix the table of hooks (names, signatures, who owns
-      the state), the interface of the file backend (open one component, stat, list, rename, link; see stage 5), the names of the files, and what
+      the state), the interface of the file backend (open one component, stat, list, rename, link; shaped by POSIX and by Win32, see stage 3), the names of the files, and what
       the shared library and the executable need from the core (the entry points, `_start` and the exports of a reactor, the instance). Output: this
       document, no code. The cheap stage that stops later ones from being done twice.
-   2. **The core of WASI** (`wasi_core.h`, no `Python.h`) and the hooks of Python (`wasi_python.h`). POSIX files stay in the core (`openat`). Files of
-      Windows stay through Python, as the backend of `wasi_python.h` (`WASMEXT_WASI_PYTHON_FS` is that backend; it stays as a way to test the
-      interface on Linux). Check (a) begins here, on the core of WASI.
-   3. **The glue as files**: `wasmext_glue.h` (the same for every module), `<name>_glue.h` (the module: typed C functions, the tables), `<name>_py.c`
-      (the Python layer) — see "Decisions". The record `wasmext_export` and the fingerprint do not change. Check (a) covers them.
-   4. **The first front end that is not Python, on Linux and macOS**: the C runner (`wasmext-run module.wasm`, the idea of `natify --exe`): `main()`,
-      the hooks of WASI in plain C, `_start`. It runs the official tests without the Python adapter (the cause of the slow Windows job) and is
-      check (b). If the cut is wrong, it shows here, before the Windows work is built on it.
-   5. **The native path to files on Windows** (item 9): the Win32 backend of the interface of stage 1, in the core. Verified by the official tests
-      through the extension and through the C runner built with MSVC, and by the compile of check (a) with MinGW or `zig cc`. After it the files of
-      Windows are in `wasi_core.h` too, and `wasi_python.h` keeps its Python backend only for tests.
+   2. **The core of WASI, cut** (`wasi_core.h`, no `Python.h`) and the hooks of Python (`wasi_python.h`). POSIX files stay in the core (`openat`).
+      Files of Windows stay through Python, as the backend of `wasi_python.h` (`WASMEXT_WASI_PYTHON_FS` is that backend; it stays as a way to test
+      the interface on Linux). Green on the three systems before the next stage starts, so that a failure of stage 3 is not taken for one of the cut.
+      Check (a) begins here, on the core of WASI (on Windows it is incomplete until stage 3: no file backend without Python).
+   3. **The native path to files on Windows** (item 9), straight after, **before the glue is touched**: the Win32 backend of the interface of stage 1,
+      in the core. It goes here and not later because the core of WASI is not free of the interpreter on Windows without it, and because the interface
+      of the backend should be shaped by both systems and not by `openat` alone. Verified by the official tests through the extension. After it the
+      files of Windows are in `wasi_core.h` too, `wasi_python.h` keeps its Python backend only for tests, and check (a) is complete on Windows
+      (MSVC; the compile with MinGW or `zig cc` where it is at hand).
+   4. **The glue as files**: `wasmext_glue.h` (the same for every module), `<name>_glue.h` (the module: typed C functions, the tables), `<name>_py.c`
+      (the Python layer) — see "Decisions". The record `wasmext_export` and the fingerprint do not change. Check (a) covers them. The WASI half
+      (2 and 3) and the glue half (4) do not depend on each other; the WASI half goes first because the blocker (Windows) is there.
+   5. **The first front end that is not Python, on the three systems**: the C runner (`wasmext-run module.wasm`, the idea of `natify --exe`):
+      `main()`, the hooks of WASI in plain C, `_start`. It needs 2 to 4 (the core of WASI complete on every system, the core of the glue). It runs
+      the official tests without the Python adapter (the cause of the slow Windows job) and is check (b). If the cut is wrong, it shows here.
    6. **The shared library and the ctypes wrapper** (`natify --shared`): the fixed `.c` that exports the functions of `<name>_glue.h`, the generated
       `<name>_ctypes.py` and the `.pyi` shared with `Instance`; the open points listed above (callbacks and exceptions, the interruption of a sleep, the
       link between instances, the GIL) are settled here. The largest stage.
@@ -306,9 +310,10 @@ In this order (the first ones are small):
       alpha-level decisions about names (`--shared`, `--exe`, the files shipped in the wheel).
    What does not wait for any of it: the alpha of the extension, as it is. The public interface (`Instance`, `natify`, `wasi=`) does not change in
    stages 1 to 5; the files that a built extension carries do (the headers beside its C), which the cache of `wasmimport` and the stamp of the
-   build already follow. Order and why: 1 before everything (the seams are the part that is expensive to redo); 2 before 3 because the WASI core is the
-   larger and the more tested piece, and the cut there is clearer; 4 before 5 so that the cut is proved with a second front end on the systems where
-   files are already native, and the Windows work is then measured against it; 6 and 7 last, because they add products, not structure.
+   build already follow. Order and why: 1 before everything (the seams are the part that is expensive to redo); 2 and 3 together and first,
+   because the core of WASI is the larger and the more tested piece and its one gap, the files of Windows, is what keeps it from being free of the
+   interpreter; 4 after them, being the other half; 5 once both halves are complete, so that the cut is proved on all three systems with a second
+   front end; 6 and 7 last, because they add products, not structure.
    Not decided: the size of each stage (it is not estimated); whether stages 6 and 7 are one release or two; the hooks being `static inline` or
    function pointers (to be measured at stage 2 on a call that is on a hot path, the standard streams).
 

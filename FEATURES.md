@@ -45,7 +45,7 @@ What each line says is tested (`tests/test_features.py`), not read from those do
 | Multi-memory | done | `3.0 multi-memory` |
 | memory64 | done | inside the module, exported as a `memoryview`, addresses above 4 GiB (Linux): `3.0 memory64`, `test_an_exported_memory64_is_a_memoryview_too`, `test_memory64_addresses_above_4_gib` |
 | 64-bit tables (the address type of tables, with memory64) | done inside the module | `3.0 memory64, a 64-bit table`; a table is not exported yet |
-| Exception handling, legacy `try`/`catch` | done | `3.0 exceptions`; an exception nobody catches is a `Trap`: `test_an_exception_nobody_catches_is_a_trap`. This form is not in the specification, but compilers still make it; **the tag and the values of that exception are not given to the caller yet** (the `Trap` says `Uncaught exception` and no more): planned, stage 4 of item 10 |
+| Exception handling, legacy `try`/`catch` | done | `3.0 exceptions`; an exception nobody catches is `UncaughtException`, a `Trap` with `.tag` (the index of the tag in the module) and `.values` (a tuple of Python numbers; empty for a tag with none): `test_an_exception_that_nothing_catches_is_an_uncaught_exception_with_its_tag_and_values`, and through `natify` in one file or in several: `test_uncaught_exceptions_are_told_apart_by_the_whole_path_in_one_file_or_several`. This form is not in the specification, but compilers still make it. Not done: the name of an exported tag, the tag of another module (`.tag` is `None`, no values), the values of a tag with a reference type (none), importing a tag from the host |
 | Exception handling, `try_table`, `throw_ref`, `exnref` | done | the form of the specification: `3.0 exceptions, try_table`, `3.0 exceptions, exnref (catch_all_ref and throw_ref)`; `exnref` in a signature and exported tags: not yet |
 | Relaxed SIMD | no (wasm2c) | `wasm2c` 1.0.42 itself aborts (signal 6, no message) on `i32x4.relaxed_trunc_f32x4_s`, `f32x4.relaxed_madd`, `i8x16.relaxed_swizzle` and `i32x4.relaxed_laneselect` (the others were not tried; reported: [WABT #2886](https://github.com/WebAssembly/wabt/issues/2886)), so it is not a matter of headers; strict xfail `3.0 relaxed SIMD…`. Its README says the same: wasm2c is not ticked for relaxed SIMD |
 | Typed function references | no (wasm2c) | `wat2wasm --enable-function-references` makes the binary, `wasm2c` stops at `call_ref` (unexpected opcode 0x14); the README of WABT does not tick wasm2c for it; strict xfail `3.0 typed function references` |
@@ -805,8 +805,21 @@ Notes: a call across two instances is now a call of a function pointer with `use
 and a Python callable (the old `lf`/`li` and `fn` fork is gone). The protocol of errors is what the glue does: a host function answers
 nonzero through `trapped`, the frames of the module are unwound with `WASMEXT_TRAP_HOST`, and the Python layer finds its exception where Python
 keeps it. The check (a) in CI (`core-without-python.yml`) does not cover the new headers yet; `test_the_glue_of_a_module_compiles_with_no_python`
-does it for now, on systems with a `cc`. **Still to do in stage 4**: the tag section and the uncaught exception of WebAssembly with its
-tag and values (the second half), and the C API of the stage 6 that the typed functions are written for.
+does it for now, on systems with a `cc`. **Second half of stage 4: built** (the tags, below). Still to do for the C API: stage 6.
+
+### Stage 4, second half: the uncaught exception of WebAssembly, as built
+
+`_wasm.py` reads the tag section (`Module.tags`, `all_tags`; the check of the indices of exported tags is real now). The glue of a module that has tags
+(`<name>_glue.h`, no Python) gets `<name>_tag_of(tag)` (the index of the tag of the exception the runtime keeps, or -1 for the tag of another module) and
+`<name>_tag_values(tag, payload, size, out)`, which decodes the bytes the runtime keeps by the types of the tag into `wasmext_value` (a type number and a
+union; `wasmext_glue.h`). The Python layer makes `UncaughtException(Trap)` with `.tag` and `.values` from them when a call ends with
+`WASM_RT_TRAP_UNCAUGHT_EXCEPTION`, before any other code of WebAssembly runs (the runtime keeps one exception per thread); the stub names it.
+
+How the glue finds the tag: wasm2c makes the tags of a module `static` (in one file) or gives them names that depend on the export, so natify adds to the
+C of wasm2c, in the first (or the only) file, a table `wasmext_tags_<prefix>[]` of their addresses in the order of the tags (`_export_tags` in
+`_natify.py`; it reads the declarations `const wasm_tag_placeholder_t NAME;` that wasm2c writes, in that order). The payload is the value itself for a tag with
+one value and a struct of them for more (wasm2c's own `struct wasm_multi_<codes>` is not in the header, so the glue declares the same members in the
+same order). Limits: the runtime keeps at most 256 bytes of an exception; a tag with a reference type in its values is told by its index with no values.
 
 ## Decisions
 

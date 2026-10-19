@@ -66,6 +66,11 @@ class Glue:
     header: str = ""  # the C of the glue of the module (<name>_glue.h): typed functions, no Python; the Python layer (`source`, <name>_py.c) includes it
 
 
+def module_prefix(name: str) -> str:
+    """The `<prefix>` of `w2c_<prefix>_...`: what wasm2c makes of the name of the extension module (dotted, as it is imported)."""
+    return mangle(_ident(name), module=True)
+
+
 def mangle(name: str, *, module: bool = False) -> str:
     """The C identifier `wasm2c` makes of a WebAssembly name (CWriter::Mangle in WABT); `module` for module names.
 
@@ -355,6 +360,16 @@ def generate(module: Module, name: str, *, version: str | None = None) -> Glue:
     hadd('#include "wasmext_glue.h"')
     for module_name in wasi_modules:
         hadd(f'#include "{_WASI_HEADERS[module_name]}"')
+    tags = module.tags
+    if tags:
+        hadd(
+            "/* The tags of the module: their identities (a table that wasmext adds to the C of wasm2c, in the order of the tags) and the"
+        )
+        hadd("   values of an exception that was thrown and not caught, decoded from what the runtime keeps of it. */")
+        hadd(f"extern const wasm_rt_tag_t wasmext_tags_{prefix}[{len(tags)}];")
+        hadd(f"#define {last.upper()}_TAG_COUNT {len(tags)}")
+        hadd(f"#define {last.upper()}_TAG_MAX_VALUES {max(1, max(len(t.params) for t in tags))}")
+        hadd("")
     hadd(f"#define WASMEXT_ENTER(CODE, FAIL) WASMEXT_ENTER_{reentrant}(CODE, FAIL)")
     hadd(f"#define WASMEXT_LEAVE() WASMEXT_LEAVE_{reentrant}()")
     hadd("")
@@ -372,6 +387,8 @@ def generate(module: Module, name: str, *, version: str | None = None) -> Glue:
     add("")
     add("static PyObject *TrapError;")
     add("static PyObject *LinkError;")
+    if tags:
+        add("static PyObject *UncaughtExceptionError;")
     if uses_wasi:
         add("static PyObject *WasiExitError, *WasiSignalError, *WasiTerminatedError;")
     add("static PyTypeObject *InstanceType;")
@@ -486,6 +503,46 @@ def generate(module: Module, name: str, *, version: str | None = None) -> Glue:
         add("    int export_index;  /* its place in export_table: the reference to it is made from that */")
         add("} MemoryObject;")
         add("")
+    if tags:
+        add(
+            "/* an exception of WebAssembly that no `try` caught: UncaughtException, with .tag (its index in the module, or None for the tag of"
+        )
+        add(
+            "   another module) and .values (a tuple); what the runtime keeps of it is read now, before any other code of WebAssembly runs */"
+        )
+        add("static void raise_uncaught(void) {")
+        add(f"    wasmext_value v[{last.upper()}_TAG_MAX_VALUES];")
+        add(f"    int tag = {last}_tag_of(wasm_rt_exception_tag());")
+        add(f"    int n = tag >= 0 ? {last}_tag_values(tag, wasm_rt_exception(), wasm_rt_exception_size(), v) : -1;")
+        add("    PyObject *values = PyTuple_New(n > 0 ? n : 0);")
+        add("    for (int i = 0; values != NULL && i < n; i++) {")
+        add("        PyObject *item = NULL;")
+        add("        switch (v[i].type) {")
+        add("        case 0x7F: item = PyLong_FromLong((long)(int32_t)v[i].as.i); break;")
+        add("        case 0x7E: item = PyLong_FromLongLong((long long)(int64_t)v[i].as.j); break;")
+        add("        case 0x7D: item = PyFloat_FromDouble((double)v[i].as.f); break;")
+        add("        case 0x7C: item = PyFloat_FromDouble(v[i].as.d); break;")
+        add("        default: item = PyBytes_FromStringAndSize((const char *)v[i].as.o, 16); break;")
+        add("        }")
+        add("        if (item == NULL) { Py_CLEAR(values); break; }")
+        add("        if (PyTuple_SetItem(values, i, item) < 0) { Py_CLEAR(values); break; }")
+        add("    }")
+        add("    PyObject *index = NULL;")
+        add(
+            "    if (values != NULL) { if (tag >= 0) index = PyLong_FromLong(tag); else { Py_INCREF(Py_None); index = Py_None; } }"
+        )
+        add(
+            '    PyObject *exc = index != NULL ? PyObject_CallFunction(UncaughtExceptionError, "s", wasm_rt_strerror(WASM_RT_TRAP_UNCAUGHT_EXCEPTION)) : NULL;'
+        )
+        add(
+            '    if (exc != NULL && (PyObject_SetAttrString(exc, "tag", index) < 0 || PyObject_SetAttrString(exc, "values", values) < 0)) Py_CLEAR(exc);'
+        )
+        add("    if (exc != NULL) PyErr_SetObject(UncaughtExceptionError, exc);")
+        add("    Py_XDECREF(exc);")
+        add("    Py_XDECREF(index);")
+        add("    Py_XDECREF(values);")
+        add("}")
+        add("")
     add(
         "/* what a code of a trap becomes in Python (the code of a host function that failed means its exception is set already) */"
     )
@@ -498,6 +555,8 @@ def generate(module: Module, name: str, *, version: str | None = None) -> Glue:
         add('        else PyErr_SetString(TrapError, "the WebAssembly program of a linked instance has ended");')
         add("        return;")
         add("    }")
+    if tags:
+        add("    if (code == (int)WASM_RT_TRAP_UNCAUGHT_EXCEPTION) { raise_uncaught(); return; }")
     add("    if (code == (int)WASMEXT_TRAP_NO_MEMORY) PyErr_NoMemory();")
     add("    else PyErr_SetString(TrapError, wasm_rt_strerror((wasm_rt_trap_t)code));")
     add("}")
@@ -907,6 +966,53 @@ def generate(module: Module, name: str, *, version: str | None = None) -> Glue:
     add("}")
     add("")
 
+    if tags:
+        hadd("/* the index of the tag of an exception in this module, or -1 (the tag of another module) */")
+        hadd(f"static int {last}_tag_of(wasm_rt_tag_t tag) {{")
+        hadd(f"    for (int i = 0; i < {last.upper()}_TAG_COUNT; i++)")
+        hadd(f"        if (wasmext_tags_{prefix}[i] == tag) return i;")
+        hadd("    return -1;")
+        hadd("}")
+        hadd("")
+        hadd(
+            "/* The values of an exception of the tag `tag`, from the bytes the runtime keeps (`size` of them): how many, or -1 when the bytes are not"
+        )
+        hadd("   the values of that tag, or -2 when a type of the tag has no decoding here (a reference). */")
+        hadd(f"static int {last}_tag_values(int tag, const void *payload, uint32_t size, wasmext_value *out) {{")
+        hadd("    switch (tag) {")
+        for k, tag in enumerate(tags):
+            types = tag.params
+            hadd(f"    case {k}: {{")
+            if any(t not in _CTYPE for t in types):
+                hadd("        (void)payload; (void)size; (void)out;")
+                hadd("        return -2;")
+            elif not types:
+                hadd("        (void)payload; (void)out;")
+                hadd("        return size == 0 ? 0 : -1;")
+            elif len(types) == 1:
+                t = types[0]
+                hadd(f"        {_CTYPE[t]} v;")
+                hadd("        if (size != sizeof v) return -1;")
+                hadd("        memcpy(&v, payload, sizeof v);")
+                hadd(f"        out[0].type = {_TYPE_CODE[t]};")
+                hadd(f"        {_VALUE_STORE[t].format(dst='out[0]', src='v')}")
+                hadd("        return 1;")
+            else:
+                # the values are a struct of them in the order of the tag, as wasm2c puts them (its `struct wasm_multi_<codes>` is not in the header)
+                members = " ".join(f"{_CTYPE[t]} m{j};" for j, t in enumerate(types))
+                hadd(f"        struct {{ {members} }} p;")
+                hadd("        if (size != sizeof p) return -1;")
+                hadd("        memcpy(&p, payload, sizeof p);")
+                for j, t in enumerate(types):
+                    hadd(f"        out[{j}].type = {_TYPE_CODE[t]};")
+                    hadd(f"        {_VALUE_STORE[t].format(dst=f'out[{j}]', src=f'p.m{j}')}")
+                hadd(f"        return {len(types)};")
+            hadd("    }")
+        hadd("    default: return -1;")
+        hadd("    }")
+        hadd("}")
+        hadd("")
+
     # ---- the exports, as typed C functions of the glue (no Python): `result f(void *instance, parameters..., int *trapped)` ----
     # A WASI program is over when it calls proc_exit or proc_raise; a command (it exports _start) is over after a trap too
     is_command = any(exp_name == "_start" for exp_name, _ in funcs)
@@ -1278,6 +1384,10 @@ def generate(module: Module, name: str, *, version: str | None = None) -> Glue:
         add(
             f'    WasiSignalError = PyErr_NewExceptionWithDoc({_c_string(name + ".WasiSignal")}, "The WebAssembly program called proc_raise (the number of the signal is .signal, its name .name)", WasiTerminatedError, NULL);'
         )
+    if tags:
+        add(
+            f'    UncaughtExceptionError = PyErr_NewExceptionWithDoc({_c_string(name + ".UncaughtException")}, "An exception of WebAssembly that nothing caught (.tag, .values)", TrapError, NULL);'
+        )
     add("    InstanceType = (PyTypeObject *)PyType_FromSpec(&instance_spec);")
     if memories:
         add("    MemoryType = (PyTypeObject *)PyType_FromSpec(&memory_spec);")
@@ -1285,6 +1395,7 @@ def generate(module: Module, name: str, *, version: str | None = None) -> Glue:
         "    if (!TrapError || !LinkError || !InstanceType"
         + (" || !WasiTerminatedError || !WasiExitError || !WasiSignalError" if uses_wasi else "")
         + (" || !MemoryType" if memories else "")
+        + (" || !UncaughtExceptionError" if tags else "")
         + ") goto fail;"
     )
     if uses_wasi:
@@ -1292,6 +1403,8 @@ def generate(module: Module, name: str, *, version: str | None = None) -> Glue:
         add('    if (PyModule_AddObjectRef(m, "WasiExit", WasiExitError) < 0) goto fail;')
         add('    if (PyModule_AddObjectRef(m, "WasiSignal", WasiSignalError) < 0) goto fail;')
     add('    if (PyModule_AddObjectRef(m, "Trap", TrapError) < 0) goto fail;')
+    if tags:
+        add('    if (PyModule_AddObjectRef(m, "UncaughtException", UncaughtExceptionError) < 0) goto fail;')
     add('    if (PyModule_AddObjectRef(m, "LinkError", LinkError) < 0) goto fail;')
     add('    if (PyModule_AddObjectRef(m, "Instance", (PyObject *)InstanceType) < 0) goto fail;')
     add("    return m;")
@@ -1303,7 +1416,7 @@ def generate(module: Module, name: str, *, version: str | None = None) -> Glue:
     return Glue(
         "\n".join(w) + "\n",
         skipped,
-        _stub(last, funcs, memories, globals_, stub_imports, uses_wasi, version, param_names),
+        _stub(last, funcs, memories, globals_, stub_imports, uses_wasi, version, param_names, bool(tags)),
         tuple(_WASI_HEADERS[m] for m in wasi_modules),
         "\n".join(h) + "\n",
     )
@@ -1312,6 +1425,14 @@ def generate(module: Module, name: str, *, version: str | None = None) -> Glue:
 # the value types as the binary format of WebAssembly numbers them: what the link between two extensions says of a global
 _TYPE_CODE: dict[ValType, int] = {"i32": 0x7F, "i64": 0x7E, "f32": 0x7D, "f64": 0x7C, "v128": 0x7B}
 _PY_TYPE: dict[ValType, str] = {"i32": "int", "i64": "int", "f32": "float", "f64": "float", "v128": "bytes"}
+# how a value of a type is put in a `wasmext_value` (the member of the union: i j f d, o for 16 bytes)
+_VALUE_STORE: dict[ValType, str] = {
+    "i32": "{dst}.as.i = {src};",
+    "i64": "{dst}.as.j = {src};",
+    "f32": "{dst}.as.f = {src};",
+    "f64": "{dst}.as.d = {src};",
+    "v128": "memcpy({dst}.as.o, &{src}, 16);",
+}
 # wasm2c returns several results in a `struct wasm_multi_<codes>` whose members are `<code><position>`.
 _MULTI_CODE: dict[ValType, str] = {"i32": "i", "i64": "j", "f32": "f", "f64": "d", "v128": "o"}
 
@@ -1384,6 +1505,7 @@ def _stub(
     wasi: bool = False,
     version: str | None = None,
     param_names: dict[str, tuple[str | None, ...]] | None = None,
+    tags: bool = False,
 ) -> str:
     """The `.pyi` for the extension module: what a type checker and an editor can know of an extension."""
     # The formatter and the linter of the project the stub lands in leave a generated file alone (the second noqa is
@@ -1404,6 +1526,12 @@ def _stub(
     elif imports:
         lines += ["from collections.abc import Callable", "from typing import TypedDict"]
     lines += ["", "class Trap(RuntimeError): ...", "class LinkError(Exception): ..."]
+    if tags:
+        lines += [
+            "class UncaughtException(Trap):",
+            "    tag: int | None  # the index of the tag in the module; None for the tag of another module",
+            "    values: tuple[int | float | bytes, ...]",
+        ]
     if wasi:
         lines += [
             "class WasiTerminated(Exception): ...",

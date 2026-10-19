@@ -5,6 +5,7 @@ name: Example wheels
 
 on:
   push:
+    branches: [main] # a branch with a pull request is run by the pull request alone, not twice
     paths-ignore:
       - "**.md"
   pull_request:
@@ -23,6 +24,8 @@ jobs:
   build-wasmext:
     name: Build the wasmext wheel
     runs-on: ubuntu-latest
+    # a branch of this repository is run by its push; a pull request is run only when it comes from a fork (a push to a fork is not seen here)
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     steps:
       - uses: actions/checkout@v7
         with:

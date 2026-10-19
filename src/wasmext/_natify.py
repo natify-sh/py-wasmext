@@ -27,7 +27,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from ._gen import GenError, Glue, generate
+from ._gen import GenError, Glue, generate, module_prefix
 from ._toolchain import Toolchain, find_toolchain
 from ._wasm import WasmError, parse
 
@@ -261,6 +261,23 @@ def _tail_call_locals(c_source: bytes) -> bytes:
     return _TAIL_CALL_LOCALS.sub(_TAIL_CALL_LOCALS_FIXED, c_source)
 
 
+# the tags of the module, as wasm2c declares them (in the order of the tags): `static` in a file of its own, a definition in the first of
+# several (the others see them as extern in <name>_w2c-impl.h)
+_TAG_PLACEHOLDER = re.compile(rb"^(?:static )?const wasm_tag_placeholder_t (\w+);$", re.MULTILINE)
+
+
+def _export_tags(c_source: bytes, prefix: str) -> bytes:
+    """Where wasm2c defines the tags of a module, the identities of them in a table `wasmext_tags_<prefix>` that the glue can name (the
+    tags themselves are `static`, or have names that depend on the export): the glue tells an exception that nothing caught by it."""
+    names = _TAG_PLACEHOLDER.findall(c_source)
+    if not names:
+        return c_source
+    plain = _TAG_PLACEHOLDER.sub(rb"const wasm_tag_placeholder_t \1;", c_source)
+    entries = b", ".join(b"&" + n for n in names)
+    table = f"\nconst wasm_rt_tag_t wasmext_tags_{prefix}[{len(names)}] = {{".encode() + entries + b"};\n"
+    return plain.rstrip(b"\n") + b"\n" + table
+
+
 def _memory_error_not_abort(inc_source: bytes) -> bytes:
     """`wasm_rt_allocate_memory` (in wasm-rt-mem-impl-helper.inc) traps instead of abort(); fails if the runtime has changed."""
     match = _ALLOCATE_MEMORY.search(inc_source)
@@ -387,7 +404,8 @@ def _prepare(
         raise RuntimeError(f"wasm2c failed on {wasm}:\n{result.stderr.strip()}")
     for part in _w2c_files(out_dir, last, wanted):
         part.write_bytes(
-            _marker(toolchain.version, wanted).encode() + _tail_call_locals(_portable_on_arm64(part.read_bytes()))
+            _marker(toolchain.version, wanted).encode()
+            + _export_tags(_tail_call_locals(_portable_on_arm64(part.read_bytes())), module_prefix(name))
         )
     shared = out_dir / f"{last}_w2c-impl.h"  # the code every file includes, when there are several
     if shared.is_file():

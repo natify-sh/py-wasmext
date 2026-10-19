@@ -32,6 +32,19 @@
     sizeof(wasm_rt_funcref_table_t) * 65537u))
 #endif
 
+/* a value of WebAssembly that is not a parameter or a result of a call: the values of an exception that nothing caught (`type` is the
+   number of the type in the binary format: 0x7F i32, 0x7E i64, 0x7D f32, 0x7C f64, 0x7B v128, whose 16 bytes are in `o`) */
+typedef struct {
+    uint8_t type;
+    union {
+        uint32_t i;
+        uint64_t j;
+        float f;
+        double d;
+        uint8_t o[16];
+    } as;
+} wasmext_value;
+
 /* a trap from a signal handler (an access past the guard pages) leaves the signal blocked: sigsetjmp saves no mask, for speed */
 static void wasmext_unblock_fault_signals(void) {
 #ifndef _WIN32

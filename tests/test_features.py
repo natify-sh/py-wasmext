@@ -898,3 +898,28 @@ print(i.fd_filestat_get(fd, 120), mem[136], int.from_bytes(mem[152:160], 'little
         "0 True",
         "0 4 13",
     ]
+
+
+@pytest.mark.parametrize("parts", ["1", "2"])
+def test_uncaught_exceptions_are_told_apart_by_the_whole_path_in_one_file_or_several(
+    tmp_path: Path, wabt: Path, parts: str
+) -> None:
+    """`wasmext natify -i`: the table of the tags that the glue reads is added to the C of wasm2c, whether it is in one file or in several."""
+    package = tmp_path / "pkg"
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "m.wat").write_text((Path(__file__).parent / "data" / "exceptions.wat").read_text("utf-8"), "utf-8")
+    subprocess.run([wabt / "bin" / "wat2wasm", "m.wat", "-o", "m.wasm"], cwd=package, check=True)
+    built = wasmext(tmp_path, wabt, "natify", "-i", "-q", "--parts", parts, "pkg/m.wasm")
+    assert built.returncode == 0, built.stderr[-800:]
+    code = (
+        "import pkg.m\n"
+        "i = pkg.m.Instance()\n"
+        "try:\n"
+        "    i.throw_many()\n"
+        "except pkg.m.UncaughtException as e:\n"
+        "    print(e.tag, e.values)\n"
+    )
+    ran = subprocess.run([sys.executable, "-c", code], cwd=tmp_path, capture_output=True, text=True, check=False)
+    assert ran.returncode == 0, ran.stderr[-500:]
+    assert ran.stdout.splitlines() == ["1 (-5, 1.5, 2.25, -1)"]

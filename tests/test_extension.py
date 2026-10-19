@@ -221,3 +221,22 @@ def test_the_module_without_imports_takes_no_arguments(build_extension: Builder)
     with pytest.raises(TypeError):
         simple.Instance({"env": {}})
     assert simple.Instance.__module__ == "simple_ext"
+
+
+def test_an_exception_that_nothing_catches_is_an_uncaught_exception_with_its_tag_and_values(
+    build_extension: Callable[..., ModuleType],
+) -> None:
+    mod: Any = build_extension(DATA / "exceptions.wat", "exceptions_ext")
+    inst = mod.Instance()
+    assert inst.caught() == 8 and inst.ok() == 5  # an exception that a `try` of the module catches is not seen
+    with pytest.raises(mod.UncaughtException) as one:
+        inst.throw_one(-9)
+    assert one.value.tag == 0 and one.value.values == (-9,)
+    with pytest.raises(mod.UncaughtException) as many:
+        inst.throw_many()
+    assert many.value.tag == 1 and many.value.values == (-5, 1.5, 2.25, -1)
+    with pytest.raises(mod.UncaughtException) as bare:
+        inst.throw_bare()
+    assert bare.value.tag == 2 and bare.value.values == ()
+    assert isinstance(bare.value, mod.Trap) and "ncaught" in str(bare.value)  # code that catches Trap goes on working
+    assert inst.ok() == 5  # the instance is usable afterwards

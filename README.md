@@ -89,7 +89,7 @@ inst.add(2, 3)  # the exports are methods; an exported memory is a memoryview at
 
 The values are Python's own: an `i32` or `i64` is an `int` (a result comes back signed, an argument is wrapped to the width, as the
 JavaScript API does), an `f32` or `f64` a `float`, a `v128` 16 bytes (`bytes`, or any bytes-like object, in the order of WebAssembly
-memory); an export with several results returns a tuple. A trap is `Trap` (a `RuntimeError`) and the instance stays usable (a WASI command, which exports `_start`, is over after one); a missing
+memory); an export with several results returns a tuple. A trap is `Trap` (a `RuntimeError`; an exception of WebAssembly that nothing catches is `UncaughtException`, a `Trap` with `.tag`, the index of the tag in the module, and `.values`) and the instance stays usable (a WASI command, which exports `_start`, is over after one); a missing
 or wrong import is `LinkError`; an exported global is an attribute. The stub `<module>.pyi` written beside the `.wasm` says all that
 for the module at hand.
 

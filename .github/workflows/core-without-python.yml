@@ -6,6 +6,7 @@ name: Core without Python
 
 on:
   push:
+    branches: [main] # a branch with a pull request is run by the pull request alone, not twice
     paths:
       - "src/wasmext/c/**"
       - ".github/workflows/core-without-python.yml"
@@ -26,6 +27,8 @@ jobs:
   core:
     name: ${{ matrix.os }} ${{ matrix.cc }}
     runs-on: ${{ matrix.os }}
+    # a branch of this repository is run by its push; a pull request is run only when it comes from a fork (a push to a fork is not seen here)
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     strategy:
       fail-fast: false
       matrix:

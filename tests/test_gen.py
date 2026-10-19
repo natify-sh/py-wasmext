@@ -98,7 +98,9 @@ def test_the_dotted_name_is_the_type_name_and_the_last_part_the_init_function() 
     assert "PyMODINIT_FUNC PyInit_fast(void)" in glue.source
     assert '"pkg.sub.fast.Instance"' in glue.source
     assert '#include "fast_glue.h"' in glue.source  # the Python layer includes the glue of the module ...
-    assert '#include "fast_w2c.h"' in glue.header and "#include <Python.h>" not in glue.header  # ... which has no Python in it
+    assert (
+        '#include "fast_w2c.h"' in glue.header and "#include <Python.h>" not in glue.header
+    )  # ... which has no Python in it
 
 
 def test_the_stub_describes_the_extension() -> None:
@@ -215,3 +217,16 @@ def test_param_names_are_read_per_function() -> None:
     m = parse(_named("x", None))
     assert m.param_names(0) == ("x", None)
     assert m.local_names == {0: {0: "x"}}
+
+
+def test_a_module_with_tags_has_the_uncaught_exception_in_its_glue_and_in_its_stub(wabt: Path, tmp_path: Path) -> None:
+    wasm = tmp_path / "ex.wasm"
+    subprocess.run([wabt / "bin" / "wat2wasm", DATA / "exceptions.wat", "-o", wasm], check=True)
+    glue = generate(parse(wasm.read_bytes()), "ex")
+    assert "class UncaughtException(Trap):" in glue.stub and "tag: int | None" in glue.stub
+    assert (
+        "extern const wasm_rt_tag_t wasmext_tags_ex[3];" in glue.header
+    )  # the table the repair of the C of wasm2c adds
+    assert "UncaughtException" in glue.source
+    plain = generate(parse((DATA / "simple.wasm").read_bytes()), "simple")
+    assert "UncaughtException" not in plain.stub + plain.source + plain.header  # a module without tags has none

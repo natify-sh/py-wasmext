@@ -124,6 +124,9 @@ class Module:
     tables: list[TableType] = field(default_factory=list[TableType])
     memories: list[Limits] = field(default_factory=list[Limits])
     globals: list[GlobalType] = field(default_factory=list[GlobalType])
+    tags: list[FuncType] = field(
+        default_factory=list[FuncType]
+    )  # defined here, not imported: the types of the values of an exception
     exports: list[Export] = field(default_factory=list[Export])
     start: int | None = None
     # From the "name" section, which is only a help for people: function index -> {local index -> name}; the parameters are the first locals.
@@ -148,6 +151,11 @@ class Module:
     @property
     def all_globals(self) -> list[GlobalType]:
         return [t for t in self._imported("global") if isinstance(t, GlobalType)] + self.globals
+
+    @property
+    def all_tags(self) -> list[FuncType]:
+        """The tag index space: imported tags, then defined ones (the signature of a tag has parameters and no results)."""
+        return [t for t in self._imported("tag") if isinstance(t, FuncType)] + self.tags
 
     def func_exports(self) -> list[tuple[str, FuncType]]:
         """The exported functions with their signatures, in the order of the export section."""
@@ -309,7 +317,7 @@ class _Reader:
 
 
 def parse(data: bytes) -> Module:
-    """Read the type, import, function, table, memory, global, export and start sections of a binary module."""
+    """Read the type, import, function, table, memory, global, tag, export and start sections of a binary module."""
     if data[:4] != _MAGIC:
         raise WasmError("not a WebAssembly binary: the magic number is missing")
     if data[4:8] != _VERSION:
@@ -383,7 +391,9 @@ def _section(module: Module, section_id: int, body: _Reader) -> None:
         module.exports = body.vec(lambda: _export(body))
     elif section_id == _START:
         module.start = body.uleb()
-    else:  # element, data, data count, tag: the framing is all that is checked
+    elif section_id == _TAG:
+        module.tags = body.vec(lambda: _tag(body, module.types))
+    else:  # element, data, data count: the framing is all that is checked
         return
     if not body.at_end():
         raise WasmError(f"section {section_id} has {body.end - body.pos} unread bytes at offset {body.pos}")
@@ -451,6 +461,12 @@ def _import(r: _Reader, types: list[FuncType]) -> Import:
     return Import(module, name, kind, _typeref(r, types))
 
 
+def _tag(r: _Reader, types: list[FuncType]) -> FuncType:
+    if r.byte() != 0x00:  # an attribute byte (0: an exception), then the type of its values
+        raise WasmError(f"unknown tag attribute at offset {r.pos - 1}")
+    return _typeref(r, types)
+
+
 def _export(r: _Reader) -> Export:
     name = r.name()
     code = r.byte()
@@ -466,7 +482,7 @@ def _check_indices(module: Module) -> None:
         "table": len(module.all_tables),
         "memory": len(module.all_memories),
         "global": len(module.all_globals),
-        "tag": -1,  # the tag section is not read: nothing to check against
+        "tag": len(module.all_tags),
     }
     for e in module.exports:
         if 0 <= spaces[e.kind] <= e.index:

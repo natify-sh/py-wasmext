@@ -303,14 +303,14 @@ In this order (the first ones are small):
    5. **The first front end that is not Python, on the three systems**: the C runner (`wasmext-run module.wasm`, the idea of `natify --exe`):
       `main()`, the hooks of WASI in plain C, `_start`. It needs 2 to 4 (the core of WASI complete on every system, the core of the glue). It runs
       the official tests without the Python adapter (the cause of the slow Windows job) and is check (b). If the cut is wrong, it shows here.
-   6. **The shared library**, and after it, on demand, **the ctypes wrapper**.
+   6. **The shared library and the ctypes wrapper**, both in the plan (the wrapper is the second half of this stage, on the first).
       a. The shared library (`natify --shared`): the fixed `.c` that exports the functions of `<name>_glue.h` and a **generated C header of the API**
          (create and release an instance, call an export, the pointer and size of a memory, register an import with the status of the protocol above,
          the configuration of WASI, the code of a trap and its message). For any host language; no Python in it. The error protocol is checked here
          with a host in C.
-      b. The ctypes wrapper (`<name>_ctypes.py` and the `.pyi` shared with `Instance`): **kept as viable** (the protocol above is the one wasmtime-py
-         uses over ctypes), **not started, on demand**: it is a front end on the C API of 6a and needs nothing from the core that 6a does not give.
-         Its open points are listed above (the interruption of a sleep, the link between instances, the GIL, the lifetime of the callbacks).
+      b. The ctypes wrapper (`<name>_ctypes.py` and the `.pyi` shared with `Instance`), a front end on the C API of 6a, with the same interface as
+         `Instance` (decided above). The protocol above is the one wasmtime-py uses over ctypes, so the error of a host function is not a block.
+         Its open points, settled while it is built: the interruption of a sleep, the link between instances, the GIL, the lifetime of the callbacks.
    7. **The executable** (`natify --exe`) on all three systems; the documentation, the README and the table of products brought up to date; the
       alpha-level decisions about names (`--shared`, `--exe`, the files shipped in the wheel).
    **The protocol of errors of host functions (decided in its form; part of the interface of the core, stage 1).** A C ABI has no exception that can
@@ -333,7 +333,7 @@ In this order (the first ones are small):
    build already follow. Order and why: 1 before everything (the seams are the part that is expensive to redo); 2 and 3 together and first,
    because the core of WASI is the larger and the more tested piece and its one gap, the files of Windows, is what keeps it from being free of the
    interpreter; 4 after them, being the other half; 5 once both halves are complete, so that the cut is proved on all three systems with a second
-   front end; 6 and 7 last, because they add products, not structure.
+   front end; 6 (the shared library, then the ctypes wrapper) and 7 last, because they add products, not structure.
    Not decided: the size of each stage (it is not estimated); whether stages 6 and 7 are one release or two; the hooks being `static inline` or
    function pointers (to be measured at stage 2 on a call that is on a hot path, the standard streams).
 

@@ -44,7 +44,7 @@ To **build** an extension (`pip install` from an sdist, `wasmext`, `wasmimport`,
 - for a module with SIMD instructions, the headers of simde: the wabt-package carries them (1.0.42.0 or later) and wasmext adds them to the build by itself.
 
 Building a native extension has been tested on Linux (x86-64 glibc and musl, ARM64), Windows (x64, ARM64), macOS (Apple
-Silicon, Intel), Pyodide, and, built but not run, Android arm64-v8a; the details and what is not confirmed are in
+Silicon, Intel), Pyodide, Android x86-64 (in an emulator), and, built but not run, Android arm64-v8a; the details and what is not confirmed are in
 [FEATURES.md](FEATURES.md#platforms-where-a-native-extension-was-built-and-tested).
 
 `wasm2c` is needed only to make the C. A tree that ships the C (`<name>_wasmext/`, for example in an sdist) builds with the

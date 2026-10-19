@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
+from typing import Any
 
 from ._natify import _prepare  # pyright: ignore[reportPrivateUsage]
 
@@ -148,7 +149,7 @@ def main_c(last: str, prefix: str) -> str:
     return _MAIN.replace("@LAST_U@", last.upper()).replace("@LAST@", last).replace("@PREFIX@", prefix)
 
 
-def _compiler() -> object:
+def _compiler() -> Any:
     from setuptools._distutils import sysconfig
     from setuptools._distutils.ccompiler import new_compiler
 
@@ -159,7 +160,7 @@ def _compiler() -> object:
 
 def _compile_sources(
     sources: list[str], prepared: object, out_dir: Path, *, optimize: bool
-) -> tuple[object, list[str], bool]:
+) -> tuple[Any, list[str], bool]:
     """Compile `sources` with the compiler of setuptools; returns the compiler, the objects and whether it is MSVC."""
     compiler = _compiler()
     msvc = compiler.compiler_type == "msvc"  # type: ignore[attr-defined]

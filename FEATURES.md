@@ -268,8 +268,13 @@ In this order (the first ones are small):
    flag); the rest of the examples of other projects (below).
 8. ~~**WASI**~~ (`wasi_snapshot_preview1` and `wasi_unstable`): done for WASI 0.1. Part of wasmext, compiled into the native module as a header, `wasi_preview1.h`, the system
    reached through `Python.h`; 42 of 46 calls, the official tests pass on Linux, macOS and Windows; see "Design: WASI". Left: the clocks of the process and the thread in `poll_oneoff`, sockets (the specification allows them, on a socket the host gives to the program; wasmext gives none: its `wasi=` has only directories), WASI 0.2 and 0.3.
-9. **A native path to files on Windows** (now through Python; with the split of the layers, below, the core of WASI needs no interpreter). `NtCreateFile` relative to a directory handle, as cap-std does: it would give the safety of `openat` there
-   (no gap between a check and a use) and the speed. Not started; first measure what the Python way costs on Windows (it was not measured).
+9. **A native path to files on Windows** (decided, not started). The aim is portability: the core of WASI as plain C that needs no interpreter and no toolchain
+   beyond a C compiler, so that the layers can be split (item 10) and a shared library or an executable (`--shared`, `--exe`) can be built with MSVC, MinGW or `zig cc`. Linux and macOS are confirmed; Windows
+   is the one place that still goes through Python. Safety is not the aim: the walk that confines a path stays because the official tests and the behaviour of POSIX ask for it, not as a promise of a
+   race-free sandbox (the way uvwasi and wasm3 resolve a path as a string, not as wasmtime does with a handle). How: the same walk, with its primitive (open one component) behind one small interface; the primitives
+   are documented Win32 with wide-character functions (UTF-8 to UTF-16, never the ANSI ones): `CreateFileW` with `FILE_FLAG_BACKUP_SEMANTICS` and `FILE_FLAG_OPEN_REPARSE_POINT`, `FindFirstFileW`, `MoveFileExW`,
+   `CreateSymbolicLinkW`, `SetFileInformationByHandle`; no `ntdll`, no `GetProcAddress`, the same headers in MSVC and MinGW. A handle-relative open (`NtCreateFile` with `RootDirectory`, as cap-std) could replace
+   the primitive later if a race-free sandbox is ever wanted; it is not planned. Checked by the official tests on Windows (x64, ARM64, x86) in CI; Windows cannot be run here, so only CI tells. Not measured: what the Python way costs.
 10. **C first** (decided, not started): the core of the glue and the core of WASI as plain C with hooks, the exports and the hooks in a Python layer
    (see "Decisions"). The first step is the split of `wasi_common.h`; a shared library and a C runner for the WASI test suite follow when
    something needs them.

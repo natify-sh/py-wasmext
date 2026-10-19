@@ -268,16 +268,49 @@ In this order (the first ones are small):
    flag); the rest of the examples of other projects (below).
 8. ~~**WASI**~~ (`wasi_snapshot_preview1` and `wasi_unstable`): done for WASI 0.1. Part of wasmext, compiled into the native module as a header, `wasi_preview1.h`, the system
    reached through `Python.h`; 42 of 46 calls, the official tests pass on Linux, macOS and Windows; see "Design: WASI". Left: the clocks of the process and the thread in `poll_oneoff`, sockets (the specification allows them, on a socket the host gives to the program; wasmext gives none: its `wasi=` has only directories), WASI 0.2 and 0.3.
-9. **A native path to files on Windows** (decided, not started). The aim is portability: the core of WASI as plain C that needs no interpreter and no toolchain
+9. **A native path to files on Windows** (decided, not started; stage 5 of the single work in item 10). The aim is portability: the core of WASI as plain C that needs no interpreter and no toolchain
    beyond a C compiler, so that the layers can be split (item 10) and a shared library or an executable (`--shared`, `--exe`) can be built with MSVC, MinGW or `zig cc`. Linux and macOS are confirmed; Windows
    is the one place that still goes through Python. Safety is not the aim: the walk that confines a path stays because the official tests and the behaviour of POSIX ask for it, not as a promise of a
    race-free sandbox (the way uvwasi and wasm3 resolve a path as a string, not as wasmtime does with a handle). How: the same walk, with its primitive (open one component) behind one small interface; the primitives
    are documented Win32 with wide-character functions (UTF-8 to UTF-16, never the ANSI ones): `CreateFileW` with `FILE_FLAG_BACKUP_SEMANTICS` and `FILE_FLAG_OPEN_REPARSE_POINT`, `FindFirstFileW`, `MoveFileExW`,
    `CreateSymbolicLinkW`, `SetFileInformationByHandle`; no `ntdll`, no `GetProcAddress`, the same headers in MSVC and MinGW. A handle-relative open (`NtCreateFile` with `RootDirectory`, as cap-std) could replace
    the primitive later if a race-free sandbox is ever wanted; it is not planned. If it is built, it is chosen by a define (for example `WASMEXT_WASI_WIN=portable|nt`), not by the compiler: ntdll is a matter of the system, and with declarations of its own and `GetProcAddress` the variant builds the same in MSVC, MinGW and `zig cc`; `portable` is the default, and CI would run both, as it runs the Python path of the files on Linux (`WASMEXT_WASI_PYTHON_FS`). Checked by the official tests on Windows (x64, ARM64, x86) in CI; Windows cannot be run here, so only CI tells. Not measured: what the Python way costs.
-10. **C first** (decided, not started): the core of the glue and the core of WASI as plain C with hooks, the exports and the hooks in a Python layer
-   (see "Decisions"). The first step is the split of `wasi_common.h`; a shared library and a C runner for the WASI test suite follow when
-   something needs them.
+10. **C first** (decided, not started). **It is one work, with items 9 and the glue as a header (see "Decisions") as parts of it**: the core of the glue
+   and the core of WASI become plain C with hooks, and everything that uses them is a front end: the extension for CPython, the shared library with
+   its ctypes wrapper, the executable, the C runner of the test suite. The front ends are not only for Python: the shared library and the executable
+   are meant for any host, so the work is **checked against a front end that has no Python from the first stage**, or it would be a refactor for the
+   extension alone. Two checks hold the layers in place from stage 2 on (both in CI): (a) the core headers compile with **no Python on the include
+   path**, on Linux, macOS and Windows (MSVC, and MinGW or `zig cc` where it is at hand); (b) the C runner of stage 4 runs the official WASI tests
+   with no interpreter in between. The stages, each leaving the repository green (the 303 tests, the 72 official tests on the three systems) and
+   each its own commit(s), none changing what the extension does:
+   1. **Inventory and the seams, on paper.** Sort the 49 functions of `wasi_common.h` that mention Python (stdio, the configuration `wasi=`, the
+      exceptions, the files of Windows, the user functions for the clock and the random bytes); fix the table of hooks (names, signatures, who owns
+      the state), the interface of the file backend (open one component, stat, list, rename, link; see stage 5), the names of the files, and what
+      the shared library and the executable need from the core (the entry points, `_start` and the exports of a reactor, the instance). Output: this
+      document, no code. The cheap stage that stops later ones from being done twice.
+   2. **The core of WASI** (`wasi_core.h`, no `Python.h`) and the hooks of Python (`wasi_python.h`). POSIX files stay in the core (`openat`). Files of
+      Windows stay through Python, as the backend of `wasi_python.h` (`WASMEXT_WASI_PYTHON_FS` is that backend; it stays as a way to test the
+      interface on Linux). Check (a) begins here, on the core of WASI.
+   3. **The glue as files**: `wasmext_glue.h` (the same for every module), `<name>_glue.h` (the module: typed C functions, the tables), `<name>_py.c`
+      (the Python layer) — see "Decisions". The record `wasmext_export` and the fingerprint do not change. Check (a) covers them.
+   4. **The first front end that is not Python, on Linux and macOS**: the C runner (`wasmext-run module.wasm`, the idea of `natify --exe`): `main()`,
+      the hooks of WASI in plain C, `_start`. It runs the official tests without the Python adapter (the cause of the slow Windows job) and is
+      check (b). If the cut is wrong, it shows here, before the Windows work is built on it.
+   5. **The native path to files on Windows** (item 9): the Win32 backend of the interface of stage 1, in the core. Verified by the official tests
+      through the extension and through the C runner built with MSVC, and by the compile of check (a) with MinGW or `zig cc`. After it the files of
+      Windows are in `wasi_core.h` too, and `wasi_python.h` keeps its Python backend only for tests.
+   6. **The shared library and the ctypes wrapper** (`natify --shared`): the fixed `.c` that exports the functions of `<name>_glue.h`, the generated
+      `<name>_ctypes.py` and the `.pyi` shared with `Instance`; the open points listed above (callbacks and exceptions, the interruption of a sleep, the
+      link between instances, the GIL) are settled here. The largest stage.
+   7. **The executable** (`natify --exe`) on all three systems; the documentation, the README and the table of products brought up to date; the
+      alpha-level decisions about names (`--shared`, `--exe`, the files shipped in the wheel).
+   What does not wait for any of it: the alpha of the extension, as it is. The public interface (`Instance`, `natify`, `wasi=`) does not change in
+   stages 1 to 5; the files that a built extension carries do (the headers beside its C), which the cache of `wasmimport` and the stamp of the
+   build already follow. Order and why: 1 before everything (the seams are the part that is expensive to redo); 2 before 3 because the WASI core is the
+   larger and the more tested piece, and the cut there is clearer; 4 before 5 so that the cut is proved with a second front end on the systems where
+   files are already native, and the Windows work is then measured against it; 6 and 7 last, because they add products, not structure.
+   Not decided: the size of each stage (it is not estimated); whether stages 6 and 7 are one release or two; the hooks being `static inline` or
+   function pointers (to be measured at stage 2 on a call that is on a hot path, the standard streams).
 
 How to choose the next features: **on demand, not in advance**. The examples of [wasm2mpy](https://github.com/vshymanskyy/wasm2mpy)
 and [pywasm3](https://github.com/wasm3/pywasm3) are taken one by one, the simplest first, and added to this project as examples

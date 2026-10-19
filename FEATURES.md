@@ -275,14 +275,16 @@ In this order (the first ones are small):
    are documented Win32 with wide-character functions (UTF-8 to UTF-16, never the ANSI ones): `CreateFileW` with `FILE_FLAG_BACKUP_SEMANTICS` and `FILE_FLAG_OPEN_REPARSE_POINT`, `FindFirstFileW`, `MoveFileExW`,
    `CreateSymbolicLinkW`, `SetFileInformationByHandle`; no `ntdll`, no `GetProcAddress`, the same headers in MSVC and MinGW. A handle-relative open (`NtCreateFile` with `RootDirectory`, as cap-std) could replace
    the primitive later if a race-free sandbox is ever wanted; it is not planned. If it is built, it is chosen by a define (for example `WASMEXT_WASI_WIN=portable|nt`), not by the compiler: ntdll is a matter of the system, and with declarations of its own and `GetProcAddress` the variant builds the same in MSVC, MinGW and `zig cc`; `portable` is the default, and CI would run both, as it runs the Python path of the files on Linux (`WASMEXT_WASI_PYTHON_FS`). Checked by the official tests on Windows (x64, ARM64, x86) in CI; Windows cannot be run here, so only CI tells. Not measured: what the Python way costs.
-10. **C first** (decided, not started). **It is one work, with items 9 and the glue as a header (see "Decisions") as parts of it**: the core of the glue
-   and the core of WASI become plain C with hooks, and everything that uses them is a front end: the extension for CPython, the shared library with
-   its ctypes wrapper, the executable, the C runner of the test suite. The front ends are not only for Python: the shared library and the executable
-   are meant for any host, so the work is **checked against a front end that has no Python from the first stage**, or it would be a refactor for the
-   extension alone. Two checks hold the layers in place (both in CI): (a) from stage 2 on, (b) from stage 5 on: (a) the core headers compile with **no Python on the include
-   path**, on Linux, macOS and Windows (MSVC, and MinGW or `zig cc` where it is at hand); (b) the C runner of stage 5 runs the official WASI tests
-   with no interpreter in between. The stages, each leaving the repository green (the 303 tests, the 72 official tests on the three systems) and
-   each its own commit(s), none changing what the extension does:
+10. **C first** (decided, not started; **the plan, final**). One work, of which item 9 (the native path to files on Windows) and the glue as files (see
+   "Decisions") are parts: the core of the glue and the core of WASI become plain C with hooks, and everything that uses them is a front end: the
+   extension for CPython, the shared library with its ctypes wrapper, the executable, the C runner of the test suite. The shared library and the
+   executable are meant for any host, not only for Python, so the work is **checked against a front end that has no Python**, or it would be a
+   refactor for the extension alone. Two checks hold the layers in place, both in CI: (a) the core headers compile with **no Python on the include
+   path**, on Linux, macOS and Windows (MSVC; MinGW or `zig cc` where it is at hand), from stage 2 on; (b) the C runner runs the official WASI tests
+   with no interpreter in between, from stage 5 on. At a glance: 1 seams on paper; 2 the core of WASI cut; 3 native files on Windows; 4 the glue as
+   files; 5 the C runner on the three systems; 6 the shared library, then the ctypes wrapper; 7 the executable and the documentation. Each stage
+   leaves the repository green (the 303 tests, the 72 official tests on the three systems), is its own commit(s), and changes nothing of what the
+   extension does:
    1. **Inventory and the seams, on paper.** Sort the 49 functions of `wasi_common.h` that mention Python (stdio, the configuration `wasi=`, the
       exceptions, the files of Windows, the user functions for the clock and the random bytes); fix the table of hooks (names, signatures, who owns
       the state), the interface of the file backend (open one component, stat, list, rename, link; shaped by POSIX and by Win32, see stage 3), the protocol of errors of host functions (below), the names of the files, and what

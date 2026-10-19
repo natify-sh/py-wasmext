@@ -193,3 +193,19 @@ def test_native_after_abi3_gives_the_native_extension_and_not_the_abi3_one_left_
     assert native.returncode == 0, native.stderr[-600:]
     assert not is_abi3(native.stdout)
     assert len(cached(tmp_path)) == 1  # the stale one is gone, not left to shadow the new one
+
+
+def test_the_working_directory_does_not_make_the_extension_again(tmp_path: Path, env: dict[str, str]) -> None:
+    """natify() gives its include directories relative to the working directory: they must not be part of what makes a cached
+    extension stale (every program of the WASI tests was made again when the runner started it from another directory)."""
+    shutil.copy(SIMPLE, tmp_path / "fast.wasm")
+    here = {**env, "PYTHONPATH": str(tmp_path)}
+    elsewhere = tmp_path / "elsewhere" / "deeper"
+    elsewhere.mkdir(parents=True)
+    first = python(tmp_path, here, "import fast\nprint(fast.Instance().add(2, 3))")
+    assert first.returncode == 0, first.stderr
+    [so] = cached(tmp_path)
+    stamp = so.stat().st_mtime_ns
+    other = python(elsewhere, here, "import fast\nprint(fast.Instance().add(2, 3))")
+    assert other.returncode == 0, other.stderr
+    assert so.stat().st_mtime_ns == stamp  # loaded from another directory, not made again

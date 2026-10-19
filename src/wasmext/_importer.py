@@ -229,6 +229,15 @@ _BUILD_ENVIRONMENT = (
 )
 
 
+# the lists of an Extension that hold paths, which natify() gives relative to the working directory
+_PATH_LISTS = ("library_dirs", "include_dirs")
+
+
+def _absolute(paths: list[str] | None) -> list[str] | None:
+    """The same directories whatever the working directory is: the fingerprint must not change with the place `import` is run from."""
+    return None if paths is None else [os.path.abspath(p) for p in paths]
+
+
 def _fingerprint(options: _Options, ext: Extension, special_args: dict[str, Any]) -> str:
     """What the extension was built with besides the files: a change of any of it makes the cached one stale (the files say nothing of it)."""
     settings = {
@@ -238,7 +247,7 @@ def _fingerprint(options: _Options, ext: Extension, special_args: dict[str, Any]
         "setup_args": options.setup_args,
         "special_args": special_args,
         "extension": {
-            key: getattr(ext, key, None)
+            key: _absolute(getattr(ext, key, None)) if key in _PATH_LISTS else getattr(ext, key, None)
             for key in (
                 "libraries",
                 "library_dirs",

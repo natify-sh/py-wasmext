@@ -21,13 +21,22 @@ from typing import TYPE_CHECKING
 
 from ._gen import GenError
 from ._inspect import read
+from ._toolchain import find_toolchain
 from ._wasm import WasmError
-from ._wasmize import _wasmize  # pyright: ignore[reportPrivateUsage]
+from ._wasmize import _version, _wasmize  # pyright: ignore[reportPrivateUsage]
 
 if TYPE_CHECKING:
     from setuptools import Extension
 
 __all__ = ["main"]
+
+
+def _version_text() -> str:
+    """`wasmext 0.1.0a1 (WABT 1.0.42)`: the version of wasmext and of the WABT it would use, where there is one."""
+    try:
+        return f"wasmext {_version()} (WABT {find_toolchain().version})"
+    except RuntimeError:
+        return f"wasmext {_version()} (no WABT found)"
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -36,6 +45,7 @@ def _parser() -> argparse.ArgumentParser:
         description="Turn WebAssembly modules into native CPython extensions: the C is written beside each .wasm "
         "(or under --build-dir); with -i or -b the extensions are built too.",
     )
+    parser.add_argument("--version", action="version", version=_version_text())
     parser.add_argument(
         "files", nargs="+", metavar="FILE", help=".wasm file or glob pattern (quote it to let wasmext expand it)"
     )

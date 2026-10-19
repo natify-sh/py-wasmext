@@ -136,6 +136,16 @@ def _version() -> str:
         return "0+unknown"
 
 
+_RELEASE_VERSION = re.compile(r"\d+(\.\d+)*((a|b|rc)\d+)?")
+
+
+def _release_version() -> str | None:
+    """The version of wasmext if it is a release (1.2, 1.2a1, 1.2rc1): a development version (a tag and a number of commits, a date)
+    changes with every commit, and what is written into a file that is committed must not."""
+    version = _version()
+    return version if _RELEASE_VERSION.fullmatch(version) else None
+
+
 def _marker(wabt: str, parts: int = 1) -> str:
     return f"{MARKER}{_version()} (WABT {wabt}, parts {parts}) */\n"
 
@@ -315,7 +325,7 @@ def _prepare(
     # cannot be wrapped is reported on every run, and a stub deleted from a tree that ships its C is written again.
     try:
         parsed = parse(data)
-        glue = generate(parsed, name)
+        glue = generate(parsed, name, version=_release_version())
     except (WasmError, GenError) as exc:
         raise type(exc)(f"{wasm}: {exc}") from None
     if (

@@ -3,7 +3,9 @@
 from ._gen import GenError, Glue, generate, mangle
 from ._toolchain import Toolchain, find_toolchain
 from ._wasm import Export, FuncType, GlobalType, Import, Limits, Module, TableType, ValType, WasmError, parse
-from ._wasmize import wasmize
+from ._wasmize import _version, wasmize  # pyright: ignore[reportPrivateUsage]
+
+__version__ = _version()
 
 __all__ = [
     "Export",
@@ -18,6 +20,7 @@ __all__ = [
     "Toolchain",
     "ValType",
     "WasmError",
+    "__version__",
     "find_toolchain",
     "generate",
     "mangle",

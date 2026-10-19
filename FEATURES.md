@@ -576,5 +576,22 @@ Whatever is not in `wasi=` can be replaced call by call through `imports`.
   glue, and it comes when something needs a host that is not Python (the runner, a shared library); the Python layer stays as it is, and the
   hooks are `static inline` so that the split costs no call (to be measured). The contract of the link between two instances keeps its form;
   a C host would carry the same record in its own way.
+  **The glue of a module as a header (a proposal, not decided; nothing built).** Today the generator (`_gen.py`) writes a whole `.c` from Python
+  string templates; of the 245 lines it writes for `simple.wasm` (one export) 16 mention the module or the export, the other 230 are the same
+  for every module (the traps, `set_trap_error`, the `wasmext_export` record and its layout fingerprint, the signals, the machinery of
+  `Instance`). Two steps, in this order: (a) the part that does not depend on the module moves to a header of the project (`wasmext_glue.h`,
+  shipped as `wasi_common.h` is, copied beside the C of the module), and the generator writes only what depends on the module; (b) that part
+  is written as a header too, `<name>_glue.h`: the tables of the exports, imports, memories and globals, and for each export a *thunk*, a plain C
+  function that calls `w2c_<name>_<export>` and catches the trap, with no `Python.h` in it. The extension is then a fixed `.c` of a few lines
+  (`#include "wasmext_python.h"`, `#include "<name>_glue.h"`, one macro for the init of the module); the shared library would be another fixed
+  `.c` that exports the same thunks as symbols, the executable a `main()`; the generator writes no translation unit, the build compiles the fixed
+  one (the parts of `wasm2c` stay separate `.c` files). What it does not do: the code of the glue is still compiled into every module (a header
+  gives no sharing, a shared library would), so the size of an extension does not change.
+  **Open: how the Python layer calls a thunk.** If a thunk knows nothing of Python it has one form, `int thunk(void *instance, const wasmext_val
+  *args, wasmext_val *results)`, and the Python layer, one for all modules, turns the arguments and results by the signature string (`"ij>i"`: the
+  string is in the record `wasmext_export` already). Cost: the values are packed and unpacked on every call, which the typed wrappers of today do not
+  do. **Not measured**: a call of `add(a, b)` in a loop is the case that would show it (the exports of `coremark` take no arguments). If it is
+  more than a few percent, the typed wrapper that parses the Python arguments stays generated for the CPython extension (then that header
+  includes `Python.h`, and the other front ends get their own tables). The measurement comes before the form is fixed.
 - `wasmhost` is a different tool (a facade over engines); its API is a guide for names and errors, the reference for behaviour
   is the specification and the JavaScript API.

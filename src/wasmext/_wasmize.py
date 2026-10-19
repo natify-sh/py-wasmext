@@ -271,7 +271,7 @@ def _simde_include(w2c_files: list[Path]) -> tuple[str, ...]:
     if headers is None or not (headers / "simde").is_dir():
         raise RuntimeError(
             f"{w2c_c} includes simde (the module uses SIMD), but the headers of simde are not there: they come with "
-            "wabt-package 1.0.42.0b2 or later (or an `include/simde` in the directory of WASMEXT_WABT)"
+            "wabt-package 1.0.42.0 or later (or an `include/simde` in the directory of WASMEXT_WABT)"
         )
     return (str(headers),)
 

@@ -24,7 +24,7 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "wabt-package>=1.0.42.0b2",
+    "wabt-package>=1.0.42.0",
 ]
 dynamic = ["version"]
 

@@ -291,7 +291,7 @@ In this order (the first ones are small):
    files; 5 the C runner on the three systems; 6 the shared library, then the ctypes wrapper; 7 the executable and the documentation. Each stage
    leaves the repository green (the 303 tests, the 72 official tests on the three systems), is its own commit(s), and changes nothing of what the
    extension does:
-   1. **Inventory and the seams, on paper.** Sort the 49 functions of `wasi_common.h` that mention Python (stdio, the configuration `wasi=`, the
+   1. **Inventory and the seams, on paper** (done: see "Design: C first, the seams"). Sort the 49 functions of `wasi_common.h` that mention Python (stdio, the configuration `wasi=`, the
       exceptions, the files of Windows, the user functions for the clock and the random bytes); fix the table of hooks (names, signatures, who owns
       the state), the interface of the file backend (open one component, stat, list, rename, link; shaped by POSIX and by Win32, see stage 3), the protocol of errors of host functions (below) and the three outcomes of a call (a value, a trap, an uncaught exception with its tag and values), the names of the files, and what
       the shared library and the executable need from the core (the entry points, `_start` and the exports of a reactor, the instance). Output: this
@@ -612,6 +612,118 @@ How it is now (after the decision "The configuration of WASI" below). "Plain C" 
 | Sockets | none (`sock_*` give `ENOTSOCK`) | (postponed, see "Decisions") | no |
 
 Whatever is not in `wasi=` can be replaced call by call through `imports`.
+
+## Design: C first, the seams (stage 1 of item 10)
+
+Written from a reading of `wasi_common.h` (2860 lines) and `_gen.py`; nothing here is built yet. The figure "49 of 135 functions mention
+Python" came from a rough search; the groups below are what the reading found and are the figures to trust.
+
+### Where Python is in the core of WASI today
+
+| Group | Functions | Why it needs Python now | Where it goes |
+| --- | --- | --- | --- |
+| Configuration | `wasi_pack_strings`, `wasi_config_*`, `wasi_apply_option`, `wasi_setup_preopens`, `wasmext_wasi_new` | reads the dict `wasi=` (`os.path.realpath`, `isdir`, `fsencode`, `PyDict_*`) | front end: `wasi_python.h` fills a plain-C `wasmext_wasi_config` (args, env, preopens `{name, host path, readonly}`, hooks, `user`); the core takes that |
+| Python objects in the state | `stream[3]`, `stdin_pos`, `exit_type`, `signal_type`, `ended_type`, `time_module`, `os_module`, `text_base`, `clock_fn`, `random_fn`, `cfg_*`; `wasmext_wasi_traverse`/`_clear` | the state holds references | out of the core state: the core has `void *user`, and the Python front end keeps these in the structure `user` points to (and does the GC traversal) |
+| Standard streams | `wasi_is_text`, `wasi_write_text_stream`, `wasi_write_bytes`, `wasi_write_std`, `wasi_read_bytes`, `wasi_read_std` | text or binary stream, `sys.stdout` as it is now, bytes as stdin | hooks `stdin_read`, `stdout_write`; without hooks the core reads and writes descriptors 0, 1, 2 itself (what the executable needs) |
+| Clock, random | `wasi_clock_ns`, `wasi_random_get` | a function the caller gave | optional hooks `clock`, `random`; the system's own is already plain C |
+| Sleep | `wasi_sleep_ns` | releases the interpreter and checks `PyErr_CheckSignals` between slices | hook `sleep`; the default (slices of 100 ms, `nanosleep`/`Sleep`) stays in the core |
+| End of the program | `wasi_proc_exit`, `wasi_proc_raise`, `wasmext_wasi_finish`, `wasmext_wasi_check` | builds `WasiExit`, `WasiSignal` and raises them in the call | the core records the end (`finished`, `end_value`) and reports a trap; the front end makes the exception from that record when the call returns (`wasmext_wasi_check` is already there) |
+| Errors of Python | `wasi_python_error` and every `return wasi_python_error(trapped)` | an `OSError` becomes a WASI errno, anything else a trap | disappears from the core; becomes the protocol of hooks (below) |
+| Files of Windows | the block `#if WASMEXT_WASI_PYTHON_FS` of `wasi_common.h`, lines 1349–1930 (about 580 lines; the whole `#if … #else … #endif` with the POSIX half is 1005 lines) | `os.stat`, `os.open`, `os.listdir`, `normcase`, times through `os.utime` | stage 3: replaced by a native backend; until then a backend of `wasi_python.h` |
+| Two small `#if` | `wasi_fill_preopen`, `wasi_sync_entry` | the same switch | go with the backend |
+
+Everything else in the file (memory access, rights, descriptors, the walk of a path, `openat` and its kin, the translation of errno)
+has no Python in it; the POSIX half is plain C already, and its only link to the interpreter is `wasmext_wasi *w` and the argument
+`trapped`.
+
+### The hooks
+
+One structure given at creation, in the configuration; every hook is optional, and a missing one means the default of the core.
+`user` is the host's own state; the core never frees it, and the front end owns its lifetime (it must outlive the instance).
+
+| Hook | Signature | Default of the core |
+| --- | --- | --- |
+| `stdin_read` | `int (*)(void *user, uint8_t *buf, size_t cap, size_t *got)` | `read(0, …)` |
+| `stdout_write` | `int (*)(void *user, int fd, const uint8_t *buf, size_t n)` (`fd` 1 or 2) | `write(fd, …)` |
+| `clock` | `int (*)(void *user, uint32_t id, uint64_t *ns)` | the system's clock |
+| `random` | `int (*)(void *user, uint8_t *buf, size_t n)` | the system's source |
+| `sleep` | `int (*)(void *user, uint64_t ns)` | slices of 100 ms |
+
+Return of every hook: `0` is success; a positive number is an errno of WASI (`WASI_E_*`) that the core hands to the program
+unchanged (a broken pipe is `WASI_E_PIPE`, an unreadable stream is `WASI_E_IO`); `WASI_HOOK_TRAP` (a value outside the errnos) is a
+trap of the call. The host keeps what it needs for the report (the Python layer keeps the exception it caught, see the protocol).
+The text-or-binary logic of `stdout_write` is the Python layer's, not the core's.
+
+Whether hooks are `static inline` functions chosen by a define or pointers in this structure is **not decided here** (stage 2 measures
+it); the table is written for pointers because that is the case the other front ends (shared library, executable) need.
+
+### The interface of a file backend
+
+`wasi_be_*` already is that interface: there are two implementations of the same 12 functions (the Python one at 1349–1930, the POSIX
+one at 1931–2353) and the code after them calls only the names. What changes is how they are shaped:
+
+- `stat_fd`, `stat_path`, `open`, `mkdir`, `remove`, `times_fd`, `times_path`, `rename`, `link`, `symlink`, `readlink`, `list`
+  (that is the whole set; `sync` and `seek` use the descriptor directly).
+- They no longer take guest pointers (`uint32_t path, len`) or `trapped`: the core copies the name out of the memory of the module,
+  checks it, and gives `const char *` and its length; the result is a WASI errno. A backend does not know the module has a memory.
+- A directory is an `wasi_entry`; what it keeps in it (a POSIX descriptor, a Windows handle, a root and a relative path) is the
+  backend's business, so `osfd` becomes `uintptr_t handle` plus the backend's own fields. The POSIX and the Win32 backend are shaped
+  by that: Win32 has no `openat`, so the portable one holds a handle of the directory and the path below it and checks that the real
+  path stays inside the preopen; the `nt` one opens relative to the handle.
+- Selection is by define at build time (`WASMEXT_WASI_FILES=posix|win32|nt|python`), not by compiler.
+
+### The protocol of errors of host functions
+
+The same for the hooks of WASI and for the functions the host gives through `imports`: **the status is the return value, and the
+exception, if there is one, is the host's own object.**
+
+- A host function in a language with exceptions catches everything inside its callback, keeps the exception object, and returns
+  `WASI_HOOK_TRAP` (for `imports`: the same, a trap code of the call).
+- The core raises a trap in the module with `trapped` set; the call ends, and the export reports `trapped` and a code.
+- The front end that made the call looks at what it kept and raises that, so Python raises the very object its function raised.
+  Nothing crosses the C frames of the module as an exception; this is the pattern of wasmtime, wasm3 and wasmtime-py.
+
+Known from reading the headers of wasm3 and wasmtime only; checked against the real behaviour of neither.
+
+### The three outcomes of a call
+
+A call to an export ends in one of these, and the C interface has to carry all three (today the third is `Trap('Uncaught exception')`):
+
+1. **A value** (or none).
+2. **A trap**: the code of `wasm_rt_trap_t`, and for a host trap the object the front end kept.
+3. **An uncaught exception of WebAssembly**: the tag and the values (`wasm_rt_exception_tag`, `_size`, `_exception`; up to 256
+   bytes). The front end of Python makes `UncaughtException(Trap)` with `.tag` and `.values`; the C interface gives the tag index,
+   the number of bytes and a pointer valid until the next call. Tags of the module are read from the tag section when the glue is made
+   (stage 4); importing a tag from the host is not supported.
+
+### Names of the files
+
+| File | Layer | Python.h |
+| --- | --- | --- |
+| `wasmext_glue.h` | universal glue: instance of the runtime, link record, the three outcomes | no |
+| `<name>_glue.h` | glue of the module: typed functions (`link_call0` …), tables | no |
+| `<name>_py.c` | the extension: types, methods, the stubs of the capsule | yes |
+| `<name>_shared.c` and `<name>_api.h` (stage 6) | the stub of the shared library and its C header | no |
+| `<name>_exe.c` (stage 7) | `main()` | no |
+| `wasi_core.h` | WASI without the host | no |
+| `wasi_preview1.h`, `wasi_unstable.h` | the two interfaces (stay as they are) | no |
+| `wasi_python.h` | hooks and configuration of Python | yes |
+| `wasi_files_posix.h`, `wasi_files_win32.h`, `wasi_files_nt.h` | file backends | no |
+| `wasi_files_python.h` | the Python backend; leaves when 3a is green on Windows, unless the Linux job that tests the Python path is worth keeping | yes |
+
+### What the shared library and the executable need from the core
+
+- **Entry points**: create an instance with a configuration (arguments, environment, preopens, hooks); call an export (by index, with
+  typed arguments and results, or a `uint64_t` array); read and write the linear memory; free; the link record, for linking instances.
+- **Commands and reactors**: the executable calls `_start`, ends on `proc_exit` with its code, and takes `args` from `argv`, `env`
+  from the environment and the preopens from `--dir` options; a library calls `_initialize` (if the module has it) and then the
+  exports.
+- **Nothing of Python**: no hook of the core may need the interpreter to finish; this is the check (a) of the plan.
+
+### Not decided at this stage
+
+Hooks as pointers or `static inline` (stage 2 measures); one release for stages 6 and 7 or two; whether `wasi_files_python.h` stays;
+the exact errno for a host function that cannot report one; the interruption of a sleep in a library that has no signals.
 
 ## Decisions
 

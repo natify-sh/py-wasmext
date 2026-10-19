@@ -149,16 +149,18 @@ jobs:
           CIBW_TEST_SKIP: ${{ matrix.skip_tests && '*' || '' }}
           # Android and Pyodide are built on the host: cibuildwheel installs build-system.requires itself, and pip has to find the wheel of wasmext
           PIP_FIND_LINKS: ${{ (matrix.platform == 'android' || matrix.platform == 'pyodide') && format('{0}/examples/coremark/deps', github.workspace) || '' }}
-        run: uvx cibuildwheel examples/coremark --platform ${{ matrix.platform }} --archs ${{ matrix.archs }} --output-dir wheelhouse
+        # from the folder of the example: test-sources (Android) is relative to the folder cibuildwheel is run in
+        working-directory: examples/coremark
+        run: uvx cibuildwheel --platform ${{ matrix.platform }} --archs ${{ matrix.archs }} --output-dir wheelhouse
         shell: bash
 
       - name: list ./wheelhouse
-        run: ls ./wheelhouse
+        run: ls examples/coremark/wheelhouse
         shell: bash
 
       - name: Upload the wheels
         uses: actions/upload-artifact@v7
         with:
           name: coremark-wheels-${{ matrix.platform }}-${{ matrix.archs }}
-          path: ./wheelhouse
+          path: examples/coremark/wheelhouse
           retention-days: 7

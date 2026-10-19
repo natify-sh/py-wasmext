@@ -13,6 +13,8 @@ echo 'for l in io.lines() do print(l * 2) end' > double.lua
 seq 3 | uv run python -m luawasm double.lua   # the current directory is the whole world of the script
 ```
 
+The tests: `uv run pytest` (the `dev` group of the example has pytest, and `uv sync` installs it).
+
 With pip, build the wheel of wasmext in the root of the repository (`uv build --wheel -o dist`) and give it as a source:
 `pip install --find-links ../../dist .`.
 

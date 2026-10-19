@@ -11,6 +11,8 @@ uv sync --reinstall      # --reinstall: build the extensions again (uv keeps wha
 uv run python -m linkdemo
 ```
 
+The tests: `uv run pytest` (the `dev` group of the example has pytest, and `uv sync` installs it).
+
 With pip, build the wheel of wasmext in the root of the repository (`uv build --wheel -o dist`) and give it as a source:
 `pip install --find-links ../../dist .`.
 

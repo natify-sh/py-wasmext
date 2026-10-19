@@ -12,6 +12,8 @@ uv sync --reinstall      # --reinstall: build the extension again (uv keeps what
 uv run python -c "import coremark; print(coremark.run())"
 ```
 
+The tests: `uv run pytest` (the `dev` group of the example has pytest, and `uv sync` installs it).
+
 With pip, build the wheel of wasmext in the root of the repository (`uv build --wheel -o dist`) and give it as a source:
 `pip install --find-links ../../dist .`. A wheel of the example itself: `uv build --wheel -o dist`.
 

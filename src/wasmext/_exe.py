@@ -211,6 +211,13 @@ def build_shared(
     ]
     compiler, objects, msvc = _compile_sources(sources, prepared, out_dir, optimize=optimize)
     library_path.parent.mkdir(parents=True, exist_ok=True)
+    if (
+        sys.platform == "darwin"
+    ):  # Python links a bundle (a plug-in, which nothing can link against), and a library is a dylib
+        linker: list[str] = compiler.linker_so
+        compiler.linker_so = [
+            "-dynamiclib" if a == "-bundle" else a for a in linker if a not in ("-undefined", "dynamic_lookup")
+        ]
     compiler.link_shared_object(  # type: ignore[attr-defined]
         objects, str(library_path), libraries=[] if msvc else ["m"], extra_postargs=[]
     )

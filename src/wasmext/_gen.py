@@ -358,7 +358,7 @@ def generate(module: Module, name: str) -> Glue:
     add("static PyObject *TrapError;")
     add("static PyObject *LinkError;")
     if uses_wasi:
-        add("static PyObject *WasiExitError;")
+        add("static PyObject *WasiExitError, *WasiSignalError, *WasiTerminatedError;")
     add("static PyTypeObject *InstanceType;")
     if memories:
         add("static PyTypeObject *MemoryType;")
@@ -682,7 +682,9 @@ def generate(module: Module, name: str) -> Glue:
     add("    InstanceObject *self = (InstanceObject *)PyType_GenericAlloc(type, 0);")
     add("    if (self == NULL) return NULL;")
     if uses_wasi:
-        add(f"    self->wasi = wasmext_wasi_new(wasi, WasiExitError, {_c_string(last)});")
+        add(
+            f"    self->wasi = wasmext_wasi_new(wasi, WasiExitError, WasiSignalError, WasiTerminatedError, {_c_string(last)});"
+        )
         add("    if (self->wasi == NULL) { Py_DECREF(self); return NULL; }")
         add(f"    wasmext_wasi_bind(self->wasi, w2c_{prefix}_{mangle('memory')}(&self->inst));")
     if has_imports:
@@ -913,6 +915,17 @@ def generate(module: Module, name: str) -> Glue:
     add("}")
     add("")
 
+    # A WASI program is over when it calls proc_exit or proc_raise; a command (it exports _start) is over after a trap too
+    is_command = any(exp_name == "_start" for exp_name, _ in funcs)
+    fail_trap = "return NULL"
+    link_self = ""
+    link_fail = ""
+    if uses_wasi:
+        if is_command:
+            fail_trap = "{ wasmext_wasi_finish(self->wasi, WASI_END_TRAP, 0); return NULL; }"
+            link_fail = "wasmext_wasi_finish(self->wasi, WASI_END_TRAP, 0);"
+        link_self = "InstanceObject *self = (InstanceObject *)((char *)inst - offsetof(InstanceObject, inst));"
+
     # the exported functions
     for i, (exp_name, func) in enumerate(funcs):
         n = len(func.params)
@@ -929,7 +942,9 @@ def generate(module: Module, name: str) -> Glue:
             add(f"    {_CTYPE[t]} a{j} = {_TO_WASM[t].format(f'args[{j}]')};")
         if n:
             add("    if (PyErr_Occurred()) return NULL;")
-        add("    ENTER_WASM(return NULL)")
+        if uses_wasi:
+            add("    if (wasmext_wasi_check(self->wasi) < 0) return NULL;")
+        add(f"    ENTER_WASM({fail_trap})")
         call_args = "".join(f", a{j}" for j in range(n))
         call = f"w2c_{prefix}_{mangle(exp_name)}(&self->inst{call_args})"
         if len(func.results) > 1:
@@ -969,12 +984,16 @@ def generate(module: Module, name: str) -> Glue:
         if func.results:
             add(f"    {ret} zero;")
             add("    memset(&zero, 0, sizeof zero);")
-            add("    ENTER_WASM({ *trapped = 1; return zero; })")
+            add(f"    {link_self}")
+            add("    if (wasmext_wasi_check(self->wasi) < 0) { *trapped = 1; return zero; }" if uses_wasi else "")
+            add(f"    ENTER_WASM({{ {link_fail} *trapped = 1; return zero; }})")
             add(f"    {ret} r = w2c_{prefix}_{mangle(exp_name)}((w2c_{prefix} *)inst{names});")
             add("    LEAVE_WASM();")
             add("    return r;")
         else:
-            add("    ENTER_WASM({ *trapped = 1; return; })")
+            add(f"    {link_self}")
+            add("    if (wasmext_wasi_check(self->wasi) < 0) { *trapped = 1; return; }" if uses_wasi else "")
+            add(f"    ENTER_WASM({{ {link_fail} *trapped = 1; return; }})")
             add(f"    w2c_{prefix}_{mangle(exp_name)}((w2c_{prefix} *)inst{names});")
             add("    LEAVE_WASM();")
         add("}")
@@ -1227,19 +1246,27 @@ def generate(module: Module, name: str) -> Glue:
     )
     if uses_wasi:
         add(
-            f'    WasiExitError = PyErr_NewExceptionWithDoc({_c_string(name + ".WasiExit")}, "The WebAssembly program called proc_exit (its code is .code)", PyExc_Exception, NULL);'
+            f'    WasiTerminatedError = PyErr_NewExceptionWithDoc({_c_string(name + ".WasiTerminated")}, "The WebAssembly program is over (proc_exit, proc_raise)", PyExc_Exception, NULL);'
+        )
+        add(
+            f'    WasiExitError = PyErr_NewExceptionWithDoc({_c_string(name + ".WasiExit")}, "The WebAssembly program called proc_exit (its code is .code)", WasiTerminatedError, NULL);'
+        )
+        add(
+            f'    WasiSignalError = PyErr_NewExceptionWithDoc({_c_string(name + ".WasiSignal")}, "The WebAssembly program called proc_raise (the number of the signal is .signal, its name .name)", WasiTerminatedError, NULL);'
         )
     add("    InstanceType = (PyTypeObject *)PyType_FromSpec(&instance_spec);")
     if memories:
         add("    MemoryType = (PyTypeObject *)PyType_FromSpec(&memory_spec);")
     add(
         "    if (!TrapError || !LinkError || !InstanceType"
-        + (" || !WasiExitError" if uses_wasi else "")
+        + (" || !WasiTerminatedError || !WasiExitError || !WasiSignalError" if uses_wasi else "")
         + (" || !MemoryType" if memories else "")
         + ") goto fail;"
     )
     if uses_wasi:
+        add('    if (PyModule_AddObjectRef(m, "WasiTerminated", WasiTerminatedError) < 0) goto fail;')
         add('    if (PyModule_AddObjectRef(m, "WasiExit", WasiExitError) < 0) goto fail;')
+        add('    if (PyModule_AddObjectRef(m, "WasiSignal", WasiSignalError) < 0) goto fail;')
     add('    if (PyModule_AddObjectRef(m, "Trap", TrapError) < 0) goto fail;')
     add('    if (PyModule_AddObjectRef(m, "LinkError", LinkError) < 0) goto fail;')
     add('    if (PyModule_AddObjectRef(m, "Instance", (PyObject *)InstanceType) < 0) goto fail;')
@@ -1351,7 +1378,15 @@ def _stub(
         lines += ["from collections.abc import Callable", "from typing import TypedDict"]
     lines += ["", "class Trap(RuntimeError): ...", "class LinkError(Exception): ..."]
     if wasi:
-        lines += ["class WasiExit(Exception):", "    code: int", ""]
+        lines += [
+            "class WasiTerminated(Exception): ...",
+            "class WasiExit(WasiTerminated):",
+            "    code: int",
+            "class WasiSignal(WasiTerminated):",
+            "    signal: int",
+            "    name: str",
+            "",
+        ]
         lines += _WASI_STUB
     lines.append("")
     by_module: dict[str, list[Import]] = {}

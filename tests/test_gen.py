@@ -137,7 +137,8 @@ def test_the_stub_of_a_wasi_program_types_every_key_of_wasi_and_the_exit() -> No
         section(7, vec(name("memory") + b"\x02" + leb(0))),
     )
     stub = generate(parse(data), "m").stub
-    assert "class WasiExit(Exception):" in stub and "wasi: Wasi | None = None" in stub
+    assert "class WasiExit(WasiTerminated):" in stub and "class WasiSignal(WasiTerminated):" in stub
+    assert "class WasiTerminated(Exception)" in stub and "wasi: Wasi | None = None" in stub
     for key in ("args", "env", "stdin", "stdout", "stderr", "preopens", "readonly", "clock", "random"):
         assert f"    {key}: NotRequired[" in stub  # absent is the default, None is nothing
     assert "SupportsWrite[bytes]" in stub and "SupportsRead[bytes]" in stub

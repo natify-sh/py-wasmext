@@ -63,6 +63,8 @@
 
 typedef struct wasmext_wasi wasmext_wasi;
 
+enum { WASI_END_NONE = 0, WASI_END_EXIT, WASI_END_SIGNAL, WASI_END_TRAP };
+
 static inline void wasmext_wasi_clear(wasmext_wasi *w);
 static inline void wasmext_wasi_free(wasmext_wasi *w);
 
@@ -156,7 +158,9 @@ struct wasmext_wasi {
     uint32_t envc;
     PyObject *stream[3];  /* what the caller gave for stdin, stdout, stderr (NULL: sys.stdin, sys.stdout, sys.stderr) */
     Py_ssize_t stdin_pos; /* when stdin is bytes */
-    PyObject *exit_type;
+    PyObject *exit_type, *signal_type, *ended_type;  /* WasiExit, WasiSignal, and WasiTerminated, the base of both */
+    int finished;         /* the program is over: 0, or how it ended (WASI_END_*) */
+    uint32_t end_value;   /* ... the code of proc_exit, or the signal of proc_raise */
     PyObject *time_module;
     PyObject *os_module;
     PyObject *text_base;  /* io.TextIOBase, to tell a text stream from a binary one */
@@ -478,7 +482,8 @@ static inline int wasi_apply_option(wasmext_wasi *w, const char *name, PyObject 
     return -1;
 }
 
-static inline wasmext_wasi *wasmext_wasi_new(PyObject *config, PyObject *exit_type, const char *program) {
+static inline wasmext_wasi *wasmext_wasi_new(PyObject *config, PyObject *exit_type, PyObject *signal_type, PyObject *ended_type,
+                                             const char *program) {
     wasmext_wasi *w = (wasmext_wasi *)PyMem_Calloc(1, sizeof(wasmext_wasi));
     if (w == NULL) {
         PyErr_NoMemory();
@@ -486,6 +491,10 @@ static inline wasmext_wasi *wasmext_wasi_new(PyObject *config, PyObject *exit_ty
     }
     Py_INCREF(exit_type);
     w->exit_type = exit_type;
+    Py_INCREF(signal_type);
+    w->signal_type = signal_type;
+    Py_INCREF(ended_type);
+    w->ended_type = ended_type;
     w->nentries = 8;
     w->entries = (wasi_entry *)PyMem_Calloc(w->nentries, sizeof(wasi_entry));
     if (w->entries == NULL) {
@@ -544,6 +553,8 @@ static inline void wasmext_wasi_free(wasmext_wasi *w) {
 static inline int wasmext_wasi_traverse(wasmext_wasi *w, visitproc visit, void *arg) {
     for (int i = 0; i < 3; i++) Py_VISIT(w->stream[i]);
     Py_VISIT(w->exit_type);
+    Py_VISIT(w->signal_type);
+    Py_VISIT(w->ended_type);
     Py_VISIT(w->time_module);
     Py_VISIT(w->os_module);
     Py_VISIT(w->text_base);
@@ -555,6 +566,8 @@ static inline int wasmext_wasi_traverse(wasmext_wasi *w, visitproc visit, void *
 static inline void wasmext_wasi_clear(wasmext_wasi *w) {
     for (int i = 0; i < 3; i++) Py_CLEAR(w->stream[i]);
     Py_CLEAR(w->exit_type);
+    Py_CLEAR(w->signal_type);
+    Py_CLEAR(w->ended_type);
     Py_CLEAR(w->time_module);
     Py_CLEAR(w->os_module);
     Py_CLEAR(w->text_base);
@@ -565,6 +578,26 @@ static inline void wasmext_wasi_clear(wasmext_wasi *w) {
 }
 
 static inline void wasmext_wasi_bind(wasmext_wasi *w, wasm_rt_memory_t *memory) { w->memory = memory; }
+
+/* The program is over (proc_exit, proc_raise, or a trap of a command): as on an operating system, what it opened is closed at once, and
+   the instance says so to any call afterwards. What the caller gave is not closed: the streams, and the directories of the host. */
+static inline void wasmext_wasi_finish(wasmext_wasi *w, int how, uint32_t value) {
+    if (w == NULL || w->finished) return;
+    w->finished = how;
+    w->end_value = value;
+    for (uint32_t i = 0; i < w->nentries; i++) wasi_release(&w->entries[i]);
+}
+
+/* 0, or -1 with an exception set: the program is over */
+static inline int wasmext_wasi_check(wasmext_wasi *w) {
+    if (w == NULL || !w->finished) return 0;
+    switch (w->finished) {
+    case WASI_END_EXIT: PyErr_Format(w->ended_type, "the program has ended: proc_exit(%u)", (unsigned)w->end_value); break;
+    case WASI_END_SIGNAL: PyErr_Format(w->ended_type, "the program has ended: proc_raise(%u)", (unsigned)w->end_value); break;
+    default: PyErr_SetString(w->ended_type, "the program has ended: it trapped"); break;
+    }
+    return -1;
+}
 
 /* ---- the memory of the instance (little-endian, as WebAssembly says) -------------------------------------------------- */
 
@@ -865,7 +898,37 @@ static inline void wasi_proc_exit(void *s, uint32_t code, int *trapped) {
         PyErr_SetObject(w->exit_type, exc);
         Py_DECREF(exc);
     }
+    wasmext_wasi_finish(w, WASI_END_EXIT, code);
     *trapped = 1;
+}
+
+/* proc_raise: the signals of WASI 0.1 by number. A signal that is ignored when nothing handles it (the child, continue, urgent data, the
+   size of the window) or that stops a process (stop, and the ones of a terminal) is answered with success and the program goes on;
+   any other ends it, as it would end a process: WasiSignal, with the number (.signal) and the name (.name). 0 is no signal. */
+static const char *const wasi_signal_names[31] = {
+    "", "SIGHUP", "SIGINT", "SIGQUIT", "SIGILL", "SIGTRAP", "SIGABRT", "SIGBUS", "SIGFPE", "SIGKILL", "SIGUSR1",
+    "SIGSEGV", "SIGUSR2", "SIGPIPE", "SIGALRM", "SIGTERM", "SIGCHLD", "SIGCONT", "SIGSTOP", "SIGTSTP", "SIGTTIN",
+    "SIGTTOU", "SIGURG", "SIGXCPU", "SIGXFSZ", "SIGVTALRM", "SIGPROF", "SIGWINCH", "SIGPOLL", "SIGPWR", "SIGSYS",
+};
+
+static inline uint32_t wasi_proc_raise(void *s, uint32_t sig, int *trapped) {
+    WASI_STATE(s);
+    if (sig > 30) return WASI_E_INVAL;
+    if (sig == 0 || (sig >= 16 && sig <= 22) || sig == 27) return WASI_E_SUCCESS;  /* nothing ends */
+    PyObject *exc = PyObject_CallFunction(w->signal_type, "s", wasi_signal_names[sig]);
+    if (exc != NULL) {
+        PyObject *number = PyLong_FromUnsignedLong(sig), *name = PyUnicode_FromString(wasi_signal_names[sig]);
+        if (number == NULL || name == NULL || PyObject_SetAttrString(exc, "signal", number) < 0 ||
+            PyObject_SetAttrString(exc, "name", name) < 0)
+            PyErr_Clear();
+        Py_XDECREF(number);
+        Py_XDECREF(name);
+        PyErr_SetObject(w->signal_type, exc);
+        Py_DECREF(exc);
+    }
+    wasmext_wasi_finish(w, WASI_END_SIGNAL, sig);
+    *trapped = 1;
+    return WASI_E_SUCCESS;
 }
 
 /* ---- descriptors ----------------------------------------------------------------------------------------------------- */
@@ -2789,7 +2852,6 @@ static inline uint32_t wasi_poll_oneoff(void *s, uint32_t in, uint32_t out, uint
         return wasi_entry_of(w, fd) == NULL ? WASI_E_BADF : WASI_E_NOTSOCK; \
     }
 
-WASI_NOT_PROVIDED(proc_raise, WASI_E_NOSYS, uint32_t a)
 WASI_SOCKET(sock_accept, uint32_t b, uint32_t c)
 WASI_SOCKET(sock_recv, uint32_t b, uint32_t c, uint32_t d, uint32_t e, uint32_t f)
 WASI_SOCKET(sock_send, uint32_t b, uint32_t c, uint32_t d, uint32_t e)

@@ -18,6 +18,7 @@
   (import "wasi_snapshot_preview1" "path_open"
     (func $path_open (param i32 i32 i32 i32 i32 i64 i64 i32 i32) (result i32)))
   (import "wasi_snapshot_preview1" "proc_exit" (func $proc_exit (param i32)))
+  (import "wasi_snapshot_preview1" "proc_raise" (func $proc_raise (param i32) (result i32)))
   (memory (export "memory") 1)
   (func (export "args_sizes_get") (param i32 i32) (result i32) local.get 0 local.get 1 call $args_sizes_get)
   (func (export "args_get") (param i32 i32) (result i32) local.get 0 local.get 1 call $args_get)
@@ -36,4 +37,5 @@
   (func (export "path_open") (result i32)
     i32.const 3 i32.const 0 i32.const 0 i32.const 0 i32.const 0 i64.const 0 i64.const 0 i32.const 0 i32.const 0
     call $path_open)
+  (func (export "proc_raise") (param i32) (result i32) local.get 0 call $proc_raise)
   (func (export "proc_exit") (param i32) local.get 0 call $proc_exit))

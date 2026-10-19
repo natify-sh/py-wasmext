@@ -138,12 +138,68 @@ def test_descriptors_the_first_stage_has(build_extension: Builder) -> None:
     assert inst.path_open() == 8  # EBADF: there is no descriptor 3 without a preopen
 
 
-def test_proc_exit_is_an_exception_and_the_instance_stays_usable(build_extension: Builder) -> None:
+def test_proc_exit_is_an_exception_and_the_program_is_over(build_extension: Builder) -> None:
     mod, inst = probe(build_extension)
     with pytest.raises(mod.WasiExit) as info:
         inst.proc_exit(7)
-    assert info.value.code == 7
-    assert inst.sched_yield() == 0
+    assert info.value.code == 7 and isinstance(info.value, mod.WasiTerminated)
+    with pytest.raises(mod.WasiTerminated, match=r"the program has ended: proc_exit\(7\)") as again:
+        inst.sched_yield()
+    assert not isinstance(again.value, mod.WasiExit)  # not another exit: a call into what is over
+    assert bytes(inst.memory[:1]) == b"\0"  # what it left in memory can still be read
+
+
+def test_proc_raise_ends_the_program_with_a_signal_unless_the_signal_is_ignored(build_extension: Builder) -> None:
+    mod, inst = probe(build_extension)
+    for ignored in (0, 16, 17, 18, 19, 20, 21, 22, 27):  # none, child, continue, the stops, urgent data, window size
+        assert inst.proc_raise(ignored) == 0
+    assert inst.proc_raise(31) == 28  # EINVAL: there is no such signal
+    assert inst.sched_yield() == 0  # still alive
+    with pytest.raises(mod.WasiSignal) as info:
+        inst.proc_raise(6)
+    assert (info.value.signal, info.value.name) == (6, "SIGABRT") and isinstance(info.value, mod.WasiTerminated)
+    with pytest.raises(mod.WasiTerminated, match=r"proc_raise\(6\)"):
+        inst.sched_yield()
+    _, other = probe(build_extension)
+    with pytest.raises(mod.WasiSignal) as term:
+        other.proc_raise(15)
+    assert term.value.name == "SIGTERM"
+
+
+def test_the_end_of_a_program_closes_what_it_opened(build_extension: Builder, tmp_path: Path) -> None:
+    import os
+    import sys
+
+    if not sys.platform.startswith("linux"):
+        pytest.skip("counts the descriptors of the process through /proc/self/fd")
+    mod: Any = build_extension(DATA / "wasi_fs_probe.wat", "wasi_fs_probe_end")
+    (tmp_path / "f.txt").write_text("x", encoding="utf-8")
+    before = len(os.listdir("/proc/self/fd"))
+    inst = mod.Instance(wasi={"preopens": {"/": str(tmp_path)}})
+    mem = inst.memory
+    mem[1000:1005] = b"f.txt"
+    assert inst.path_open(3, 0, 1000, 5, 0, 0xFFFFFFFF, 0, 0, 2000) == 0  # rights: all, no flags
+    assert u32(mem, 2000) == 4  # a file is open
+    assert len(os.listdir("/proc/self/fd")) >= before + 2  # the preopen and the file
+    with pytest.raises(mod.WasiExit):
+        inst.proc_exit(0)
+    assert len(os.listdir("/proc/self/fd")) == before  # closed at once, not when the object is deleted
+    with pytest.raises(mod.WasiTerminated):
+        inst.fd_close(4)
+
+
+def test_a_command_that_traps_is_over_a_reactor_that_traps_is_not(build_extension: Builder) -> None:
+    command: Any = build_extension(DATA / "wasi_command_trap.wat", "wasi_command_trap")
+    inst = command.Instance()
+    with pytest.raises(command.Trap):
+        inst._start()
+    with pytest.raises(command.WasiTerminated, match="it trapped"):
+        inst.ping()
+    reactor: Any = build_extension(DATA / "wasi_reactor_trap.wat", "wasi_reactor_trap")
+    loose = reactor.Instance()
+    with pytest.raises(reactor.Trap):
+        loose.boom()
+    assert loose.ping() == 1  # the instance stays usable
 
 
 def test_the_caller_can_replace_a_call_and_the_rest_stays(build_extension: Builder) -> None:
@@ -325,12 +381,18 @@ def test_the_clock_and_the_random_bytes_can_be_replaced(build_extension: Builder
         asked.append(clock_id)
         return 1_234_567_890_123 + clock_id
 
-    _, inst = probe(build_extension, clock=clock, random=lambda n: b"\x07" * n)
+    def sevens(count: int) -> bytes:
+        return b"\x07" * count
+
+    def one_byte(count: int) -> bytes:
+        return b"x"
+
+    _, inst = probe(build_extension, clock=clock, random=sevens)
     mem = inst.memory
     assert inst.clock_time_get(1, 16) == 0
     assert int.from_bytes(mem[16:24], "little") == 1_234_567_890_124 and asked == [1]
     assert inst.random_get(64, 5) == 0 and bytes(mem[64:69]) == b"\x07" * 5
-    _, short = probe(build_extension, random=lambda n: b"x")
+    _, short = probe(build_extension, random=one_byte)
     with pytest.raises(ValueError, match="'random' gave 1 bytes, 4 were asked for"):
         short.random_get(64, 4)
     mod = build_extension(DATA / "wasi_probe.wat", "wasi_probe")

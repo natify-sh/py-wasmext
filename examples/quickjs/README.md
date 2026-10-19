@@ -27,13 +27,12 @@ result = qjswasm.run(["script.js"], root="some/directory")  # Result(code, stdou
 An error of the script is what `qjs` does on the command line: a message on `stderr` and the code 1 (`proc_exit`, not a trap).
 `std` and `os` are modules of QuickJS-ng under the names `qjs:std` and `qjs:os` (`import * as std from "qjs:std"`).
 
-`setup.py` is the whole integration:
+There is no `setup.py`: the whole integration is this table of `pyproject.toml` (a hook of wasmext, which setuptools runs, reads it):
 
-```python
-from setuptools import setup
-from wasmext import wasmize
-
-setup(ext_modules=wasmize("src/qjswasm/*.wasm", parts=4))
+```toml
+[[tool.wasmext.wasmize]]
+module-list = "src/qjswasm/*.wasm"
+parts = 4
 ```
 
 ## The WebAssembly module

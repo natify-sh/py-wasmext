@@ -55,6 +55,22 @@ from wasmext import wasmize
 setup(ext_modules=wasmize("src/mypkg/*.wasm"))  # build-system.requires = ["setuptools", "wasmext"]
 ```
 
+Or with no `setup.py` at all, in `pyproject.toml` (a hook of wasmext, an entry point of setuptools, reads the table; the keys are the arguments
+of `wasmize()` with dashes: `module-list`, `exclude`, `build-dir`, `force`, `quiet`, `stubs`, `limited-api`, `guard-pages`, `parts`):
+
+```toml
+[build-system]
+requires = ["setuptools>=77", "wasmext"]
+build-backend = "setuptools.build_meta"
+
+[[tool.wasmext.wasmize]]       # one table, or several for modules that need different settings
+module-list = "src/mypkg/*.wasm"
+parts = 4
+```
+
+A project that calls `wasmize()` in its `setup.py` and has this table is refused with a message (use one of them); a `setup.py` with an extension of
+another kind (a hand-written C one) goes with the table. [`examples/quickjs`](examples/quickjs) is built this way.
+
 ```python
 import mypkg.fast  # src/mypkg/fast.wasm
 

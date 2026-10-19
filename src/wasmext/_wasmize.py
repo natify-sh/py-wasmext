@@ -495,6 +495,7 @@ def _wasmize(
         rest = [s for s in (template.sources if template else []) if not str(s).endswith(".wasm")]
         ext.sources = [*rest, *prepared.sources]
         ext._wasmext_parallel = prepared.parts > 1  # type: ignore[attr-defined]  # wasmext._setuptools compiles the files at once
+        ext._wasmext_made = True  # type: ignore[attr-defined]  # made by wasmize(): the table of pyproject.toml is not for a project that calls it
         ext.depends = [*ext.depends, *prepared.depends]
         ext.include_dirs = [
             *ext.include_dirs,

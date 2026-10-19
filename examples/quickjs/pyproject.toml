@@ -20,6 +20,12 @@ include-package-data = false
 [tool.setuptools.package-data]
 qjswasm = ["py.typed", "*.pyi"]
 
+# No setup.py: the hook of wasmext (an entry point of setuptools) reads this table and makes the extension from the .wasm. The C that wasm2c
+# writes for it is in 4 files, compiled at the same time.
+[[tool.wasmext.wasmize]]
+module-list = "src/qjswasm/*.wasm"
+parts = 4
+
 [tool.cibuildwheel]
 # cp311-* builds the abi3 wheel (every CPython from 3.11 on); cp314t-* has no stable ABI and gets a native one.
 build = "cp311-* cp314t-*"

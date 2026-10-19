@@ -2,7 +2,6 @@ name: Pre-commit
 
 on:
   push:
-    branches: [main] # a branch with a pull request is run by the pull request alone, not twice
     paths-ignore: &non-code-paths
       - "**.md"
       - "docs/**"

@@ -6,7 +6,6 @@ name: Core without Python
 
 on:
   push:
-    branches: [main] # a branch with a pull request is run by the pull request alone, not twice
     paths:
       - "src/wasmext/c/**"
       - ".github/workflows/core-without-python.yml"

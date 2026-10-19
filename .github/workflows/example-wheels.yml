@@ -118,6 +118,8 @@ jobs:
           - { name: "Linux riscv64", os: ubuntu-latest, platform: linux, archs: "riscv64", qemu: true }
           - { name: "Pyodide", os: ubuntu-latest, platform: pyodide, archs: "wasm32", build: "cp313-*" }
           - { name: "Android arm64", os: ubuntu-latest, platform: android, archs: "arm64_v8a", build: "cp313-*", skip_tests: true }
+          # the emulator has the architecture of the runner, so only an x86-64 wheel is tested (with KVM, which cibuildwheel sets up)
+          - { name: "Android x86_64", os: ubuntu-latest, platform: android, archs: "x86_64", build: "cp313-*" }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7

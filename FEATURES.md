@@ -555,6 +555,11 @@ Whatever is not in `wasi=` can be replaced call by call through `imports`.
   What it is for: the same layers 1 to 3 give a **shared library** (`.so`/`.dll`: a module with a C API for `ctypes`/`cffi`, Rust, Go, with no
   Python in it) and a **C runner** (`wasmext-run module.wasm`) that runs the official WASI test suite with no Python in between (the suite is
   run through a Python adapter now, which is what made the Windows job slow), as well as the extension for CPython that the project is for.
+  A third product of the same layers, no Python at all: a **native executable** of a WASI program (`wasmext natify --exe` is the idea): the C of
+  `wasm2c`, the core of the glue, the core of WASI with the hooks filled in plain C (the standard streams are descriptors 0, 1, 2; `proc_exit`
+  is `exit`; a signal is `raise`), and a `main()` that gives the arguments and the environment of the process to the program and calls
+  `_start`. With it `lua.wasm`, `qjs.wasm` or `coreutils.wasm` become ordinary command line programs, built by the C compiler of the machine;
+  the C runner of the test suite is the same thing with a path to the file in place of a built-in module.
   Where it stands now: in `wasi_common.h` (2860 lines) 49 of the 135 functions mention Python (stdio through `sys.stdout`, the configuration, the
   exceptions, the files of Windows through `os`, the user functions for the clock and the random bytes); the rest is plain C already. The
   files of Windows are the last place where the core needs the interpreter for data, which is why the native path to files on Windows

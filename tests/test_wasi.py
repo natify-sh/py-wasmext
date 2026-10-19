@@ -298,7 +298,9 @@ def test_none_is_nothing_and_an_absent_key_is_the_default(
     assert capsys.readouterr().err == "ok"
 
 
-def test_the_system_streams_can_be_given_explicitly(build_extension: Builder, capsys: pytest.CaptureFixture[str]) -> None:
+def test_the_system_streams_can_be_given_explicitly(
+    build_extension: Builder, capsys: pytest.CaptureFixture[str]
+) -> None:
     import io
     import sys
 

@@ -833,14 +833,16 @@ binary mode and the host path of a directory is made whole (`_fullpath`).
 (exit code and bytes, a trap, the refusals). **Not yet run**: the same on macOS and Windows; the CI jobs `(native executables)` of `wasi-testsuite.yml` are the first run there.
 This is the tool of the test suite, not yet a command (`natify --exe` is stage 7).
 
-### Stage 6a, the shared library with a C API, as built
+### Stage 6a, the shared library with a C API: built, NOT closed
 
 `wasmext._shared` makes, from the same typed glue, a public header `<name>_api.h` (plain C types, no wasm2c types) and `<name>_shared.c` that exports it; `_exe.build_shared` compiles and
 links them into a shared library (the sources of wasm2c, the glue and the core of WASI; no Python, and no `main`). The life of an instance: `<name>_new(&config, &error)` (WASI is made and
 bound there), `<name>_set_import<k>(m, f, user)` for each import that is not WASI's (a host function `result f(void *user, params..., int *trapped)`, the protocol of errors above),
 `<name>_instantiate(m)` (0 or the code of a trap), each export as `int <name>_<export>(m, params..., results...)` (0 or the code of a trap; `<name>_trap_message(code)` is its text), `<name>_free(m)`.
 Refused for now (a clear message when it is made): a module that imports a global or a memory, or uses v128 or several results in an import. Checked by `tests/test_shared.py` with a host
-written in C (two tests). **Not yet run**: Windows (the import library of MSVC) and macOS.
+written in C (two tests); passes on Linux and macOS in CI. **Open, so 6a is not closed**: Windows has never run it (the import library of MSVC; the test is skipped there); the configuration of WASI in the API
+has only the hooks of stdin and stdout (clock, random, sleep and `end` of the core are not in it); a module with an imported global or memory, v128 or several results in an import is refused; a reactor
+(`_initialize`) is not served; the proof is two tests and one host.
 
 **The products, decided** (for stage 7): `--extension` (the default when no product is named), `--shared` and `--exe` are *one product for each run*, not combinable: a library must not hold a
 `main`, and an executable has its own, so they are separate builds of the same C (the C of wasm2c and the glue are shared by the work directory and not made twice). Naming `--shared` or `--exe`

@@ -858,6 +858,32 @@ A package may ship a shared library (a dll) or an executable instead of, or besi
 - A product that is not an extension is an `Extension` with a mark that `wasmext._setuptools` (the `build_ext` it already puts in) knows: it compiles `<name>_shared.c` or `<name>_main.c` in place of the Python layer, links a library (`lib<name>.so`, `lib<name>.dylib`, `<name>.dll` with its import library) or an executable (`<name>`, `<name>.exe`) and puts the file where an extension would go, so `package-data`, `inplace` and wheels work as they do for an extension.
 - To settle when it is built: the tag of a wheel that has no Python extension (`py3-none-<platform>`, not `cp311`); where the header `<name>_api.h` goes (beside the library, in the wheel); how a package finds its own binary at run time (a small helper, not a path written by hand); `--exe` needs `_start`, and a reactor (`_initialize`, no `_start`) is a `--shared` product whose instantiation must call `_initialize`.
 
+### Audit of stages 1 to 6a against the plan (after 6a; probes run by hand, not yet tests)
+
+**Bugs found by running the shared library** (fix before 6a is closed, each gets a test):
+- The library never calls `wasm_rt_init()` (the extension does it in `PyInit_`, the executable in `main`): an out-of-bounds access in a module **crashes the host with SIGSEGV** instead of
+  answering a trap (the only trap the test uses is `unreachable`); a build without `NDEBUG` (a Windows build by `zig cc`) stops at `assert(wasm_rt_is_initialized())`. `_new` must call it (it is idempotent), and a
+  host thread other than the one that created the instance needs `wasm_rt_init_thread()`.
+- The call in which a WASI program ends (`proc_exit`) answers `TRAP_HOST` ("a host function failed"); only later calls answer `TRAP_ENDED`, which is what the header documents for the end.
+- An executable of a command that imports nothing from WASI stops in a C `#error` of the generated `main` instead of running or being refused in words.
+- An export with `funcref`/`externref` in its signature is left out of the header without a word (a v128 one is said), and a table export is accepted where the extension refuses it.
+
+**In the plan and not there**: a reactor's `_initialize` is not called by `_instantiate`; the configuration has the hooks of stdin and stdout only (the core also has `clock`, `random`, `sleep`; the `wasi=` of Python has the user
+functions for the clock and the random bytes, so 6b needs them); exported globals have no accessor (the extension has them as attributes); the link record for linking instances is not in the API; Windows (MSVC)
+has never built the library (cross-built by `zig cc` as a MinGW dll, it exports and links, and runs under wine up to the missing `wasm_rt_init`); the proof is two tests and one host.
+
+**Plan deviations not written down before**: the file backend kept its form (guest pointers and `trapped` in the `wasi_be_*` functions; the plan wanted `const char *`, no `trapped`, a handle); the selection by
+`WASMEXT_WASI_FILES=posix|win32|nt|python` and the files `wasi_files_posix.h`, `wasi_files_nt.h`, `wasi_files_python.h` do not exist (it is `_WIN32` and `WASMEXT_WASI_PYTHON_FS`); the file of `main` is
+`<name>_main.c`, not `<name>_exe.c`, and `wasmext-run` is not a command; stage 3b (`nt`) is not started; hooks as pointers or `static inline` was never measured. Check (a) in CI
+(`core-without-python.yml`) does not compile `wasmext_glue.h`, `<name>_glue.h` or `<name>_api.h` (a test of pytest does it on Linux and macOS, skipped on Windows; MinGW or `zig cc` is not in CI). Item 9 says the
+official tests were checked on Windows x64, ARM64 and x86: the suite, the native backend and the executable run in CI on x64 only (ARM64 and x86 build the example wheels).
+The text of "Stage 3a", "Stage 4 first half" and "Stage 5, as built" above still says the CI had not run; it has, and is green on Linux, macOS and Windows (the suite on the extension, on the Python files, on the executables).
+
+**Checked and sound**: no Python in the core files (grep, and CI with gcc, clang, macOS clang and MSVC); the 72 official tests pass on the extension, with files through Python and as native executables, on the three systems, and
+all 72 executables run clean under valgrind (this found the use of a freed table in `path_open`, now fixed); an out-of-bounds trap in an executable and in the extension (also from another thread) is a trap; the library
+passes the probes for WASI with and without hooks, a preopened directory (a file is written), i64/f32/f64, several results, two instances, a growing memory, a free of NULL, and a clean valgrind.
+Not started: 6b (ctypes), stage 7 (`--shared`/`--exe` of the command line, `product` of `natify()` and of `pyproject.toml`, README and the table of products).
+
 ## Decisions
 
 - **Platforms.** `wasmext` is a pure Python wheel (`py3-none-any`) that depends on the wabt-package, so it installs wherever the

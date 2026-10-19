@@ -194,6 +194,7 @@ Windows x64, x86 and ARM64, macOS Apple Silicon and Intel):
 | [`examples/coremark`](examples/coremark) | the CoreMark benchmark as a module (imports the clock and print from Python) |
 | [`examples/link`](examples/link) | two modules that use each other's memory, variable and function with no Python in between |
 | [`examples/lua`](examples/lua) | Lua 5.4, a WASI program: `luawasm.run(["script.lua"], root="dir")`, files in the directory it is given and nowhere else |
+| [`examples/quickjs`](examples/quickjs) | QuickJS-ng, a JavaScript engine as a WASI program: `qjswasm.run(["script.js"], root="dir")`, an error of the script is code 1 and a message, as on the command line |
 
 What is supported, what is not yet, and the plan are in [FEATURES.md](FEATURES.md).
 

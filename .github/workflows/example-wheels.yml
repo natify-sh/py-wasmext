@@ -1,6 +1,6 @@
 name: Example wheels
 
-# examples/coremark and examples/lua are packages whose extension is made by wasmext from a .wasm: cibuildwheel builds their
+# examples/coremark, examples/lua and examples/quickjs are packages whose extension is made by wasmext from a .wasm: cibuildwheel builds their
 # wheels on every platform, with the wasmext of this checkout as the build tool.
 
 on:
@@ -51,7 +51,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        example: [coremark, lua]
+        example: [coremark, lua, quickjs]
         name:
           - Linux x64
           - Linux ARM64

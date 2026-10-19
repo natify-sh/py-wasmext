@@ -576,25 +576,34 @@ Whatever is not in `wasi=` can be replaced call by call through `imports`.
   glue, and it comes when something needs a host that is not Python (the runner, a shared library); the Python layer stays as it is, and the
   hooks are `static inline` so that the split costs no call (to be measured). The contract of the link between two instances keeps its form;
   a C host would carry the same record in its own way.
-  **The glue of a module as a header (a proposal, not decided; nothing built).** Today the generator (`_gen.py`) writes the glue of a module as a
-  `.c` file, from Python string templates. The proposal is only the form of the file: the generator writes `<name>_glue.h` with the same code that
-  is in `<name>_glue.c` today (the typed wrappers of the exports, the init of the module; it includes `Python.h` as it does now), and the `.c`
-  that the build compiles is a fixed one of a line or two (`#include "<name>_glue.h"`). The generator then writes no translation unit. Nothing
-  inside the glue changes, and the size of an extension does not change (the glue is compiled into every module, as a header too). By itself it
-  gains little for the extension for CPython; it matters when something else wants the same code: a shared library or an executable (the
-  product of "C first" above) would be another fixed `.c` that includes the same header. A second, separate step is to move what is the same for
-  every module (of the 245 lines written for `simple.wasm`, 16 mention the module or the export: the traps, `set_trap_error`, the `wasmext_export`
-  record and its layout fingerprint, the signals, the machinery of `Instance`) into a header of the project (`wasmext_glue.h`, shipped and copied
-  beside the C of the module as `wasi_common.h` is), so that the generator writes only what depends on the module.
-  *Only if a core without `Python.h` is wanted later* (not part of the proposal): the part of a module that calls `w2c_<name>_<export>` would be
-  a *thunk* of one form, `int thunk(void *instance, const wasmext_val *args, wasmext_val *results)`, and the Python layer would turn arguments
-  and results by the signature string (`"ij>i"`, in `wasmext_export` already) instead of the typed wrappers. The cost of packing the values was
-  measured with a prototype (a hand-made copy of the glue of `simple.wasm`: `Instance_f0` against a method that packs by `"ii>i"` and calls such a
-  thunk): `add(2, 3)` in a loop of 1 000 000 calls, 25 alternated rounds, a shared 4-core machine, GCC, the flags of setuptools: typed 40.4 ns
-  (median; best round 27.3), uniform 44.6 ns (28.7): **+4.2 ns, +10 % by the median; +1.4 ns, +5 % by the best rounds**, within the noise
-  between rounds (a round of the uniform call was faster than one of the typed call); `max(2, 3)` in the same loop takes 50 to 70 ns. Not
-  covered: `i64`, `f32`, `f64` and several results, a trap, many arguments, other compilers, a thunk in a header of its own (inlined or not).
-  Nothing is decided about it.
+  **The layers of the glue and of WASI, as files (a proposal, not decided; nothing built).** Today the generator (`_gen.py`) writes the glue of a
+  module as one `.c`, from Python string templates; of the 245 lines it writes for `simple.wasm`, 16 mention the module or the export, the other 230
+  are the same for every module (the traps, `set_trap_error`, the `wasmext_export` record and its layout fingerprint, the signals, the machinery of
+  `Instance`). The files that the layers of "C first" would become, the inner ones nested and the outer ones side by side on the same core:
+  1. `wasmext_glue.h`, the glue that is the same for every module, **no `Python.h`**: the traps, the export record and its fingerprint, the
+     signals, the table of hooks. Shipped and copied beside the C of the module, as `wasi_common.h` is.
+  2. `<name>_glue.h`, the glue of the module, generated, **no `Python.h`**: for each export a typed C function (as `link_call0` in the glue
+     today: `result f(void *instance, parameters..., int *trapped)`), the tables of exports, imports, memories and globals with their signature strings,
+     the instantiation and the release.
+  3. The front ends, each on 1 and 2:
+     a. `<name>_py.c`, generated, **with `Python.h`**: the type `Instance`, the wrappers of the exports (they parse the Python arguments and call
+        the typed function of 2 in the same translation unit: no packing of values), the table of methods, the init of the module. It is the one
+        `.c` that the build compiles for the extension for CPython (so no fixed stub is needed);
+     b. a shared library: a fixed `.c` that exports the functions of 2 as symbols, **and a generated ctypes wrapper** (`<name>_ctypes.py`, with a
+        `.pyi`): it loads the `.so`/`.dll`, sets `argtypes`/`restype` from the signature strings, and gives a class `Instance` with the same
+        methods. The wheel then depends on the platform and not on the version of Python; it may serve interpreters with no CPython extensions
+        (PyPy, GraalPy: **not tried**). A call through ctypes costs much more than a call of the extension: an alternative, not a replacement;
+     c. an executable: a `.c` with `main()` that gives the arguments and the environment of the process to the program, the hooks of WASI in plain C
+        (standard streams are descriptors 0, 1, 2; `proc_exit` is `exit`; a signal is `raise`), and calls `_start` (`natify --exe`).
+  WASI follows the same cut: `wasi_core.h` (plain C: descriptors, the walk of paths, arguments, environment, clocks, random bytes, `poll_oneoff`, the
+  end of a program; whatever needs the world outside it is a hook, a table of function pointers) and, for each host, its hooks: `wasi_python.h`
+  (with `Python.h`: `sys.stdout` and objects with `write`, the dict `wasi=` turned into the configuration, the exceptions `WasiExit` and `WasiSignal`,
+  the user functions for the clock and the random bytes), the hooks in plain C of the executable, and for the shared library the hooks that the
+  ctypes wrapper gives as callbacks. The native path to files on Windows (the plan, item 9) is the last thing that keeps the core from being free of
+  the interpreter.
+  *A uniform thunk instead of the typed wrapper* (a function of one form that the Python layer calls with the values packed by the signature
+  string) was thought of and measured with a prototype: +4.2 ns on a call of 40 ns (median), +5 % by the best rounds, within the noise. It is not
+  needed in this scheme (3a calls the typed function of 2 directly) and is kept here only as the measurement.
 
 - `wasmhost` is a different tool (a facade over engines); its API is a guide for names and errors, the reference for behaviour
   is the specification and the JavaScript API.

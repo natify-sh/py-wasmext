@@ -217,8 +217,8 @@ The package is **not published on PyPI yet**; until it is, build the wheel from 
   has a gap between a check and a use that `openat` does not have; a native path is not written, and the cost was not measured.
   Setting the times of a symbolic link needs Python 3.13.
 - **Big-endian hosts** (s390x): a memory cannot be exported as a `memoryview`, and `v128` in a signature is refused.
-- **Not tested in CI:** the Linux architectures other than x86-64 and ARM64 (armv7l, riscv64, ppc64le, i686 were run by hand under QEMU),
-  Android, Pyodide, PyPy. Speed figures are from one machine.
+- **Less tested in CI:** the example `coremark` is built and tested on Linux armv7l, i686, ppc64le, riscv64 and in Pyodide, and built (not run)
+  for Android arm64; s390x (big-endian) and PyPy are not covered. Speed figures are from one machine.
 - **Always:** the `.wasm` is fixed when the extension is built (no loading at run time), and building needs a C compiler.
 
 The full list, with the reasons and the plan, is in [FEATURES.md](FEATURES.md).

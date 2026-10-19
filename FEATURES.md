@@ -107,8 +107,8 @@ What each line says is tested (`tests/test_features.py`), not read from those do
 | Example: Lua | done | `lua.wasm`, a WASI program, built in 8 files (`examples/lua`); tests on the wheel, and the wheels, in CI on seven platforms |
 | Example: QuickJS | done | `qjs` of QuickJS-ng v0.17.0 (1.1 MB), a WASI program built with `zig cc` from the sources of the tag (`examples/quickjs/build_wasm.py`), in 4 files; a real `proc_exit` for the errors of a script, not a trap as in Lua; 9 tests on the wheel (a module imported from a directory, stdin, writes, a name that leaves the directory refused) |
 | simde headers | done | from the wabt-package, see SIMD above |
-| Pyodide wheel | done (locally) | `cibuildwheel --platform pyodide` on `examples/coremark`, Python 3.13: built (`…pyemscripten_2025_0_wasm32.whl`, 83 KB) and the 2 tests passed inside Pyodide; the `wasm2c` of the Linux x86-64 wheel of the wabt-package did the translation on the host, no Pyodide wheel of the wabt-package is needed |
-| Android wheel | partly | `cibuildwheel --platform android --archs arm64_v8a`, Python 3.13, NDK 27: the wheel (`…android_24_arm64_v8a.whl`) builds with the same host wabt-package wheel; the tests were skipped (the machine cannot run an arm64 emulator), so it was not run on Android; the extension links `libpython3.13.so`, as every Android extension does |
+| Pyodide wheel | done | `cibuildwheel --platform pyodide` on `examples/coremark`, Python 3.13: built and the tests passed inside Pyodide, locally and in CI (the job "coremark on Pyodide"); the `wasm2c` of the Linux x86-64 wheel of the wabt-package did the translation on the host, no Pyodide wheel of the wabt-package is needed |
+| Android wheel | built, not run | `cibuildwheel --platform android --archs arm64_v8a`, Python 3.13, NDK 27, in CI (the job "coremark on Android arm64", on an x86-64 runner): the wheel builds with the host wabt-package wheel. The tests do not run: cibuildwheel tests on an emulator of the architecture of the build machine, so an arm64 wheel built on x86-64 is not tested. An x86-64 wheel on the Linux runner (an emulator with KVM, and a `test-command` that is a Python command) would be; not tried. The extension links `libpython3.13.so`, as every Android extension does |
 | Import hook, like `pyximport` | done | `import wasmimport; wasmimport.install()`; `import mod` finds `mod.wasm` (working directory, `sys.path`, packages), builds it into `~/.wasmbld` (or `build_dir`) and loads it. Options as in `pyximport`: `build_dir`, `build_in_temp`, `setup_args`, `inplace`, and those of `wasmize()`; `<module>.wasmbld` with `make_ext`/`make_setup_args`; `uninstall(finder)`, `clean()`. Not taken from `pyximport`: `.pyxdep`, importing `.py` files (`pyimport`), `reload_support`, `load_py_module_on_import_failure`. A development tool: it runs a C compiler on import. `tests/test_importer.py` |
 | Configuration in `pyproject.toml` only | not yet | |
 | `.wat` as a source (`wasmext -i m.wat`, `import m` with `wasmimport`) | not yet (idea) | `wat2wasm` is in the wabt-package already. Small: `Toolchain` learns the path of `wat2wasm` (and `WASMEXT_WABT/bin`), `_prepare` makes the `.wasm` first when the source is a `.wat` (same rule as for the C: made again when older than the `.wat`), the globs and the import hook accept the suffix. Open: where the `.wasm` goes (beside the `.wat` or in the build directory), flags for proposals that `wat2wasm` has off by default (`--enable-…`), and that the `.wasm` stays what is distributed. Not planned yet |
@@ -153,9 +153,11 @@ The examples (CoreMark, and Lua from commit `43324a2`) built by cibuildwheel and
 | Linux ARM64 | CI job passed (the wheel list was not read) |
 | Windows x64, Windows ARM64, Windows x86 (MSVC) | CI jobs passed (the wheel lists were not read) |
 | macOS Apple Silicon, macOS Intel | CI jobs passed (the wheel lists were not read) |
-| Pyodide 4.0.9 (CPython 3.13, wasm32) | local, `cibuildwheel --platform pyodide`: the 2 tests passed inside Pyodide (not in CI) |
-| Android arm64-v8a (CPython 3.13, NDK 27) | local: the wheel is built, the tests were skipped, **not run** (not in CI) |
-| Linux armv7l, riscv64, ppc64le, i686: `manylinux` and `musllinux_1_2` | local, `cibuildwheel` in Docker (armv7l, riscv64, ppc64le under QEMU; i686 in a 32-bit userland), the wasmext wheel of this branch and the wabt-package 1.0.42.0b2 wheels from PyPI: the cp311 abi3 wheel was built and the 2 tests of the example passed in each of the eight (not cp314t; not in CI) |
+| Pyodide 4.0.9 (CPython 3.13, wasm32) | CI (the 2 tests of coremark passed inside Pyodide), and locally |
+| Android arm64-v8a (CPython 3.13, NDK 27) | CI: the wheel is built; the tests are not run (see "Android wheel") |
+| Linux armv7l (native arm runner), i686 (native), ppc64le and riscv64 (QEMU), `manylinux` and `musllinux_1_2` | CI jobs passed (coremark: the wheel is built and its 2 tests pass; the wheel lists were not read); ppc64le and riscv64 take 10 to 11 minutes |
+| `examples/quickjs` on the seven platforms of the desktop matrix | CI jobs passed (9 tests each) |
+| Linux armv7l, riscv64, ppc64le, i686: `manylinux` and `musllinux_1_2` | local, `cibuildwheel` in Docker (armv7l, riscv64, ppc64le under QEMU; i686 in a 32-bit userland), the wasmext wheel of this branch and the wabt-package 1.0.42.0b2 wheels from PyPI: the cp311 abi3 wheel was built and the 2 tests of the example passed in each of the eight (not cp314t; now also in CI, see the row above) |
 | Linux s390x (big-endian): `manylinux_2_28`, `musllinux_1_2` | local, the same way: the wheel is built, but the example's tests **fail**. Checked with a small module under QEMU: before the fix `i32.load` of the bytes 01 02 03 04 gave 0x01020304 instead of 0x04030201, because nothing defined `WABT_BIG_ENDIAN`; now it is defined and the value is right. The exported memory is refused there (`NotImplementedError`), and the example needs it, so on s390x the example still fails; `v128` in a signature is refused by an `#error` |
 | Linux i386, CPython 3.12 | by hand, one abi3 memory64 module (`gcc -m32`), not in the suite |
 
@@ -164,12 +166,11 @@ The cibuildwheel configuration of the example is `build = "cp311-* cp314t-*"`.
 ### Not confirmed
 
 - PyPy (iOS is not a target).
-- The Linux architectures above in CI (they were built by hand under QEMU, not in a workflow), the `cp314t` wheels on them, and
-  `musllinux_1_2` x86-64 locally (the disk of the machine was full; CI built it in run #23, commit `0e251d8`).
+- The `cp314t` wheels on the Linux architectures other than x86-64 and ARM64 (CI builds `cp311` and `cp314t` there but the wheel lists were not read).
 - Big-endian hosts (s390x): a module that exports its memory, or uses `v128` in a signature, does not work there (see above);
   the rest was run only through the example and one small module.
 - Clang on Windows; gcc on macOS; Python 3.12 and later with the suite (CI uses 3.11; the official WASI tests use 3.11 for wasmext and 3.12 for the runner of that suite).
-- Android and Pyodide in CI.
+- Android: the tests (an arm64 wheel is only built, see "Android wheel"); a run on a real device.
 - Ahead-of-time claims about speed are from one machine (see "Speed").
 
 ### Examples of other projects
@@ -255,9 +256,9 @@ In this order (the first ones are small):
 4. **Threads**: `--enable-threads`, C11 atomics (and MSVC), a shared memory, `wasm_rt_init_thread` per thread. After 3, since the
    shared memory is a memory given to several instances, and the link table must not rely on plain reads of a mutable global.
 5. ~~**CI**~~: the desktop matrix is green (see "Verified"). The other Linux architectures were checked by hand under QEMU (armv7l,
-   riscv64, ppc64le, i686 work; s390x, big-endian, does not for modules with a memory export). Left: those in CI (a QEMU job). Windows x86 is in the matrix and green.
-6. Android and Pyodide in the CI matrix of the example (they build locally, see above); `pyproject.toml` configuration (no `setup.py`);
-   publishing on PyPI; `.wat` as a source (an idea, see "Build and distribution").
+   riscv64, ppc64le, i686 work; s390x, big-endian, does not for modules with a memory export). Those are in CI now (armv7l, i686, ppc64le, riscv64: coremark only, see "Verified"); s390x is not. Windows x86 is in the matrix and green.
+6. Android and Pyodide in the CI matrix of the example: done (Android is built, not tested); `pyproject.toml` configuration (no `setup.py`);
+   publishing on PyPI (the workflow publishes on a tag; the publisher is not set up yet); `.wat` as a source (an idea, see "Build and distribution").
 7. `funcref`/`externref` in signatures (a design is needed first: who owns an `externref`); custom page sizes (`wasm2c` can, with a
    flag); the rest of the examples of other projects (below).
 8. ~~**WASI**~~ (`wasi_snapshot_preview1` and `wasi_unstable`): done for WASI 0.1. Part of wasmext, compiled into the native module as a header, `wasi_preview1.h`, the system

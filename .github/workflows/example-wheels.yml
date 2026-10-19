@@ -145,6 +145,8 @@ jobs:
           CIBW_BEFORE_BUILD: pip install --find-links {package}/deps wasmext setuptools
           CIBW_BUILD: ${{ matrix.build || 'cp311-* cp314t-*' }}
           CIBW_TEST_SKIP: ${{ matrix.skip_tests && '*' || '' }}
+          # Android and Pyodide are built on the host: cibuildwheel installs build-system.requires itself, and pip has to find the wheel of wasmext
+          PIP_FIND_LINKS: ${{ (matrix.platform == 'android' || matrix.platform == 'pyodide') && format('{0}/examples/coremark/deps', github.workspace) || '' }}
         run: uvx cibuildwheel examples/coremark --platform ${{ matrix.platform }} --archs ${{ matrix.archs }} --output-dir wheelhouse
         shell: bash
 

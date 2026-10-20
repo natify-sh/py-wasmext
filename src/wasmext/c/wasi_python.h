@@ -765,6 +765,11 @@ static inline uint32_t wasi_resolve(wasmext_wasi *w, wasi_entry *dir, uint32_t p
             while (n > 0 && out[n - 1] != '/') n--;
             if (n > 0) n--;
         } else if (tlen > 0 && !(tlen == 1 && cursor[0] == '.')) {
+            if (tlen > 255) {  /* a name of at most 255 bytes, as on POSIX; Windows would answer "invalid name" and the others at the end of a walk */
+                WASI_FREE(joined);
+                WASI_FREE(out);
+                return WASI_E_NAMETOOLONG;
+            }
             if (n) out[n++] = '/';
             memcpy(out + n, cursor, tlen);
             n += tlen;

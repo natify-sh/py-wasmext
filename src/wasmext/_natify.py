@@ -27,7 +27,7 @@ import sysconfig
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from ._gen import GenError, Glue, generate, module_prefix
 from ._toolchain import Toolchain, find_toolchain
@@ -182,6 +182,29 @@ class _Prepared:
     skipped: list[str]
     extra_include_dirs: tuple[str, ...] = ()
     parts: int = 1  # the files the C of the module is in
+    glue: Any = None  # the Glue of the module (what is generated from it, for every target)
+    parsed: Any = None  # the parsed module
+
+
+@dataclass(frozen=True, slots=True)
+class Target:
+    """What one product of a module is built from: the sources to compile, or why the module has no such product."""
+
+    sources: list[str]
+    reason: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class Generated:
+    """The C that is made of a module, for **every** target it can have (an extension, a shared library, a program): the build only chooses which sources to compile,
+    so what is generated never has to be made again for another product. `files` is everything made, for a source distribution."""
+
+    last: str
+    out_dir: Path
+    prepared: _Prepared
+    targets: dict[str, Target]
+    files: list[str]
+    skipped: list[str]  # what the module leaves out of its API, said in words
 
 
 def _rel(path: Path) -> str:
@@ -428,6 +451,8 @@ def _prepare(
             skipped,
             _simde_include(files),
             count,
+            glue,
+            parsed,
         )
 
     # The glue and the stub come from the module alone (no wasm2c, no compiler), so they are always made: a module that
@@ -499,6 +524,50 @@ def _prepare(
         for item in glue.notes:
             print(f"wasmext: {wasm}: {item}", file=sys.stderr)
     return outputs(glue.skipped, wanted)
+
+
+def generate_c(
+    wasm: Path, name: str, out_dir: Path, *, force: bool, quiet: bool, stubs: bool, parts: int | None
+) -> Generated:
+    """The C of `wasm` for every target that the module can have, written in `out_dir`: the C of wasm2c, its runtime and the glue (the same for all of them), and the front end of each
+    target: `<name>_py.c` (an extension), `<name>_api.h` and `<name>_shared.c` (a shared library), `<name>_main.c` (a program). A target that the module cannot have is left out and the reason is
+    kept in `targets` (a library of a module whose import has no type in C; a program of a module that is not a WASI command). Nothing is compiled: the build chooses the sources of its product, so
+    the C that is made for one product is the C of the others too, and a source distribution carries all of it."""
+    from ._exe import main_c, program_problem
+
+    prepared = _prepare(wasm, name, out_dir, force=force, quiet=quiet, stubs=stubs, parts=parts)
+    last = name.rsplit(".", 1)[-1]
+    glue, parsed = prepared.glue, prepared.parsed
+    common = [
+        s for s in prepared.sources if not s.endswith(f"{last}_py.c")
+    ]  # the C of wasm2c and the runtime: every target compiles it
+    written: list[Path] = []
+
+    def put(file: str, text: str) -> Path:
+        target = out_dir / file
+        if not target.is_file() or target.read_text("utf-8") != text:
+            target.write_text(text, encoding="utf-8")
+        written.append(target)
+        return target
+
+    targets = {"extension": Target(list(prepared.sources))}
+    if glue.shared_unsupported or not glue.shared:
+        targets["shared"] = Target(
+            [], f"no shared library yet: {glue.shared_unsupported or 'the module has no API in C'}"
+        )
+    else:
+        put(f"{last}_api.h", glue.api_header)
+        shared_c = put(f"{last}_shared.c", glue.shared)
+        targets["shared"] = Target([*common, shared_c.as_posix()])
+    problem = program_problem(parsed)
+    if problem:
+        targets["exe"] = Target([], problem)
+    else:
+        main_path = put(f"{last}_main.c", main_c(last, module_prefix(last)))
+        targets["exe"] = Target([*common, main_path.as_posix()])
+    files = [*prepared.sources, *prepared.depends, *(_rel(p) for p in written)]
+    skipped = [item for item in glue.skipped if "is not an attribute" not in item]
+    return Generated(last, out_dir, prepared, targets, list(dict.fromkeys(files)), skipped)
 
 
 def natify(
@@ -608,14 +677,16 @@ def _natify(
         if not name.rsplit(".", 1)[-1].isidentifier():
             raise ValueError(f"{wasm}: {name!r} is not a module name; give the module an Extension with a name")
         out_dir = Path(build_dir) / name if build_dir else wasm.parent / f"{wasm.stem}_wasmext"
+        # The C of every target is made now (so a source distribution carries it, and a file of it can be named in package-data on the first build);
+        # the build, here or in wasmext._setuptools, only chooses the sources of the product that was asked for.
+        generated = generate_c(
+            wasm, name, out_dir, force=force, quiet=quiet, stubs=stubs and product == "extension", parts=parts
+        )
+        prepared = generated.prepared
+        chosen = generated.targets[product]
+        if chosen.reason:
+            raise GenError(f"{wasm}: {chosen.reason}")
         if product != "extension":
-            # The C is made now, as an extension's is (so a source distribution carries it, and a file of it can be named in package-data on the first build);
-            # the file itself, the library or the program, is made by the build_ext of wasmext._setuptools.
-            from ._exe import generate_program, generate_shared
-
-            generated = (generate_shared if product == "shared" else generate_program)(
-                wasm, work=out_dir.resolve(), parts=parts, force=force
-            )
             ext = copy.copy(template) if template else Extension(name, [])
             ext.name = name
             ext.sources = [wasm.as_posix()]
@@ -628,15 +699,14 @@ def _natify(
             ext._wasmext_settings = {"work": out_dir.resolve(), "parts": parts, "quiet": quiet, "force": force}  # type: ignore[attr-defined]
             result.append((wasm, ext))
             return
-        prepared = _prepare(wasm, name, out_dir, force=force, quiet=quiet, stubs=stubs, parts=parts)
         ext = copy.copy(template) if template else Extension(name, [])
         ext.name = name
         ext._wasmext_limited_api = limited_api  # type: ignore[attr-defined]  # what was asked (None: whatever the interpreter allows), for wasmext._setuptools to make the wheel consistent
         rest = [s for s in (template.sources if template else []) if not str(s).endswith(".wasm")]
-        ext.sources = [*rest, *prepared.sources]
+        ext.sources = [*rest, *chosen.sources]
         ext._wasmext_parallel = prepared.parts > 1  # type: ignore[attr-defined]  # wasmext._setuptools compiles the files at once
         ext._wasmext_made = True  # type: ignore[attr-defined]  # made by natify(): the table of pyproject.toml is not for a project that calls it
-        ext.depends = [*ext.depends, *prepared.depends]
+        ext.depends = [*ext.depends, *(f for f in generated.files if f not in chosen.sources)]
         ext.include_dirs = [
             *ext.include_dirs,
             *prepared.extra_include_dirs,

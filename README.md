@@ -117,9 +117,9 @@ module-list = "src/pkg/tool.wasm"
 product = "exe"
 ```
 
-`natify(..., product="shared")` is the same. The C of a product is made when `natify()` runs, as an extension's is (so a source distribution carries it, below), and `wasmext natify --shared FILE` / `--exe FILE`
-writes only that C, as `cythonize` does without `-b`; with `-i` (or `-b`) the library or the program is built too, in place (the two options exclude each other:
-a library holds no `main`). `setup.py build_ext` puts the file where an extension would go: `lib<name>.so` / `lib<name>.dylib` / `<name>.dll`
+`natify(..., product="shared")` is the same. Whatever product is asked for, `natify()` makes the C of **every** product that the module can have (an extension, a library, and a program if the module is a WASI command), and the build only chooses the sources to compile, so the
+C made for one product never has to be made again for another (a source distribution carries all of it, below). `wasmext natify FILE`, with `--shared` or `--exe` too, writes only that C, as `cythonize` does without `-b`; with `-i` (or `-b`) the extension, the library or the program is built too
+(the options `--shared` and `--exe` exclude each other: a library holds no `main`; a program of a module that is not a command is refused). `setup.py build_ext` puts the file where an extension would go: `lib<name>.so` / `lib<name>.dylib` / `<name>.dll`
 (with its header `<name>_api.h` in `<name>_wasmext/`, and `<name>_ctypes.py` beside it: the interface of the extension over `ctypes`), or the program `<name>` /
 `<name>.exe`. A program needs a `_start` and no imports but WASI's (`--env NAME=VALUE`, `--dir HOST::GUEST[:ro]`, `--argv0`, `--help`); a
 library exports only its API. The settings of the extension (`libraries`, `extra-compile-args`, ...) are the flags of the build. A reactor
@@ -131,11 +131,10 @@ and may not want a launcher at all). `limited-api` and the stubs are for extensi
 
 ### What a source distribution carries
 
-An sdist made from a project that uses wasmext has the `.wasm` **and** the C that wasmext made from it (`<name>_wasmext/`: the glue, the C of wasm2c, its runtime and, for a product, `<name>_api.h` and `<name>_shared.c` or `<name>_main.c`), for an
-extension and for a library or a program alike: the C is made when the project is read, and the files are named in the sources and the dependencies of the extension, which setuptools puts in the sdist. The C is not trusted by its time:
+An sdist made from a project that uses wasmext has the `.wasm` **and** the C that wasmext made from it (`<name>_wasmext/`: the glue, the C of wasm2c, its runtime and the front end of every target the module can have: `<name>_py.c`, `<name>_api.h` and `<name>_shared.c`, and `<name>_main.c` for a WASI command), whichever product the project builds: the C is made when the project is read, and the files are named in the sources and the dependencies of the extension, which setuptools puts in the sdist. The C is not trusted by its time:
 it carries the SHA-256 of the `.wasm` it was made from, and is made again if the `.wasm`, wasmext or WABT is another (so a file restored from a cache, or copied with its old time, cannot leave a stale C behind).
-Cython advises against shipping generated C in an sdist and a build requirement on the generator instead, which is what `requires = ["setuptools", "wasmext"]` does here; a project that does not want the C in its sdist adds
-`global-exclude *_wasmext/*` and `prune src/pkg/*_wasmext` (the names of its folders) to `MANIFEST.in`. Shipping the C and not the `.wasm`, to be built with a C compiler and no wasmext, is not tested.
+Cython advises against shipping generated C in an sdist and a build requirement on the generator instead, which is what `requires = ["setuptools", "wasmext"]` does here; a project that does not want the C in its sdist puts
+`global-exclude *_wasmext/*` (or a `prune` for each folder, as `prune src/pkg/engine_wasmext`) in `MANIFEST.in`; the sdist then has the `.wasm` only (checked on `examples/products`). Shipping the C and not the `.wasm`, to be built with a C compiler and no wasmext, is not tested.
 
 ### Linking instances
 

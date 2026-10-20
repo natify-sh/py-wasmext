@@ -17,11 +17,11 @@ import sys
 import tempfile
 from collections.abc import Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from ._gen import GenError
 from ._inspect import read
-from ._natify import _natify, _version, parse_guard_pages  # pyright: ignore[reportPrivateUsage]
+from ._natify import Generated, _natify, _version, parse_guard_pages  # pyright: ignore[reportPrivateUsage]
 from ._toolchain import find_toolchain
 from ._wasm import WasmError
 
@@ -186,7 +186,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             if args.product == "extension":
                 print(f"wasmext: {shown} -> {ext.name} ({ext.include_dirs[-1]}/)")
                 continue
-            generated = ext._wasmext_generated  # type: ignore[attr-defined]
+            generated = cast("Generated", ext._wasmext_generated)  # type: ignore[attr-defined]
             print(
                 f"wasmext: {shown} -> the C of the {args.product} {generated.last} ({Path(generated.out_dir).as_posix()}/)"
             )

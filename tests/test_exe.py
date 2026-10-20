@@ -110,7 +110,7 @@ def test_a_directory_can_be_given_read_only(wabt: Path, tmp_path: Path) -> None:
 def test_a_start_that_is_not_a_command_is_refused(wabt: Path, tmp_path: Path) -> None:
     wat = tmp_path / "typed.wat"
     wat.write_text(
-        '(module (import "wasi_snapshot_preview1" "proc_exit" (func (param i32))) (func (export "_start") (param i32)))',
+        '(module (import "wasi_snapshot_preview1" "proc_exit" (func (param i32))) (memory (export "memory") 1) (func (export "_start") (param i32)))',
         encoding="utf-8",
     )
     wasm = tmp_path / "typed.wasm"

@@ -23,7 +23,10 @@ The library (@LIBRARY@) is looked for beside this file; $@ENV@ names another pat
 
 from __future__ import annotations
 
+import codecs
 import ctypes
+import errno
+import io
 import operator
 import os
 import sys
@@ -589,8 +592,96 @@ _RANDOM = _c.CFUNCTYPE(_c.c_int, _c.c_void_p, _c.c_void_p, _c.c_size_t)
 
 
 def _strings(items: Any) -> Any:
+    if isinstance(items, (str, bytes, bytearray)):  # a string is a sequence of characters: not the list of arguments
+        raise TypeError("wasi: args and env are lists of strings (and not one string, or bytes)")
+    items = list(items)
+    for item in items:
+        if not isinstance(item, str):
+            raise TypeError("wasi: args and env are strings")
+        if chr(0) in item:  # each is ended by a NUL in the table of the program
+            raise ValueError("wasi: a string of args or env has a null character in it")
     array = (_c.c_char_p * max(len(items), 1))(*[os.fsencode(s) for s in items])
     return array, len(items)
+
+
+# the errno of WASI for what the OSError of a stream says (the numbers of the host are not those of WASI)
+_WASI_ERRNO = {
+    errno.EBADF: 8, errno.EPIPE: 64, errno.EIO: 29, errno.EAGAIN: 6, errno.EACCES: 2, errno.ENOSPC: 51, errno.EINTR: 27,
+    errno.EINVAL: 28, errno.EPERM: 63, errno.ENOENT: 44,
+}
+
+
+def _write_all(writer: Any, data: bytes) -> None:
+    """All of `data` to the `write` of an object, which may take less than it is given (a raw stream does)."""
+    done = 0
+    while done < len(data):
+        taken = writer.write(data[done:])
+        taken = len(data) - done if taken is None or not isinstance(taken, int) else taken  # no number: all of it, as io.BufferedIOBase says
+        if taken <= 0:
+            raise OSError(errno.EIO, "a stream wrote no bytes")
+        done += min(taken, len(data) - done)
+
+
+def _closed(stream: Any) -> None:
+    """A stream that is closed is EBADF for the program, not a trap for the ValueError of the write."""
+    if getattr(stream, "closed", False):
+        raise OSError(errno.EBADF, "the stream is closed")
+
+
+class _Streams:
+    """The standard streams of the program, as the caller gave them (the key left out is sys.stdin / stdout / stderr as they are when the program reads or writes)."""
+
+    def __init__(self, wasi: dict[str, Any]) -> None:
+        self.wasi = wasi
+        self.decoders: dict[int, Any] = {}  # a text stream with no binary side gets text; a character may come in two writes
+        self.rest = b""
+
+    def write(self, fd: int, data: bytes) -> None:
+        key = "stdout" if fd == 1 else "stderr"
+        if key in self.wasi:
+            target = self.wasi[key]
+            if target is None:
+                return
+            given = True
+        else:
+            target = sys.stdout if fd == 1 else sys.stderr
+            if target is None:
+                return
+            given = False
+        text = not given or isinstance(target, io.TextIOBase)
+        if given and not text and not hasattr(target, "write"):
+            target(data)  # a function: it is called once with the bytes
+            return
+        _closed(target)
+        if not text:
+            _write_all(target, data)
+            return
+        if hasattr(target, "flush"):  # a stand-in for sys.stdout may have only write
+            target.flush()
+        binary = getattr(target, "buffer", None)
+        if binary is not None:
+            _write_all(binary, data)
+            return
+        if fd not in self.decoders:
+            self.decoders[fd] = codecs.getincrementaldecoder("utf-8")("replace")
+        target.write(self.decoders[fd].decode(data))
+
+    def read(self, size: int) -> bytes:
+        source = self.wasi["stdin"] if "stdin" in self.wasi else sys.stdin
+        if source is None:
+            return b""
+        if isinstance(source, (bytes, bytearray)):
+            data, self.wasi["stdin"] = bytes(source[:size]), bytes(source[size:])
+            return data
+        if isinstance(source, io.TextIOBase):
+            binary = getattr(source, "buffer", None)
+            if binary is not None:
+                return bytes(binary.read1(size) if hasattr(binary, "read1") else binary.read(size))
+            if not self.rest:
+                self.rest = source.read(size).encode("utf-8")
+            data, self.rest = self.rest[:size], self.rest[size:]
+            return data
+        return bytes(source.read(size))
 
 
 def _wasi_config(self_ref: Any, wasi: Any) -> tuple[Any, list[Any]]:
@@ -605,11 +696,18 @@ def _wasi_config(self_ref: Any, wasi: Any) -> tuple[Any, list[Any]]:
     config = _Config()
     keep: list[Any] = []
     if "args" in wasi:  # None is no arguments at all; a key that is left out is the name of the module
-        array, count = _strings([str(a) for a in (wasi["args"] or ())])
+        array, count = _strings(wasi["args"] or ())
         keep.append(array)
         config.args, config.nargs = _c.cast(array, _c.POINTER(_c.c_char_p)), count
     env = wasi.get("env") or {}
-    array, count = _strings([f"{k}={v}" for k, v in dict(env).items()])
+    lines: list[str] = []
+    for key, value in dict(env).items():
+        if not isinstance(key, str) or not isinstance(value, str):
+            raise TypeError("wasi: env: names and values are strings")
+        if not key or "=" in key:
+            raise ValueError("wasi: env: a name is not empty and has no '=' in it")
+        lines.append(f"{key}={value}")
+    array, count = _strings(lines)
     keep.append(array)
     config.env, config.nenv = _c.cast(array, _c.POINTER(_c.c_char_p)), count
     preopens_given = wasi.get("preopens")
@@ -645,7 +743,11 @@ def _wasi_config(self_ref: Any, wasi: Any) -> tuple[Any, list[Any]]:
     config.dirs, config.ndirs = _c.cast(array, _c.POINTER(_c.c_char_p)), count
     config.dirs_readonly = _c.cast(flags, _c.POINTER(_c.c_int))
 
+    streams = _Streams(wasi)
+
     def failed(exc: BaseException) -> int:
+        if isinstance(exc, OSError) and not isinstance(exc, BlockingIOError | BrokenPipeError) or isinstance(exc, BlockingIOError | BrokenPipeError):
+            return _WASI_ERRNO.get(exc.errno or errno.EIO, 29)  # an error of a stream is an error of the call, not a trap
         owner = self_ref()
         if owner is not None:
             owner._pending = exc
@@ -653,17 +755,9 @@ def _wasi_config(self_ref: Any, wasi: Any) -> tuple[Any, list[Any]]:
 
     def stdin_read(_user: Any, buffer: Any, capacity: int, got: Any) -> int:
         try:
-            source = wasi.get("stdin", sys.stdin)
-            if source is None:
-                got[0] = 0
-                return 0
-            if isinstance(source, (bytes, bytearray)):
-                data, source = bytes(source[:capacity]), bytes(source[capacity:])
-                wasi["stdin"] = source
-            else:
-                data = source.read(capacity) if hasattr(source, "read") else b""
-                if isinstance(data, str):
-                    data = data.encode("utf-8")
+            data = streams.read(capacity)
+            if len(data) > capacity:
+                raise ValueError("stdin gave more bytes than were asked for")
             _c.memmove(buffer, data, len(data))
             got[0] = len(data)
             return 0
@@ -672,17 +766,7 @@ def _wasi_config(self_ref: Any, wasi: Any) -> tuple[Any, list[Any]]:
 
     def stdout_write(_user: Any, fd: int, buffer: Any, count: int) -> int:
         try:
-            data = _c.string_at(buffer, count)
-            target = wasi.get("stdout" if fd == 1 else "stderr", sys.stdout if fd == 1 else sys.stderr)
-            if target is None:
-                return 0
-            if callable(target) and not hasattr(target, "write"):
-                target(data)
-                return 0
-            try:
-                target.write(data)
-            except TypeError:  # a text stream
-                target.write(data.decode("utf-8", "replace"))
+            streams.write(fd, _c.string_at(buffer, count))
             return 0
         except BaseException as exc:
             return failed(exc)

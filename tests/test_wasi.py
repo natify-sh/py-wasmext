@@ -478,3 +478,92 @@ def test_the_glue_of_a_module_compiles_with_no_python(source: str, wabt: Path, t
     )
     assert compiled.returncode == 0, compiled.stderr[-1500:]
     assert "#include <Python.h>" not in glue.header
+
+
+def _write_bytes(inst: Any, data: bytes, fd: int = 1) -> int:
+    """fd_write of `data` to `fd` from the memory of the probe: the errno."""
+    mem = inst.memory
+    mem[100 : 100 + len(data)] = data
+    mem[0:8] = (100).to_bytes(4, "little") + len(data).to_bytes(4, "little")
+    return int(inst.fd_write(fd, 0, 1, 32))
+
+
+def test_a_stream_that_takes_less_than_it_is_given_gets_all_of_it(build_extension: Builder) -> None:
+    taken: list[bytes] = []
+
+    class Chunky:
+        """A raw stream: write() says how many bytes it took, and it takes three at a time."""
+
+        def write(self, data: bytes) -> int:
+            taken.append(bytes(data[:3]))
+            return min(3, len(data))
+
+    _, inst = probe(build_extension, stdout=Chunky())
+    assert _write_bytes(inst, b"hello, wasi") == 0
+    assert b"".join(taken) == b"hello, wasi"
+
+
+def test_a_character_in_two_writes_is_one_character(build_extension: Builder) -> None:
+    import io
+
+    text = io.StringIO()  # a text stream with no binary side
+    _, inst = probe(build_extension, stdout=text)
+    assert _write_bytes(inst, b"\xc3") == 0 and _write_bytes(inst, b"\xa9!") == 0
+    assert text.getvalue() == "é!"
+
+
+def test_a_closed_stream_is_ebadf_not_a_trap(build_extension: Builder) -> None:
+    import io
+
+    text = io.StringIO()
+    text.close()
+    _, inst = probe(build_extension, stdout=text)
+    assert _write_bytes(inst, b"x") == 8  # EBADF
+
+
+def test_a_stand_in_for_stdout_that_has_only_write(build_extension: Builder, monkeypatch: pytest.MonkeyPatch) -> None:
+    import sys
+
+    seen: list[str] = []
+
+    class OnlyWrite:
+        def write(self, text: str) -> int:
+            seen.append(text)
+            return len(text)
+
+    monkeypatch.setattr(sys, "stdout", OnlyWrite())
+    _, inst = probe(build_extension)
+    assert _write_bytes(inst, "é".encode()) == 0
+    assert "".join(seen) == "é"
+
+
+def test_a_text_stdin_with_characters_of_several_bytes_is_read_in_pieces(build_extension: Builder) -> None:
+    import io
+
+    _, inst = probe(build_extension, stdin=io.StringIO("héllo wörld ✓"))
+    mem = inst.memory
+    got = b""
+    for _ in range(20):
+        mem[0:8] = (200).to_bytes(4, "little") + (4).to_bytes(4, "little")
+        assert inst.fd_read(0, 0, 1, 32) == 0
+        n = u32(mem, 32)
+        if n == 0:
+            break
+        got += bytes(mem[200 : 200 + n])
+    assert got == "héllo wörld ✓".encode()
+
+
+def test_args_and_env_are_checked(build_extension: Builder) -> None:
+    mod = build_extension(DATA / "wasi_probe.wat", "wasi_probe")
+    for bad, error in (
+        ({"env": {b"a": b"c"}}, TypeError),
+        ({"env": {"a": 1}}, TypeError),
+        ({"env": {"a=b": "c"}}, ValueError),
+        ({"env": {"": "c"}}, ValueError),
+        ({"env": {"a": "c\0d"}}, ValueError),
+        ({"args": "abc"}, TypeError),
+        ({"args": ["a\0b"]}, ValueError),
+        ({"args": [b"a"]}, TypeError),
+    ):
+        with pytest.raises(error):
+            mod.Instance(wasi=bad)

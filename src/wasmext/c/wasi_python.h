@@ -20,6 +20,8 @@ typedef struct {
     PyObject *os_module;
     PyObject *text_base;  /* io.TextIOBase, to tell a text stream from a binary one */
     PyObject *clock_fn, *random_fn;  /* what the caller gave in place of the clocks and of the random bytes */
+    PyObject *decoder[3];  /* a text stream with no binary side gets text: the bytes of one character may come in two writes, so each stream has its decoder */
+    PyObject *stdin_rest;  /* the bytes of a text stdin that did not fit in the last read */
 } wasmext_wasi_py;
 
 #define WASI_PY(w) ((wasmext_wasi_py *)(w)->user)
@@ -70,27 +72,79 @@ static inline int wasi_is_text(wasmext_wasi_py *p, PyObject *stream) {
     return PyObject_IsInstance(stream, p->text_base);
 }
 
+/* a stream that has been closed: the program gets EBADF, as for a descriptor that is closed (not a trap for the ValueError that the write would raise) */
+static inline int wasi_stream_closed(PyObject *stream) {
+    PyObject *closed = PyObject_GetAttrString(stream, "closed");
+    if (closed == NULL) {
+        PyErr_Clear();
+        return 0;
+    }
+    int yes = PyObject_IsTrue(closed);
+    Py_DECREF(closed);
+    if (yes < 0) PyErr_Clear();
+    if (yes > 0) {
+        errno = EBADF;
+        PyErr_SetFromErrno(PyExc_OSError);
+        return -1;
+    }
+    return 0;
+}
+
+/* all of `data` to the `write` of an object, which may take less than it is given (a raw stream does): 0, or -1 with an exception */
+static inline int wasi_write_all(PyObject *writer, const char *data, Py_ssize_t size) {
+    Py_ssize_t done = 0;
+    while (done < size) {
+        PyObject *bytes = PyBytes_FromStringAndSize(data + done, size - done);
+        if (bytes == NULL) return -1;
+        PyObject *r = PyObject_CallMethod(writer, "write", "O", bytes);
+        Py_DECREF(bytes);
+        if (r == NULL) return -1;
+        Py_ssize_t n = size - done;  /* a write that gives no number (None) is taken as all written, as io.BufferedIOBase does */
+        if (PyLong_Check(r)) n = PyLong_AsSsize_t(r);
+        Py_DECREF(r);
+        if (n == -1 && PyErr_Occurred()) return -1;
+        if (n <= 0) {
+            errno = EIO;
+            PyErr_SetFromErrno(PyExc_OSError);
+            return -1;
+        }
+        done += n > size - done ? size - done : n;
+    }
+    return 0;
+}
+
 /* bytes to a text stream (sys.stdout, or any text stream the caller gave): through its binary side after flushing its text layer, or
-   as text where it has none */
-static inline int wasi_write_text_stream(PyObject *stream, const char *data, Py_ssize_t size) {
-    PyObject *r, *flushed = PyObject_CallMethod(stream, "flush", NULL);
-    if (flushed == NULL) return -1;
-    Py_DECREF(flushed);
+   as text (decoded as the bytes come, a character in two writes is one character) where it has none */
+static inline int wasi_write_text_stream(wasmext_wasi_py *p, uint32_t fd, PyObject *stream, const char *data, Py_ssize_t size) {
+    PyObject *r;
+    if (PyObject_HasAttrString(stream, "flush")) {  /* a stand-in for sys.stdout may have only write */
+        PyObject *flushed = PyObject_CallMethod(stream, "flush", NULL);
+        if (flushed == NULL) return -1;
+        Py_DECREF(flushed);
+    }
     PyObject *buffer = PyObject_GetAttrString(stream, "buffer");
     if (buffer == NULL) {  /* a text stream with no binary side: it gets the text */
         PyErr_Clear();
-        PyObject *text = PyUnicode_DecodeUTF8(data, size, "replace");
-        r = text ? PyObject_CallMethod(stream, "write", "O", text) : NULL;
-        Py_XDECREF(text);
+        if (p->decoder[fd] == NULL) {
+            PyObject *codecs = PyImport_ImportModule("codecs");
+            PyObject *factory = codecs ? PyObject_CallMethod(codecs, "getincrementaldecoder", "s", "utf-8") : NULL;
+            p->decoder[fd] = factory ? PyObject_CallFunction(factory, "s", "replace") : NULL;
+            Py_XDECREF(factory);
+            Py_XDECREF(codecs);
+            if (p->decoder[fd] == NULL) return -1;
+        }
+        PyObject *bytes = PyBytes_FromStringAndSize(data, size);
+        PyObject *text = bytes ? PyObject_CallMethod(p->decoder[fd], "decode", "O", bytes) : NULL;
+        Py_XDECREF(bytes);
+        if (text == NULL) return -1;
+        r = PyObject_CallMethod(stream, "write", "O", text);
+        Py_DECREF(text);
         Py_XDECREF(r);
         return r ? 0 : -1;
     }
-    PyObject *bytes = PyBytes_FromStringAndSize(data, size);
-    r = bytes ? PyObject_CallMethod(buffer, "write", "O", bytes) : NULL;
-    Py_XDECREF(bytes);
+    int rc = wasi_write_all(buffer, data, size);
     Py_DECREF(buffer);
-    Py_XDECREF(r);
-    return r ? 0 : -1;
+    return rc;
 }
 
 /* the stream the caller gave (None: thrown away), or sys.stdout / sys.stderr as they are now */
@@ -100,15 +154,17 @@ static inline int wasi_write_bytes(wasmext_wasi_py *p, uint32_t fd, const char *
     if (target == NULL) {
         target = PySys_GetObject(fd == 1 ? "stdout" : "stderr");  /* borrowed */
         if (target == NULL || target == Py_None) return 0;
-        return wasi_write_text_stream(target, data, size);
+        if (wasi_stream_closed(target) < 0) return -1;
+        return wasi_write_text_stream(p, fd, target, data, size);
     }
     int text = wasi_is_text(p, target);
     if (text < 0) return -1;
-    if (text) return wasi_write_text_stream(target, data, size);
-    PyObject *bytes = PyBytes_FromStringAndSize(data, size);
+    if (wasi_stream_closed(target) < 0) return -1;
+    if (text) return wasi_write_text_stream(p, fd, target, data, size);
+    if (PyObject_HasAttrString(target, "write")) return wasi_write_all(target, data, size);
+    PyObject *bytes = PyBytes_FromStringAndSize(data, size);  /* a function: it is called once with the bytes */
     if (bytes == NULL) return -1;
-    if (PyObject_HasAttrString(target, "write")) r = PyObject_CallMethod(target, "write", "O", bytes);
-    else r = PyObject_CallFunctionObjArgs(target, bytes, NULL);
+    r = PyObject_CallFunctionObjArgs(target, bytes, NULL);
     Py_DECREF(bytes);
     Py_XDECREF(r);
     return r ? 0 : -1;
@@ -135,12 +191,24 @@ static inline PyObject *wasi_read_bytes(wasmext_wasi_py *p, Py_ssize_t size) {
     }
     if (!text) return PyObject_CallMethod(source, "read", "n", size);
     PyObject *buffer = PyObject_GetAttrString(source, "buffer");
-    if (buffer == NULL) {  /* a text stream with no binary side: its text, as UTF-8 */
+    if (buffer == NULL) {  /* a text stream with no binary side: its text, as UTF-8; what does not fit in this read waits for the next */
         PyErr_Clear();
-        PyObject *chars = PyObject_CallMethod(source, "read", "n", size);
-        PyObject *bytes = chars ? PyUnicode_AsUTF8String(chars) : NULL;
-        Py_XDECREF(chars);
-        return bytes;
+        if (p->stdin_rest == NULL || PyBytes_GET_SIZE(p->stdin_rest) == 0) {
+            Py_CLEAR(p->stdin_rest);
+            PyObject *chars = PyObject_CallMethod(source, "read", "n", size);
+            p->stdin_rest = chars ? PyUnicode_AsUTF8String(chars) : NULL;
+            Py_XDECREF(chars);
+            if (p->stdin_rest == NULL) return NULL;
+        }
+        Py_ssize_t have = PyBytes_GET_SIZE(p->stdin_rest), n = have < size ? have : size;
+        PyObject *head = PyBytes_FromStringAndSize(PyBytes_AS_STRING(p->stdin_rest), n);
+        PyObject *tail = head ? PyBytes_FromStringAndSize(PyBytes_AS_STRING(p->stdin_rest) + n, have - n) : NULL;
+        if (tail == NULL) {
+            Py_XDECREF(head);
+            return NULL;
+        }
+        Py_SETREF(p->stdin_rest, tail);
+        return head;
     }
     PyObject *bytes = PyObject_HasAttrString(buffer, "read1") ? PyObject_CallMethod(buffer, "read1", "n", size)
                                                               : PyObject_CallMethod(buffer, "read", "n", size);
@@ -284,12 +352,24 @@ static inline void wasi_py_options_free(wasi_py_options *o) {
 
 /* the strings of a sequence into one buffer of NUL-ended strings */
 static inline int wasi_pack_strings(PyObject *seq, char **out, size_t *size, uint32_t *count) {
+    if (PyUnicode_Check(seq) || PyBytes_Check(seq) || PyByteArray_Check(seq)) {  /* a string is a sequence of characters: not the list of arguments */
+        PyErr_SetString(PyExc_TypeError, "wasi: args and env are lists of strings (and not one string, or bytes)");
+        return -1;
+    }
     PyObject *list = PySequence_List(seq);
     if (list == NULL) return -1;
     Py_ssize_t n = PyList_Size(list), total = 0;
     for (Py_ssize_t i = 0; i < n; i++) {
         Py_ssize_t len;
-        if (PyUnicode_AsUTF8AndSize(PyList_GetItem(list, i), &len) == NULL) {
+        PyObject *item = PyList_GetItem(list, i);
+        const char *text = PyUnicode_Check(item) ? PyUnicode_AsUTF8AndSize(item, &len) : NULL;
+        if (text == NULL) {
+            if (!PyErr_Occurred()) PyErr_SetString(PyExc_TypeError, "wasi: args and env are strings");
+            Py_DECREF(list);
+            return -1;
+        }
+        if ((Py_ssize_t)strlen(text) != len) {  /* each is ended by a NUL in the table of the program: one inside it would make two */
+            PyErr_SetString(PyExc_ValueError, "wasi: a string of args or env has a null character in it");
             Py_DECREF(list);
             return -1;
         }
@@ -458,7 +538,18 @@ static inline int wasi_apply_option(wasmext_wasi_py *p, wasi_py_options *o, cons
         Py_ssize_t n = PyList_Size(items);
         for (Py_ssize_t i = 0; strings != NULL && i < n; i++) {
             PyObject *pair = PyList_GetItem(items, i);
-            PyObject *line = PyUnicode_FromFormat("%U=%U", PyTuple_GetItem(pair, 0), PyTuple_GetItem(pair, 1));
+            PyObject *key = PyTuple_GetItem(pair, 0), *val = PyTuple_GetItem(pair, 1);
+            if (!PyUnicode_Check(key) || !PyUnicode_Check(val)) {
+                PyErr_SetString(PyExc_TypeError, "wasi: env: names and values are strings");
+                Py_CLEAR(strings);
+                break;
+            }
+            if (PyUnicode_GET_LENGTH(key) == 0 || PyUnicode_FindChar(key, '=', 0, PyUnicode_GET_LENGTH(key), 1) >= 0) {
+                PyErr_SetString(PyExc_ValueError, "wasi: env: a name is not empty and has no '=' in it");
+                Py_CLEAR(strings);
+                break;
+            }
+            PyObject *line = PyUnicode_FromFormat("%U=%U", key, val);
             if (line == NULL || PyList_Append(strings, line) < 0) {
                 Py_XDECREF(line);
                 Py_CLEAR(strings);
@@ -496,6 +587,8 @@ static inline int wasmext_wasi_traverse(wasmext_wasi *w, visitproc visit, void *
     Py_VISIT(p->text_base);
     Py_VISIT(p->clock_fn);
     Py_VISIT(p->random_fn);
+    for (int i = 0; i < 3; i++) Py_VISIT(p->decoder[i]);
+    Py_VISIT(p->stdin_rest);
     return 0;
 }
 
@@ -509,6 +602,8 @@ static inline void wasi_py_clear(wasmext_wasi_py *p) {
     Py_CLEAR(p->text_base);
     Py_CLEAR(p->clock_fn);
     Py_CLEAR(p->random_fn);
+    for (int i = 0; i < 3; i++) Py_CLEAR(p->decoder[i]);
+    Py_CLEAR(p->stdin_rest);
 }
 
 static inline void wasmext_wasi_clear(wasmext_wasi *w) { wasi_py_clear(WASI_PY(w)); }

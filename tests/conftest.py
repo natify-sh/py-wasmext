@@ -114,3 +114,41 @@ def build_extension(wabt: Path, tmp_path_factory: pytest.TempPathFactory) -> Cal
         return importlib.import_module(name)
 
     return build
+
+
+@pytest.fixture(scope="session")
+def build_ctypes(wabt: Path, tmp_path_factory: pytest.TempPathFactory) -> Callable[..., ModuleType]:
+    """The other front end of a module: the shared library and its wrapper for ctypes (`<name>_ctypes.py`), imported; the same arguments as `build_extension`."""
+    from wasmext._exe import build_shared  # pyright: ignore[reportPrivateUsage]
+
+    out = tmp_path_factory.mktemp("ctypes")
+    sys.path.insert(0, str(out))
+
+    built: dict[str, ModuleType] = {}  # a loaded library is not made again under the feet of the process
+
+    def build(source: Path, name: str, *, abi3: bool = False, defines: tuple[str, ...] = ()) -> ModuleType:
+        del abi3, defines  # of the extension
+        if name in built:
+            return built[name]
+        wasm = source
+        if source.suffix == ".wat":
+            wasm = out / f"{name}.wasm"
+            subprocess.run([wabt / "bin" / "wat2wasm", source, "-o", wasm], check=True)
+        suffix = ".dll" if platform.system() == "Windows" else ".dylib" if platform.system() == "Darwin" else ".so"
+        build_shared(wasm, out / f"lib{name}{suffix}", name=name, work=out / f"{name}_work", optimize=False, quiet=True)
+        built[name] = importlib.import_module(f"{name}_ctypes")
+        return built[name]
+
+    return build
+
+
+@pytest.fixture(scope="session", params=["extension", "ctypes"])
+def front_end(request: pytest.FixtureRequest) -> str:
+    """Which front end a test of the interface runs on: the extension of CPython, or the wrapper for ctypes over the shared library."""
+    return str(request.param)
+
+
+@pytest.fixture(scope="session")
+def build_front_end(front_end: str, request: pytest.FixtureRequest) -> Callable[..., ModuleType]:
+    """The builder of the front end: `build_extension` or `build_ctypes` (the same call, the same module interface)."""
+    return request.getfixturevalue("build_extension" if front_end == "extension" else "build_ctypes")  # type: ignore[no-any-return]

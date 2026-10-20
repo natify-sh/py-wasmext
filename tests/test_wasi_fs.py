@@ -88,11 +88,16 @@ class Fs:
         return code, bytes(self.mem[2000 : 2000 + self.u32(8)])
 
 
-@pytest.fixture(params=["native", "python"])
-def probe(request: pytest.FixtureRequest, build_extension: Builder) -> Any:
-    """The probe module built for each way the file system is reached: the system (openat on POSIX, Win32 on Windows), and Python (os.stat, os.open)."""
+@pytest.fixture(params=["native", "python", "ctypes"])
+def probe(request: pytest.FixtureRequest) -> Any:
+    """The probe module built for each way the file system is reached (the system: openat on POSIX, Win32 on Windows; Python: os.stat, os.open),
+    and as the shared library used through ctypes (the system's files)."""
+    if request.param == "ctypes":
+        return request.getfixturevalue("build_ctypes")(DATA / "wasi_fs_probe.wat", "wasi_fs_probe_ctypes")
     defines = ("WASMEXT_WASI_PYTHON_FS=1",) if request.param == "python" else ()
-    return build_extension(DATA / "wasi_fs_probe.wat", f"wasi_fs_probe_{request.param}", defines=defines)
+    return request.getfixturevalue("build_extension")(
+        DATA / "wasi_fs_probe.wat", f"wasi_fs_probe_{request.param}", defines=defines
+    )
 
 
 def test_a_preopen_is_a_descriptor_with_a_name(probe: Any, world: Path) -> None:

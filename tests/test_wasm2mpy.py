@@ -14,6 +14,13 @@ import pytest
 DATA = Path(__file__).parent / "data" / "wasm2mpy"
 Builder = Callable[..., ModuleType]
 
+
+@pytest.fixture(params=["extension", "ctypes"])
+def build_extension(request: pytest.FixtureRequest) -> Builder:
+    """These examples run on both front ends: the extension, and the shared library through ctypes (the name `build_extension` is kept for the tests)."""
+    return request.getfixturevalue("build_extension" if request.param == "extension" else "build_ctypes")  # type: ignore[no-any-return]
+
+
 # the greeting that `setup` prints, and how many "Blink" lines four calls of `loop` print (Rust's `loop` prints only the
 # line ends: the module formats a number and the text of it does not come out; it is the module's own behaviour,
 # and the same under any host)

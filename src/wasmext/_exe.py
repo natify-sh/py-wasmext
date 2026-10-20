@@ -195,9 +195,11 @@ def build_shared(
     parts: int | None = None,
     optimize: bool = True,
     quiet: bool = False,
+    wrapper: bool = True,
 ) -> Path:
     """Make the shared library `library` of the module `wasm`; beside the C, in `work`, is its header `<name>_api.h`: the C API for a host that is not
-    Python (see _shared.py)."""
+    Python (see _shared.py). With `wrapper`, beside the library are `<name>_ctypes.py` and its `.pyi`: the interface of the extension over ctypes
+    (see _ctypes_gen.py)."""
     from ._gen import GenError, generate
     from ._wasm import parse
 
@@ -231,6 +233,15 @@ def build_shared(
             "-dynamiclib" if a == "-bundle" else a for a in linker if a not in ("-undefined", "dynamic_lookup")
         ]
     compiler.link_shared_object(objects, str(library_path), libraries=[] if msvc else ["m"], extra_postargs=[])
+    if (
+        glue.api_model is not None and wrapper
+    ):  # the front end for ctypes, beside the library, with the types of the extension
+        from ._ctypes_gen import generate_ctypes
+
+        (library_path.parent / f"{last}_ctypes.py").write_text(
+            generate_ctypes(glue.api_model, library_file=library_path.name), encoding="utf-8"
+        )
+        (library_path.parent / f"{last}_ctypes.pyi").write_text(glue.stub, encoding="utf-8")
     if msvc:  # the import library (what a host links against) is written beside the objects; put it beside the dll
         implib = Path(objects[0]).parent / f"{library_path.stem}.lib"
         if implib.is_file():

@@ -15,6 +15,12 @@ DATA = Path(__file__).parent / "data" / "pywasm3"
 Builder = Callable[..., ModuleType]
 
 
+@pytest.fixture(params=["extension", "ctypes"])
+def build_extension(request: pytest.FixtureRequest) -> Builder:
+    """These examples run on both front ends: the extension, and the shared library through ctypes (the name `build_extension` is kept for the tests)."""
+    return request.getfixturevalue("build_extension" if request.param == "extension" else "build_ctypes")  # type: ignore[no-any-return]
+
+
 def test_fibonacci(build_extension: Builder, tmp_path: Path) -> None:
     wat = tmp_path / "fib.wat"
     wat.write_text(

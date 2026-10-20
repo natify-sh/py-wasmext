@@ -20,8 +20,9 @@ Builder = Callable[..., ModuleType]
 
 
 @pytest.fixture(scope="module")
-def ext(build_extension: Builder) -> Any:
-    return build_extension(DATA / "features.wasm", "features_ext")
+def ext(build_front_end: Builder, front_end: str) -> Any:
+    """The module `features.wasm` in each front end: the tests below are the proof that they have one interface."""
+    return build_front_end(DATA / "features.wasm", f"features_{front_end}")
 
 
 def _ignore(_x: int) -> None:
@@ -215,18 +216,20 @@ def test_a_cycle_through_an_import_is_collected(ext: Any) -> None:
         gc.enable()
 
 
-def test_the_module_without_imports_takes_no_arguments(build_extension: Builder) -> None:
-    simple = build_extension(DATA / "simple.wasm", "simple_ext")
+def test_the_module_without_imports_takes_no_arguments(build_front_end: Builder, front_end: str) -> None:
+    simple = build_front_end(DATA / "simple.wasm", f"simple_{front_end}")
     assert simple.Instance().add(3, 4) == 7
     with pytest.raises(TypeError):
         simple.Instance({"env": {}})
-    assert simple.Instance.__module__ == "simple_ext"
+    if front_end == "extension":
+        assert simple.Instance.__module__ == "simple_extension"
 
 
 def test_an_exception_that_nothing_catches_is_an_uncaught_exception_with_its_tag_and_values(
-    build_extension: Callable[..., ModuleType],
+    build_front_end: Callable[..., ModuleType],
+    front_end: str,
 ) -> None:
-    mod: Any = build_extension(DATA / "exceptions.wat", "exceptions_ext")
+    mod: Any = build_front_end(DATA / "exceptions.wat", f"exceptions_{front_end}")
     inst = mod.Instance()
     assert inst.caught() == 8 and inst.ok() == 5  # an exception that a `try` of the module catches is not seen
     with pytest.raises(mod.UncaughtException) as one:

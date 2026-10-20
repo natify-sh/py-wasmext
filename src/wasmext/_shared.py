@@ -44,9 +44,9 @@ class ApiModel:
     globals: list[tuple[str, str, str | None, ValType]] = field(
         default_factory=list[tuple[str, str, str | None, ValType]]
     )  # name, C getter, C setter (None: immutable), type
-    imports: list[tuple[int, str, str, FuncType]] = field(
-        default_factory=list[tuple[int, str, str, FuncType]]
-    )  # k (the C function is <last>_set_import<k>), module, field, type: the imports that are not WASI's
+    imports: list[tuple[int, str, str, FuncType, bool]] = field(
+        default_factory=list[tuple[int, str, str, FuncType, bool]]
+    )  # k (the C function is <last>_set_import<k>), module, field, type, whether it is a call of WASI (that the core has)
     skipped: list[str] = field(default_factory=list[str])
 
 
@@ -74,8 +74,6 @@ def unsupported(imports: list[tuple[str, str, FuncType]], *, global_imports: boo
     for module, field_, func in imports:
         if "v128" in (*func.params, *func.results):
             return f"the import {module}.{field_} uses v128"
-        if len(func.results) > 1:
-            return f"the import {module}.{field_} has several results"
     return None
 
 
@@ -147,9 +145,14 @@ def generate_shared(
         "   and hooks for the standard streams, the clocks, the random bytes and sleeping: a hook answers 0, an errno of WASI, or HOOK_TRAP; without one the core uses descriptors 0, 1 and 2 and the system. */"
     )
     A("typedef struct {")
-    A("    const char *const *args; size_t nargs;  /* none: the name of the module */")
+    A(
+        "    const char *const *args; size_t nargs;  /* NULL: the name of the module; not NULL with nargs 0: no arguments */"
+    )
     A("    const char *const *env; size_t nenv;")
     A("    const char *const *dirs; size_t ndirs;")
+    A(
+        "    const int *dirs_readonly;  /* NULL, or a flag for each dir: 1 for a directory that the program cannot change */"
+    )
     A("    int (*stdin_read)(void *user, uint8_t *buf, size_t cap, size_t *got);")
     A("    int (*stdout_write)(void *user, int fd, const uint8_t *buf, size_t n);  /* fd 1 or 2 */")
     A(
@@ -209,6 +212,10 @@ def generate_shared(
     C(f"struct {last}_t {{")
     C(f"    {last}_instance core;")
     C(f"    unsigned char set[{max(n_imports, 1)}];  /* an import that the host has set (those of WASI are) */")
+    if any(len(func.results) > 1 for _m, _f, func, _w, _h, _s in imports):
+        C(
+            f"    struct {{ void *fn; void *user; }} multi[{max(n_imports, 1)}];  /* the host function of an import with several results, and its user */"
+        )
     C("    int how; uint32_t value;  /* how the WASI program ended */")
     C("    int (*stdin_read)(void *user, uint8_t *buf, size_t cap, size_t *got);")
     C("    int (*stdout_write)(void *user, int fd, const uint8_t *buf, size_t n);")
@@ -278,7 +285,7 @@ def generate_shared(
         C("    size_t ndirs = config != NULL ? config->ndirs : 0;")
         C("    if (config != NULL) {")
         C("        size_t size;")
-        C("        if (config->nargs > 0) {")
+        C("        if (config->args != NULL) {")
         C("            args = api_pack(config->args, config->nargs, &size);")
         C("            wasi.args = args; wasi.args_size = size; wasi.argc = (uint32_t)config->nargs;")
         C("        }")
@@ -299,6 +306,7 @@ def generate_shared(
         C("                preopens[i].host = hosts[i];")
         C("                preopens[i].name = sep != NULL && sep[2] != '\\0' ? sep + 2 : \"/\";")
         C("                preopens[i].name_len = strlen(preopens[i].name);")
+        C("                preopens[i].readonly = config->dirs_readonly != NULL && config->dirs_readonly[i] != 0;")
         C("            }")
         C("            wasi.preopens = preopens; wasi.npreopens = ndirs;")
         C("        }")
@@ -383,21 +391,44 @@ def generate_shared(
     C("}")
     C("")
 
-    # the imports that are not WASI's: the types of the functions and where to set them
+    # the imports: the types of the functions and where to set them (a call of WASI may be replaced too: what the host gives wins)
     for k, (module, field_, func, is_wasi, host, slot) in enumerate(imports):
-        if is_wasi:
-            continue
-        ret = _API_TYPE[func.results[0]] if func.results else "void"
+        several = len(func.results) > 1
+        ret = "void" if several else _API_TYPE[func.results[0]] if func.results else "void"
         params = "".join(f", {_API_TYPE[t]} a{j}" for j, t in enumerate(func.params))
-        A(
-            f"/* the import {module}.{field_}: set it before {last}_instantiate; a failure of the function is `*trapped` nonzero (and its own error, kept by the host) */"
-        )
-        model.imports.append((k, module, field_, func))
-        A(f"typedef {ret} (*{last}_import{k}_fn)(void *user{params}, int *trapped);")
+        outs = "".join(f", {_API_TYPE[t]} *r{j}" for j, t in enumerate(func.results)) if several else ""
+        if is_wasi:
+            A(
+                f"/* the call of WASI {module}.{field_}: the core has it; a function set here (not NULL) replaces it, as the host's own import does */"
+            )
+        else:
+            A(
+                f"/* the import {module}.{field_}: set it before {last}_instantiate; a failure of the function is `*trapped` nonzero (and its own error, kept by the host){'; the results go through the pointers' if several else ''} */"
+            )
+        model.imports.append((k, module, field_, func, is_wasi))
+        A(f"typedef {ret} (*{last}_import{k}_fn)(void *user{params}{outs}, int *trapped);")
         A(f"WASMEXT_API void {last}_set_import{k}({last}_t *m, {last}_import{k}_fn function, void *user);")
-        C(f"void {last}_set_import{k}({last}_t *m, {last}_import{k}_fn function, void *user) {{")
-        C(f"    m->core.host{host}.fn[{slot}] = (void *)function;")
-        C(f"    m->core.host{host}.user[{slot}] = user;")
+        if several:
+            codes = "".join(_MULTI_CODE[t] for t in func.results)
+            C(f"static struct wasm_multi_{codes} api_import{k}(void *self{params}, int *trapped) {{")
+            C(f"    {last}_t *m = ({last}_t *)self;")
+            C(f"    struct wasm_multi_{codes} r;")
+            C("    memset(&r, 0, sizeof r);")
+            C(f"    {last}_import{k}_fn function = ({last}_import{k}_fn)m->multi[{k}].fn;")
+            args = "".join(f", a{j}" for j in range(len(func.params)))
+            refs = "".join(f", ({_API_TYPE[t]} *)&r.{_MULTI_CODE[t]}{j}" for j, t in enumerate(func.results))
+            C(f"    function(m->multi[{k}].user{args}{refs}, trapped);")
+            C("    return r;")
+            C("}")
+            C(f"void {last}_set_import{k}({last}_t *m, {last}_import{k}_fn function, void *user) {{")
+            C(f"    m->multi[{k}].fn = (void *)function;")
+            C(f"    m->multi[{k}].user = user;")
+            C(f"    m->core.host{host}.fn[{slot}] = (void *)api_import{k};")
+            C(f"    m->core.host{host}.user[{slot}] = m;")
+        else:
+            C(f"void {last}_set_import{k}({last}_t *m, {last}_import{k}_fn function, void *user) {{")
+            C(f"    m->core.host{host}.fn[{slot}] = (void *)function;")
+            C(f"    m->core.host{host}.user[{slot}] = user;")
         C(f"    m->set[{k}] = function != NULL;")
         C("}")
         C("")

@@ -13,6 +13,12 @@ DATA = Path(__file__).parent / "data"
 Builder = Callable[..., ModuleType]
 
 
+@pytest.fixture(params=["extension", "ctypes"])
+def build_extension(request: pytest.FixtureRequest) -> Builder:
+    """The tests of WASI run on both front ends: the extension, and the shared library through ctypes (the name `build_extension` is kept for the tests)."""
+    return request.getfixturevalue("build_extension" if request.param == "extension" else "build_ctypes")  # type: ignore[no-any-return]
+
+
 def test_hello_writes_to_stdout_and_exits_with_a_code(
     build_extension: Builder, capsys: pytest.CaptureFixture[str]
 ) -> None:

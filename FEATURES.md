@@ -858,6 +858,18 @@ A package may ship a shared library (a dll) or an executable instead of, or besi
 - A product that is not an extension is an `Extension` with a mark that `wasmext._setuptools` (the `build_ext` it already puts in) knows: it compiles `<name>_shared.c` or `<name>_main.c` in place of the Python layer, links a library (`lib<name>.so`, `lib<name>.dylib`, `<name>.dll` with its import library) or an executable (`<name>`, `<name>.exe`) and puts the file where an extension would go, so `package-data`, `inplace` and wheels work as they do for an extension.
 - To settle when it is built: the tag of a wheel that has no Python extension (`py3-none-<platform>`, not `cp311`); where the header `<name>_api.h` goes (beside the library, in the wheel); how a package finds its own binary at run time (a small helper, not a path written by hand); `--exe` needs `_start`, and a reactor (`_initialize`, no `_start`) is a `--shared` product whose instantiation must call `_initialize`.
 
+### Stage 6b, the wrapper for ctypes: first cut, as built
+
+`build_shared` also writes `<name>_ctypes.py` and `<name>_ctypes.pyi` beside the library (`wasmext._ctypes_gen`; the stub is the one of the extension). The module is Python only, needs nothing of wasmext, finds the library beside itself
+(or at `$WASMEXT_<NAME>_LIBRARY`) and has `Instance`, `Trap`, `LinkError`, `UncaughtException`, `WasiTerminated`, `WasiExit`, `WasiSignal` as the extension has them: methods with their signature as the docstring, the same type errors and wrapping of
+integers, `imports` as callables (the exception of an import comes out of the call as the very object, by the protocol of errors: the callback keeps it and answers `trapped`), the memory as a `memoryview` that keeps the instance alive, globals as attributes,
+`wasi={...}` with the same keys and the same errors, a call of WASI replaced through `imports`.
+**The proof** is that the tests of the interface run on both front ends and pass: `test_extension.py` (all), `test_wasi.py` (all), `test_wasi_fs.py` (the files of the system, third parameter of `probe`), and the examples of pywasm3, wasm2mpy and wasmhost.
+What the C API got for it: `set_import<k>` for the calls of WASI too (what the host gives wins), imports with several results (through pointers; `_shared.c` makes the struct of wasm2c), `dirs_readonly` in the configuration, and `args` non-NULL with
+`nargs` 0 for "no arguments".
+**Not there yet**: `__exports__` and `__getitem__` (so an instance of the wrapper cannot be linked into another instance, nor take one), modules with an imported global or memory (the C API refuses them), the interruption of a sleep by Ctrl-C (the core sleeps
+in C), PyPy and GraalPy (not tried), Windows (the test fixtures build it there, first run in CI), where the library is shipped (stage 7).
+
 ### Audit of stages 1 to 6a against the plan (after 6a; probes run by hand, not yet tests)
 
 **Bugs found by running the shared library** (the four are fixed, each with a test in `tests/test_shared.py` or `tests/test_exe.py`; the fixes: `_new`, `_instantiate` and every export set the runtime up for the calling thread by `api_enter()`, with `<name>_thread_free()` to give it back; the end of a WASI program answers `TRAP_ENDED`; an export left out is said in the header (`not here:`) and on stderr; an executable of a module with no WASI import is refused in words):

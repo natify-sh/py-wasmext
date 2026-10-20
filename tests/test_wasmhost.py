@@ -14,6 +14,12 @@ DATA = Path(__file__).parent / "data" / "wasmhost"
 Builder = Callable[..., ModuleType]
 
 
+@pytest.fixture(params=["extension", "ctypes"])
+def build_extension(request: pytest.FixtureRequest) -> Builder:
+    """These examples run on both front ends: the extension, and the shared library through ctypes (the name `build_extension` is kept for the tests)."""
+    return request.getfixturevalue("build_extension" if request.param == "extension" else "build_ctypes")  # type: ignore[no-any-return]
+
+
 def test_host_functions_with_several_results_and_an_exception(build_extension: Builder) -> None:
     mod = build_extension(DATA / "imports.wasm", "wh_imports")
     log: list[str] = []

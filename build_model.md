@@ -131,11 +131,21 @@ nothing a user puts into the sdist is taken out. The generated files stay out be
 out by the backend's own rules (distutils prunes it; the paths given to setuptools use the separator of the system, or on Windows that
 pruning does not match them). `uv build` and `pip` run setuptools as the backend, so they work as they do.
 
-For another backend (hatch, scikit-build, meson) the way is the one Cython has, the command: `wasmext natify FILE` (no `-i`, no `-b`)
-only generates the C into `build/wasmext/<module name>/`, and the backend compiles it. What is **missing** for that to be convenient is how
-to compile: the list of sources, the include directories (the runtime of the toolchain, simde) and the macros (`WASM_RT_USE_MMAP`,
-`Py_LIMITED_API` for an extension, `WABT_BIG_ENDIAN`) are not printed, so a backend would have to guess them. A `--print-build` (JSON) is the
-small step that closes it; it is not written, and no hook for another backend is.
+For another backend the way is the one Cython has, the command: `wasmext natify -i [--shared|--exe] FILE` builds in `build/` and puts the products in
+place, and the backend's own hook takes them from there. **Tried on `examples/coremark` and `examples/products` with hatchling** (a
+build hook that runs the command, `artifacts` for the built files, `build_data["tag"]` for the wheel tag; kept in the session, not in the
+repository): the wheels are `cp311-abi3-<plat>` (the extension and its `.pyi`) and `py3-none-<plat>` (the library with its ctypes wrapper
+and the program), the examples' tests pass in a clean environment, also from an isolated `uv build`. What that found:
+
+- `wasmext` needs setuptools to build whatever the backend is (the command and `natify()` use it, and its `_distutils`). It was not a
+  declared dependency (the projects had it as their own backend), so an isolated build on hatchling failed with `No module named
+  'setuptools'`. It is a dependency of `wasmext` now.
+- The project says the wheel tag itself on such a backend (abi3 or native, `py3-none`): the hook of setuptools that does it for a wheel
+  is not there.
+- The sdist is the backend's: hatchling puts `build/` into it unless the project's `.gitignore` has it, so a project on such a backend
+  ignores `build/` (and the built files in the source tree), as it would any build output.
+- Not done: `--print-build` (the sources, include directories and macros as JSON) for a backend that compiles the C itself (meson,
+  scikit-build); no hook for another backend is written.
 
 ## What this removes
 

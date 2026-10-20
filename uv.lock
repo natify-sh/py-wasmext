@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.11"
 resolution-markers = [
     "sys_platform == 'win32'",
@@ -395,6 +395,7 @@ wheels = [
 name = "wasmext"
 source = { editable = "." }
 dependencies = [
+    { name = "setuptools" },
     { name = "wabt-package" },
 ]
 
@@ -412,7 +413,10 @@ wasm = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "wabt-package", specifier = ">=1.0.42.0" }]
+requires-dist = [
+    { name = "setuptools", specifier = ">=77" },
+    { name = "wabt-package", specifier = ">=1.0.42.0" },
+]
 
 [package.metadata.requires-dev]
 dev = [

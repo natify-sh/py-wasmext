@@ -228,7 +228,7 @@ you get:
 
 ```toml
 [tool.cibuildwheel]
-build = "cp311-* cp314t-*"   # cp311: the abi3 wheel; cp314t: a native free-threaded one
+build = "cp311-* cp314t-* cp315t-*"   # cp311: the abi3 wheel; cp314t, cp315t: native free-threaded ones
 ```
 
 `limited_api=True`/`False` in `natify()` (or `--limited-api` / `--no-limited-api`) forces one or the other (`True` still builds native where

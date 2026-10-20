@@ -171,7 +171,7 @@ The examples (CoreMark, and Lua from commit `43324a2`) built by cibuildwheel and
 | Linux s390x (big-endian): `manylinux_2_28`, `musllinux_1_2` | local, the same way: the wheel is built, but the example's tests **fail**. Checked with a small module under QEMU: before the fix `i32.load` of the bytes 01 02 03 04 gave 0x01020304 instead of 0x04030201, because nothing defined `WABT_BIG_ENDIAN`; now it is defined and the value is right. The exported memory is refused there (`NotImplementedError`), and the example needs it, so on s390x the example still fails; `v128` in a signature is refused by an `#error` |
 | Linux i386, CPython 3.12 | by hand, one abi3 memory64 module (`gcc -m32`), not in the suite |
 
-The cibuildwheel configuration of the example is `build = "cp311-* cp314t-*"` (`cp315t-*` would be the same as `cp314t-*`: a native free-threaded wheel; not in the examples yet).
+The cibuildwheel configuration of the example is `build = "cp311-* cp314t-* cp315t-*"` (`cp314t` and `cp315t` are native free-threaded wheels).
 
 ### Not confirmed
 
@@ -292,7 +292,8 @@ One table for the whole plan, so that nothing is in only one place: the eleven i
 - **3.15t**: the tests of abi3 are skipped (`needs_abi3`): a free-threaded build has no abi3, so the extension is native (`cp315-cp315t`). Passed in CI on Linux, macOS and Windows, and locally on Linux.
 - **3.15**: passed locally (531 tests) and in CI on the three systems. In the first run Linux and macOS failed two tests, because the CI interpreter names an abi3 file with the platform (`add.abi3-x86_64-linux-gnu.so`, `add.abi3-darwin.so`), which two tests did not expect; fixed in `42e9470`, and `abi3_possible()` and the tests now accept `.abi3.` and `.abi3-<platform>.` and not `.abi3t.so` (a test for each form).
 - **abi3t** (the stable ABI of 3.15t, PEP 803, files `.abi3t.so`) is **not built**: cibuildwheel does not tag it yet, and the glue would have to lose `PyObject_HEAD` (the object is opaque there; the type data would go through `PyObject_GetTypeData`). Checked on 3.15.0b4: the generated C does not compile with `Py_TARGET_ABI3T=0x030f0000` (`PyObject_HEAD` is unknown), and `Py_LIMITED_API=0x030B0000` on a free-threaded 3.15 turns abi3t on by itself (`pyabi.h`) and fails the same way, so the resolver must keep saying "native" there.
-- Not done: `cp315t` in the `build` of the examples (they build `cp311-* cp314t-*`); an abi3 wheel run on 3.15 by a test of the wheel (the wheel is built and tested on 3.11).
+- **`cp315t` in the examples**: `build = "cp311-* cp314t-* cp315t-*"` in coremark, link, lua, quickjs and wabt (`products` is `py3-none`, so `cp311-*` only). Checked locally with `uv build` and the tests of `examples/coremark` on 3.15t (`cp315-cp315t`, 2 passed), not yet through cibuildwheel and CI; the Linux architectures under QEMU build the same selector, which may meet a manylinux image without `cp315t` (CI will say).
+- **The abi3 wheel on newer Pythons**: the `cp311-abi3` wheel of coremark, built on 3.11, passed the 2 tests on 3.12, 3.13, 3.14 and 3.15 locally; CI has the job `abi3-wheel-on-newer-pythons` in `example-wheels.yml` that installs the wheel of the Linux x64 job into those four (cibuildwheel tests a wheel only on the interpreter that built it). Its first run is not read yet.
 
 In this order (the first ones are small):
 

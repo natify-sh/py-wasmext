@@ -105,6 +105,44 @@ jobs:
           path: ./wheelhouse
           retention-days: 7
 
+  # The abi3 wheel (cp311-abi3) is one wheel for every CPython from 3.11 on, but cibuildwheel tests it on the interpreter that built it (3.11): this installs
+  # the wheel that the Linux x64 job made into the newer interpreters and runs the tests of the example there.
+  abi3-wheel-on-newer-pythons:
+    name: the abi3 wheel of coremark on Python ${{ matrix.python }}
+    needs: build-example
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.12", "3.13", "3.14", "3.15"]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Download the wheels
+        uses: actions/download-artifact@v8
+        with:
+          name: coremark-wheels-ubuntu-latest-x86_64
+          path: wheels
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          python-version: ${{ matrix.python }}
+          github-token: ${{ github.token }}
+
+      - name: Install the abi3 wheel
+        run: |
+          ls wheels
+          uv venv --python ${{ matrix.python }} "$RUNNER_TEMP/abi3"
+          uv pip install --python "$RUNNER_TEMP/abi3" wheels/*-abi3-*.whl pytest
+        shell: bash
+
+      # not from the checkout: the source of the example must not be what the tests import
+      - name: Test
+        working-directory: ${{ runner.temp }}
+        run: ./abi3/bin/python -m pytest "$GITHUB_WORKSPACE/examples/coremark/tests" -q -p no:cacheprovider
+        shell: bash
+
   # The platforms that the desktop matrix above has not: the other Linux architectures (under QEMU where the runner has not the processor),
   # Pyodide, and Android (built, not run: there is no emulator of arm64 on the runner). coremark only: it is small, and these are slow.
   build-example-extra:
@@ -147,7 +185,7 @@ jobs:
         env:
           CIBW_BUILD_FRONTEND: "build; args: --no-isolation"
           CIBW_BEFORE_BUILD: pip install --find-links {package}/deps wasmext setuptools
-          CIBW_BUILD: ${{ matrix.build || 'cp311-* cp314t-*' }}
+          CIBW_BUILD: ${{ matrix.build || 'cp311-* cp314t-* cp315t-*' }}
           CIBW_TEST_SKIP: ${{ matrix.skip_tests && '*' || '' }}
           # Android and Pyodide are built on the host: cibuildwheel installs build-system.requires itself, and pip has to find the wheel of wasmext
           PIP_FIND_LINKS: ${{ (matrix.platform == 'android' || matrix.platform == 'pyodide') && format('{0}/examples/coremark/deps', github.workspace) || '' }}

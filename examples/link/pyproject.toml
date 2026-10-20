@@ -20,7 +20,7 @@ include-package-data = false
 linkdemo = ["py.typed", "*.pyi"]
 
 [tool.cibuildwheel]
-build = "cp311-* cp314t-*"
+build = "cp311-* cp314t-* cp315t-*"
 test-requires = "pytest"
 test-command = "pytest {package}/tests"
 

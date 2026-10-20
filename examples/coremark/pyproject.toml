@@ -22,7 +22,7 @@ coremark = ["py.typed", "*.pyi"]
 
 [tool.cibuildwheel]
 # cp311-* builds the abi3 wheel (every CPython from 3.11 on); cp314t-* has no stable ABI and gets a native one.
-build = "cp311-* cp314t-*"
+build = "cp311-* cp314t-* cp315t-*"
 test-requires = "pytest"
 test-command = "pytest {package}/tests"
 

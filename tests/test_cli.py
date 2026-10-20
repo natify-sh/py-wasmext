@@ -266,3 +266,16 @@ def test_quiet_inplace_prints_nothing_not_even_warnings_of_the_compiler(project:
         assert done.stdout == "" and done.stderr == ""
     built = [p for p in (project / "src" / "pkg").glob("add.*") if p.suffix in (".so", ".pyd")]
     assert (project / "gen").is_dir() and built  # --build-dir is honoured with -i
+
+
+def test_guard_pages_by_architecture_on_the_command_line(project: Path, wabt: Path) -> None:
+    from wasmext._natify import target_arch  # pyright: ignore[reportPrivateUsage]
+
+    here = target_arch()
+    shutil_target = project / "src" / "pkg" / "add.wasm"
+    assert shutil_target.is_file()
+    for spec in (f"{here}=off", f"{here}=off,default=on", "off"):
+        done = wasmext(project, wabt, "natify", "-q", "--guard-pages-for", spec, "src/pkg/add.wasm")
+        assert done.returncode == 0, (spec, done.stderr[-400:])
+    bad = wasmext(project, wabt, "natify", "-q", "--guard-pages-for", "x86", "src/pkg/add.wasm")
+    assert bad.returncode == 1 and "guard pages" in bad.stderr

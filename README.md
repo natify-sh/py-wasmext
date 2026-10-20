@@ -190,6 +190,24 @@ What is there, of the 46 calls of the specification (WASI 0.1):
 
 See [FEATURES.md](FEATURES.md#design-wasi) for the design.
 
+### Guard pages
+
+By default each memory reserves 8 GiB of *address space* (not RAM) and the MMU catches out-of-bounds accesses, with no checks in the code. That needs a
+64-bit address space with room for it: a process with a limit (`ulimit -v`, some containers) or a 32-bit target cannot do it, and there the runtime allocates the memory at
+its size and checks every access in code (about 30% slower on CoreMark). It is decided **when the C is compiled**, for the architecture the extension is built for, so it can be set
+for some architectures and not others, in all the places that build:
+
+```toml
+[[tool.wasmext.ext-modules]]
+module-list = "src/pkg/*.wasm"
+guard-pages = { x86 = false, armv7l = false, default = true }   # or just true / false
+```
+
+`natify(..., guard_pages={"x86": False, "default": True})`, `wasmext natify --guard-pages-for x86=off,armv7l=off --guard-pages` (or `--no-guard-pages`), and
+`WASMEXT_GUARD_PAGES=x86=off,default=on` (or `0`/`1`) say the same; the names of the architectures are `x86_64`, `x86`, `arm64`, `armv7l`, `ppc64le`, ... as the platform of the
+interpreter that builds names them, which in a cross build (cibuildwheel for Windows x86 or ARM64) is the target. A memory that cannot be reserved is a `MemoryError`; wasmext does not
+switch the mode when it runs (that would need both versions of the code in the module).
+
 ### Large modules
 
 The C that `wasm2c` writes is about 13 times the size of the module, and one file of millions of lines is a very long job for a

@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Any
 
 from ._gen import GenError
 from ._inspect import read
-from ._natify import _natify, _version  # pyright: ignore[reportPrivateUsage]
+from ._natify import _natify, _version, parse_guard_pages  # pyright: ignore[reportPrivateUsage]
 from ._toolchain import find_toolchain
 from ._wasm import WasmError
 
@@ -79,6 +79,12 @@ def _parser() -> argparse.ArgumentParser:
         "what they need and check every access (--no-guard-pages: for processes with a limit on address space)",
     )
     parser.add_argument(
+        "--guard-pages-for",
+        metavar="ARCH=on|off,...",
+        help="guard pages by architecture of the target (x86_64, x86, arm64, armv7l, ...), e.g. x86=off,armv7l=off; `default=` is for the others "
+        "(or what --guard-pages says)",
+    )
+    parser.add_argument(
         "--parts",
         type=int,
         metavar="N",
@@ -125,6 +131,18 @@ def _parser() -> argparse.ArgumentParser:
     return top
 
 
+def _guard_pages_of(args: Any) -> Any:
+    """What --guard-pages and --guard-pages-for ask together: a bool, a mapping of architectures, or None (not asked)."""
+    if args.guard_pages_for is None:
+        return args.guard_pages
+    asked = parse_guard_pages(args.guard_pages_for)
+    if isinstance(asked, bool):
+        return asked
+    if args.guard_pages is not None:
+        asked.setdefault("default", args.guard_pages)
+    return asked
+
+
 def _inspect_main(files: Sequence[str]) -> int:
     paths = sorted({Path(p) for pattern in files for p in (glob.glob(pattern, recursive=True) or [pattern])})
     status = 0
@@ -152,7 +170,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             quiet=args.quiet,
             stubs=not args.no_stubs,
             limited_api=args.limited_api,
-            guard_pages=args.guard_pages,
+            guard_pages=_guard_pages_of(args),
             parts=args.parts,
             product=args.product,
         )

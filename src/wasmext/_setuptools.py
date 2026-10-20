@@ -80,7 +80,7 @@ _KEY_TYPES = {
     "quiet": "bool",
     "stubs": "bool",
     "limited-api": "bool",
-    "guard-pages": "bool",
+    "guard-pages": "guard",
     "parts": "int",
     "product": "product",
     "extra-compile-args": "list",
@@ -100,6 +100,12 @@ def _check_value(path: Path, key: str, value: Any) -> None:
     strings = isinstance(value, list) and all(isinstance(v, str) for v in value)  # pyright: ignore[reportUnknownVariableType]
     if kind == "product" and value not in PRODUCTS:
         raise ValueError(f"{where} must be one of {', '.join(PRODUCTS)}, not {value!r}")
+    if kind == "guard":  # true/false, or a table of architectures
+        table = isinstance(value, dict) and all(isinstance(k, str) and isinstance(v, bool) for k, v in value.items())  # pyright: ignore[reportUnknownVariableType]
+        if not (isinstance(value, bool) or table):
+            raise TypeError(
+                f"{where} must be true or false, or a table of architectures to true or false (x86 = false), not {value!r}"
+            )
     if kind == "str" and not isinstance(value, str):
         raise TypeError(f"{where} must be a string, not {value!r}")
     if kind == "bool" and not isinstance(value, bool):

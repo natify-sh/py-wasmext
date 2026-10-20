@@ -34,7 +34,7 @@ import os
 import shutil
 import sys
 import sysconfig
-from collections.abc import Callable, Generator, Sequence
+from collections.abc import Callable, Generator, Mapping, Sequence
 from pathlib import Path
 from types import ModuleType
 from typing import TYPE_CHECKING, Any, cast
@@ -96,7 +96,7 @@ class _Options:
         inplace: bool,
         build_in_temp: bool,
         setup_args: dict[str, Any],
-        guard_pages: bool | None,
+        guard_pages: bool | str | Mapping[str, bool] | None,
         limited_api: bool | None,
         stubs: bool,
         parts: int | None = None,
@@ -330,7 +330,7 @@ def install(
     build_in_temp: bool = True,
     setup_args: dict[str, Any] | None = None,
     inplace: bool = False,
-    guard_pages: bool | None = None,
+    guard_pages: bool | str | Mapping[str, bool] | None = None,
     limited_api: bool | None = None,
     stubs: bool = False,
     parts: int | None = None,

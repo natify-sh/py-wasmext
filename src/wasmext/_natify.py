@@ -22,7 +22,7 @@ import shutil
 import subprocess
 import sys
 import sysconfig
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -81,15 +81,65 @@ def abi3_possible() -> str | None:
     return None
 
 
-def _guard_pages(requested: bool | None) -> bool:
-    """Whether the memories of the modules are reserved with guard pages (the default of the runtime of wasm2c).
+_ARCH_NAMES = {
+    "amd64": "x86_64",
+    "x64": "x86_64",
+    "x86_64": "x86_64",
+    "i386": "x86",
+    "i686": "x86",
+    "x86": "x86",
+    "win32": "x86",
+    "aarch64": "arm64",
+    "arm64": "arm64",
+    "arm64_v8a": "arm64",
+    "armv7": "armv7l",
+    "armv7l": "armv7l",
+    "armeabi_v7a": "armv7l",
+}
 
-    False builds the runtime with WASM_RT_USE_MMAP=0: a memory is allocated at the size it has and every access is
-    checked, instead of 8 GiB of address space being reserved for each memory, which a process with a limit on its
-    address space (ulimit -v, some containers) cannot do: the runtime then calls abort()."""
+
+def target_arch(platform: str | None = None) -> str:
+    """The architecture the extension is built for, by one set of names (`x86_64`, `x86`, `arm64`, `armv7l`, `ppc64le`, `riscv64`, `s390x`, `wasm32`, ...):
+    taken from `sysconfig.get_platform()`, which a cross build (cibuildwheel for Windows x86 or ARM64, macOS universal pieces, Android) sets to the target, not the host."""
+    text = (platform or sysconfig.get_platform()).lower()
+    if text == "win32":
+        return "x86"
+    for token in reversed(text.split("-")):
+        if token in _ARCH_NAMES:
+            return _ARCH_NAMES[token]
+    return text.rsplit("-", 1)[-1]
+
+
+def parse_guard_pages(text: str) -> bool | dict[str, bool]:
+    """`1`/`0` (also yes, no, on, off, true, false), or a list for architectures: `x86=off,armv7l=off,default=on` (the names of `target_arch()`; `default` is for the others)."""
+    truth = {"1": True, "true": True, "yes": True, "on": True, "0": False, "false": False, "no": False, "off": False}
+    plain = text.strip().lower()
+    if plain in truth:
+        return truth[plain]
+    result: dict[str, bool] = {}
+    for item in plain.split(","):
+        arch, sep, value = item.partition("=")
+        if not sep or value.strip() not in truth or not arch.strip():
+            raise ValueError(f"guard pages: {text!r} is neither on/off nor a list like x86=off,default=on")
+        result[arch.strip()] = truth[value.strip()]
+    return result
+
+
+def _guard_pages(requested: bool | str | Mapping[str, bool] | None) -> bool:
+    """Whether the memories of the modules are reserved with guard pages (the default of the runtime of wasm2c). It is decided when the C is compiled, for the architecture
+    the extension is built for: a bool, or a mapping from architectures (see `target_arch()`) to bool with `default` for the others, as a list in text too
+    (`x86=off,armv7l=off`). None takes WASMEXT_GUARD_PAGES in the same forms, else True.
+
+    False builds the runtime with WASM_RT_USE_MMAP=0: a memory is allocated at the size it has and every access is checked, instead of 8 GiB of address
+    space being reserved for each memory, which a process with a limit on its address space (ulimit -v, some containers) cannot do: the runtime then calls abort().
+    Guard pages need a 64-bit address space: on a 32-bit target the runtime allocates the other way whatever is asked."""
     if requested is None:
-        return os.environ.get("WASMEXT_GUARD_PAGES", "1") != "0"
-    return requested
+        requested = parse_guard_pages(os.environ.get("WASMEXT_GUARD_PAGES", "1"))
+    if isinstance(requested, str):
+        requested = parse_guard_pages(requested)
+    if isinstance(requested, Mapping):
+        return bool(requested.get(target_arch(), requested.get("default", True)))
+    return bool(requested)
 
 
 def _use_limited_api(requested: bool | None, quiet: bool) -> bool:
@@ -435,7 +485,7 @@ def natify(
     quiet: bool = False,
     stubs: bool = True,
     limited_api: bool | None = None,
-    guard_pages: bool | None = None,
+    guard_pages: bool | str | Mapping[str, bool] | None = None,
     parts: int | None = None,
     product: str = "extension",
 ) -> list[Extension]:
@@ -457,7 +507,8 @@ def natify(
     the abi3 wheel and `cp314t-*` a native one. WASMEXT_LIMITED_API=0 turns abi3 off for a None; True and False decide in
     the code (True still builds native where abi3 is impossible, and says so).
 
-    `guard_pages` (None, the default, is True unless WASMEXT_GUARD_PAGES=0) is how the memories of the modules are checked
+    `guard_pages` (None, the default, is True unless WASMEXT_GUARD_PAGES says otherwise; a bool, or a mapping `{"x86": False, "armv7l": False, "default": True}` of the architectures
+    the extension is built for, as text `x86=off,default=on` too) is how the memories of the modules are checked
     and allocated. True reserves 8 GiB of address space for each memory and catches out-of-bounds accesses with the
     MMU (fast), which fails, with an abort() of the runtime, in a process whose address space is limited. False
     allocates what the memory needs and checks every access in code (a bit slower).
@@ -505,7 +556,7 @@ def _natify(
     quiet: bool,
     stubs: bool,
     limited_api: bool | None,
-    guard_pages: bool | None = None,
+    guard_pages: bool | str | Mapping[str, bool] | None = None,
     parts: int | None = None,
     product: str = "extension",
 ) -> list[tuple[Path | None, Extension]]:

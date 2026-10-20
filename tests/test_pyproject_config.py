@@ -196,3 +196,16 @@ def test_limited_api_is_one_setting_of_the_project(tmp_path: Path) -> None:
     )
     with pytest.raises(TypeError, match="limited-api must be true or false"):
         pyproject_calls(tmp_path)
+
+
+def test_guard_pages_in_pyproject_are_a_bool_or_a_table_of_architectures(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        "[[tool.wasmext.ext-modules]]\nmodule-list = 'a'\nguard-pages = { x86 = false, default = true }\n",
+        encoding="utf-8",
+    )
+    assert pyproject_calls(tmp_path)[0]["guard_pages"] == {"x86": False, "default": True}
+    (tmp_path / "pyproject.toml").write_text(
+        "[[tool.wasmext.ext-modules]]\nmodule-list = 'a'\nguard-pages = { x86 = 'no' }\n", encoding="utf-8"
+    )
+    with pytest.raises(TypeError, match="table of architectures"):
+        pyproject_calls(tmp_path)

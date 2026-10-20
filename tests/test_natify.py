@@ -462,3 +462,49 @@ def test_the_extensions_of_one_wheel_are_all_abi3_or_all_native(project: Path) -
     [abi3] = natify("pkg/*.wasm", quiet=True)
     [program] = natify("pkg/*.wasm", quiet=True, product="exe")
     assert tagged(finalize(abi3, program))  # a program does not tie the wheel to a Python
+
+
+@pytest.mark.parametrize(
+    ("platform", "arch"),
+    [
+        ("linux-x86_64", "x86_64"),
+        ("linux-i686", "x86"),
+        ("win32", "x86"),
+        ("win-amd64", "x86_64"),
+        ("win-arm64", "arm64"),
+        ("macosx-11.0-arm64", "arm64"),
+        ("macosx-10.13-x86_64", "x86_64"),
+        ("linux-aarch64", "arm64"),
+        ("linux-armv7l", "armv7l"),
+        ("android-24-arm64_v8a", "arm64"),
+        ("ios-13.0-arm64-iphoneos", "arm64"),
+        ("linux-ppc64le", "ppc64le"),
+        ("emscripten-4.0.9-wasm32", "wasm32"),
+    ],
+)
+def test_the_architecture_of_the_target_has_one_name(platform: str, arch: str) -> None:
+    from wasmext._natify import target_arch  # pyright: ignore[reportPrivateUsage]
+
+    assert target_arch(platform) == arch
+
+
+def test_guard_pages_are_decided_for_the_architecture_of_the_target(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from wasmext._natify import parse_guard_pages, target_arch  # pyright: ignore[reportPrivateUsage]
+
+    assert parse_guard_pages("off") is False and parse_guard_pages("1") is True
+    assert parse_guard_pages("x86=off, armv7l=0,default=on") == {"x86": False, "armv7l": False, "default": True}
+    with pytest.raises(ValueError, match="guard pages"):
+        parse_guard_pages("x86")
+    here = target_arch()
+    macro = ("WASM_RT_USE_MMAP", "0")
+    [off_here] = natify("pkg/*.wasm", quiet=True, guard_pages={here: False, "default": True})
+    [on_here] = natify("pkg/*.wasm", quiet=True, guard_pages={here: True, "default": False})
+    [other] = natify("pkg/*.wasm", quiet=True, guard_pages={"no-such-arch": False})  # not this one: the default (on)
+    [text] = natify("pkg/*.wasm", quiet=True, guard_pages=f"{here}=off")
+    assert macro in off_here.define_macros and macro not in on_here.define_macros
+    assert macro not in other.define_macros and macro in text.define_macros
+    monkeypatch.setenv("WASMEXT_GUARD_PAGES", f"{here}=off")
+    [by_env] = natify("pkg/*.wasm", quiet=True)
+    assert macro in by_env.define_macros

@@ -207,7 +207,7 @@ def _build(base: Path, extensions: list[Extension], *, inplace: bool, force: boo
 
     moved = [_rebase(ext, base) for ext in extensions]
     if quiet:  # -q: the warnings of the C that wasm2c makes (an unused function, ...) are not the user's to read; their own flags come after and win
-        from setuptools._distutils.ccompiler import get_default_compiler  # noqa: PLC0415
+        from setuptools._distutils.ccompiler import get_default_compiler
 
         silence = "/w" if get_default_compiler() == "msvc" else "-w"
         for ext in moved:

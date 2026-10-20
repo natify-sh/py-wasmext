@@ -270,7 +270,11 @@ class _Reader:
         try:
             return _VALTYPES[code]
         except KeyError:
-            reference = " (a reference type of the GC proposal, which wasm2c does not support)" if code in (0x63, 0x64, 0x6A, 0x6B, 0x6C, 0x6D, 0x6E, 0x71, 0x72, 0x73, 0x74) else ""
+            reference = (
+                " (a reference type of the GC proposal, which wasm2c does not support)"
+                if code in (0x63, 0x64, 0x6A, 0x6B, 0x6C, 0x6D, 0x6E, 0x71, 0x72, 0x73, 0x74)
+                else ""
+            )
             raise WasmError(f"unsupported value type 0x{code:02x} at offset {self.pos - 1}{reference}") from None
 
     def reftype(self) -> ValType:

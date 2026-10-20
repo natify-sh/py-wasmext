@@ -545,7 +545,11 @@ def test_abi3_is_asked_of_the_interpreter_and_the_platform(monkeypatch: pytest.M
     # free-threaded: even where .pyd is listed (Windows)
     monkeypatch.setattr(sysconfig, "get_platform", lambda: "win-amd64")
     real = sysconfig.get_config_var
-    monkeypatch.setattr(sysconfig, "get_config_var", lambda name: 1 if name == "Py_GIL_DISABLED" else real(name))
+
+    def free_threaded(name: str) -> Any:
+        return 1 if name == "Py_GIL_DISABLED" else real(name)
+
+    monkeypatch.setattr(sysconfig, "get_config_var", free_threaded)
     assert "free-threaded" in str(abi3_possible())
     # not CPython
     monkeypatch.setattr(sysconfig, "get_config_var", real)

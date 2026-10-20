@@ -235,9 +235,9 @@ def _build(base: Path, extensions: list[Extension], *, inplace: bool, force: boo
     if quiet:  # -q: the warnings of the C that wasm2c makes (an unused function, ...) are not the user's to read; their own flags come after and win
         from setuptools._distutils.ccompiler import get_default_compiler
 
-        silence = "/w" if get_default_compiler() == "msvc" else "-w"
-        for ext in moved:
-            ext.extra_compile_args = [silence, *(ext.extra_compile_args or [])]
+        if get_default_compiler() != "msvc":  # cl says it is overriding /W3 with /w, which is a warning of its own
+            for ext in moved:
+                ext.extra_compile_args = ["-w", *(ext.extra_compile_args or [])]
     script_args = ["build_ext"]
     if inplace:
         script_args.append("--inplace")

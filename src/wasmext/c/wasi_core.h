@@ -286,6 +286,27 @@ static inline int wasi_release(wasi_entry *e) {
 /* the directory of a preopen, from its real path: an open descriptor, or (through Python) the path */
 static inline int wasi_fill_preopen(wasi_entry *e, const char *root) {
 #if WASI_DIRS_ARE_PATHS
+#if defined(_WIN32) && !WASMEXT_WASI_PYTHON_FS
+    { /* the directory must be there: on POSIX it is opened here, and a path that is not a directory fails at once */
+        int n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, root, -1, NULL, 0);
+        wchar_t *wide = n > 0 ? (wchar_t *)WASI_MALLOC((size_t)n * sizeof(wchar_t)) : NULL;
+        if (wide == NULL) {
+            errno = n > 0 ? ENOMEM : EINVAL;
+            return -1;
+        }
+        MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, root, -1, wide, n);
+        DWORD attributes = GetFileAttributesW(wide);
+        WASI_FREE(wide);
+        if (attributes == INVALID_FILE_ATTRIBUTES) {
+            errno = ENOENT;
+            return -1;
+        }
+        if (!(attributes & FILE_ATTRIBUTE_DIRECTORY)) {
+            errno = ENOTDIR;
+            return -1;
+        }
+    }
+#endif
     e->root = wasi_copy(root, strlen(root));
     e->rel = wasi_copy("", 0);
     if (e->root == NULL || e->rel == NULL) {

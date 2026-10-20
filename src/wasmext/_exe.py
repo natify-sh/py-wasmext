@@ -67,10 +67,11 @@ static @LAST@_instance instance;
 
 #ifdef _WIN32
 #include <windows.h>
+#include <shellapi.h>
 /* the arguments as UTF-8: the narrow ones of the C runtime are in the code page of the console, and lose what it cannot hold */
 static char **run_utf8_argv(int *count) {
-    int n = __argc;
-    wchar_t **wide = __wargv;
+    int n = 0;
+    wchar_t **wide = CommandLineToArgvW(GetCommandLineW(), &n);
     if (wide == NULL) return NULL;
     char **out = (char **)calloc((size_t)n + 1, sizeof(char *));
     for (int i = 0; out != NULL && i < n; i++) {
@@ -423,13 +424,24 @@ def build(
     flags = flags or BuildFlags()
     compiler, objects, msvc = _compile_sources(sources, prepared, out_dir, optimize=optimize, flags=flags)
     program_path.parent.mkdir(parents=True, exist_ok=True)
+    # `link_executable` adds the extension of programs itself (`.exe` of MSVC): a name that has it already would be `m.exe.exe`
+    suffix = compiler.exe_extension or ""
+    named = str(program_path)
+    if suffix and named.lower().endswith(suffix):
+        named = named[: -len(suffix)]
+    libraries = (
+        ["shell32"] if msvc or sys.platform == "win32" else ["m"]
+    )  # shell32: the arguments of the program as UTF-8
     compiler.link_executable(
         objects,
-        str(program_path),
-        libraries=[*([] if msvc else ["m"]), *flags.libraries],
+        named,
+        libraries=[*libraries, *flags.libraries],
         library_dirs=list(flags.library_dirs),
         extra_postargs=list(flags.extra_link_args),
     )
+    made = Path(compiler.executable_filename(named))
+    if made != program_path and made.is_file():
+        made.replace(program_path)
     return program_path
 
 

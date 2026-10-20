@@ -2,7 +2,8 @@
 
 The runner itself fails the job when a test fails; it does not notice a test that is gone (a program that was not built, a directory that moved with a new
 commit of the suite). This does: the programs of WASI 0.1 in the suite are 72 (12 AssemblyScript, 14 C, 46 Rust), none is skipped, none failed, and a test that
-was expected to fail and passes (`xpassed`) is an out-of-date expectation. `python check_results.py report.json [count]`.
+was expected to fail and passes (`xpassed`) is an out-of-date expectation. Only the suites of `wasm32-wasip1` count: the runner lists the tests of WASI 0.3 too
+(55 of them) and wasmext, which is WASI 0.1, skips them on purpose. `python check_results.py report.json [count]`.
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ PROGRAMS = 72  # the programs of wasm32-wasip1 in the commit of the suite that W
 def check(report: dict[str, Any], expected: int = PROGRAMS) -> list[str]:
     """What is wrong with the report, as a list of sentences (empty: nothing)."""
     problems: list[str] = []
-    suites: list[dict[str, Any]] = report.get("results", [])
+    suites: list[dict[str, Any]] = [s for s in report.get("results", []) if "[wasm32-wasip1]" in str(s.get("name", ""))]
     total = sum(len(suite.get("tests", [])) for suite in suites)
     if total != expected:
         problems.append(f"{total} tests ran, the suite has {expected} programs")

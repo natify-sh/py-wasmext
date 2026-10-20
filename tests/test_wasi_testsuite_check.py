@@ -10,9 +10,17 @@ sys.path.insert(0, str(Path(__file__).parent / "wasi_testsuite"))
 from check_results import PROGRAMS, check  # type: ignore[import-not-found]  # pyright: ignore[reportMissingImports]
 
 
-def _suite(passed: int, failed: int = 0, skipped: int = 0, xfailed: int = 0, xpassed: int = 0) -> dict[str, Any]:
+def _suite(
+    passed: int,
+    failed: int = 0,
+    skipped: int = 0,
+    xfailed: int = 0,
+    xpassed: int = 0,
+    name: str = "WASI tests [wasm32-wasip1]",
+) -> dict[str, Any]:
     names = passed + failed + skipped + xfailed + xpassed
     return {
+        "name": name,
         "passed": passed,
         "failed": failed,
         "skipped": skipped,
@@ -54,3 +62,11 @@ def test_counts_that_do_not_add_up_are_noticed() -> None:
     broken = _suite(46)
     broken["passed"] = 40
     assert any("add up" in p for p in check(_report(_suite(12), _suite(14), broken)))
+
+
+def test_the_tests_of_wasi_0_3_that_are_skipped_on_purpose_do_not_count() -> None:
+    wasip3 = _suite(0, skipped=55, name="WASI Rust tests [wasm32-wasip3]")
+    assert check(_report(_suite(12), _suite(14), _suite(46), wasip3)) == []
+    assert check(_report(_suite(12), _suite(14), wasip3)) == [
+        "26 tests ran, the suite has 72 programs"
+    ]  # the Rust ones are gone

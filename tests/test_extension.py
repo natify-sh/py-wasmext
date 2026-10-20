@@ -287,3 +287,78 @@ def test_a_table_that_cannot_be_allocated_is_a_memory_error(
     mod = build_front_end(wat, f"bigtable_{front_end}")
     with pytest.raises(MemoryError):
         mod.Instance()
+
+
+def test_odd_names_of_exports_and_imports_cannot_break_the_generated_c(
+    build_front_end: Builder, front_end: str, tmp_path: Path
+) -> None:
+    """A name of the module is data, never C: `*/` and a line end in a name, a name with a null character, and the names `export` and ``."""
+    wat = tmp_path / "odd.wat"
+    wat.write_text(
+        r"""(module
+  (func (export "a*/ static int injected_by_name(void){return 77;} /*") (result i32) i32.const 1)
+  (func (export "line\n*/ int x;") (result i32) i32.const 2)
+  (func (export "export") (result i32) i32.const 3)
+  (func (export "") (result i32) i32.const 4)
+  (func (export "a\00b") (result i32) i32.const 5)
+  (func (export "a") (result i32) i32.const 6))""",
+        encoding="utf-8",
+    )
+    mod = build_front_end(wat, f"odd_{front_end}")
+    inst = mod.Instance()
+    assert inst.a() == 6  # not the function behind "a\0b", which is left out
+    assert getattr(inst, "a*/ static int injected_by_name(void){return 77;} /*")() == 1
+    assert getattr(inst, "line\n*/ int x;")() == 2
+    assert (inst.export(), getattr(inst, "")()) == (3, 4)
+    assert "a\x00b" not in inst.__exports__
+
+
+def test_a_null_character_in_the_name_of_an_import_is_refused(tmp_path: Path, wabt: Path) -> None:
+    from wasmext import GenError, generate, parse
+
+    wat = tmp_path / "nul.wat"
+    wat.write_text(r'(module (import "env" "f\00g" (func)))', encoding="utf-8")
+    wasm = tmp_path / "nul.wasm"
+    subprocess.run([wabt / "bin" / "wat2wasm", wat, "-o", wasm], check=True)
+    with pytest.raises(GenError, match="null character"):
+        generate(parse(wasm.read_bytes()), "nul")
+
+
+@pytest.mark.skipif(not Path("/proc/self/status").is_file(), reason="the size of the address space is read from /proc")
+@pytest.mark.parametrize(
+    "wat",
+    [
+        '(module (memory 1) (start $s) (func $s unreachable) (func (export "f")))',
+        '(module (memory 1) (data (i32.const 70000) "x") (func (export "f")))',
+    ],
+    ids=["start", "data"],
+)
+def test_an_instance_that_could_not_be_made_gives_its_memory_back(
+    build_front_end: Builder, front_end: str, tmp_path: Path, wat: str
+) -> None:
+    """Every failed `Instance()` used to leave the mapping of its memory (8 GiB of address space with guard pages)."""
+
+    def megabytes() -> int:
+        for line in Path("/proc/self/status").read_text(encoding="utf-8").splitlines():
+            if line.startswith("VmSize"):
+                return int(line.split()[1]) // 1024
+        return 0
+
+    source = tmp_path / "fail.wat"
+    source.write_text(wat, encoding="utf-8")
+    mod = build_front_end(source, f"fail{abs(hash(wat)) % 10**6}_{front_end}")
+    before = megabytes()
+    for _ in range(50):
+        with pytest.raises(RuntimeError):  # Trap
+            mod.Instance()
+    assert megabytes() - before < 1000, "the address space grew by the memories of the failed instances"
+
+
+def test_a_tag_with_a_payload_larger_than_the_runtime_keeps_is_reported(wabt: Path, tmp_path: Path) -> None:
+    params = " ".join(["i64"] * 40)  # 320 bytes; the runtime keeps 256
+    wat = tmp_path / "bigtag.wat"
+    wat.write_text(f'(module (tag $t (param {params})) (func (export "f") (result i32) i32.const 1))', encoding="utf-8")
+    wasm = tmp_path / "bigtag.wasm"
+    subprocess.run([wabt / "bin" / "wat2wasm", wat, "-o", wasm], check=True)
+    glue = generate(parse(wasm.read_bytes()), "bigtag")
+    assert any("320 bytes" in note for note in glue.notes)

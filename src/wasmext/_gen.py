@@ -61,6 +61,7 @@ class GenError(ValueError):
 class Glue:
     source: str  # the C of the glue
     skipped: list[str] = field(default_factory=list[str])
+    notes: list[str] = field(default_factory=list[str])  # things worth saying that do not lose anything
     stub: str = ""  # the .pyi of the extension module
     wasi_headers: tuple[
         str, ...
@@ -109,6 +110,12 @@ def mangle(name: str, *, module: bool = False) -> str:
             out.append(f"0x{ch:02X}")
             last_underscore = False
     return "".join(out)
+
+
+def _cc(text: str) -> str:
+    """`text` made safe to stand in a C comment: a name in the module can be anything, even `*/` and a line end followed by code."""
+    plain = "".join(c if c.isprintable() else "?" for c in text)
+    return plain.replace("*/", "* /").replace("/*", "/ *")
 
 
 def _c_string(text: str) -> str:
@@ -261,7 +268,7 @@ def _emit_links(
     incompatible = "the export is from an incompatible version of wasmext or of the wasm2c runtime"
     for k, imp in enumerate(imports):
         where = f"{imp.module}.{imp.field}"
-        hadd(f"/* the import {where}: a function of another instance */")
+        hadd(f"/* the import {_cc(where)}: a function of another instance */")
         hadd(
             f"static int {last}_link_func{k}({last}_instance *core, const wasmext_export *e, char *msg, size_t cap) {{"
         )
@@ -285,7 +292,7 @@ def _emit_links(
     for j, g in enumerate(global_imports):
         where = f"{g.module}.{g.field}"
         expected = f"{'mutable ' if g.mutable else ''}{g.type}"
-        hadd(f"/* the import {where}: a global of another instance, or (an immutable one) a value */")
+        hadd(f"/* the import {_cc(where)}: a global of another instance, or (an immutable one) a value */")
         hadd(
             f"static int {last}_link_global{j}({last}_instance *core, const wasmext_export *e, char *msg, size_t cap) {{"
         )
@@ -312,7 +319,7 @@ def _emit_links(
     for j, m in enumerate(memory_imports):
         where = f"{m.module}.{m.field}"
         lim = m.limits
-        hadd(f"/* the import {where}: the memory of another instance */")
+        hadd(f"/* the import {_cc(where)}: the memory of another instance */")
         hadd(
             f"static int {last}_link_memory{j}({last}_instance *core, const wasmext_export *e, char *msg, size_t cap) {{"
         )
@@ -367,6 +374,8 @@ def generate(module: Module, name: str, *, version: str | None = None) -> Glue:
     memory_imports: list[_ImportMemory] = []
     memory_slots: dict[str, int] = {}
     for imp in module.imports:
+        if "\0" in imp.module or "\0" in imp.name:  # a C string ends at the NUL: the name would be another one
+            raise GenError(f"import {imp.module!r}.{imp.name!r}: a null character in a name is not supported")
         symbol = f"w2c_{mangle(imp.module, module=True)}_{mangle(imp.name)}"
         if imp.kind == "func" and isinstance(imp.type, FuncType):
             reason = _why_not(imp.type, several_results=True)
@@ -423,6 +432,9 @@ def generate(module: Module, name: str, *, version: str | None = None) -> Glue:
     globals_: list[tuple[str, GlobalType]] = []
     no_attribute: set[str] = set()
     for exp in module.exports:
+        if "\0" in exp.name:  # a C string ends at the NUL: the export would be another one
+            skipped.append(f"{exp.kind} {exp.name!r} has a null character in its name")
+            continue
         if _reserved(exp.name) and exp.kind in ("func", "memory", "global"):
             # not an attribute (it would replace a special name of Instance), but instance.__exports__[name] reaches it
             skipped.append(
@@ -473,6 +485,14 @@ def generate(module: Module, name: str, *, version: str | None = None) -> Glue:
     for module_name in wasi_modules:
         hadd(f'#include "{_WASI_HEADERS[module_name]}"')
     tags = module.tags
+    notes: list[str] = []
+    for tag_index, tag in enumerate(tags):
+        size = sum({"i32": 4, "f32": 4, "i64": 8, "f64": 8, "v128": 16}.get(str(t), 8) for t in tag.params)
+        if size > 256:
+            notes.append(
+                f"exception tag {tag_index} carries {size} bytes: the runtime keeps at most 256, "
+                "so its values are not decoded when it is not caught"
+            )
     if tags:
         hadd(
             "/* The tags of the module: their identities (a table that wasmext adds to the C of wasm2c, in the order of the tags) and the"
@@ -1071,7 +1091,12 @@ def generate(module: Module, name: str, *, version: str | None = None) -> Glue:
             hadd(
                 f"    {{ void *probe_ = calloc((size_t){t.limits.min}ULL, sizeof({element})); if (probe_ == NULL) return (int)WASMEXT_TRAP_NO_MEMORY; free(probe_); }}"
             )
-    hadd("    WASMEXT_ENTER(trap_, return (int)trap_)")
+    # a trap while the instance is made (a start function that traps, a data segment out of range) leaves what was allocated: it is freed
+    # here. Not after NO_MEMORY: the memory that could not be had has size but no data, and the runtime frees it with munmap(NULL, size),
+    # which unmaps whatever lives at the bottom of the address space (the interpreter itself); only a further memory of the module leaks then.
+    hadd(
+        f"    WASMEXT_ENTER(trap_, {{ if (trap_ != WASMEXT_TRAP_NO_MEMORY) wasm2c_{prefix}_free(&self->inst); memset(&self->inst, 0, sizeof self->inst); return (int)trap_; }})"
+    )
     # wasm2c orders the import modules by name in the parameters of its `instantiate`, whatever the order of the imports of the module is
     by_name = sorted(range(len(hosts)), key=lambda i: hosts[i].encode("utf-8"))
     host_args = "".join(f", &self->host{i}" for i in by_name)
@@ -1110,7 +1135,7 @@ def generate(module: Module, name: str, *, version: str | None = None) -> Glue:
         ret = f"struct wasm_multi_{codes}" if several else _CTYPE[func.results[0]] if func.results else "void"
         names = "".join(f", a{j}" for j in range(len(func.params)))
         give = "return zero;" if func.results else "return;"
-        hadd(f"/* {exp_name}{_signature(func)} */")
+        hadd(f"/* {_cc(exp_name)}{_signature(func)} */")
         hadd(f"static {ret} {last}_call{i}(void *inst{params}, int *trapped) {{")
         if func.results:
             hadd(f"    {ret} zero;")
@@ -1138,7 +1163,7 @@ def generate(module: Module, name: str, *, version: str | None = None) -> Glue:
     # ---- the exported functions in Python: the arguments to C, the call, the result (or the trap) to Python ----
     for i, (exp_name, func) in enumerate(funcs):
         n = len(func.params)
-        add(f"/* {exp_name}{_signature(func)} */")
+        add(f"/* {_cc(exp_name)}{_signature(func)} */")
         add(f"static PyObject *Instance_f{i}(InstanceObject *self, PyObject *const *args, Py_ssize_t nargs) {{")
         add(f"    if (nargs != {n}) {{")
         add(
@@ -1511,6 +1536,7 @@ def generate(module: Module, name: str, *, version: str | None = None) -> Glue:
     return Glue(
         "\n".join(w) + "\n",
         skipped,
+        notes,
         _stub(last, funcs, memories, globals_, stub_imports, uses_wasi, version, param_names, bool(tags)),
         tuple(_WASI_HEADERS[m] for m in wasi_modules),
         api_header=api_header,

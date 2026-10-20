@@ -419,6 +419,9 @@ def _prepare(
     if glue.skipped and not quiet:
         for item in glue.skipped:
             print(f"wasmext: {wasm}: not exposed: {item}", file=sys.stderr)
+    if glue.notes and not quiet:
+        for item in glue.notes:
+            print(f"wasmext: {wasm}: {item}", file=sys.stderr)
     return outputs(glue.skipped, wanted)
 
 

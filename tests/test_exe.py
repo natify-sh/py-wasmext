@@ -40,3 +40,14 @@ def test_a_module_with_other_imports_than_wasi_is_not_made_into_a_program(wabt: 
     subprocess.run([wabt / "bin" / "wat2wasm", wat, "-o", wasm], check=True)
     with pytest.raises(Exception, match="serves the imports of WASI"):
         build(wasm, tmp_path / "other", optimize=False)
+
+
+def test_a_module_that_imports_nothing_from_wasi_is_not_made_into_a_program_in_words(
+    wabt: Path, tmp_path: Path
+) -> None:
+    wat = tmp_path / "plain.wat"
+    wat.write_text('(module (func (export "_start")))', encoding="utf-8")
+    wasm = tmp_path / "plain.wasm"
+    subprocess.run([wabt / "bin" / "wat2wasm", wat, "-o", wasm], check=True)
+    with pytest.raises(Exception, match="imports nothing from WASI"):
+        build(wasm, tmp_path / "plain", optimize=False)

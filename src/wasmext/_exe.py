@@ -187,6 +187,7 @@ def build_shared(
     work: str | os.PathLike[str] | None = None,
     parts: int | None = None,
     optimize: bool = True,
+    quiet: bool = False,
 ) -> Path:
     """Make the shared library `library` of the module `wasm`; beside the C, in `work`, is its header `<name>_api.h`: the C API for a host that is not
     Python (see _shared.py)."""
@@ -201,6 +202,10 @@ def build_shared(
     glue = generate(parse(wasm_path.read_bytes()), last)
     if glue.shared_unsupported:
         raise GenError(f"{wasm_path}: no shared library yet: {glue.shared_unsupported}")
+    if not quiet:
+        for item in glue.skipped:
+            if "is not an attribute" not in item:
+                print(f"wasmext: {wasm_path}: not in the library: {item}", file=sys.stderr)
     prepared = _prepare(wasm_path, last, out_dir, force=False, quiet=True, stubs=False, parts=parts)
     for file, text in ((f"{last}_api.h", glue.api_header), (f"{last}_shared.c", glue.shared)):
         target = out_dir / file
@@ -244,6 +249,8 @@ def build(
         raise GenError(
             f"{wasm_path}: an executable serves the imports of WASI and no others (import {other.module}.{other.name})"
         )
+    if not any(i.module in ("wasi_snapshot_preview1", "wasi_unstable") for i in parsed.imports):
+        raise GenError(f"{wasm_path}: an executable is a WASI program, and the module imports nothing from WASI")
     if not any(e.kind == "func" and e.name == "_start" for e in parsed.exports):
         raise GenError(f"{wasm_path}: an executable runs the _start of a command, and the module has none")
     last = name or "".join(c if c.isalnum() else "_" for c in wasm_path.stem)

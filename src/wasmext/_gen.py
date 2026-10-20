@@ -1450,6 +1450,7 @@ def generate(module: Module, name: str, *, version: str | None = None) -> Glue:
             [(i.module, i.field, i.func, i.module in _WASI_HEADERS, i.host, i.slot) for i in imports],
             uses_wasi,
             len(tags),
+            skipped,
         )
     return Glue(
         "\n".join(w) + "\n",

@@ -860,7 +860,7 @@ A package may ship a shared library (a dll) or an executable instead of, or besi
 
 ### Audit of stages 1 to 6a against the plan (after 6a; probes run by hand, not yet tests)
 
-**Bugs found by running the shared library** (fix before 6a is closed, each gets a test):
+**Bugs found by running the shared library** (the four are fixed, each with a test in `tests/test_shared.py` or `tests/test_exe.py`; the fixes: `_new`, `_instantiate` and every export set the runtime up for the calling thread by `api_enter()`, with `<name>_thread_free()` to give it back; the end of a WASI program answers `TRAP_ENDED`; an export left out is said in the header (`not here:`) and on stderr; an executable of a module with no WASI import is refused in words):
 - The library never calls `wasm_rt_init()` (the extension does it in `PyInit_`, the executable in `main`): an out-of-bounds access in a module **crashes the host with SIGSEGV** instead of
   answering a trap (the only trap the test uses is `unreachable`); a build without `NDEBUG` (a Windows build by `zig cc`) stops at `assert(wasm_rt_is_initialized())`. `_new` must call it (it is idempotent), and a
   host thread other than the one that created the instance needs `wasm_rt_init_thread()`.

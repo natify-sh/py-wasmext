@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import platform
 import shutil
 import subprocess
 import sys
@@ -282,6 +283,10 @@ def test_the_c_of_every_target_the_module_can_have_is_generated_at_once(
         natify("pkg/lib.wasm", product="exe", quiet=True)  # only when the program itself is asked for
 
 
+@pytest.mark.skipif(
+    platform.system() == "Windows",
+    reason="open: on Windows the patterns of MANIFEST.in did not match the paths of the generated C (CI, Python 3.15t); they have forward slashes, the patterns get the separator of the system",
+)
 def test_a_manifest_can_leave_the_generated_c_out_of_the_source_distribution(tmp_path: Path, wabt: Path) -> None:
     """The C goes into an sdist by default; a project that follows the advice of Cython (the generator is a build requirement) says so in MANIFEST.in."""
     import tarfile

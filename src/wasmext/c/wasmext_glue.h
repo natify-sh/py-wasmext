@@ -11,6 +11,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 #include "wasm-rt.h"
 #include "wasm-rt-impl.h"
@@ -31,6 +32,36 @@
     offsetof(wasm_rt_memory_t, pages) * 131u ^ offsetof(wasm_rt_memory_t, size) * 17u ^ offsetof(wasm_rt_memory_t, is64) * 7u ^ \
     sizeof(wasm_rt_funcref_table_t) * 65537u))
 #endif
+
+/* What another instance reads of an export of this one (a function, a memory or a global): a record that a host passes from the exporter to the
+   importer. The contract is private to wasmext and versioned; a reader checks `version`, `size` and `runtime` (wasmext_export_ok) before it reads a
+   field. The extension for CPython wraps it in a capsule named WASMEXT_EXPORT; any other host passes the pointer. */
+#define WASMEXT_EXPORT "wasmext.export.v1"
+enum { WASMEXT_FUNC = 0, WASMEXT_TABLE = 1, WASMEXT_MEMORY = 2, WASMEXT_GLOBAL = 3 };
+typedef struct {
+    uint32_t size;      /* sizeof of this struct for the host that made it */
+    uint32_t version;   /* 1 */
+    uint32_t kind;      /* WASMEXT_FUNC, ... */
+    uint32_t type;      /* a global: its value type as numbered in the binary format (0x7F is i32); a memory: sizeof(wasm_rt_memory_t) */
+    uint32_t flags;     /* bit 0: the global is mutable; bit 1: the memory is 64-bit; bit 2: it is checked with guard pages */
+    void *owner;        /* what keeps the exporter alive (Python: the instance, a PyObject *): a reader that keeps the address keeps a reference to it */
+    void *address;      /* a global: the pointer to its value; a memory: the wasm_rt_memory_t; a function: the function to call (see below) */
+    void *instance;     /* a function: the first argument of that call */
+    const char *signature;  /* a function: the parameters, '>', the results (i j f d o) */
+    uint32_t runtime;   /* WASMEXT_RUNTIME of the host that made it: the layout of the structs of the wasm2c runtime */
+} wasmext_export;
+/* a function is called as `result f(void *instance, parameters..., int *trapped)`: a trap is reported through `trapped` (its code: see above),
+   and the result is then undefined; it catches the traps of its own module. */
+
+static inline int wasmext_export_ok(const wasmext_export *e) {
+    return e->version == 1 && e->size >= sizeof(wasmext_export) && e->runtime == WASMEXT_RUNTIME;
+}
+
+/* the message of a link that fails: 1 */
+static inline int wasmext_link_fail(char *msg, size_t cap, const char *text) {
+    snprintf(msg, cap, "%s", text);
+    return 1;
+}
 
 /* a value of WebAssembly that is not a parameter or a result of a call: the values of an exception that nothing caught (`type` is the
    number of the type in the binary format: 0x7F i32, 0x7E i64, 0x7D f32, 0x7C f64, 0x7B v128, whose 16 bytes are in `o`) */

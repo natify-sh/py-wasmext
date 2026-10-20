@@ -19,6 +19,7 @@ Not yet: reference types, imported memories/tables and mutable globals, exported
 from __future__ import annotations
 
 import keyword
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -246,6 +247,110 @@ class _ImportGlobal:
     mutable: bool = False
 
 
+def _emit_links(
+    hadd: Callable[[str], None],
+    last: str,
+    imports: list[_Import],
+    global_imports: list[_ImportGlobal],
+    memory_imports: list[_ImportMemory],
+    hosts: list[str],
+) -> None:
+    """The C that links an import to an export of another instance (a `wasmext_export`, see wasmext_glue.h), for every host that has Python or has
+    not: it checks what the export is (kind, type, signature, size) and, if it fits, puts it where the module reads its import. 0 when linked;
+    1 with the message in `msg` otherwise. Keeping the other instance alive is the host's business."""
+    incompatible = "the export is from an incompatible version of wasmext or of the wasm2c runtime"
+    for k, imp in enumerate(imports):
+        where = f"{imp.module}.{imp.field}"
+        hadd(f"/* the import {where}: a function of another instance */")
+        hadd(
+            f"static int {last}_link_func{k}({last}_instance *core, const wasmext_export *e, char *msg, size_t cap) {{"
+        )
+        hadd(
+            f"    if (!wasmext_export_ok(e)) return wasmext_link_fail(msg, cap, {_c_string(f'import {where}: {incompatible}')});"
+        )
+        hadd(
+            f"    if (e->kind != WASMEXT_FUNC) return wasmext_link_fail(msg, cap, {_c_string(f'import {where} is a function: the export given is not')});"
+        )
+        hadd(f"    if (strcmp(e->signature, {_c_string(_signature_code(imp.func))}) != 0) {{")
+        hadd(
+            f'        snprintf(msg, cap, "import {where} is a function {_signature_code(imp.func)}: the export given is another one (%s)", e->signature);'
+        )
+        hadd("        return 1;")
+        hadd("    }")
+        hadd(f"    core->host{imp.host}.fn[{imp.slot}] = e->address;")
+        hadd(f"    core->host{imp.host}.user[{imp.slot}] = e->instance;")
+        hadd("    return 0;")
+        hadd("}")
+        hadd("")
+    for j, g in enumerate(global_imports):
+        where = f"{g.module}.{g.field}"
+        expected = f"{'mutable ' if g.mutable else ''}{g.type}"
+        hadd(f"/* the import {where}: a global of another instance, or (an immutable one) a value */")
+        hadd(
+            f"static int {last}_link_global{j}({last}_instance *core, const wasmext_export *e, char *msg, size_t cap) {{"
+        )
+        hadd(
+            f"    if (!wasmext_export_ok(e)) return wasmext_link_fail(msg, cap, {_c_string(f'import {where}: {incompatible}')});"
+        )
+        hadd(
+            f"    if (e->kind != WASMEXT_GLOBAL) return wasmext_link_fail(msg, cap, {_c_string(f'import {where} is a global: the export given is not')});"
+        )
+        hadd(f"    if (e->type != {_TYPE_CODE[g.type]} || (e->flags & 1) != {int(g.mutable)})")
+        hadd(
+            f"        return wasmext_link_fail(msg, cap, {_c_string(f'import {where} is a {expected} global: the export given has another type or the other mutability')});"
+        )
+        hadd(f"    core->host{g.host}.gp{g.slot} = ({_CTYPE[g.type]} *)e->address;")
+        hadd("    return 0;")
+        hadd("}")
+        hadd("")
+        if not g.mutable:
+            hadd(f"static void {last}_set_global{j}({last}_instance *core, {_CTYPE[g.type]} value) {{")
+            hadd(f"    core->host{g.host}.g{g.slot} = value;")
+            hadd(f"    core->host{g.host}.gp{g.slot} = &core->host{g.host}.g{g.slot};")
+            hadd("}")
+            hadd("")
+    for j, m in enumerate(memory_imports):
+        where = f"{m.module}.{m.field}"
+        lim = m.limits
+        hadd(f"/* the import {where}: the memory of another instance */")
+        hadd(
+            f"static int {last}_link_memory{j}({last}_instance *core, const wasmext_export *e, char *msg, size_t cap) {{"
+        )
+        hadd(
+            f"    if (!wasmext_export_ok(e)) return wasmext_link_fail(msg, cap, {_c_string(f'import {where}: {incompatible}')});"
+        )
+        hadd(
+            f"    if (e->kind != WASMEXT_MEMORY) return wasmext_link_fail(msg, cap, {_c_string(f'import {where} is a memory: the export given is not')});"
+        )
+        hadd("    wasm_rt_memory_t *mem = (wasm_rt_memory_t *)e->address;")
+        hadd(
+            f"    if (e->type != sizeof(wasm_rt_memory_t)) return wasmext_link_fail(msg, cap, {_c_string(f'import {where}: the memory is from an incompatible runtime of wasm2c')});"
+        )
+        hadd(
+            f"    if (((e->flags >> 1) & 1) != {int(lim.is64)}) return wasmext_link_fail(msg, cap, {_c_string(f'import {where} is a 64-bit memory the other way: memory64 differs')});"
+        )
+        hadd(
+            f"    if (((e->flags >> 2) & 1) != (WASM_RT_MEMCHECK_GUARD_PAGES ? 1 : 0)) return wasmext_link_fail(msg, cap, {_c_string(f'import {where}: one module is built with guard pages and the other without (--no-guard-pages)')});"
+        )
+        hadd(f"    if (mem->pages < {lim.min}ULL) {{")
+        hadd(
+            f'        snprintf(msg, cap, "import {where}: the memory has %llu pages, the module needs at least {lim.min}", (unsigned long long)mem->pages);'
+        )
+        hadd("        return 1;")
+        hadd("    }")
+        if lim.max is not None:
+            hadd(f"    if (mem->max_pages > {lim.max}ULL) {{")
+            hadd(
+                f'        snprintf(msg, cap, "import {where}: the memory may grow to %llu pages, the module allows {lim.max}", (unsigned long long)mem->max_pages);'
+            )
+            hadd("        return 1;")
+            hadd("    }")
+        hadd(f"    core->host{m.host}.mp{m.slot} = mem;")
+        hadd("    return 0;")
+        hadd("}")
+        hadd("")
+
+
 def generate(module: Module, name: str, *, version: str | None = None) -> Glue:
     """The C source of the extension module `name` (dotted, as it is imported) for the parsed `module`. `version`, the version of
     wasmext, goes into the header of the stub."""
@@ -435,38 +540,6 @@ def generate(module: Module, name: str, *, version: str | None = None) -> Glue:
         add("    return PyBytes_FromStringAndSize((const char *)&v, 16);")
         add("}")
         add("")
-    # what another extension reads of an export of this one: a capsule over this struct. The contract between the extensions
-    # is private to wasmext and versioned; a reader checks `version` and `size` before it reads a field.
-    add('#define WASMEXT_EXPORT "wasmext.export.v1"')
-    add("enum { WASMEXT_FUNC = 0, WASMEXT_TABLE = 1, WASMEXT_MEMORY = 2, WASMEXT_GLOBAL = 3 };")
-    add("typedef struct {")
-    add("    uint32_t size;      /* sizeof of this struct for the extension that made it */")
-    add("    uint32_t version;   /* 1 */")
-    add("    uint32_t kind;      /* WASMEXT_FUNC, ... */")
-    add(
-        "    uint32_t type;      /* a global: its value type as numbered in the binary format (0x7F is i32); a memory: sizeof(wasm_rt_memory_t) */"
-    )
-    add(
-        "    uint32_t flags;     /* bit 0: the global is mutable; bit 1: the memory is 64-bit; bit 2: it is checked with guard pages */"
-    )
-    add("    PyObject *owner;    /* the instance: a reader that keeps the address keeps a reference to it */")
-    add(
-        "    void *address;      /* a global: the pointer to its value; a memory: the wasm_rt_memory_t; a function: the function to call (see below) */"
-    )
-    add("    void *instance;     /* a function: the first argument of that call */")
-    add("    const char *signature;  /* a function: the parameters, '>', the results (i j f d o) */")
-    add(
-        "    uint32_t runtime;   /* WASMEXT_RUNTIME of the extension that made it: the layout of the structs of the wasm2c runtime */"
-    )
-    add("} wasmext_export;")
-    add(
-        "/* a function is called as `result f(void *instance, parameters..., int *trapped)`: a trap is reported through `trapped`"
-    )
-    add(
-        "   (its code: see wasmext_glue.h), and the result is then undefined; it catches the traps of its own module. */"
-    )
-    add("")
-
     # ---- the glue of the module (no Python): what each import module holds, the instance, the imports as the module calls them ----
     for i, host in enumerate(hosts):
         hadd(f"/* the functions and the values of the imports of module {_c_string(host)} */")
@@ -490,6 +563,7 @@ def generate(module: Module, name: str, *, version: str | None = None) -> Glue:
         hadd(f"    struct w2c_{mangle(host, module=True)} host{i};")
     hadd(f"}} {last}_instance;")
     hadd("")
+    _emit_links(hadd, last, imports, global_imports, memory_imports, hosts)
     add("typedef struct {")
     add("    PyObject_HEAD")
     add(f"    {last}_instance core;")
@@ -799,25 +873,12 @@ def generate(module: Module, name: str, *, version: str | None = None) -> Glue:
             add("        }")
             add("        if (ref != NULL && PyCapsule_IsValid(ref, WASMEXT_EXPORT)) {")
             add("            wasmext_export *e = (wasmext_export *)PyCapsule_GetPointer(ref, WASMEXT_EXPORT);")
-            add(
-                "            if (e->version != 1 || e->size < sizeof(wasmext_export) || e->runtime != WASMEXT_RUNTIME) {"
-            )
-            add(
-                f"                PyErr_SetString(LinkError, {_c_string(f'import {where}: the export is from an incompatible version of wasmext or of the wasm2c runtime')});"
-            )
-            add("            } else if (e->kind != WASMEXT_FUNC) {")
-            add(
-                f"                PyErr_SetString(LinkError, {_c_string(f'import {where} is a function: the export given is not')});"
-            )
-            add(f"            }} else if (strcmp(e->signature, {_c_string(signature)}) != 0) {{")
-            add(
-                f'                PyErr_Format(LinkError, "import {where} is a function {_signature_code(imp.func)}: the export given is another one (%s)", e->signature);'
-            )
+            add("            char message[512];")
+            add(f"            if ({last}_link_func{k}(&self->core, e, message, sizeof message)) {{")
+            add("                PyErr_SetString(LinkError, message);")
             add("            } else {")
-            add(f"                {host}.fn[{imp.slot}] = e->address;")
-            add(f"                {host}.user[{imp.slot}] = e->instance;")
-            add("                Py_INCREF(e->owner);")
-            add(f"                {hold}.lo[{imp.slot}] = e->owner;")
+            add("                Py_INCREF((PyObject *)e->owner);")
+            add(f"                {hold}.lo[{imp.slot}] = (PyObject *)e->owner;")
             add("            }")
             add("            Py_DECREF(ref);")
             add("            Py_DECREF(v);")
@@ -838,39 +899,25 @@ def generate(module: Module, name: str, *, version: str | None = None) -> Glue:
             if imp.module in _WASI_HEADERS:
                 add("        }")
             add("    }")
-        for g in global_imports:
+        for j, g in enumerate(global_imports):
             if g.type == "v128":
                 number, what = "wasmext_is_v128(v)", "16 bytes"
             else:
                 number = "PyLong_Check(v)" if g.type in ("i32", "i64") else "(PyLong_Check(v) || PyFloat_Check(v))"
                 what = "an int" if g.type in ("i32", "i64") else "a number"
             where = f"{g.module}.{g.field}"
-            host = f"self->core.host{g.host}"
             hold = f"self->hold{g.host}"
             add("    {")
             add(f"        PyObject *v = lookup_import(imports, {_c_string(g.module)}, {_c_string(g.field)}, 0);")
             add("        if (v == NULL) { Py_DECREF(self); return NULL; }")
             add("        if (PyCapsule_IsValid(v, WASMEXT_EXPORT)) {  /* an export of another instance */")
             add("            wasmext_export *e = (wasmext_export *)PyCapsule_GetPointer(v, WASMEXT_EXPORT);")
-            add(
-                "            if (e->version != 1 || e->size < sizeof(wasmext_export) || e->runtime != WASMEXT_RUNTIME) {"
-            )
-            add(
-                f"                PyErr_SetString(LinkError, {_c_string(f'import {where}: the export is from an incompatible version of wasmext or of the wasm2c runtime')});"
-            )
-            add("            } else if (e->kind != WASMEXT_GLOBAL) {")
-            add(
-                f"                PyErr_SetString(LinkError, {_c_string(f'import {where} is a global: the export given is not')});"
-            )
-            add(f"            }} else if (e->type != {_TYPE_CODE[g.type]} || (e->flags & 1) != {int(g.mutable)}) {{")
-            expected = f"{'mutable ' if g.mutable else ''}{g.type}"
-            add(
-                f"                PyErr_SetString(LinkError, {_c_string(f'import {where} is a {expected} global: the export given has another type or the other mutability')});"
-            )
+            add("            char message[512];")
+            add(f"            if ({last}_link_global{j}(&self->core, e, message, sizeof message)) {{")
+            add("                PyErr_SetString(LinkError, message);")
             add("            } else {")
-            add(f"                {host}.gp{g.slot} = ({_CTYPE[g.type]} *)e->address;")
-            add("                Py_INCREF(e->owner);")
-            add(f"                {hold}.go{g.slot} = e->owner;")
+            add("                Py_INCREF((PyObject *)e->owner);")
+            add(f"                {hold}.go{g.slot} = (PyObject *)e->owner;")
             add("            }")
             add("            Py_DECREF(v);")
             add("            if (PyErr_Occurred()) { Py_DECREF(self); return NULL; }")
@@ -892,16 +939,13 @@ def generate(module: Module, name: str, *, version: str | None = None) -> Glue:
                 add("            Py_DECREF(self);")
                 add("            return NULL;")
                 add("        } else {")
-                add(f"            {host}.g{g.slot} = {_TO_WASM[g.type].format('v')};")
-                add(f"            {host}.gp{g.slot} = &{host}.g{g.slot};")
+                add(f"            {last}_set_global{j}(&self->core, {_TO_WASM[g.type].format('v')});")
                 add("            Py_DECREF(v);")
                 add("        }")
             add("    }")
-    for m in memory_imports:
+    for j, m in enumerate(memory_imports):
         where = f"{m.module}.{m.field}"
-        host = f"self->core.host{m.host}"
         hold = f"self->hold{m.host}"
-        lim = m.limits
         add("    {")
         add(f"        PyObject *v = lookup_import(imports, {_c_string(m.module)}, {_c_string(m.field)}, 0);")
         add("        if (v == NULL) { Py_DECREF(self); return NULL; }")
@@ -919,40 +963,12 @@ def generate(module: Module, name: str, *, version: str | None = None) -> Glue:
         add("        }")
         add("        if (ref != NULL && PyCapsule_IsValid(ref, WASMEXT_EXPORT)) {")
         add("            wasmext_export *e = (wasmext_export *)PyCapsule_GetPointer(ref, WASMEXT_EXPORT);")
-        add("            wasm_rt_memory_t *mem = (wasm_rt_memory_t *)e->address;")
-        add("            if (e->version != 1 || e->size < sizeof(wasmext_export) || e->runtime != WASMEXT_RUNTIME) {")
-        add(
-            f"                PyErr_SetString(LinkError, {_c_string(f'import {where}: the export is from an incompatible version of wasmext or of the wasm2c runtime')});"
-        )
-        add("            } else if (e->kind != WASMEXT_MEMORY) {")
-        add(
-            f"                PyErr_SetString(LinkError, {_c_string(f'import {where} is a memory: the export given is not')});"
-        )
-        add("            } else if (e->type != sizeof(wasm_rt_memory_t)) {")
-        add(
-            f"                PyErr_SetString(LinkError, {_c_string(f'import {where}: the memory is from an incompatible runtime of wasm2c')});"
-        )
-        add(f"            }} else if (((e->flags >> 1) & 1) != {int(lim.is64)}) {{")
-        add(
-            f"                PyErr_SetString(LinkError, {_c_string(f'import {where} is a {chr(54)}{chr(52)}-bit memory the other way: memory64 differs')});"
-        )
-        add("            } else if (((e->flags >> 2) & 1) != (WASM_RT_MEMCHECK_GUARD_PAGES ? 1 : 0)) {")
-        add(
-            f"                PyErr_SetString(LinkError, {_c_string(f'import {where}: one module is built with guard pages and the other without (--no-guard-pages)')});"
-        )
-        add(f"            }} else if (mem->pages < {lim.min}ULL) {{")
-        add(
-            f'                PyErr_Format(LinkError, "import {where}: the memory has %llu pages, the module needs at least {lim.min}", (unsigned long long)mem->pages);'
-        )
-        if lim.max is not None:
-            add(f"            }} else if (mem->max_pages > {lim.max}ULL) {{")
-            add(
-                f'                PyErr_Format(LinkError, "import {where}: the memory may grow to %llu pages, the module allows {lim.max}", (unsigned long long)mem->max_pages);'
-            )
+        add("            char message[512];")
+        add(f"            if ({last}_link_memory{j}(&self->core, e, message, sizeof message)) {{")
+        add("                PyErr_SetString(LinkError, message);")
         add("            } else {")
-        add(f"                {host}.mp{m.slot} = mem;")
-        add("                Py_INCREF(e->owner);")
-        add(f"                {hold}.mo{m.slot} = e->owner;")
+        add("                Py_INCREF((PyObject *)e->owner);")
+        add(f"                {hold}.mo{m.slot} = (PyObject *)e->owner;")
         add("            }")
         add("            Py_DECREF(ref);")
         add("            Py_DECREF(v);")
@@ -1172,7 +1188,7 @@ def generate(module: Module, name: str, *, version: str | None = None) -> Glue:
     add("")
     add("static void export_free(PyObject *capsule) {")
     add("    wasmext_export *e = (wasmext_export *)PyCapsule_GetPointer(capsule, WASMEXT_EXPORT);")
-    add("    if (e != NULL) { Py_DECREF(e->owner); PyMem_Free(e); }")
+    add("    if (e != NULL) { Py_DECREF((PyObject *)e->owner); PyMem_Free(e); }")
     add("}")
     add("")
     add("static PyObject *export_ref(PyObject *self, int k) {")

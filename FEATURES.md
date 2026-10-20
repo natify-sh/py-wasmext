@@ -868,7 +868,7 @@ integers, `imports` as callables (the exception of an import comes out of the ca
 What the C API got for it: `set_import<k>` for the calls of WASI too (what the host gives wins), imports with several results (through pointers; `_shared.c` makes the struct of wasm2c), `dirs_readonly` in the configuration, and `args` non-NULL with
 `nargs` 0 for "no arguments".
 **Not there yet**: `__exports__` and `__getitem__` (so an instance of the wrapper cannot be linked into another instance, nor take one), modules with an imported global or memory (the C API refuses them), the interruption of a sleep by Ctrl-C (the core sleeps
-in C), PyPy and GraalPy (not tried), Windows (the test fixtures build it there, first run in CI), where the library is shipped (stage 7).
+in C), PyPy and GraalPy (not tried), Windows (the fixtures build it there with MSVC; first run in CI after this cut), where the library is shipped (stage 7).
 
 ### Audit of stages 1 to 6a against the plan (after 6a; probes run by hand, not yet tests)
 
@@ -883,14 +883,14 @@ in C), PyPy and GraalPy (not tried), Windows (the test fixtures build it there, 
 **Then built** (tests in `tests/test_shared.py`): the configuration of the library has the hooks `clock`, `random` and `sleep` as well as stdin and stdout; `_instantiate` runs `_initialize` of a reactor (a module that has it and no `_start`) after the instantiation, so that
 the first export already sees its effects (the extension does **not**: a `wasi=` reactor there is initialized by calling `_initialize` by hand; whether `Instance` should do it too is to be settled in 6b, since the ctypes wrapper must have the same interface); every exported global
 of type i32, i64, f32 or f64 has `<name>_global_<g>(m)` and, when mutable, `<name>_set_global_<g>(m, value)`. The tests run on Windows too: the host is compiled by the compiler of setuptools (MSVC) against the import library that `build_shared` copies beside the dll
-(`libm.lib`), so the CI of the three systems is the first run on MSVC; checked by hand before: the library cross-built by `zig cc` (MinGW) and run under wine answers an out-of-bounds trap, the end of a WASI program and a reactor.
+(`libm.lib`), so the CI of the three systems ran it on MSVC: **green** (02a841e; the first run found that a path of an object past 260 characters broke `cl`, now the objects are named by the stem); checked by hand before: the library cross-built by `zig cc` (MinGW) and run under wine answers an out-of-bounds trap, the end of a WASI program and a reactor.
 Because these tests compile `<name>_glue.h`, `<name>_api.h` and the core with no path to Python on each system, they are check (a) for those headers too (the dedicated workflow still compiles only the core).
 
 **Left from the list below**: the link record for linking instances is not in the API (open for 6b); the file-backend and naming deviations, 3b and the measure of hooks, ARM64 and x86 for the suite, and the stale 'as built' texts are untouched.
 
 **In the plan and not there (as found; the hooks, `_initialize` and the globals are now there, see above)**: a reactor's `_initialize` is not called by `_instantiate`; the configuration has the hooks of stdin and stdout only (the core also has `clock`, `random`, `sleep`; the `wasi=` of Python has the user
 functions for the clock and the random bytes, so 6b needs them); exported globals have no accessor (the extension has them as attributes); the link record for linking instances is not in the API; Windows (MSVC)
-has never built the library (cross-built by `zig cc` as a MinGW dll, it exports and links, and runs under wine up to the missing `wasm_rt_init`); the proof is two tests and one host.
+had never built the library at that time (cross-built by `zig cc` as a MinGW dll, it exported and linked, and ran under wine up to the missing `wasm_rt_init`; MSVC has built and run it since, see above); the proof is two tests and one host.
 
 **Plan deviations not written down before**: the file backend kept its form (guest pointers and `trapped` in the `wasi_be_*` functions; the plan wanted `const char *`, no `trapped`, a handle); the selection by
 `WASMEXT_WASI_FILES=posix|win32|nt|python` and the files `wasi_files_posix.h`, `wasi_files_nt.h`, `wasi_files_python.h` do not exist (it is `_WIN32` and `WASMEXT_WASI_PYTHON_FS`); the file of `main` is

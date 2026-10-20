@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import re
 
-from ._wasm import FuncType, ValType
+from ._wasm import FuncType, GlobalType, ValType
 
 # the C types of the public header (no wasm2c types in it)
 _API_TYPE: dict[ValType, str] = {"i32": "int32_t", "i64": "int64_t", "f32": "float", "f64": "double"}
@@ -38,7 +38,7 @@ def _ident(name: str, taken: set[str]) -> str:
     while (
         out in taken
         or out in _RESERVED
-        or re.fullmatch(r"call\d+|set_import\d+|memory_\w+|wasi_\w+|glue_\w+|instance", out)
+        or re.fullmatch(r"call\d+|set_import\d+|memory_\w+|global_\w+|set_global_\w+|wasi_\w+|glue_\w+|instance", out)
     ):
         n += 1
         out = f"{base}_{n}"
@@ -69,6 +69,7 @@ def generate_shared(
     uses_wasi: bool,
     tags: int,
     skipped: list[str] | None = None,
+    globals_: list[tuple[str, GlobalType]] | None = None,
 ) -> tuple[str, str]:
     """The public header and the C of the library; `funcs` are the exports in the order of the glue (`<name>_call<i>`). An export with a v128 is left out
     of the header (and said there)."""
@@ -116,7 +117,7 @@ def generate_shared(
         "/* The configuration of WASI (every field may be 0): arguments, `NAME=value` strings, directories as `host::guest` (the guest name is `/` when it is left out),"
     )
     A(
-        "   and hooks for the standard streams: a hook answers 0, an errno of WASI, or HOOK_TRAP; without a hook descriptors 0, 1 and 2 are used. */"
+        "   and hooks for the standard streams, the clocks, the random bytes and sleeping: a hook answers 0, an errno of WASI, or HOOK_TRAP; without one the core uses descriptors 0, 1 and 2 and the system. */"
     )
     A("typedef struct {")
     A("    const char *const *args; size_t nargs;  /* none: the name of the module */")
@@ -124,6 +125,11 @@ def generate_shared(
     A("    const char *const *dirs; size_t ndirs;")
     A("    int (*stdin_read)(void *user, uint8_t *buf, size_t cap, size_t *got);")
     A("    int (*stdout_write)(void *user, int fd, const uint8_t *buf, size_t n);  /* fd 1 or 2 */")
+    A(
+        "    int (*clock)(void *user, uint32_t id, uint64_t *ns);  /* id: the clock of WASI (0 realtime, 1 monotonic, 2 and 3 of the process and the thread); without it the system's */"
+    )
+    A("    int (*random)(void *user, uint8_t *buf, size_t n);  /* without it the system's source */")
+    A("    int (*sleep)(void *user, uint64_t ns);  /* without it the core sleeps in slices of 100 ms */")
     A("    void *user;")
     A(f"}} {last}_config;")
     A("")
@@ -179,6 +185,9 @@ def generate_shared(
     C("    int how; uint32_t value;  /* how the WASI program ended */")
     C("    int (*stdin_read)(void *user, uint8_t *buf, size_t cap, size_t *got);")
     C("    int (*stdout_write)(void *user, int fd, const uint8_t *buf, size_t n);")
+    C("    int (*clock)(void *user, uint32_t id, uint64_t *ns);")
+    C("    int (*random)(void *user, uint8_t *buf, size_t n);")
+    C("    int (*sleep)(void *user, uint64_t ns);")
     C("    void *user;")
     if tags:
         C(
@@ -200,6 +209,18 @@ def generate_shared(
         C("static int api_stdout(void *user, int fd, const uint8_t *buf, size_t n) {")
         C(f"    {last}_t *m = ({last}_t *)user;")
         C("    return m->stdout_write(m->user, fd, buf, n);")
+        C("}")
+        C("static int api_clock(void *user, uint32_t id, uint64_t *ns) {")
+        C(f"    {last}_t *m = ({last}_t *)user;")
+        C("    return m->clock(m->user, id, ns);")
+        C("}")
+        C("static int api_random(void *user, uint8_t *buf, size_t n) {")
+        C(f"    {last}_t *m = ({last}_t *)user;")
+        C("    return m->random(m->user, buf, n);")
+        C("}")
+        C("static int api_sleep(void *user, uint64_t ns) {")
+        C(f"    {last}_t *m = ({last}_t *)user;")
+        C("    return m->sleep(m->user, ns);")
         C("}")
         C("static char *api_pack(const char *const *items, size_t count, size_t *size) {")
         C("    size_t total = 0;")
@@ -256,10 +277,16 @@ def generate_shared(
         C("        }")
         C("        m->stdin_read = config->stdin_read;")
         C("        m->stdout_write = config->stdout_write;")
+        C("        m->clock = config->clock;")
+        C("        m->random = config->random;")
+        C("        m->sleep = config->sleep;")
         C("        m->user = config->user;")
         C("    }")
         C("    if (m->stdin_read != NULL) wasi.hooks.stdin_read = api_stdin;")
         C("    if (m->stdout_write != NULL) wasi.hooks.stdout_write = api_stdout;")
+        C("    if (m->clock != NULL) wasi.hooks.clock = api_clock;")
+        C("    if (m->random != NULL) wasi.hooks.random = api_random;")
+        C("    if (m->sleep != NULL) wasi.hooks.sleep = api_sleep;")
         C("    wasi.hooks.end = api_ended;")
         C("    wasi.user = m;")
         C("    size_t bad;")
@@ -292,7 +319,19 @@ def generate_shared(
     for k, (module, field, _func, is_wasi, _host, _slot) in enumerate(imports):
         if not is_wasi:
             C(f"    if (!m->set[{k}]) return {big}_LINK_ERROR;  /* {module}.{field} */")
-    C(f"    return {last}_glue_instantiate(&m->core);")
+    init = next(
+        (i for i, (name, func) in enumerate(funcs) if name == "_initialize" and not func.params and not func.results),
+        None,
+    )
+    if init is not None and not any(name == "_start" for name, _ in funcs):
+        # a reactor: `_initialize` is run once, after the module is instantiated, before any other export (the convention of WASI for a library)
+        C(f"    int rc = {last}_glue_instantiate(&m->core);")
+        C("    if (rc) return rc;")
+        C("    int trapped = 0;")
+        C(f"    {last}_call{init}(&m->core.inst, &trapped);")
+        C("    return trapped;")
+    else:
+        C(f"    return {last}_glue_instantiate(&m->core);")
     C("}")
     C("")
     C(f"const char *{last}_trap_message(int code) {{")
@@ -422,6 +461,28 @@ def generate_shared(
         C("    return memory->data;")
         C("}")
         C("")
+    # the exported globals
+    taken_globals: set[str] = set()
+    for name, glob in globals_ or ():
+        if glob.type not in _API_TYPE:
+            A(f"/* the global {name}: not here, it is a {glob.type} */")
+            continue
+        ident = _ident(name, taken_globals)
+        ctype = _API_TYPE[glob.type]
+        kind = "mutable" if glob.mutable else "immutable"
+        accessor = f"w2c_{prefix}_{mangle(name)}(&m->core.inst)"
+        A(f"/* the {kind} global {name} ({glob.type}) */")
+        A(f"WASMEXT_API {ctype} {last}_global_{ident}({last}_t *m);")
+        C(f"{ctype} {last}_global_{ident}({last}_t *m) {{")
+        C(f"    return ({ctype})*{accessor};")
+        C("}")
+        C("")
+        if glob.mutable:
+            A(f"WASMEXT_API void {last}_set_global_{ident}({last}_t *m, {ctype} value);")
+            C(f"void {last}_set_global_{ident}({last}_t *m, {ctype} value) {{")
+            C(f"    *{accessor} = value;")
+            C("}")
+            C("")
     A("")
     A("#ifdef __cplusplus")
     A("}")

@@ -868,7 +868,15 @@ A package may ship a shared library (a dll) or an executable instead of, or besi
 - An executable of a command that imports nothing from WASI stops in a C `#error` of the generated `main` instead of running or being refused in words.
 - An export with `funcref`/`externref` in its signature is left out of the header without a word (a v128 one is said), and a table export is accepted where the extension refuses it.
 
-**In the plan and not there**: a reactor's `_initialize` is not called by `_instantiate`; the configuration has the hooks of stdin and stdout only (the core also has `clock`, `random`, `sleep`; the `wasi=` of Python has the user
+**Then built** (tests in `tests/test_shared.py`): the configuration of the library has the hooks `clock`, `random` and `sleep` as well as stdin and stdout; `_instantiate` runs `_initialize` of a reactor (a module that has it and no `_start`) after the instantiation, so that
+the first export already sees its effects (the extension does **not**: a `wasi=` reactor there is initialized by calling `_initialize` by hand; whether `Instance` should do it too is to be settled in 6b, since the ctypes wrapper must have the same interface); every exported global
+of type i32, i64, f32 or f64 has `<name>_global_<g>(m)` and, when mutable, `<name>_set_global_<g>(m, value)`. The tests run on Windows too: the host is compiled by the compiler of setuptools (MSVC) against the import library that `build_shared` copies beside the dll
+(`libm.lib`), so the CI of the three systems is the first run on MSVC; checked by hand before: the library cross-built by `zig cc` (MinGW) and run under wine answers an out-of-bounds trap, the end of a WASI program and a reactor.
+Because these tests compile `<name>_glue.h`, `<name>_api.h` and the core with no path to Python on each system, they are check (a) for those headers too (the dedicated workflow still compiles only the core).
+
+**Left from the list below**: the link record for linking instances is not in the API (open for 6b); the file-backend and naming deviations, 3b and the measure of hooks, ARM64 and x86 for the suite, and the stale 'as built' texts are untouched.
+
+**In the plan and not there (as found; the hooks, `_initialize` and the globals are now there, see above)**: a reactor's `_initialize` is not called by `_instantiate`; the configuration has the hooks of stdin and stdout only (the core also has `clock`, `random`, `sleep`; the `wasi=` of Python has the user
 functions for the clock and the random bytes, so 6b needs them); exported globals have no accessor (the extension has them as attributes); the link record for linking instances is not in the API; Windows (MSVC)
 has never built the library (cross-built by `zig cc` as a MinGW dll, it exports and links, and runs under wine up to the missing `wasm_rt_init`); the proof is two tests and one host.
 

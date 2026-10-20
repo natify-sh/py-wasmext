@@ -1451,6 +1451,7 @@ def generate(module: Module, name: str, *, version: str | None = None) -> Glue:
             uses_wasi,
             len(tags),
             skipped,
+            globals_,
         )
     return Glue(
         "\n".join(w) + "\n",

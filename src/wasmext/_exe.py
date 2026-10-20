@@ -10,6 +10,7 @@ test suite answers too). Only the imports of WASI are served: another import is 
 from __future__ import annotations
 
 import os
+import shutil
 import sys
 from pathlib import Path
 from typing import Any
@@ -223,9 +224,11 @@ def build_shared(
         compiler.linker_so = [
             "-dynamiclib" if a == "-bundle" else a for a in linker if a not in ("-undefined", "dynamic_lookup")
         ]
-    compiler.link_shared_object(  # type: ignore[attr-defined]
-        objects, str(library_path), libraries=[] if msvc else ["m"], extra_postargs=[]
-    )
+    compiler.link_shared_object(objects, str(library_path), libraries=[] if msvc else ["m"], extra_postargs=[])
+    if msvc:  # the import library (what a host links against) is written beside the objects; put it beside the dll
+        implib = Path(objects[0]).parent / f"{library_path.stem}.lib"
+        if implib.is_file():
+            shutil.copyfile(implib, library_path.with_suffix(".lib"))
     return library_path
 
 

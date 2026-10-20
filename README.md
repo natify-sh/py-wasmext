@@ -123,8 +123,10 @@ a library holds no `main`). `setup.py build_ext` puts the file where an extensio
 `<name>.exe`. A program needs a `_start` and no imports but WASI's (`--env NAME=VALUE`, `--dir HOST::GUEST[:ro]`, `--argv0`, `--help`); a
 library exports only its API. The settings of the extension (`libraries`, `extra-compile-args`, ...) are the flags of the build. A reactor
 (`_initialize`, no `_start`) is a library, and is initialized when the instance is made, in the extension and in the library alike (WASI says the host runs `_initialize` once, before any other export; a later explicit call of it does nothing). A package whose compiled files are all libraries and programs gets a wheel tagged
-`py3-none-<platform>` (any Python 3), not for the interpreter that built it. The header `<name>_api.h` is in `<name>_wasmext/`: ship it with `package-data` if the wheel is to
-have it. `limited-api` and the stubs are for extensions only.
+`py3-none-<platform>` (any Python 3), not for the interpreter that built it. The header `<name>_api.h` is in `<name>_wasmext/`: nothing in a Python package needs it (the wrapper knows the signatures), it is for a host in C or another language that is built against the
+library, so ship it with `package-data` only if the wheel is meant for such a host. wasmext builds the files and the project distributes them: it writes no helper that finds a program or a library at run time
+(a library has its wrapper, which looks beside itself; for a program, a package does what suits it: `Path(__file__).with_name(...)` as `examples/products` does, `importlib.resources`, a `main()` of its own run by a `[project.scripts]` entry, or none of it; a project may have several programs
+and may not want a launcher at all). `limited-api` and the stubs are for extensions only.
 
 ### Linking instances
 

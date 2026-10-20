@@ -22,3 +22,5 @@ uv run pytest
 ```
 
 The modules are written in the text format (`wat/`); `build_wasm.py` makes the `.wasm` files with `wat2wasm` of the wabt-package. The `.wasm` are in the repository.
+
+The lookup of the program (`HELLO` in `src/productsdemo/__init__.py`) is this package's own code: wasmext builds the files and writes no helper for them, and a package may find a program some other way or ship its own launcher.

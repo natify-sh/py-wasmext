@@ -10,8 +10,11 @@ test suite answers too). Only the imports of WASI are served: another import is 
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import sys
+from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -150,6 +153,41 @@ def main_c(last: str, prefix: str) -> str:
     return _MAIN.replace("@LAST_U@", last.upper()).replace("@LAST@", last).replace("@PREFIX@", prefix)
 
 
+@dataclass(frozen=True)
+class BuildFlags:
+    """What the user adds to the build of a library or a program, by the names that `setuptools.Extension` has (and `[tool.wasmext.ext-modules]` of pyproject.toml). They come after
+    the flags of wasmext, so that they win (`-O3` after `-O1`); the environment is read as setuptools reads it (CC, CFLAGS, CPPFLAGS and LDFLAGS; `_CL_` for MSVC)."""
+
+    extra_compile_args: Sequence[str] = ()
+    extra_link_args: Sequence[str] = ()
+    define_macros: Sequence[tuple[str, str | None]] = ()
+    undef_macros: Sequence[str] = ()
+    include_dirs: Sequence[str] = ()
+    libraries: Sequence[str] = ()
+    library_dirs: Sequence[str] = ()
+
+
+def _exported_names(api_header: str) -> list[str]:
+    """The functions of the C API (WASMEXT_API in the header): the only symbols that a library shows."""
+    return re.findall(r"^WASMEXT_API\s+[^;(]*?\b([A-Za-z_]\w*)\s*\(", api_header, re.MULTILINE)
+
+
+def _export_args(names: list[str], out_dir: Path, last: str) -> list[str]:
+    """The arguments of the linker that make the library show those names and no others, whatever the flags of the compiler were. Two libraries then have a copy of the runtime of
+    wasm2c each (as two extensions have), and the references to it bind inside the library: a global of the runtime is not shared between them. (MSVC: only what is `dllexport`.)"""
+    if sys.platform == "win32":
+        return []
+    if sys.platform == "darwin":
+        listing = out_dir / f"{last}.exports"
+        listing.write_text("".join(f"_{n}\n" for n in names), encoding="utf-8")
+        return [f"-Wl,-exported_symbols_list,{listing.as_posix()}"]
+    script = out_dir / f"{last}.map"
+    script.write_text(
+        "{\n  global:\n" + "".join(f"    {n};\n" for n in names) + "  local:\n    *;\n};\n", encoding="utf-8"
+    )
+    return [f"-Wl,--version-script={script.as_posix()}"]
+
+
 def _compiler() -> Any:
     from setuptools._distutils import sysconfig
     from setuptools._distutils.ccompiler import new_compiler
@@ -160,7 +198,7 @@ def _compiler() -> Any:
 
 
 def _compile_sources(
-    sources: list[str], prepared: object, out_dir: Path, *, optimize: bool
+    sources: list[str], prepared: object, out_dir: Path, *, optimize: bool, flags: BuildFlags
 ) -> tuple[Any, list[str], bool]:
     """Compile `sources` with the compiler of setuptools; returns the compiler, the objects and whether it is MSVC."""
     compiler = _compiler()
@@ -172,16 +210,17 @@ def _compile_sources(
 
     compiler.object_filenames = flat  # the stems of the sources of one module are all different
     # no warnings: the C of wasm2c and its runtime are not ours to police
-    flags: list[str] = ["/w"] if msvc else ["-w"]
+    ours: list[str] = ["/w"] if msvc else ["-w"]
     if not optimize:
-        flags += ["/Od"] if msvc else ["-O0"]
+        ours += ["/Od"] if msvc else ["-O0"]
     elif not msvc:
-        flags += ["-O1"]
-    objects = compiler.compile(  # type: ignore[attr-defined]
+        ours += ["-O1"]
+    objects = compiler.compile(
         sources,
         output_dir=str(out_dir / "obj"),
-        include_dirs=[prepared.include_dir, *prepared.extra_include_dirs],  # type: ignore[attr-defined]
-        extra_postargs=flags,
+        macros=[*flags.define_macros, *[(name,) for name in flags.undef_macros]],
+        include_dirs=[prepared.include_dir, *prepared.extra_include_dirs, *flags.include_dirs],  # type: ignore[attr-defined]
+        extra_postargs=[*ours, *flags.extra_compile_args],  # the flags of the user come after ours, and win
     )
     return compiler, objects, msvc
 
@@ -196,10 +235,11 @@ def build_shared(
     optimize: bool = True,
     quiet: bool = False,
     wrapper: bool = True,
+    flags: BuildFlags | None = None,
 ) -> Path:
     """Make the shared library `library` of the module `wasm`; beside the C, in `work`, is its header `<name>_api.h`: the C API for a host that is not
     Python (see _shared.py). With `wrapper`, beside the library are `<name>_ctypes.py` and its `.pyi`: the interface of the extension over ctypes
-    (see _ctypes_gen.py)."""
+    (see _ctypes_gen.py). `flags` adds to the build (see BuildFlags). The library shows the functions of its API and no other symbol, by the linker."""
     from ._gen import GenError, generate
     from ._wasm import parse
 
@@ -223,7 +263,8 @@ def build_shared(
     sources = [s for s in prepared.sources if not s.endswith(f"{last}_py.c")] + [
         (out_dir / f"{last}_shared.c").as_posix()
     ]
-    compiler, objects, msvc = _compile_sources(sources, prepared, out_dir, optimize=optimize)
+    flags = flags or BuildFlags()
+    compiler, objects, msvc = _compile_sources(sources, prepared, out_dir, optimize=optimize, flags=flags)
     library_path.parent.mkdir(parents=True, exist_ok=True)
     if (
         sys.platform == "darwin"
@@ -232,7 +273,13 @@ def build_shared(
         compiler.linker_so = [
             "-dynamiclib" if a == "-bundle" else a for a in linker if a not in ("-undefined", "dynamic_lookup")
         ]
-    compiler.link_shared_object(objects, str(library_path), libraries=[] if msvc else ["m"], extra_postargs=[])
+    compiler.link_shared_object(
+        objects,
+        str(library_path),
+        libraries=[*([] if msvc else ["m"]), *flags.libraries],
+        library_dirs=list(flags.library_dirs),
+        extra_postargs=[*_export_args(_exported_names(glue.api_header), out_dir, last), *flags.extra_link_args],
+    )
     if (
         glue.api_model is not None and wrapper
     ):  # the front end for ctypes, beside the library, with the types of the extension
@@ -257,8 +304,9 @@ def build(
     work: str | os.PathLike[str] | None = None,
     parts: int | None = None,
     optimize: bool = True,
+    flags: BuildFlags | None = None,
 ) -> Path:
-    """Make `program` (an executable) from the command `wasm`; the C is made in `work` (beside the program by default). Returns its path."""
+    """Make `program` (an executable) from the command `wasm`; the C is made in `work` (beside the program by default). `flags` adds to the build (see BuildFlags). Returns its path."""
     from ._gen import GenError, module_prefix
     from ._wasm import parse
 
@@ -283,10 +331,15 @@ def build(
     if not main_path.is_file() or main_path.read_text("utf-8") != text:
         main_path.write_text(text, encoding="utf-8")
     sources = [s for s in prepared.sources if not s.endswith(f"{last}_py.c")] + [main_path.as_posix()]
-    compiler, objects, msvc = _compile_sources(sources, prepared, out_dir, optimize=optimize)
+    flags = flags or BuildFlags()
+    compiler, objects, msvc = _compile_sources(sources, prepared, out_dir, optimize=optimize, flags=flags)
     program_path.parent.mkdir(parents=True, exist_ok=True)
-    compiler.link_executable(  # type: ignore[attr-defined]
-        objects, str(program_path), libraries=[] if msvc else ["m"], extra_postargs=[]
+    compiler.link_executable(
+        objects,
+        str(program_path),
+        libraries=[*([] if msvc else ["m"]), *flags.libraries],
+        library_dirs=list(flags.library_dirs),
+        extra_postargs=list(flags.extra_link_args),
     )
     return program_path
 

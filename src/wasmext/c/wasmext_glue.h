@@ -24,6 +24,11 @@
 #define WASMEXT_TRAP_HOST ((wasm_rt_trap_t)0x7000)       /* a host function failed and kept its error (Python: the exception is already set) */
 #define WASMEXT_TRAP_NO_MEMORY ((wasm_rt_trap_t)0x7001)  /* the copy of the runtime that wasmext brings cannot allocate a memory */
 #define WASMEXT_TRAP_ENDED ((wasm_rt_trap_t)0x7002)      /* the WASI program of the instance is over (proc_exit, proc_raise, a trap of a command) */
+/* A host function that is the export of another instance answers a trap of that instance as WASMEXT_TRAP_LINKED + its code: the caller then traps with
+   that code (the trap goes through, as in WebAssembly); any other nonzero answer is a failure of the host (WASMEXT_TRAP_HOST). */
+#define WASMEXT_TRAP_LINKED 0x20000
+#define WASMEXT_TRAP_OF(TRAPPED) \
+    ((TRAPPED) >= WASMEXT_TRAP_LINKED ? (wasm_rt_trap_t)((TRAPPED) - WASMEXT_TRAP_LINKED) : WASMEXT_TRAP_HOST)
 
 /* A fingerprint of the layout of the structs of the wasm2c runtime that are shared between extensions (a memory, a table): an extension
    built with another runtime reads another layout, and its exports must not be linked. (Overridable, for the tests.) */
@@ -43,7 +48,7 @@ typedef struct {
     uint32_t version;   /* 1 */
     uint32_t kind;      /* WASMEXT_FUNC, ... */
     uint32_t type;      /* a global: its value type as numbered in the binary format (0x7F is i32); a memory: sizeof(wasm_rt_memory_t) */
-    uint32_t flags;     /* bit 0: the global is mutable; bit 1: the memory is 64-bit; bit 2: it is checked with guard pages */
+    uint32_t flags;     /* bit 0: the global is mutable; bit 1: the memory is 64-bit; bit 2: it is checked with guard pages; bit 3: the function can be called with no Python (no GIL) */
     void *owner;        /* what keeps the exporter alive (Python: the instance, a PyObject *): a reader that keeps the address keeps a reference to it */
     void *address;      /* a global: the pointer to its value; a memory: the wasm_rt_memory_t; a function: the function to call (see below) */
     void *instance;     /* a function: the first argument of that call */

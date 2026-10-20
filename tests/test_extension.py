@@ -243,3 +243,36 @@ def test_an_exception_that_nothing_catches_is_an_uncaught_exception_with_its_tag
     assert bare.value.tag == 2 and bare.value.values == ()
     assert isinstance(bare.value, mod.Trap) and "ncaught" in str(bare.value)  # code that catches Trap goes on working
     assert inst.ok() == 5  # the instance is usable afterwards
+
+
+def test_imports_of_several_modules_are_bound_by_the_name_of_the_module_not_by_the_order(
+    build_front_end: Builder, front_end: str, tmp_path: Path
+) -> None:
+    """wasm2c takes the import modules in the order of their names; a module that imports "z" before "a" must still call each import of its own."""
+    wat = tmp_path / "order.wat"
+    wat.write_text(
+        '(module (import "z" "f" (func $f (result i32))) (import "a" "g" (func $g (result i32)))'
+        ' (func (export "callf") (result i32) call $f) (func (export "callg") (result i32) call $g))',
+        encoding="utf-8",
+    )
+    mod = build_front_end(wat, f"order_{front_end}")
+    inst = mod.Instance({"z": {"f": lambda: 1}, "a": {"g": lambda: 2}})
+    assert (inst.callf(), inst.callg()) == (1, 2)
+
+
+def test_a_wasi_module_with_imports_of_its_own_still_reaches_wasi(
+    build_front_end: Builder, front_end: str, tmp_path: Path
+) -> None:
+    """The usual layout of a WASI program that has host imports: proc_exit of WASI first, then "env": the exit code must come from the call of env."""
+    wat = tmp_path / "wasienv.wat"
+    wat.write_text(
+        '(module (import "wasi_snapshot_preview1" "proc_exit" (func $exit (param i32)))'
+        ' (import "env" "get" (func $get (result i32))) (memory (export "memory") 1)'
+        ' (func (export "_start") (call $exit (call $get))))',
+        encoding="utf-8",
+    )
+    mod = build_front_end(wat, f"wasienv_{front_end}")
+    inst = mod.Instance({"env": {"get": lambda: 5}})
+    with pytest.raises(mod.WasiExit) as raised:
+        inst._start()  # pyright: ignore[reportPrivateUsage]
+    assert raised.value.code == 5

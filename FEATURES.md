@@ -858,17 +858,27 @@ A package may ship a shared library (a dll) or an executable instead of, or besi
 - A product that is not an extension is an `Extension` with a mark that `wasmext._setuptools` (the `build_ext` it already puts in) knows: it compiles `<name>_shared.c` or `<name>_main.c` in place of the Python layer, links a library (`lib<name>.so`, `lib<name>.dylib`, `<name>.dll` with its import library) or an executable (`<name>`, `<name>.exe`) and puts the file where an extension would go, so `package-data`, `inplace` and wheels work as they do for an extension.
 - To settle when it is built: the tag of a wheel that has no Python extension (`py3-none-<platform>`, not `cp311`); where the header `<name>_api.h` goes (beside the library, in the wheel); how a package finds its own binary at run time (a small helper, not a path written by hand); `--exe` needs `_start`, and a reactor (`_initialize`, no `_start`) is a `--shared` product whose instantiation must call `_initialize`.
 
-### Stage 6b, the wrapper for ctypes: first cut, as built
+### Stage 6b, the wrapper for ctypes, as built
 
 `build_shared` also writes `<name>_ctypes.py` and `<name>_ctypes.pyi` beside the library (`wasmext._ctypes_gen`; the stub is the one of the extension). The module is Python only, needs nothing of wasmext, finds the library beside itself
 (or at `$WASMEXT_<NAME>_LIBRARY`) and has `Instance`, `Trap`, `LinkError`, `UncaughtException`, `WasiTerminated`, `WasiExit`, `WasiSignal` as the extension has them: methods with their signature as the docstring, the same type errors and wrapping of
 integers, `imports` as callables (the exception of an import comes out of the call as the very object, by the protocol of errors: the callback keeps it and answers `trapped`), the memory as a `memoryview` that keeps the instance alive, globals as attributes,
-`wasi={...}` with the same keys and the same errors, a call of WASI replaced through `imports`.
-**The proof** is that the tests of the interface run on both front ends and pass: `test_extension.py` (all), `test_wasi.py` (all), `test_wasi_fs.py` (the files of the system, third parameter of `probe`), and the examples of pywasm3, wasm2mpy and wasmhost.
-What the C API got for it: `set_import<k>` for the calls of WASI too (what the host gives wins), imports with several results (through pointers; `_shared.c` makes the struct of wasm2c), `dirs_readonly` in the configuration, and `args` non-NULL with
-`nargs` 0 for "no arguments".
-**Not there yet**: `__exports__` and `__getitem__` (so an instance of the wrapper cannot be linked into another instance, nor take one), modules with an imported global or memory (the C API refuses them), the interruption of a sleep by Ctrl-C (the core sleeps
-in C), PyPy and GraalPy (not tried), Windows (the fixtures build it there with MSVC; first run in CI after this cut), where the library is shipped (stage 7).
+`wasi={...}` with the same keys and the same errors, a call of WASI replaced through `imports`, `__exports__` and `__getitem__`, and the linking of instances.
+
+**Linking is C in the core, not Python.** The record of an export (`wasmext_export`, in `wasmext_glue.h`; the extension wraps it in a capsule `wasmext.export.v1`) and the checks that link an import to it live in `<name>_glue.h`
+(`<name>_link_func<k>`, `_link_global<j>`, `_set_global<j>` for a number, `_link_memory<j>`; the messages are the ones the extension always gave). The extension, the C API (`<name>_link_import<k>`, `_link_global_import<j>`, `_set_global_import<j>`,
+`_link_memory_import<j>`, `<name>_export_find`) and the wrapper all use them, so the front ends link **with each other**: a wrapper takes the memory, a global or a function of an extension, and the other way (tests: `tests/test_linking.py`, the pairs
+extension/extension, ctypes/ctypes, extension/ctypes, ctypes/extension). A function of a library is linked as a C function, with no Python in between (flag 8 of the record: it needs no GIL), and a trap of the callee goes through as it is
+(`WASMEXT_TRAP_LINKED` + its code, see `wasmext_glue.h`); a function of an extension needs Python (its `py_link` raises exceptions), so a wrapper calls it through Python. A host function that fails in an instance that is called through a link: the
+instance that was called keeps the exception (`_pending`) and the caller raises that very object. The capsule of a wrapper keeps the instance alive and owns its record, as the capsule of an extension does.
+**Two libraries in one process** each have a runtime of wasm2c of their own: the library shows its API and no other symbol, which is fixed by the **linker** and not by a flag of the compiler (a version script, or `-exported_symbols_list` on macOS; MSVC exports what is
+`dllexport`; the list is written beside the C as `<name>.map` / `<name>.exports`, for a build system of one's own). Without it the two share the buffer of `longjmp` and a trap through a link aborts.
+**Flags of the user**: `BuildFlags` (`extra_compile_args`, `extra_link_args`, `define_macros`, `undef_macros`, `include_dirs`, `libraries`, `library_dirs`: the names of `setuptools.Extension`) go to `build_shared` and `build` after the flags of wasmext, so they win; the environment
+is read as setuptools reads it (`CC`, `CFLAGS`, `CPPFLAGS`, `LDFLAGS`; `_CL_` for MSVC).
+What the C API got for it: `set_import` for the calls of WASI too, imports with several results (through pointers), imports of globals and memories, `dirs_readonly`, `args` non-NULL with `nargs` 0 for "no arguments", and the export records.
+**The proof**: the tests of the interface run on both front ends and pass: `test_extension.py`, `test_wasi.py`, `test_wasi_fs.py` (the files of the system), `test_linking.py`, and the examples of pywasm3, wasm2mpy and wasmhost.
+**Differences that stay**: a trap that goes through a link out of a library is the `Trap` of the instance that called, not that of the callee; a function of a wrapper that is given to an extension is called by it directly (no Python), one of an extension that is given to a wrapper
+goes through Python; the interruption of a sleep by Ctrl-C (the core sleeps in C); PyPy and GraalPy (not tried); where the library is shipped (stage 7).
 
 ### Audit of stages 1 to 6a against the plan (after 6a; probes run by hand, not yet tests)
 

@@ -629,7 +629,28 @@ def generate(module: Module, name: str, *, version: str | None = None) -> Glue:
     )
     add("static void raise_trap(InstanceObject *self, int code) {")
     add("    (void)self;")
-    add("    if (code == (int)WASMEXT_TRAP_HOST) return;")
+    add("    if (code == (int)WASMEXT_TRAP_HOST) {")
+    add("        if (PyErr_Occurred()) return;")
+    add(
+        "        /* a function of another instance that this one calls through a link failed in its own host function: if that instance keeps the exception"
+    )
+    add("           (the wrapper for ctypes does, in `_pending`), it is the one to raise */")
+    for i, host in enumerate(hosts):
+        add(f"        for (int k = 0; k < {max(slots.get(host, 0), 1)}; k++) {{")
+        add(f"            PyObject *owner = self->hold{i}.lo[k];")
+        add('            PyObject *kept = owner != NULL ? PyObject_GetAttrString(owner, "_pending") : NULL;')
+        add("            if (kept != NULL && kept != Py_None && PyExceptionInstance_Check(kept)) {")
+        add("                PyErr_SetObject((PyObject *)Py_TYPE(kept), kept);")
+        add('                PyObject_SetAttrString(owner, "_pending", Py_None);')
+        add("                Py_DECREF(kept);")
+        add("                return;")
+        add("            }")
+        add("            Py_XDECREF(kept);")
+        add("            PyErr_Clear();")
+        add("        }")
+    add('        PyErr_SetString(TrapError, "a host function of the WebAssembly module failed");')
+    add("        return;")
+    add("    }")
     if uses_wasi:
         add("    if (code == (int)WASMEXT_TRAP_ENDED) {")
         add("        if (self->core.wasi != NULL && self->core.wasi->finished) wasmext_wasi_check(self->core.wasi);")
@@ -672,11 +693,11 @@ def generate(module: Module, name: str, *, version: str | None = None) -> Glue:
         )
         if func.results:
             hadd(f"    {ret} r_ = {host_call};")
-            hadd("    if (trapped) wasm_rt_trap(WASMEXT_TRAP_HOST);")
+            hadd("    if (trapped) wasm_rt_trap(WASMEXT_TRAP_OF(trapped));")
             hadd("    return r_;")
         else:
             hadd(f"    {host_call};")
-            hadd("    if (trapped) wasm_rt_trap(WASMEXT_TRAP_HOST);")
+            hadd("    if (trapped) wasm_rt_trap(WASMEXT_TRAP_OF(trapped));")
         hadd("}")
         hadd("")
 
@@ -1043,7 +1064,9 @@ def generate(module: Module, name: str, *, version: str | None = None) -> Glue:
     hadd("/* instantiation: 0, or the code of the trap of the start function */")
     hadd(f"static int {last}_glue_instantiate({last}_instance *self) {{")
     hadd("    WASMEXT_ENTER(trap_, return (int)trap_)")
-    host_args = "".join(f", &self->host{i}" for i in range(len(hosts)))
+    # wasm2c orders the import modules by name in the parameters of its `instantiate`, whatever the order of the imports of the module is
+    by_name = sorted(range(len(hosts)), key=lambda i: hosts[i].encode("utf-8"))
+    host_args = "".join(f", &self->host{i}" for i in by_name)
     hadd(f"    wasm2c_{prefix}_instantiate(&self->inst{host_args});")
     hadd("    WASMEXT_LEAVE();")
     hadd("    self->instantiated = 1;")
@@ -1473,6 +1496,9 @@ def generate(module: Module, name: str, *, version: str | None = None) -> Glue:
             len(tags),
             skipped,
             globals_,
+            global_imports,
+            memory_imports,
+            memory_limits,
         )
     return Glue(
         "\n".join(w) + "\n",

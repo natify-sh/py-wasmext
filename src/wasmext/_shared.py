@@ -1,3 +1,4 @@
+# pyright: reportPrivateUsage=false
 """The C API of a module as a shared library (item 10 of FEATURES.md, stage 6a): a public header `<name>_api.h` for any host language and the C that
 exports it, `<name>_shared.c`, on the typed functions of `<name>_glue.h`. No Python in either.
 
@@ -11,6 +12,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from typing import Any
 
 from ._wasm import FuncType, GlobalType, ValType
 
@@ -47,6 +49,12 @@ class ApiModel:
     imports: list[tuple[int, str, str, FuncType, bool]] = field(
         default_factory=list[tuple[int, str, str, FuncType, bool]]
     )  # k (the C function is <last>_set_import<k>), module, field, type, whether it is a call of WASI (that the core has)
+    global_imports: list[tuple[int, str, str, ValType, bool]] = field(
+        default_factory=list[tuple[int, str, str, ValType, bool]]
+    )  # j (the C functions are <last>_link_global_import<j> and, for an immutable one, <last>_set_global_import<j>), module, field, type, mutable
+    memory_imports: list[tuple[int, str, str]] = field(
+        default_factory=list[tuple[int, str, str]]
+    )  # j (the C function is <last>_link_memory_import<j>), module, field
     skipped: list[str] = field(default_factory=list[str])
 
 
@@ -69,8 +77,10 @@ def _ident(name: str, taken: set[str]) -> str:
 
 def unsupported(imports: list[tuple[str, str, FuncType]], *, global_imports: bool, memory_imports: bool) -> str | None:
     """Why the module has no shared library yet, or None."""
-    if global_imports or memory_imports:
-        return "it imports a global or a memory"
+    del (
+        global_imports,
+        memory_imports,
+    )  # served: the numbers and the exports of other instances (see the link functions)
     for module, field_, func in imports:
         if "v128" in (*func.params, *func.results):
             return f"the import {module}.{field_} uses v128"
@@ -89,10 +99,20 @@ def generate_shared(
     tags: int,
     skipped: list[str] | None = None,
     globals_: list[tuple[str, GlobalType]] | None = None,
+    global_imports: list[Any] | None = None,
+    memory_imports: list[Any] | None = None,
+    memory_limits: list[Any] | None = None,
 ) -> tuple[str, str, ApiModel]:
     """The public header, the C of the library and the model of the API; `funcs` are the exports in the order of the glue (`<name>_call<i>`). An export with a v128 is left out
     of the header (and said there)."""
-    from ._gen import _CTYPE, _MULTI_CODE, _c_string, mangle  # pyright: ignore[reportPrivateUsage]
+    from ._gen import (
+        _CTYPE,
+        _MULTI_CODE,
+        _TYPE_CODE,
+        _c_string,
+        _signature_code,
+        mangle,
+    )
 
     big = last.upper()
     model = ApiModel(
@@ -137,6 +157,22 @@ def generate_shared(
     )
     A("")
     A(f"typedef struct {last}_t {last}_t;")
+    A("")
+    A(
+        f"#define {big}_TRAP_LINKED 0x20000  /* a function that is the export of another instance answers a trap of that instance as this + its code: the caller traps with the code */"
+    )
+    A(
+        "/* What an instance gives of an export for another to import (a function, a memory or a global): the record of wasmext, private and versioned; it is passed by"
+    )
+    A(
+        "   pointer from the exporter (`_export_find`) to the importer (`_link_*`). `owner` is whatever keeps the exporter alive (the host's own business). */"
+    )
+    A("typedef struct {")
+    A("    uint32_t size, version, kind, type, flags;")
+    A("    void *owner, *address, *instance;")
+    A("    const char *signature;")
+    A("    uint32_t runtime;")
+    A(f"}} {last}_export;")
     A("")
     A(
         "/* The configuration of WASI (every field may be 0): arguments, `NAME=value` strings, directories as `host::guest` (the guest name is `/` when it is left out),"
@@ -212,6 +248,9 @@ def generate_shared(
     C(f"struct {last}_t {{")
     C(f"    {last}_instance core;")
     C(f"    unsigned char set[{max(n_imports, 1)}];  /* an import that the host has set (those of WASI are) */")
+    C(
+        f"    unsigned char gset[{max(len(global_imports or ()), 1)}], mset[{max(len(memory_imports or ()), 1)}];  /* the same for the globals and the memories */"
+    )
     if any(len(func.results) > 1 for _m, _f, func, _w, _h, _s in imports):
         C(
             f"    struct {{ void *fn; void *user; }} multi[{max(n_imports, 1)}];  /* the host function of an import with several results, and its user */"
@@ -354,6 +393,10 @@ def generate_shared(
     for k, (module, field_, _func, is_wasi, _host, _slot) in enumerate(imports):
         if not is_wasi:
             C(f"    if (!m->set[{k}]) return {big}_LINK_ERROR;  /* {module}.{field_} */")
+    for j, g in enumerate(global_imports or ()):
+        C(f"    if (!m->gset[{j}]) return {big}_LINK_ERROR;  /* {g.module}.{g.field} */")
+    for j, mem in enumerate(memory_imports or ()):
+        C(f"    if (!m->mset[{j}]) return {big}_LINK_ERROR;  /* {mem.module}.{mem.field} */")
     init = next(
         (i for i, (name, func) in enumerate(funcs) if name == "_initialize" and not func.params and not func.results),
         None,
@@ -430,6 +473,56 @@ def generate_shared(
             C(f"    m->core.host{host}.fn[{slot}] = (void *)function;")
             C(f"    m->core.host{host}.user[{slot}] = user;")
         C(f"    m->set[{k}] = function != NULL;")
+        C("}")
+        C("")
+    # linking: the imports from the exports of another instance (the checks are those of the glue of the module, the same as the extension's)
+    A("")
+    for k, (module, field_, func, is_wasi, host, slot) in enumerate(imports):
+        A(
+            f"/* the import {module}.{field_}: the function of another instance (its record from `_export_find`); 0, or 1 with the message of the LinkError */"
+        )
+        A(
+            f"WASMEXT_API int {last}_link_import{k}({last}_t *m, const {last}_export *e, char *message, size_t capacity);"
+        )
+        C(f"int {last}_link_import{k}({last}_t *m, const {last}_export *e, char *message, size_t capacity) {{")
+        C(f"    int rc = {last}_link_func{k}(&m->core, (const wasmext_export *)e, message, capacity);")
+        C(f"    if (rc == 0) m->set[{k}] = 1;")
+        C("    return rc;")
+        C("}")
+        C("")
+    for j, g in enumerate(global_imports or ()):
+        ctype = _API_TYPE.get(g.type, "")
+        model.global_imports.append((j, g.module, g.field, g.type, g.mutable))
+        A(
+            f"/* the import {g.module}.{g.field}: the {'mutable ' if g.mutable else ''}global {g.type} of another instance */"
+        )
+        A(
+            f"WASMEXT_API int {last}_link_global_import{j}({last}_t *m, const {last}_export *e, char *message, size_t capacity);"
+        )
+        C(f"int {last}_link_global_import{j}({last}_t *m, const {last}_export *e, char *message, size_t capacity) {{")
+        C(f"    int rc = {last}_link_global{j}(&m->core, (const wasmext_export *)e, message, capacity);")
+        C(f"    if (rc == 0) m->gset[{j}] = 1;")
+        C("    return rc;")
+        C("}")
+        C("")
+        if not g.mutable and g.type in _API_TYPE:
+            A("/* ... or, as it is not mutable, its value */")
+            A(f"WASMEXT_API void {last}_set_global_import{j}({last}_t *m, {ctype} value);")
+            C(f"void {last}_set_global_import{j}({last}_t *m, {ctype} value) {{")
+            C(f"    {last}_set_global{j}(&m->core, ({_CTYPE[g.type]})value);")
+            C(f"    m->gset[{j}] = 1;")
+            C("}")
+            C("")
+    for j, mem in enumerate(memory_imports or ()):
+        model.memory_imports.append((j, mem.module, mem.field))
+        A(f"/* the import {mem.module}.{mem.field}: the memory of another instance */")
+        A(
+            f"WASMEXT_API int {last}_link_memory_import{j}({last}_t *m, const {last}_export *e, char *message, size_t capacity);"
+        )
+        C(f"int {last}_link_memory_import{j}({last}_t *m, const {last}_export *e, char *message, size_t capacity) {{")
+        C(f"    int rc = {last}_link_memory{j}(&m->core, (const wasmext_export *)e, message, capacity);")
+        C(f"    if (rc == 0) m->mset[{j}] = 1;")
+        C("    return rc;")
         C("}")
         C("")
     A("")
@@ -547,6 +640,81 @@ def generate_shared(
             C(f"    *{accessor} = value;")
             C("}")
             C("")
+    # the exports as records for another instance to import; a function's address is a shim that lets a trap through as LINKED + its code
+    A("")
+    A(
+        f"/* The record of the export `name` for another instance to import (`{last}_link_*` of the other library): 0, or 1 when there is no such export. `owner` is kept in the"
+    )
+    A("   record, for whoever has to keep this instance alive. The record is valid as long as this instance is. */")
+    A(f"WASMEXT_API int {last}_export_find({last}_t *m, const char *name, void *owner, {last}_export *out);")
+    shims: dict[int, str] = {}
+    for i, (name, func) in enumerate(funcs):
+        if "v128" in (*func.params, *func.results):
+            continue
+        several = len(func.results) > 1
+        codes = "".join(_MULTI_CODE[t] for t in func.results)
+        ret = f"struct wasm_multi_{codes}" if several else _CTYPE[func.results[0]] if func.results else "void"
+        params = "".join(f", {_CTYPE[t]} a{j}" for j, t in enumerate(func.params))
+        args = "".join(f", a{j}" for j in range(len(func.params)))
+        C(f"static {ret} api_link{i}(void *inst{params}, int *trapped) {{")
+        if func.results:
+            C(f"    {ret} r = {last}_call{i}(inst{args}, trapped);")
+            C("    if (*trapped) *trapped += WASMEXT_TRAP_LINKED;")
+            C("    return r;")
+        else:
+            C(f"    {last}_call{i}(inst{args}, trapped);")
+            C("    if (*trapped) *trapped += WASMEXT_TRAP_LINKED;")
+        C("}")
+        C("")
+        shims[i] = f"api_link{i}"
+    C(f"static wasmext_export *api_record({last}_t *m, void *owner, {last}_export *out) {{")
+    C("    wasmext_export *e = (wasmext_export *)out;")
+    C("    memset(e, 0, sizeof *e);")
+    C("    e->size = sizeof *e;")
+    C("    e->version = 1;")
+    C("    e->owner = owner;")
+    C("    e->runtime = WASMEXT_RUNTIME;")
+    C("    e->instance = &m->core.inst;")
+    C("    return e;")
+    C("}")
+    C("")
+    C(f"int {last}_export_find({last}_t *m, const char *name, void *owner, {last}_export *out) {{")
+    C("    wasmext_export *e;  /* `out` is left as it was when there is no such export */")
+    for i, shim in shims.items():
+        name, func = funcs[i]
+        C(f"    if (strcmp(name, {_c_string(name)}) == 0) {{")
+        C("        e = api_record(m, owner, out);")
+        C("        e->kind = WASMEXT_FUNC;")
+        C("        e->flags = 8u;  /* the function can be called without Python, with no GIL */")
+        C(f"        e->address = (void *){shim};")
+        C(f"        e->signature = {_c_string(_signature_code(func))};")
+        C("        return 0;")
+        C("    }")
+    for mi, name in enumerate(memories):
+        lim = (memory_limits or [None] * len(memories))[mi]
+        is64 = int(bool(getattr(lim, "is64", False)))
+        C(f"    if (strcmp(name, {_c_string(name)}) == 0) {{")
+        C("        e = api_record(m, owner, out);")
+        C("        e->kind = WASMEXT_MEMORY;")
+        C(f"        e->address = (void *)w2c_{prefix}_{mangle(name)}(&m->core.inst);")
+        C("        e->type = (uint32_t)sizeof(wasm_rt_memory_t);")
+        C(f"        e->flags = {2 * is64}u | (WASM_RT_MEMCHECK_GUARD_PAGES ? 4u : 0u);")
+        C("        return 0;")
+        C("    }")
+    for name, glob in globals_ or ():
+        if glob.type not in _API_TYPE:
+            continue
+        C(f"    if (strcmp(name, {_c_string(name)}) == 0) {{")
+        C("        e = api_record(m, owner, out);")
+        C("        e->kind = WASMEXT_GLOBAL;")
+        C(f"        e->address = (void *)w2c_{prefix}_{mangle(name)}(&m->core.inst);")
+        C(f"        e->type = {_TYPE_CODE[glob.type]};")
+        C(f"        e->flags = {int(glob.mutable)}u;")
+        C("        return 0;")
+        C("    }")
+    C("    return 1;")
+    C("}")
+    C("")
     A("")
     A("#ifdef __cplusplus")
     A("}")

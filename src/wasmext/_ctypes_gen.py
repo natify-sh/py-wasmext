@@ -27,6 +27,7 @@ import ctypes
 import operator
 import os
 import sys
+import types
 import weakref
 from collections.abc import Callable
 from pathlib import Path
@@ -103,6 +104,10 @@ _MEMORIES: list[tuple[str, str]] = @MEMORIES@
 _GLOBALS: list[tuple[str, str, str | None, str]] = @GLOBALS@
 # the C index, the module, the name, the types of the parameters, the types of the results, whether it is a call of WASI (that the library has)
 _IMPORTS: list[tuple[int, str, str, tuple[str, ...], tuple[str, ...], bool]] = @IMPORTS@
+# the C index, the module, the name, the type, whether it is mutable
+_GLOBAL_IMPORTS: list[tuple[int, str, str, str, bool]] = @GLOBAL_IMPORTS@
+# the C index, the module, the name
+_MEMORY_IMPORTS: list[tuple[int, str, str]] = @MEMORY_IMPORTS@
 _WASI = @USES_WASI@
 _TAGS = @HAS_TAGS@
 
@@ -125,6 +130,69 @@ def _signature(name: str, params: tuple[str, ...], results: tuple[str, ...]) -> 
     return f"{name}({', '.join(params)}) -> {', '.join(results) if results else 'None'}"
 
 
+# ---- linking: what an instance gives of an export for another instance to import --------------------------------------------------
+
+_CAPSULE = b"wasmext.export.v1"
+_FUNC, _TABLE, _MEMORY, _GLOBAL = 0, 1, 2, 3
+_TYPE_CODES = {"i32": 0x7F, "i64": 0x7E, "f32": 0x7D, "f64": 0x7C, "v128": 0x7B}
+
+
+class _Export(_c.Structure):
+    """The record of wasmext (wasmext_glue.h, private and versioned) that two instances pass between them; the extension for CPython wraps it in a capsule."""
+
+    _fields_ = [
+        ("size", _c.c_uint32), ("version", _c.c_uint32), ("kind", _c.c_uint32), ("type", _c.c_uint32), ("flags", _c.c_uint32),
+        ("owner", _c.c_void_p), ("address", _c.c_void_p), ("instance", _c.c_void_p),
+        ("signature", _c.c_char_p), ("runtime", _c.c_uint32),
+    ]
+
+
+_capi = _c.pythonapi
+_capi.PyCapsule_New.restype = _c.py_object
+_capi.PyCapsule_New.argtypes = [_c.c_void_p, _c.c_char_p, _c.c_void_p]
+_capi.PyCapsule_IsValid.restype = _c.c_int
+_capi.PyCapsule_IsValid.argtypes = [_c.py_object, _c.c_char_p]
+_capi.PyCapsule_GetPointer.restype = _c.c_void_p
+_capi.PyCapsule_GetPointer.argtypes = [_c.py_object, _c.c_char_p]
+_capi.Py_IncRef.restype = None
+_capi.Py_IncRef.argtypes = [_c.c_void_p]
+_capi.Py_DecRef.restype = None
+_capi.Py_DecRef.argtypes = [_c.c_void_p]
+_live: dict[int, Any] = {}  # the records that capsules point into, by address: a record lives as long as its capsule
+
+
+# the destructor of a capsule gets the capsule as a raw pointer: as a py_object it would be a new reference to an object that is being freed
+_pointer_of = _c.CFUNCTYPE(_c.c_void_p, _c.c_void_p, _c.c_char_p)(("PyCapsule_GetPointer", _capi))
+
+
+@_c.CFUNCTYPE(None, _c.c_void_p)
+def _release(capsule: Any) -> None:
+    record = _live.pop(_pointer_of(capsule, _CAPSULE), None)
+    if record is not None and record.owner:
+        _capi.Py_DecRef(record.owner)  # the capsule kept its instance alive (as the capsule of an extension does)
+
+
+def _is_capsule(reference: Any) -> bool:
+    return bool(_capi.PyCapsule_IsValid(reference, _CAPSULE))
+
+
+def _record_of(reference: Any) -> Any:
+    """The record behind a reference to an export (a capsule of this wrapper or of an extension), or None."""
+    if _capi.PyCapsule_IsValid(reference, _CAPSULE):
+        return _c.cast(_capi.PyCapsule_GetPointer(reference, _CAPSULE), _c.POINTER(_Export)).contents
+    return None
+
+
+def _function_of(record: Any) -> Any:
+    """The callable that stands for a function export of an instance of an extension (its record says whose it is): the same function, called through Python."""
+    owner = _c.cast(record.owner, _c.py_object).value
+    for name, reference in owner.__exports__.items():
+        other = _record_of(reference)
+        if other is not None and other.kind == _FUNC and other.address == record.address and other.instance == record.instance:
+            return getattr(owner, name)
+    raise LinkError("the function export given is of an instance that does not show it as a method")
+
+
 # ---- WASI -----------------------------------------------------------------------------------------------------------------------
 @WASI_RUNTIME@
 
@@ -144,18 +212,19 @@ class Instance:
         self._callbacks: list[Any] = []
         self._pending: BaseException | None = None
         self._ended_raised = False
-        if any(not wasi_call for *_, wasi_call in _IMPORTS):
+        if any(not wasi_call for *_, wasi_call in _IMPORTS) or _GLOBAL_IMPORTS or _MEMORY_IMPORTS:
             if imports is None:
                 raise LinkError("the module has imports: pass imports={module: {name: callable or value}}")
         elif imports is not None and not _WASI:
             raise TypeError("the module has no imports: Instance() takes none")
-        config, self._keep = @WASI_CONFIG_CALL@
+        config, self._alive = @WASI_CONFIG_CALL@
         error = _c.c_int(0)
         handle = lib.@NAME@_new(_c.byref(config) if config is not None else None, _c.byref(error))
         if not handle:
             raise OSError(error.value, os.strerror(error.value))
         self._h = handle
         self._finalizer = weakref.finalize(self, _free, handle, lib)
+        self._owners: list[Any] = []  # the instances whose memory, globals or code this one uses: they stay alive with it
         for k, module, field, params, results, wasi_call in _IMPORTS:
             if wasi_call:  # a call of WASI is the library's own unless the caller gives another
                 function = _find_import(imports, module, field, required=False)
@@ -163,7 +232,13 @@ class Instance:
                     continue
             else:
                 function = _find_import(imports, module, field)
-            self._set_import(k, module, field, function, params, results)
+            function = self._function_import(k, module, field, function, params, results)
+            if function is not None:
+                self._set_import(k, module, field, function, params, results)
+        for j, module, field, type_, mutable in _GLOBAL_IMPORTS:
+            self._global_import(j, module, field, type_, mutable, _find_import(imports, module, field, check=False))
+        for j, module, field in _MEMORY_IMPORTS:
+            self._memory_import(j, module, field, _find_import(imports, module, field, check=False))
         code = lib.@NAME@_instantiate(handle)
         if code:
             raise self._error(code)
@@ -174,12 +249,116 @@ class Instance:
         """The exception for the code that a call answered."""
         if code == _TRAP_HOST:
             pending, self._pending = self._pending, None
+            for owner in self._owners if pending is None else ():  # the failure was in the host function of an instance this one calls
+                pending, owner._pending = owner._pending, None
+                if pending is not None:
+                    break
             if pending is not None:
                 return pending  # the very object the function of the host raised
         if code == _TRAP_ENDED:
             return self._ended()
 @UNCAUGHT_ERROR@        message = self._lib.@NAME@_trap_message(code)
         return Trap(message.decode("utf-8", "replace") if message else f"trap {code}")
+
+    def _function_import(
+        self, k: int, module: str, field: str, value: Any, params: tuple[str, ...], results: tuple[str, ...]
+    ) -> Any:
+        """What a function import is given: a callable (the value itself, or the function that a reference stands for), or None when the library has linked it to
+        the export of another instance by itself (a reference to a function of a library like this one is called with no Python in between)."""
+        reference = value
+        if not _is_capsule(value):  # a method of an instance of a wasmext module stands for its export
+            owner = getattr(value, "__self__", None)
+            exports = getattr(owner, "__exports__", None) if owner is not None else None
+            if isinstance(exports, dict):
+                reference = exports.get(getattr(value, "__name__", None), value)
+        record = _record_of(reference)
+        if record is None:
+            if not callable(value):
+                raise LinkError(f"import '{module}.{field}' is not callable")
+            return value
+        where = f"{module}.{field}"
+        if not (record.version == 1 and record.size >= _c.sizeof(_Export)):
+            raise LinkError(f"import {where}: the export is from an incompatible version of wasmext or of the wasm2c runtime")
+        if record.kind != _FUNC:
+            raise LinkError(f"import {where} is a function: the export given is not")
+        letters = {"i32": "i", "i64": "j", "f32": "f", "f64": "d", "v128": "o"}
+        expected = "".join(letters[t] for t in params) + ">" + "".join(letters[t] for t in results)
+        if (record.signature or b"").decode() != expected:
+            raise LinkError(f"import {where} is a function {expected}: the export given is another one ({(record.signature or b'').decode()})")
+        if record.flags & 8:  # the library of another instance: the function is called as a C function, with its traps going through
+            message = _c.create_string_buffer(512)
+            link = _function(f"@NAME@_link_import{k}", _c.c_int, [_c.c_void_p, _c.POINTER(_Export), _c.c_char_p, _c.c_size_t])
+            if link(self._h, _c.byref(record), message, 512):
+                raise LinkError(message.value.decode("utf-8", "replace"))
+            self._keep(record)
+            return None
+        return _function_of(record)  # an extension: its functions need Python, so they are called through it
+
+    def _keep(self, record: Any) -> None:
+        owner = _c.cast(record.owner, _c.py_object).value if record.owner else None
+        if owner is not None:
+            self._owners.append(owner)
+
+    def _global_import(self, j: int, module: str, field: str, type_: str, mutable: bool, value: Any) -> None:
+        where = f"{module}.{field}"
+        record = _record_of(value)
+        message = _c.create_string_buffer(512)
+        if record is not None:
+            link = _function(f"@NAME@_link_global_import{j}", _c.c_int, [_c.c_void_p, _c.POINTER(_Export), _c.c_char_p, _c.c_size_t])
+            if link(self._h, _c.byref(record), message, 512):
+                raise LinkError(message.value.decode("utf-8", "replace"))
+            self._keep(record)
+            return
+        if mutable:
+            raise LinkError(
+                f"import {where} is a mutable global: pass an export of another instance: instance['name'] (or the instance for the whole shelf)"
+            )
+        whole = type_ in ("i32", "i64")
+        if not (isinstance(value, int) if whole else isinstance(value, (int, float))) or type_ == "v128":
+            raise LinkError(f"import {where} is a global of type {type_}: pass {'an int' if whole else 'a number'} or an export of another instance")
+        setter = _function(f"@NAME@_set_global_import{j}", None, [_c.c_void_p, _CTYPE[type_]])
+        setter(self._h, _CONVERT[type_](value))
+
+    def _memory_import(self, j: int, module: str, field: str, value: Any) -> None:
+        reference = value
+        if not _is_capsule(value) and isinstance(value, memoryview):  # the memoryview of a memory of an instance: the object behind it gives the reference
+            reference = getattr(value.obj, "__wasmext_ref__", None)  # (kept in this name: the record lives as long as its capsule)
+        record = _record_of(reference)
+        if record is None:
+            raise LinkError(f"import {module}.{field} is a memory: pass the memory of another instance (instance.memory or instance['memory'])")
+        message = _c.create_string_buffer(512)
+        link = _function(f"@NAME@_link_memory_import{j}", _c.c_int, [_c.c_void_p, _c.POINTER(_Export), _c.c_char_p, _c.c_size_t])
+        if link(self._h, _c.byref(record), message, 512):
+            raise LinkError(message.value.decode("utf-8", "replace"))
+        self._keep(record)
+
+    def _reference(self, name: str) -> Any:
+        """The reference to the export `name` of this instance, for another instance to import (a capsule, as the extension makes)."""
+        record = _Export()
+        find = _function("@NAME@_export_find", _c.c_int, [_c.c_void_p, _c.c_char_p, _c.c_void_p, _c.POINTER(_Export)])
+        if find(self._h, name.encode(), id(self), _c.byref(record)):
+            raise KeyError(name)
+        _capi.Py_IncRef(record.owner)  # the capsule keeps the instance alive
+        address = _c.addressof(record)
+        _live[address] = record
+        return _capi.PyCapsule_New(address, _CAPSULE, _c.cast(_release, _c.c_void_p))
+
+    @property
+    def __exports__(self) -> dict[str, Any]:
+        """{name: a reference to the export}: what another instance takes as an import."""
+        out: dict[str, Any] = {}
+        for name in _FUNCTIONS:
+            out[name] = self._reference(name)
+        for name, *_rest in _GLOBALS:
+            out[name] = self._reference(name)
+        for name, _cname in _MEMORIES:
+            out[name] = self._reference(name)
+        return out
+
+    def __getitem__(self, name: str, /) -> Any:
+        if name in _FUNCTIONS or any(name == g[0] for g in _GLOBALS) or any(name == m[0] for m in _MEMORIES):
+            return self._reference(name)
+        raise KeyError(name)
 
     def _set_import(self, k: int, module: str, field: str, function: Any, params: tuple[str, ...], results: tuple[str, ...]) -> None:
         several = len(results) > 1
@@ -238,7 +417,7 @@ class Instance:
 
     # -- memories and globals -----------------------------------------------------------------------------------------------------
 
-    def _memory(self, cname: str) -> memoryview:
+    def _memory(self, cname: str, name: str) -> memoryview:
         function = _function(cname, _c.c_void_p, [_c.c_void_p, _c.POINTER(_c.c_size_t)])
         size = _c.c_size_t(0)
         address = function(self._h, _c.byref(size))
@@ -246,6 +425,7 @@ class Instance:
             return memoryview(bytearray())
         buffer = (_c.c_uint8 * size.value).from_address(address)
         buffer._instance = self  # type: ignore[attr-defined]  # the view keeps the instance (and so the memory) alive
+        buffer.__wasmext_ref__ = self._reference(name)  # type: ignore[attr-defined]  # what an instance that is given the view takes it by
         return memoryview(buffer).cast("B")
 
     def _get_global(self, cname: str, type_: str) -> Any:
@@ -255,21 +435,22 @@ class Instance:
         _function(cname, None, [_c.c_void_p, _CTYPE[type_]])(self._h, _CONVERT[type_](value))
 @WASI_METHODS@
 
-def _find_import(imports: Any, module: str, field: str, *, required: bool = True) -> Any:
+def _find_import(imports: Any, module: str, field: str, *, required: bool = True, check: bool = True) -> Any:
     try:
         shelf = imports[module]
     except (KeyError, TypeError, IndexError):
         if not required:
             return None
         raise LinkError(f"missing import module '{module}'") from None
+    exports = getattr(shelf, "__exports__", None)  # a shelf that is an instance of a wasmext module gives its exports
+    if exports is not None:
+        shelf = exports
     try:
         function = shelf[field]
     except (KeyError, TypeError, IndexError):
         if not required:
             return None
         raise LinkError(f"missing import '{module}.{field}'") from None
-    if not callable(function):
-        raise LinkError(f"import '{module}.{field}' is not callable")
     return function
 
 
@@ -286,8 +467,8 @@ def _method(name: str, cname: str, params: tuple[str, ...], results: tuple[str, 
     return method
 
 
-def _memory_property(cname: str) -> property:
-    return property(lambda self: self._memory(cname), doc="a memoryview of the linear memory (a new one after the memory grows)")
+def _memory_property(cname: str, name: str) -> property:
+    return property(lambda self: self._memory(cname, name), doc="a memoryview of the linear memory (a new one after the memory grows)")
 
 
 def _global_property(cname: str, setter: str | None, type_: str) -> property:
@@ -297,10 +478,13 @@ def _global_property(cname: str, setter: str | None, type_: str) -> property:
     return property(getter, lambda self, value: self._set_global(setter, type_, value), doc=f"the mutable global of type {type_}")
 
 
+_FUNCTIONS: dict[str, Callable[..., Any]] = {}
 for _name, _cname, _params, _results in _EXPORTS:
-    setattr(Instance, _name, _method(_name, _cname, _params, _results))
+    _FUNCTIONS[_name] = _method(_name, _cname, _params, _results)
+    if not (_name.startswith("__") and _name.endswith("__")):  # such a name would replace a special name of Instance: instance.__exports__[name]
+        setattr(Instance, _name, _FUNCTIONS[_name])
 for _name, _cname in _MEMORIES:
-    setattr(Instance, _name, _memory_property(_cname))
+    setattr(Instance, _name, _memory_property(_cname, _name))
 for _name, _getter, _setter, _type in _GLOBALS:
     setattr(Instance, _name, _global_property(_getter, _setter, _type))
 '''
@@ -576,6 +760,8 @@ def generate_ctypes(model: ApiModel, *, library_file: str, version: str | None =
         "@MEMORIES@": _py(list(model.memories)),
         "@GLOBALS@": _py(list(model.globals)),
         "@IMPORTS@": _py(imports),
+        "@GLOBAL_IMPORTS@": _py([tuple(g) for g in model.global_imports]),
+        "@MEMORY_IMPORTS@": _py([tuple(m) for m in model.memory_imports]),
         "@USES_WASI@": _py(uses_wasi),
         "@HAS_TAGS@": _py(model.has_tags),
         "@VERSION@": f" {version}" if version else "",

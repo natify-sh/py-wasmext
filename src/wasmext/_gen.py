@@ -656,7 +656,7 @@ def generate(module: Module, name: str, *, version: str | None = None) -> Glue:
     add(
         "/* what a code of a trap becomes in Python (the code of a host function that failed means its exception is set already) */"
     )
-    add("static void raise_trap(InstanceObject *self, int code) {")
+    add("static void raise_trap_code(InstanceObject *self, int code) {")
     add("    (void)self;")
     add("    if (code == (int)WASMEXT_TRAP_HOST) {")
     add("        if (PyErr_Occurred()) return;")
@@ -669,8 +669,11 @@ def generate(module: Module, name: str, *, version: str | None = None) -> Glue:
         add(f"            PyObject *owner = self->hold{i}.lo[k];")
         add('            PyObject *kept = owner != NULL ? PyObject_GetAttrString(owner, "_pending") : NULL;')
         add("            if (kept != NULL && kept != Py_None && PyExceptionInstance_Check(kept)) {")
+        add(
+            "                /* the attribute is cleared first and the exception is set last: a call of Python with an exception set may run a finalizer or the collector, and lose it */"
+        )
+        add('                if (PyObject_SetAttrString(owner, "_pending", Py_None) < 0) PyErr_Clear();')
         add("                PyErr_SetObject((PyObject *)Py_TYPE(kept), kept);")
-        add('                PyObject_SetAttrString(owner, "_pending", Py_None);')
         add("                Py_DECREF(kept);")
         add("                return;")
         add("            }")
@@ -690,6 +693,13 @@ def generate(module: Module, name: str, *, version: str | None = None) -> Glue:
         add("    if (code == (int)WASM_RT_TRAP_UNCAUGHT_EXCEPTION) { raise_uncaught(); return; }")
     add("    if (code == (int)WASMEXT_TRAP_NO_MEMORY) PyErr_NoMemory();")
     add("    else PyErr_SetString(TrapError, wasm_rt_strerror((wasm_rt_trap_t)code));")
+    add("}")
+    add(
+        "/* a call that trapped always leaves an exception: a function that returns NULL without one is a SystemError, which says nothing of the trap */"
+    )
+    add("static void raise_trap(InstanceObject *self, int code) {")
+    add("    raise_trap_code(self, code);")
+    add('    if (!PyErr_Occurred()) PyErr_SetString(TrapError, "the WebAssembly call trapped and left no error");')
     add("}")
     add("")
 

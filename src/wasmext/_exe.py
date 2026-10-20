@@ -164,7 +164,13 @@ def _compile_sources(
 ) -> tuple[Any, list[str], bool]:
     """Compile `sources` with the compiler of setuptools; returns the compiler, the objects and whether it is MSVC."""
     compiler = _compiler()
-    msvc = compiler.compiler_type == "msvc"  # type: ignore[attr-defined]
+    msvc = compiler.compiler_type == "msvc"
+
+    def flat(names: list[str], strip_dir: bool = False, output_dir: str = "") -> list[str]:
+        # distutils lays an object out under the whole path of its source, which is past the 260 characters of Windows in a deep directory
+        return [os.path.join(output_dir, Path(n).stem + compiler.obj_extension) for n in names]
+
+    compiler.object_filenames = flat  # the stems of the sources of one module are all different
     # no warnings: the C of wasm2c and its runtime are not ours to police
     flags: list[str] = ["/w"] if msvc else ["-w"]
     if not optimize:

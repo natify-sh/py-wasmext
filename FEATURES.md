@@ -179,7 +179,7 @@ The cibuildwheel configuration of the example is `build = "cp311-* cp314t-*"`.
 - The `cp314t` wheels on the Linux architectures other than x86-64 and ARM64 (CI builds `cp311` and `cp314t` there but the wheel lists were not read).
 - Big-endian hosts (s390x): a module that exports its memory, or uses `v128` in a signature, does not work there (see above);
   the rest was run only through the example and one small module.
-- Clang on Windows; gcc on macOS; Python 3.12 and later with the suite (CI uses 3.11; the official WASI tests use 3.11 for wasmext and 3.12 for the runner of that suite).
+- Clang on Windows; gcc on macOS; Python 3.12 to 3.14 with the suite (CI uses 3.11, and `python-versions.yml` 3.15 and 3.15t; 3.15 and 3.15t passed locally on Linux; the official WASI tests use 3.11 for wasmext and 3.12 for the runner of that suite).
 - Android: the tests of an arm64 wheel (it is only built, see "Android wheel"); a run on a real device.
 - Ahead-of-time claims about speed are from one machine (see "Speed").
 
@@ -253,6 +253,42 @@ finishing**: not practical as it is. `lua.wasm` (329 KB) takes 44 seconds. For a
 - Attributes and methods of `Instance` take the names of the exports; a name that is not an identifier is reachable with `getattr`.
 
 ## Plan
+
+### State at a glance
+
+One table for the whole plan, so that nothing is in only one place: the eleven items below, and the stages of the single work in item 10 (the glue, "C first"). **done** = built and tested; **partly** = built, with what is left named; **open** = not built. The details are in the item or the section named.
+
+| Item | What | State | What is left |
+| --- | --- | --- | --- |
+| 1 | `abort()` of the runtime to `MemoryError` | done | |
+| 2 | SIMD, `v128` in signatures | done | relaxed SIMD (wasm2c aborts) |
+| 3 | Linking instances | partly | tables (imported and exported); a global, memory or table made by the host with no module behind it |
+| 4 | Threads, shared memory, atomics | open | all of it (`--enable-threads`, C11 atomics, `wasm_rt_init_thread`); after 3 |
+| 5 | CI | partly | s390x (big-endian) is not in CI; 3.15 and 3.15t have a workflow (`python-versions.yml`), its first run is not yet read |
+| 6 | Android, Pyodide, `pyproject.toml` configuration, PyPI, `.wat` as a source | partly | PyPI (the publisher is not set up); `.wat` as a source (an idea); Android arm64 is built, not run |
+| 7 | `funcref`/`externref` in signatures, custom page sizes, other projects' examples | open | a design for `externref` ownership; the flag for custom page sizes; the rest of the examples (below) |
+| 8 | WASI 0.1 | done | WASI 0.2 and 0.3; sockets and the CPU clocks of `poll_oneoff` are decided against for now ("Decisions") |
+| 9 | A native path to files on Windows | partly | 3a (`portable`) is built; **3b (`nt`) is not started** |
+| 10 | C first: the glue and the core as plain C, the products | partly | the stages below |
+| 11 | Suspend, resume, snapshot | open | an idea, nothing decided |
+
+**Item 10, by stage** (the text of each stage is under "Design: C first, the seams" and the "as built" sections after it):
+
+| Stage | What | State | What is left |
+| --- | --- | --- | --- |
+| 1 | The seams, on paper | done | |
+| 2 | The core of WASI cut from Python | done | the file backend kept its form (guest pointers and `trapped`; the plan wanted `const char *`, no `trapped`, a handle) |
+| 3a | Native files on Windows (`portable`) | done | |
+| 3b | `nt`: the handle-relative open | open | not started |
+| 4 | The glue as files (first half), the uncaught exception of WebAssembly (second half) | done | |
+| 5 | The C runner (check (b)) | done | on Windows the official tests and the native backend run in CI on x64 only (ARM64 and x86 build the example wheels) |
+| 6a | The shared library with a C API | done | `v128` in a signature is served (16 bytes behind a pointer); not served: a global of that type, and linking such a function to another instance |
+| 6b | The wrapper for ctypes | done | |
+| 7 | The products (`--shared`, `--exe`, `product=`), the documentation | partly | where `<name>_api.h` goes in the wheel; a helper for a package to find its own binary |
+| all | Deviations from the plan | open | backend chosen by `_WIN32` and `WASMEXT_WASI_PYTHON_FS`, not by `WASMEXT_WASI_FILES=posix\|win32\|nt\|python` with a file each; the file of `main` is `<name>_main.c`, not `<name>_exe.c`; `wasmext-run` is not a command; hooks as pointers or `static inline` never measured |
+| all | Tests | partly | the tests of the extension front end do not run on Windows (`build_extension` skips it; the ctypes front end, the library, the executable, the WASI suite and the example wheels do) |
+
+**Python versions.** 3.11 is the oldest; abi3 wheels are `cp311-abi3`. 3.15 (ordinary build) runs the whole suite (531 passed). 3.15t (free-threaded) runs it with the tests of abi3 skipped: a free-threaded build has no abi3, so the extension is native (`cp315-cp315t`). **abi3t** (the stable ABI of 3.15t, PEP 803) is not built: cibuildwheel does not tag it yet, and the glue would have to lose `PyObject_HEAD` (the object is opaque there; the type data would go through `PyObject_GetTypeData`).
 
 In this order (the first ones are small):
 
@@ -395,7 +431,7 @@ In this order (the first ones are small):
    - **Names**: the file of `main` is `<name>_main.c`, not `<name>_exe.c`; `wasmext-run` is not a command.
    - **CI coverage**: the official tests, the native backend and the executable run on Windows x64 only (ARM64 and x86 build the example wheels); `build_extension` skips Windows, so the tests of the extension front end do not run there (the way to close it: build with the compiler of setuptools).
    - **Stage 7, still open**: where `<name>_api.h` goes in the wheel (today the project ships it with `package-data`), and how a package finds its own binary at run time (a helper; `examples/products` does it by hand).
-   - **abi3** was tested with Python 3.11 only; 3.15 and 3.15t are being brought in (a free-threaded build is native, `cp315t`: abi3t is not built, as cibuildwheel does not tag it yet).
+   - **Python versions**: the suite ran on 3.11, and now on 3.15 and 3.15t as well (see "State at a glance"); abi3 itself is still tested on 3.11 and 3.15 only, since a free-threaded build is native (`cp315t`; abi3t is not built).
 11. **Suspend, resume and snapshot** (an idea, later; nothing decided). wasm3 has it: `m3_SetSuspendable` (before the code is compiled, because only
     code made that way has the pause checks), `m3_RequestSuspend` (it takes effect at the next point of a pause: the back edge of a loop or the
     start of a function), `m3_IsSuspended`, `m3_ResumeRuntime`, and snapshots of a paused call (`m3_SaveSnapshot`/`m3_LoadSnapshot`, to a buffer,
@@ -942,7 +978,7 @@ warnings of the compiler for the C of wasm2c too; the release workflow does not 
 **Not covered, and said so**:
 - The fixtures `build_extension` skips on Windows (it uses a `cc` and the build line of gcc/clang), so **the tests of the Python extension front end do not run on Windows**; there run the ctypes front end, the shared library, the executable, the official WASI suite and the example wheels
   (all of them build the extension with MSVC). Turning `build_extension` into a build by the compiler of setuptools is the way to close this, and needs CI rounds on Windows.
-- abi3 is tested with Python 3.11 only (the wheels are tagged `cp311-abi3`; 3.12 and later run them without a test of ours).
+- abi3 is tested with Python 3.11 and 3.15 (the wheels are tagged `cp311-abi3`; 3.12 to 3.14 run them without a test of ours; a free-threaded build has none).
 - The patches of the copy of the C that wasm2c writes are four: `_memory_error_not_abort` (the allocation of a memory traps, it does not `abort()`), `_export_tags` (the table of tags), `_tail_call_locals` (fixed in WABT master by `6c7af19`, not in a release),
   `_portable_on_arm64` (`_addcarry_u64`, WABT #2885). Nothing in the runtime or the sources of wabt-package is changed; when WABT has a release with the fixes the patches go.
 - **Fixed:** an exported `memoryview` of a memory that the runtime moves when it grows (no guard pages, memory64) used to be able to outlive the buffer. Now `memory.grow` answers -1 while such a view is alive (the maximum is made the present size; `Py_bf_releasebuffer` puts it back), in the extension and in the ctypes wrapper (`<name>_memory_*_pin` of the C API, a finalizer of the view); `test_a_memory_that_can_move_does_not_grow_while_a_memoryview_of_it_is_alive`.

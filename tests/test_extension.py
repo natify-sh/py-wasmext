@@ -403,3 +403,56 @@ def test_a_memory_that_can_move_does_not_grow_while_a_memoryview_of_it_is_alive(
     del held
     gc.collect()
     assert inst.grow(1) == 2
+
+
+_REACTOR = """(module
+  (memory (export "mem") 1)
+  (global $runs (mut i32) (i32.const 0))
+  (func (export "_initialize")
+    (global.set $runs (i32.add (global.get $runs) (i32.const 1)))
+    (i32.store (i32.const 0) (i32.const 1234)))
+  (func (export "runs") (result i32) global.get $runs)
+  (func (export "peek") (result i32) (i32.load (i32.const 0))))"""
+
+
+def test_a_reactor_is_initialized_once_when_the_instance_is_made(
+    build_front_end: Builder, front_end: str, tmp_path: Path
+) -> None:
+    """WASI: a host runs `_initialize` of a reactor once, before any other export. Every front end does it, and an explicit call afterwards does nothing."""
+    wat = tmp_path / "reactor.wat"
+    wat.write_text(_REACTOR, encoding="utf-8")
+    mod: Any = build_front_end(wat, f"reactor_{front_end}")
+    inst = mod.Instance()
+    assert (inst.runs(), inst.peek()) == (1, 1234)  # run by the instance, before the first export
+    inst._initialize()  # a program written before it was automatic: it must not run the constructors again
+    assert inst.runs() == 1
+    other = mod.Instance()
+    assert other.runs() == 1  # each instance is initialized, once
+
+
+def test_a_trap_in_initialize_is_the_error_of_making_the_instance(
+    build_front_end: Builder, front_end: str, tmp_path: Path
+) -> None:
+    wat = tmp_path / "reactor_trap.wat"
+    wat.write_text(
+        '(module (func (export "_initialize") unreachable) (func (export "f") (result i32) i32.const 1))',
+        encoding="utf-8",
+    )
+    mod: Any = build_front_end(wat, f"reactor_trap_{front_end}")
+    with pytest.raises(mod.Trap):
+        mod.Instance()
+
+
+def test_a_command_with_initialize_is_not_initialized_for_it(
+    build_front_end: Builder, front_end: str, tmp_path: Path
+) -> None:
+    """A module with a `_start` is a command: nothing is run for it when it is made."""
+    wat = tmp_path / "command.wat"
+    wat.write_text(
+        '(module (global $runs (mut i32) (i32.const 0)) (func (export "_initialize") (global.set $runs (i32.const 9)))'
+        ' (func (export "_start")) (func (export "runs") (result i32) global.get $runs))',
+        encoding="utf-8",
+    )
+    mod: Any = build_front_end(wat, f"command_{front_end}")
+    inst = mod.Instance()
+    assert inst.runs() == 0

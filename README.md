@@ -122,7 +122,7 @@ a library holds no `main`). `setup.py build_ext` puts the file where an extensio
 (with its header `<name>_api.h` in `<name>_wasmext/`, and `<name>_ctypes.py` beside it: the interface of the extension over `ctypes`), or the program `<name>` /
 `<name>.exe`. A program needs a `_start` and no imports but WASI's (`--env NAME=VALUE`, `--dir HOST::GUEST[:ro]`, `--argv0`, `--help`); a
 library exports only its API. The settings of the extension (`libraries`, `extra-compile-args`, ...) are the flags of the build. A reactor
-(`_initialize`, no `_start`) is a library: it is initialized when the instance is made. A package whose compiled files are all libraries and programs gets a wheel tagged
+(`_initialize`, no `_start`) is a library, and is initialized when the instance is made, in the extension and in the library alike (WASI says the host runs `_initialize` once, before any other export; a later explicit call of it does nothing). A package whose compiled files are all libraries and programs gets a wheel tagged
 `py3-none-<platform>` (any Python 3), not for the interpreter that built it. The header `<name>_api.h` is in `<name>_wasmext/`: ship it with `package-data` if the wheel is to
 have it. `limited-api` and the stubs are for extensions only.
 

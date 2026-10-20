@@ -850,7 +850,7 @@ hooks of the clock, random bytes, sleep and the end of the program, a reactor is
 **The products, decided** (for stage 7): `--extension` (the default when no product is named), `--shared` and `--exe` are *one product for each run*, not combinable: a library must not hold a
 `main`, and an executable has its own, so they are separate builds of the same C (the C of wasm2c and the glue are shared by the work directory and not made twice). Naming `--shared` or `--exe`
 builds only that; the extension is built only when it is the default or asked for. `--exe` needs a `_start` (a command). A reactor (WASI module with `_initialize` and no `_start`) is a
-`--shared` product: done, `_instantiate` calls `_initialize` after the start of wasm2c (the extension does not: a reactor there is initialized by calling `_initialize`).
+`--shared` product: done, in every front end: one function of the glue (`<name>_glue_initialize`) runs `_initialize` of a reactor once after the instantiation, the extension, the library and the ctypes wrapper call it, and a later explicit call of `_initialize` does nothing; a trap in it is the error of making the instance. A module with a `_start` is a command and is not initialized.
 
 ### Stage 7, how the products are asked for (built, with the wheel tag)
 
@@ -860,7 +860,7 @@ A package may ship a shared library (a dll) or an executable instead of, or besi
 - One product for each entry: several products of one `.wasm` are several entries (an array of tables), each with its own output name. The command line says the same with `--shared` and `--exe` (`--extension` is the default when none is named), one product for each run, since a library holds no `main`.
 - A product that is not an extension is an `Extension` with a mark that `wasmext._setuptools` (the `build_ext` it already puts in) knows: it compiles `<name>_shared.c` or `<name>_main.c` in place of the Python layer, links a library (`lib<name>.so`, `lib<name>.dylib`, `<name>.dll` with its import library) or an executable (`<name>`, `<name>.exe`) and puts the file where an extension would go, so `package-data`, `inplace` and wheels work as they do for an extension.
 - **Built:** `natify(product=)`, the `product` key of the table (type-checked), `--extension`/`--shared`/`--exe` (exclusive; a product other than the extension implies `-i`), the `build_ext` of `wasmext._setuptools` (`get_ext_filename`, `build_extension`, the wrapper copied to the source folder with `-i`), `tests/test_products.py`. The C of a product is made when it is built, not when `natify()` is called; the CLI ignores the table of the project it runs in (`WASMEXT_NO_PYPROJECT`).
-- **Done:** the tag of a wheel that has no Python extension (`py3-none-<platform>`). **Still open:** where the header `<name>_api.h` goes in the wheel (it is beside the C in `<name>_wasmext/`; the project ships it with `package-data`); how a package finds its own binary at run time (a small helper, not a path written by hand); whether `Instance` of the extension should call `_initialize` of a reactor, as the library does.
+- **Done:** the tag of a wheel that has no Python extension (`py3-none-<platform>`). **Still open:** where the header `<name>_api.h` goes in the wheel (it is beside the C in `<name>_wasmext/`; the project ships it with `package-data`); how a package finds its own binary at run time (a small helper, not a path written by hand).
 
 ### Stage 6b, the wrapper for ctypes, as built
 
@@ -895,7 +895,7 @@ goes through Python; the interruption of a sleep by Ctrl-C (the core sleeps in C
 - An export with `funcref`/`externref` in its signature is left out of the header without a word (a v128 one is said), and a table export is accepted where the extension refuses it.
 
 **Then built** (tests in `tests/test_shared.py`): the configuration of the library has the hooks `clock`, `random` and `sleep` as well as stdin and stdout; `_instantiate` runs `_initialize` of a reactor (a module that has it and no `_start`) after the instantiation, so that
-the first export already sees its effects (the extension does **not**: a `wasi=` reactor there is initialized by calling `_initialize` by hand; whether `Instance` should do it too is to be settled in 6b, since the ctypes wrapper must have the same interface); every exported global
+the first export already sees its effects (the extension does the same now, through the same function of the glue; see "Stage 7"); every exported global
 of type i32, i64, f32 or f64 has `<name>_global_<g>(m)` and, when mutable, `<name>_set_global_<g>(m, value)`. The tests run on Windows too: the host is compiled by the compiler of setuptools (MSVC) against the import library that `build_shared` copies beside the dll
 (`libm.lib`), so the CI of the three systems ran it on MSVC: **green** (02a841e; the first run found that a path of an object past 260 characters broke `cl`, now the objects are named by the stem); checked by hand before: the library cross-built by `zig cc` (MinGW) and run under wine answers an out-of-bounds trap, the end of a WASI program and a reactor.
 Because these tests compile `<name>_glue.h`, `<name>_api.h` and the core with no path to Python on each system, they are check (a) for those headers too (the dedicated workflow still compiles only the core).

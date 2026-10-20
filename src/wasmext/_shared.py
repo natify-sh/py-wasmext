@@ -407,19 +407,17 @@ def generate_shared(
         C(f"    if (!m->gset[{j}]) return {big}_LINK_ERROR;  /* {_cc(g.module)}.{_cc(g.field)} */")
     for j, mem in enumerate(memory_imports or ()):
         C(f"    if (!m->mset[{j}]) return {big}_LINK_ERROR;  /* {_cc(mem.module)}.{_cc(mem.field)} */")
-    init = next(
+    reactor_init = next(
         (i for i, (name, func) in enumerate(funcs) if name == "_initialize" and not func.params and not func.results),
         None,
     )
-    if init is not None and not any(name == "_start" for name, _ in funcs):
-        # a reactor: `_initialize` is run once, after the module is instantiated, before any other export (the convention of WASI for a library)
-        C(f"    int rc = {last}_glue_instantiate(&m->core);")
-        C("    if (rc) return rc;")
-        C("    int trapped = 0;")
-        C(f"    {last}_call{init}(&m->core.inst, &trapped);")
-        C("    return trapped;")
-    else:
-        C(f"    return {last}_glue_instantiate(&m->core);")
+    if any(name == "_start" for name, _ in funcs):
+        reactor_init = None
+    # a reactor: `_initialize` is run once, after the module is instantiated, before any other export (the convention of WASI for a library); the same
+    # function does it in every front end, and a later call of the export `_initialize` does nothing
+    C(f"    int rc = {last}_glue_instantiate(&m->core);")
+    C("    if (rc) return rc;")
+    C(f"    return {last}_glue_initialize(&m->core);")
     C("}")
     C("")
     C(f"const char *{last}_trap_message(int code) {{")
@@ -578,6 +576,8 @@ def generate_shared(
         A(f"WASMEXT_API int {last}_{ident}({last}_t *m{params}{results});")
         C(f"int {last}_{ident}({last}_t *m{params}{results}) {{")
         C("    api_enter();")
+        if i == reactor_init:
+            C("    if (m->core.initialized) return 0;  /* the reactor was initialized when the instance was made */")
         C("    int trapped = 0;")
         args = "".join(f", ({_CTYPE[t]})a{j}" for j, t in enumerate(func.params))
         call = f"{last}_call{i}(&m->core.inst{args}, &trapped)"

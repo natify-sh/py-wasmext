@@ -577,6 +577,7 @@ def generate(module: Module, name: str, *, version: str | None = None) -> Glue:
     hadd("typedef struct {")
     hadd(f"    w2c_{prefix} inst;")
     hadd("    int instantiated;")
+    hadd("    int initialized;  /* the `_initialize` of a reactor has run */")
     if uses_wasi:
         hadd("    wasmext_wasi *wasi;")
     for i, host in enumerate(hosts):
@@ -1033,6 +1034,7 @@ def generate(module: Module, name: str, *, version: str | None = None) -> Glue:
         add("        }")
         add("    }")
     add(f"    int trapped = {last}_glue_instantiate(&self->core);")
+    add(f"    if (!trapped) trapped = {last}_glue_initialize(&self->core);")
     add("    if (trapped) { raise_trap(self, trapped); Py_DECREF(self); return NULL; }")
     add("    return (PyObject *)self;")
     add("}")
@@ -1136,6 +1138,11 @@ def generate(module: Module, name: str, *, version: str | None = None) -> Glue:
     hadd("    self->instantiated = 0;")
     hadd("}")
     hadd("")
+    reactor_init = next(
+        (i for i, (n_, f_) in enumerate(funcs) if n_ == "_initialize" and not f_.params and not f_.results), None
+    )
+    if any(n_ == "_start" for n_, _ in funcs):
+        reactor_init = None  # a command: nothing is run before the program starts
     for i, (exp_name, func) in enumerate(funcs):
         params = "".join(f", {_CTYPE[t]} a{j}" for j, t in enumerate(func.params))
         several = len(func.results) > 1
@@ -1184,6 +1191,10 @@ def generate(module: Module, name: str, *, version: str | None = None) -> Glue:
             add(f"    {_CTYPE[t]} a{j} = {_TO_WASM[t].format(f'args[{j}]')};")
         if n:
             add("    if (PyErr_Occurred()) return NULL;")
+        if i == reactor_init:
+            add(
+                "    if (self->core.initialized) Py_RETURN_NONE;  /* the reactor was initialized when the instance was made */"
+            )
         add("    int trapped = 0;")
         call_args = "".join(f", a{j}" for j in range(n))
         call = f"{last}_call{i}(&self->core.inst{call_args}, &trapped)"
@@ -1233,6 +1244,23 @@ def generate(module: Module, name: str, *, version: str | None = None) -> Glue:
         add("}")
         add("")
         mapped.append((exp_name, 0, 0, 0, "NULL", f"(void *)py_link{i}", _c_string(_signature_code(func))))
+    # a reactor (`_initialize` and no `_start`) is initialized once, after it is instantiated and before any other export, as WASI says a host must; every front end
+    # does it through this, so that they agree, and an explicit call of `_initialize` afterwards does nothing (a second run of the constructors would break the module)
+    hadd(
+        "/* runs `_initialize` of a reactor once, after the instance is made: 0, or the code of a trap; nothing for any other module */"
+    )
+    hadd(f"static int {last}_glue_initialize({last}_instance *self) {{")
+    if reactor_init is None:
+        hadd("    (void)self;")
+        hadd("    return 0;")
+    else:
+        hadd("    if (self->initialized) return 0;")
+        hadd("    self->initialized = 1;")
+        hadd("    int trapped = 0;")
+        hadd(f"    {last}_call{reactor_init}(&self->inst, &trapped);")
+        hadd("    return trapped;")
+    hadd("}")
+    hadd("")
     memory_base = len(mapped)
     for i, (exp_name, lim) in enumerate(zip(memories, memory_limits, strict=True)):
         accessor = f"w2c_{prefix}_{mangle(exp_name)}"

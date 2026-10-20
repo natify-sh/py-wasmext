@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+import importlib
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).parent / "wasi_testsuite"))
-from check_results import PROGRAMS, check  # type: ignore[import-not-found]  # pyright: ignore[reportMissingImports]
+_module: Any = importlib.import_module(
+    "check_results"
+)  # the script is beside the adapter of the suite, not in the package
+check: Callable[..., list[str]] = _module.check
+PROGRAMS: int = _module.PROGRAMS
 
 
 def _suite(

@@ -103,6 +103,13 @@ jobs:
             --json-output-location "$RUNNER_TEMP/wasi-testsuite.json" "${ARGS[@]}"
         shell: bash
 
+      # the runner fails the job for a test that fails, not for a test that is gone (a program that was not built, a suite that moved): all 72 programs must have run
+      - name: All the programs ran
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then PY="$GITHUB_WORKSPACE\\.venv\\Scripts\\python.exe"; else PY="$GITHUB_WORKSPACE/.venv/bin/python"; fi
+          "$PY" tests/wasi_testsuite/check_results.py "$RUNNER_TEMP/wasi-testsuite.json"
+        shell: bash
+
       - name: Upload the results
         if: always()
         uses: actions/upload-artifact@v7

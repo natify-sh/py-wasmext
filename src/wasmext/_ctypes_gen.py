@@ -1,4 +1,4 @@
-"""The wrapper for ctypes (item 10 of FEATURES.md, stage 6b): `<name>_ctypes.py`, a front end on the C API of the shared library (`_shared.py`) with the interface
+"""The wrapper for ctypes (item 10 of DESIGN.md, stage 6b): `<name>_ctypes.py`, a front end on the C API of the shared library (`_shared.py`) with the interface
 of `Instance` of the extension: the same methods and attributes, the same arguments, `imports` as callables, `wasi={...}`, the memory as a `memoryview`, the same
 exceptions. Python only (no wasmext is needed to run it) and no extension of CPython.
 

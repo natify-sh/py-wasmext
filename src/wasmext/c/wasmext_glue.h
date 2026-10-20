@@ -1,6 +1,6 @@
 /* The glue that is the same for every module: the traps and how a call of WebAssembly code is guarded, and the fingerprint of the layout
    of the structs of the wasm2c runtime that two extensions share. No Python.h here (nor in the <name>_glue.h that includes it): a
-   host that is not Python (the shared library, the executable) uses these files as they are. See "Design: C first" in FEATURES.md.
+   host that is not Python (the shared library, the executable) uses these files as they are. See "Design: C first" in DESIGN.md.
 
    A function of the glue that the module exports is called as `result f(void *instance, parameters..., int *trapped)`: `*trapped` is 0,
    or the code of the trap (a WASM_RT_TRAP_* of the runtime, or one of those below) and the result is then undefined. A host function that

@@ -1,7 +1,7 @@
 /* The core of WASI 0.1 that `wasi_snapshot_preview1` and `wasi_unstable` (the first snapshot) share: the state of an instance and a
    function `wasi_<name>` for each call of the specification. Header only, included by wasi_preview1.h and wasi_unstable.h; the
    functions are `static inline`, so those the module does not import are not in the object. A module needs nothing of wasmext
-   when it runs. See "Design: WASI" and "Design: C first, the seams" in FEATURES.md.
+   when it runs. See "Design: WASI" and "Design: C first, the seams" in DESIGN.md.
 
    There is no Python in this file: what the host decides (the standard streams, the clocks, the random bytes, the sleep, the end of
    the program) comes through the hooks of `wasmext_wasi_config`, and where a hook is absent the system's own is used. The host that

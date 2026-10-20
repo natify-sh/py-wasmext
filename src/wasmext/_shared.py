@@ -1,5 +1,5 @@
 # pyright: reportPrivateUsage=false
-"""The C API of a module as a shared library (item 10 of FEATURES.md, stage 6a): a public header `<name>_api.h` for any host language and the C that
+"""The C API of a module as a shared library (item 10 of DESIGN.md, stage 6a): a public header `<name>_api.h` for any host language and the C that
 exports it, `<name>_shared.c`, on the typed functions of `<name>_glue.h`. No Python in either.
 
 The life of an instance: `<name>_new(&config, &error)` (WASI is made and bound there), `<name>_set_import<k>(m, function, user)` for each import that is not WASI's

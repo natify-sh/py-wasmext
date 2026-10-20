@@ -1,4 +1,4 @@
-"""A native executable from a WebAssembly command: the first host of the C layers that is not Python (item 10 of FEATURES.md, stage 5).
+"""A native executable from a WebAssembly command: the first host of the C layers that is not Python (item 10 of DESIGN.md, stage 5).
 
 `build(module.wasm, program)` makes the C of the module with wasm2c (the way `natify` does), writes a `main()` that uses the glue of the module
 (`<name>_glue.h`) and the core of WASI (`wasi_core.h`) with no Python in it, and compiles and links all of it. The program runs the `_start` of the

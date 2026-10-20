@@ -29,4 +29,4 @@ wabt-package (`uv run python examples/link/build_wasm.py` from the root of the r
 The rule of the Python side: **attributes use, items link**. `counter.bump(1)`, `counter.count` and `counter.memory` use what
 counter exports; `counter['bump']` and `counter.__exports__` hand over a reference that another instance can import. An import that
 is the wrong kind, or has another type or signature, is a `LinkError` when the instance is made. See "Linking instances"
-in the [README](../../README.md) and the design in [FEATURES.md](../../FEATURES.md).
+in the [README](../../README.md) and the design in [DESIGN.md](../../DESIGN.md).

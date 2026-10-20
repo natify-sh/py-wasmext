@@ -148,7 +148,7 @@ The rule: **attributes use, items link**. `a.add(1, 2)`, `a.counter` (a number; 
 `memoryview`) are for you; `a['counter']` and `a.__exports__` (a dict of references) are what another instance imports (a bound
 method `a.add` and the `memoryview` are accepted as references too). What does not fit (another kind, type, signature, size) is a
 `LinkError`. A mutable global can only be shared as a reference; a number given for it is a `LinkError`. Tables cannot be linked yet (a module that imports one is refused; an exported one is left out).
-[`examples/link`](examples/link) is a package of two modules that use each other; the design is in [FEATURES.md](FEATURES.md).
+[`examples/link`](examples/link) is a package of two modules that use each other; the design is in [DESIGN.md](DESIGN.md).
 
 ### WASI programs
 
@@ -195,7 +195,7 @@ What is there, of the 46 calls of the specification (WASI 0.1):
   with the files through Python on Windows, `symlink_filestat` is expected to fail before Python 3.13, which cannot set the times of a link. A real program that
   uses all this is [`examples/lua`](examples/lua); `coreutils` (10.8 MB) was run by hand.
 
-See [FEATURES.md](FEATURES.md#design-wasi) for the design.
+See [DESIGN.md](DESIGN.md#design-wasi) for the design.
 
 ### Guard pages
 
@@ -322,7 +322,7 @@ A module links to a module made by another version of wasmext only if both have 
   gives it only directories, so this is a gap of wasmext and not of WASI.
   `poll_oneoff` has no clocks of the process or the thread. WASI 0.2 and 0.3 are not supported.
 - **Files on Windows** use the Win32 API directly. Where Windows differs from POSIX the results differ too (see the Windows
-  notes in [FEATURES.md](FEATURES.md)); a symbolic link needs a privilege there (an administrator, or Developer Mode).
+  notes in [DESIGN.md](DESIGN.md)); a symbolic link needs a privilege there (an administrator, or Developer Mode).
 - **Threads:** an extension is built with single-phase initialization and does not declare that it runs without the GIL, so importing it
   in a free-threaded build (`3.14t`, `3.15t`) turns the GIL on again. The WebAssembly code runs with the GIL held.
 - **Memory that the runtime can move** (without guard pages, `--no-guard-pages`; on a 32-bit target, where the runtime does not use them; and memory64): the runtime reallocates such a memory when it

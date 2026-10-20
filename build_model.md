@@ -50,6 +50,50 @@ What setuptools makes from the generated C (objects) is in `build/temp.<plat>-<t
   so it is there).
 - `wasmext natify -i` builds in `build/` and puts the products in place; `-b` builds in `build/`.
 
+## The trees
+
+`pkg/add.wasm` is an extension, `pkg/engine.wasm` a shared library, `pkg/hello.wasm` a program (WASI command). The extension tree is what a real build gave
+(abi3 on CPython 3.11, Linux); the products are the same by the code, with the file names of the platform.
+
+### `build/`
+
+```
+build/
+├── wasmext/                          generated, one copy per project, the same for every platform and Python
+│   ├── pkg.add/                      one directory per module, by its full name
+│   │   ├── add_w2c.c  add_w2c.h      wasm2c
+│   │   ├── add_glue.h  wasmext_glue.h   the glue (and the WASI headers, for a module that uses WASI)
+│   │   ├── add_rt_impl.c  add_rt_mem.c  add_rt_exceptions.c   include the runtime of the toolchain
+│   │   ├── add_py.c                  extension front end
+│   │   ├── add_shared.c  add_api.h   shared library front end and its C API header
+│   │   ├── add_main.c                program front end (only for a WASI command)
+│   │   └── add.pyi                   the stub, as it is made
+│   ├── pkg.engine/                   the same; a product also keeps here its work: obj/, engine.map, libengine.shared.stamp
+│   └── pkg.hello/
+├── temp.<plat>-<tag>/                objects of an extension (setuptools)
+└── lib.<plat>-<tag>/                 what the wheel is made from (products and their parts)
+    └── pkg/
+        ├── add.abi3.so   add.pyi                       extension
+        ├── libengine.so  engine_ctypes.py  engine_ctypes.pyi   shared library (.dylib, .dll)
+        └── hello                                       program (hello.exe)
+```
+
+### `dist/` and what is in each form
+
+| | extension | shared library | program |
+|---|---|---|---|
+| **platform wheel** (`cp311-abi3-<plat>`, `cp315-cp315t-<plat>`, ...) | `pkg/add.abi3.so`, `pkg/add.pyi` | — (the tag is `py3-none` when all are products) | — |
+| **`py3-none-<plat>` wheel** (only libraries and programs) | — | `pkg/libengine.so`, `pkg/engine_ctypes.py`, `pkg/engine_ctypes.pyi` | `pkg/hello` |
+| **mixed wheel** | the tag of the extensions (abi3 or native) | the same files as above | the same |
+| **in place** (`-i`, editable) | `src/pkg/add.abi3.so`, `src/pkg/add.pyi` next to `add.wasm` | `src/pkg/libengine.so`, `engine_ctypes.py`, `engine_ctypes.pyi` | `src/pkg/hello` |
+| **sdist** | `add.wasm`, `pyproject.toml`, `setup.cfg`, `PKG-INFO`, the Python of the project | the same | the same |
+
+- A `py3-none-any` wheel does not exist for wasmext products: any extension, library or program has a binary, so a wheel has a platform tag.
+  What is `py3-none-<plat>` is a wheel of libraries and programs only. (`wasmext` itself is `py3-none-any`.)
+- `<name>_api.h`, the C, the objects, the stamps and `build/wasmext/` are in no wheel and no sdist. A project that wants a header in the wheel
+  copies it (see above).
+- The `.wasm` is in the sdist; whether it is in the wheel is the project's (`include-package-data = false` and `package-data`).
+
 ## The C API header `<name>_api.h`
 
 It is generated, not a product: it stays in `build/wasmext/<module name>/`. The wheel does not carry it by default. A project

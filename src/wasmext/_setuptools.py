@@ -214,8 +214,10 @@ def finalize_distribution_options(dist: Any) -> None:
         and "build_ext" not in dist.cmdclass
     ):
         dist.cmdclass["build_ext"] = parallel_build_ext(dist.get_command_class("build_ext"))
-    marked = [e for e in extensions if _is_abi3(e)]
-    if marked:
+    # The wheel is abi3 only if every Python extension in it is: one native extension (a hand-written one, or a module made with limited_api=False) ties the whole wheel
+    # to the interpreter, and a wheel tagged cp311-abi3 that holds it would be installed, and fail, on another Python. Libraries and programs do not count.
+    python_extensions = [e for e in extensions if not getattr(e, "_wasmext_product", None)]
+    if python_extensions and all(_is_abi3(e) for e in python_extensions):
         dist.get_option_dict("bdist_wheel").setdefault("py_limited_api", ("wasmext", wheel_tag()))
 
 

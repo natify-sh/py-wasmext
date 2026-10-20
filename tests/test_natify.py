@@ -423,3 +423,26 @@ def test_a_runtime_that_lacks_files_is_refused_with_what_is_missing(
     monkeypatch.setenv("WASMEXT_WASM2C_RUNTIME", str(runtime))
     with pytest.raises(RuntimeError, match=r"has not wasm-rt-mem-impl\.c, wasm-rt-mem-impl-helper\.inc"):
         find_toolchain()
+
+
+def test_a_wheel_with_one_native_extension_is_not_tagged_abi3(project: Path) -> None:
+    """One extension that is not abi3 ties the whole wheel to the interpreter: it gets the normal tag. Libraries and programs do not count."""
+    from setuptools import Distribution, Extension
+
+    from wasmext._setuptools import finalize_distribution_options  # pyright: ignore[reportPrivateUsage]
+
+    [abi3] = natify("pkg/*.wasm", quiet=True, limited_api=True)
+    [native] = natify("pkg/*.wasm", quiet=True, limited_api=False)
+    handwritten = Extension("pkg.other", ["other.c"])
+
+    def tagged(*extensions: Extension) -> bool:
+        dist = Distribution({"name": "demo", "ext_modules": list(extensions)})
+        finalize_distribution_options(dist)
+        return "py_limited_api" in dist.get_option_dict("bdist_wheel")
+
+    assert tagged(abi3)
+    assert not tagged(native)
+    assert not tagged(abi3, handwritten)  # the hand-written one is for one interpreter
+    assert not tagged(abi3, native)
+    [program] = natify("pkg/*.wasm", quiet=True, product="exe")
+    assert tagged(abi3, program)  # a program does not tie the wheel to a Python

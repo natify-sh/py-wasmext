@@ -276,3 +276,14 @@ def test_a_wasi_module_with_imports_of_its_own_still_reaches_wasi(
     with pytest.raises(mod.WasiExit) as raised:
         inst._start()  # pyright: ignore[reportPrivateUsage]
     assert raised.value.code == 5
+
+
+def test_a_table_that_cannot_be_allocated_is_a_memory_error(
+    build_front_end: Builder, front_end: str, tmp_path: Path
+) -> None:
+    """The runtime of wasm2c does not check the allocation of a table; wasmext tries the same allocation first, so that it is an error of memory and not a NULL."""
+    wat = tmp_path / "bigtable.wat"
+    wat.write_text('(module (table 4000000000 funcref) (func (export "f") (result i32) i32.const 1))', encoding="utf-8")
+    mod = build_front_end(wat, f"bigtable_{front_end}")
+    with pytest.raises(MemoryError):
+        mod.Instance()

@@ -49,6 +49,7 @@ class LinkError(Exception):
 
 _TRAP_HOST = 0x7000
 _TRAP_ENDED = 0x7002
+_TRAP_NO_MEMORY = 0x7001
 _HOOK_TRAP = 0x10000
 _LINK_ERROR = 0x7003
 _lib: Any = None
@@ -255,6 +256,8 @@ class Instance:
                     break
             if pending is not None:
                 return pending  # the very object the function of the host raised
+        if code == _TRAP_NO_MEMORY:
+            return MemoryError()
         if code == _TRAP_ENDED:
             return self._ended()
 @UNCAUGHT_ERROR@        message = self._lib.@NAME@_trap_message(code)

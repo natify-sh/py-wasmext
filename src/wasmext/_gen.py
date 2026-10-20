@@ -1063,6 +1063,14 @@ def generate(module: Module, name: str, *, version: str | None = None) -> Glue:
     finish_on_trap = "wasmext_wasi_finish(self->wasi, WASI_END_TRAP, 0); " if uses_wasi and is_command else ""
     hadd("/* instantiation: 0, or the code of the trap of the start function */")
     hadd(f"static int {last}_glue_instantiate({last}_instance *self) {{")
+    # The runtime of wasm2c does not check the allocation of a table (1.0.42: a NULL that the first use trips over; later releases: abort()). The same
+    # allocation is tried first, here, so that a table that cannot be had is the error of memory it is, and no part of the runtime is patched for it.
+    for t in module.tables:
+        if t.limits.min > 0:
+            element = "wasm_rt_externref_t" if t.elem == "externref" else "wasm_rt_funcref_t"
+            hadd(
+                f"    {{ void *probe_ = calloc((size_t){t.limits.min}ULL, sizeof({element})); if (probe_ == NULL) return (int)WASMEXT_TRAP_NO_MEMORY; free(probe_); }}"
+            )
     hadd("    WASMEXT_ENTER(trap_, return (int)trap_)")
     # wasm2c orders the import modules by name in the parameters of its `instantiate`, whatever the order of the imports of the module is
     by_name = sorted(range(len(hosts)), key=lambda i: hosts[i].encode("utf-8"))

@@ -281,9 +281,9 @@ def _export_tags(c_source: bytes, prefix: str) -> bytes:
 def _memory_error_not_abort(inc_source: bytes) -> bytes:
     """`wasm_rt_allocate_memory` (in wasm-rt-mem-impl-helper.inc) traps instead of abort(); fails if the runtime has changed."""
     match = _ALLOCATE_MEMORY.search(inc_source)
-    if match is None or len(_ABORT.findall(match.group())) != 4:
+    if match is None or not _ABORT.search(match.group()):
         raise RuntimeError(
-            "wasmext: wasm_rt_allocate_memory of this WABT is not what it was patched for (four abort())"
+            "wasmext: wasm_rt_allocate_memory of this WABT is not what it was patched for (no abort() in it)"
         )
     body = _ABORT.sub(_NO_MEMORY + b";", _PRINT_ERROR.sub(rb"\1(void)os_print_last_error;", match.group()))
     return inc_source[: match.start()] + body + inc_source[match.end() :]

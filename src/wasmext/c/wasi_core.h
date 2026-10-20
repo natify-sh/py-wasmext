@@ -1167,7 +1167,12 @@ done:
     return rc;
 }
 
-static inline int64_t wasi_ns(const struct timespec *t) { return (int64_t)t->tv_sec * 1000000000LL + t->tv_nsec; }
+/* a time of a file in nanoseconds since 1970 as WASI has it (unsigned): before 1970 is 0, and past the year 2262 it saturates (the product would overflow) */
+static inline int64_t wasi_ns(const struct timespec *t) {
+    if (t->tv_sec < 0) return 0;
+    if ((int64_t)t->tv_sec > INT64_MAX / 1000000000LL - 1) return INT64_MAX;
+    return (int64_t)t->tv_sec * 1000000000LL + t->tv_nsec;
+}
 
 static inline void wasi_stat_of_native(const struct stat *st, wasi_stat *out) {
     out->dev = (uint64_t)st->st_dev;
@@ -1860,6 +1865,7 @@ static inline uint32_t wasi_subscription_wait(wasmext_wasi *w, uint32_t sub, int
     timeout = ((uint64_t)hi << 32) | lo;
     flags16 = w->memory->data[sub + 40 + shift] | ((uint32_t)w->memory->data[sub + 41 + shift] << 8);
     if (id > 1) return WASI_E_INVAL;  /* the clocks of the process and the thread are not something to wait for */
+    if (flags16 & ~1u) return WASI_E_INVAL;  /* subclockflags has one flag, abstime */
     if (!(flags16 & 1)) {
         *wait = timeout;
         return WASI_E_SUCCESS;
@@ -1878,15 +1884,18 @@ static inline uint32_t wasi_poll(wasmext_wasi *w, uint32_t in, uint32_t out, uin
     uint32_t stride = legacy ? 56 : 48;
     if (count == 0) return WASI_E_INVAL;
     if (!wasi_in_memory(w, in, (uint64_t)count * stride) || !wasi_in_memory(w, out, (uint64_t)count * 32)) return WASI_E_FAULT;
-    uint64_t entry_now[2] = {0, 0}, shortest = UINT64_MAX;
-    int have[2] = {0, 0}, immediate = 0;
+    uint64_t entry_now[2] = {0, 0}, shortest = 0;
+    int have[2] = {0, 0}, immediate = 0, timed = 0;  /* timed: a clock was subscribed, so `shortest` is a time (it may be UINT64_MAX: forever) */
     for (uint32_t i = 0; i < count; i++) {  /* first, what is ready and how long the clocks wait */
         uint32_t sub = in + i * stride;
         uint8_t tag = w->memory->data[sub + 8];
         if (tag == 0) {
             uint64_t wait;
             uint32_t rc = wasi_subscription_wait(w, sub, legacy, entry_now, have, &wait, trapped);
-            if (rc == WASI_E_SUCCESS && !*trapped && wait < shortest) shortest = wait;
+            if (rc == WASI_E_SUCCESS && !*trapped && (!timed || wait < shortest)) {
+                shortest = wait;
+                timed = 1;
+            }
             if (rc == WASI_E_INVAL) immediate = 1;
             else if (rc || *trapped) return rc;
         } else if (tag == 1 || tag == 2) {
@@ -1896,7 +1905,7 @@ static inline uint32_t wasi_poll(wasmext_wasi *w, uint32_t in, uint32_t out, uin
         }
     }
     uint64_t waited = 0;
-    if (!immediate && shortest != UINT64_MAX && shortest > 0) {
+    if (!immediate && timed && shortest > 0) {
         int slept = wasi_sleep_ns(w, shortest);
         if (slept) return wasi_hook_status(slept, trapped);
         waited = shortest;

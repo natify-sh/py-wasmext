@@ -532,7 +532,9 @@ def test_poll_oneoff_sleeps_until_a_clock_and_reports_what_is_ready(probe: Any, 
     started = time.monotonic()
     code, events = _poll(fs, [_clock(7, 60_000_000)])  # 60 ms from now
     assert code == 0 and events == [(7, 0, 0, 0)]
-    assert time.monotonic() - started >= 0.05
+    assert (
+        time.monotonic() - started >= 0.03
+    )  # it slept (60 ms asked; the clock of Windows ticks every 15 ms and a sleep may end one tick early)
     started = time.monotonic()
     assert _poll(fs, [_clock(8, 1, flags=1)])[1] == [(8, 0, 0, 0)]  # an absolute time that has passed
     assert time.monotonic() - started < 0.05

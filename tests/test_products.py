@@ -214,7 +214,7 @@ def test_the_c_of_a_product_is_made_when_natify_is_called_and_is_in_the_depends(
     [ext] = natify("pkg/lib.wasm", product="shared", quiet=True)
     assert (root / "pkg" / "lib_wasmext" / "lib_api.h").is_file()  # made now, not at the build
     depends = [str(p) for p in ext.depends]
-    for name in ("lib_api.h", "lib_shared.c", "lib_w2c.c", "lib_glue.h", "wasm-rt-impl.c", "lib_py.c"):
+    for name in ("lib_api.h", "lib_shared.c", "lib_w2c.c", "lib_glue.h", "lib_rt_impl.c", "lib_py.c"):
         assert any(d.endswith(name) for d in depends), name  # the C of every target, the extension's too
     assert not any(d.endswith("lib_main.c") for d in depends)  # lib.wasm is not a command: it has no program
 

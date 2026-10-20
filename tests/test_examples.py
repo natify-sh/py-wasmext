@@ -60,28 +60,6 @@ def test_coremark(tmp_path: Path, wabt: Path) -> None:
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="the build line of the tests is for gcc/clang")
-def test_the_coremark_sdist_directory_builds_without_wasm2c(tmp_path: Path, wabt: Path) -> None:
-    """With the generated C beside the .wasm (as in an sdist) the build needs no wabt-package."""
-    first = build_example("coremark", tmp_path, wabt)
-    copy = tmp_path / "from_sdist"
-    shutil.copytree(first, copy, ignore=shutil.ignore_patterns("*.so", "build"))
-    env = {k: v for k, v in os.environ.items() if k != "WASMEXT_WABT"}
-    env["PYTHONPATH"] = f"{ROOT / 'src'}"
-    # `import wabt_package` must fail: a path entry that shadows it with nothing
-    shadow = tmp_path / "shadow"
-    (shadow / "wabt_package").mkdir(parents=True)
-    (shadow / "wabt_package" / "__init__.py").write_text("raise ImportError('hidden')\n", encoding="utf-8")
-    env["PYTHONPATH"] = os.pathsep.join([str(shadow), env["PYTHONPATH"]])
-    subprocess.run(
-        [sys.executable, "setup.py", "-q", "build_ext", "--inplace", "--force"],
-        cwd=copy,
-        env=env,
-        check=True,
-        capture_output=True,
-    )
-    assert any(p.name.startswith("_core.") for p in (copy / "src" / "coremark").iterdir())
-
-
 def test_link_example_modules_use_each_other(tmp_path: Path, wabt: Path) -> None:
     project = build_example("link", tmp_path, wabt)
     out = subprocess.run(

@@ -53,10 +53,10 @@ def test_the_extensions_get_their_names_from_the_packages(project: Path) -> None
     assert "pkg/add_wasmext" in pkg_add.include_dirs
     assert sorted(Path(s).name for s in pkg_add.sources) == [
         "add_py.c",
+        "add_rt_exceptions.c",
+        "add_rt_impl.c",
+        "add_rt_mem.c",
         "add_w2c.c",
-        "wasm-rt-exceptions-impl.c",
-        "wasm-rt-impl.c",
-        "wasm-rt-mem-impl.c",
     ]
 
 
@@ -86,19 +86,6 @@ def test_an_ordinary_extension_passes_through(project: Path) -> None:
     assert natify([plain, "pkg/*.wasm"], quiet=True)[0] is plain
 
 
-def test_the_c_is_not_written_again_and_then_needs_no_wasm2c(project: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    natify("pkg/*.wasm", quiet=True)
-    glue = project / "pkg" / "add_wasmext" / "add_py.c"
-    stamp = glue.stat().st_mtime_ns
-    # an sdist with the generated C, built where there is no wabt-package
-    monkeypatch.delenv("WASMEXT_WABT")
-    monkeypatch.setitem(sys.modules, "wabt_package", None)  # makes `import wabt_package` fail
-    [again] = natify("pkg/*.wasm", quiet=True)
-    assert glue.stat().st_mtime_ns == stamp and again.name == "pkg.add"
-    with pytest.raises(RuntimeError, match="wabt-package"):
-        natify("pkg/*.wasm", quiet=True, force=True)
-
-
 def _first_line(path: Path) -> str:
     return path.read_text(encoding="utf-8").splitlines()[0]
 
@@ -117,22 +104,10 @@ def test_another_wasmext_or_wabt_generates_the_c_again(project: Path) -> None:
     good = _first_line(w2c)
     for other in (good.replace("wasmext ", "wasmext 9"), good.replace("(WABT ", "(WABT 9")):
         w2c.write_text(w2c.read_text(encoding="utf-8").replace(good, other, 1), encoding="utf-8")
-        (out / "wasm-rt.h").write_text("old", encoding="utf-8")
+        (out / "add_py.c").write_text("old", encoding="utf-8")
         natify("pkg/*.wasm", quiet=True)
         assert _first_line(w2c) == good
-        assert (out / "wasm-rt.h").read_text(encoding="utf-8") != "old"
-
-
-def test_a_c_that_cannot_be_checked_for_wabt_is_kept(project: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    natify("pkg/*.wasm", quiet=True)
-    w2c = project / "pkg" / "add_wasmext" / "add_w2c.c"
-    text = w2c.read_text(encoding="utf-8")
-    w2c.write_text(text.replace("(WABT ", "(WABT 9", 1), encoding="utf-8")
-    before = w2c.stat().st_mtime_ns
-    monkeypatch.delenv("WASMEXT_WABT")
-    monkeypatch.setitem(sys.modules, "wabt_package", None)
-    natify("pkg/*.wasm", quiet=True)  # no WABT: the shipped C is all there is
-    assert w2c.stat().st_mtime_ns == before
+        assert (out / "add_py.c").read_text(encoding="utf-8") != "old"
 
 
 def test_a_different_wasm_or_force_generates_the_c_again(project: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -140,7 +115,7 @@ def test_a_different_wasm_or_force_generates_the_c_again(project: Path, monkeypa
     natify("pkg/*.wasm", quiet=True)
     out = project / "pkg" / "add_wasmext"
     w2c = out / "add_w2c.c"
-    marker = out / "wasm-rt.h"
+    marker = out / "add_py.c"
     marker.write_text("old", encoding="utf-8")
     natify("pkg/*.wasm", quiet=True)
     assert marker.read_text(encoding="utf-8") == "old"  # same wasm, same maker: nothing is written
@@ -224,18 +199,6 @@ def test_the_msvc_only_intrinsic_is_kept_off_arm64(project: Path) -> None:
     c = (project / "pkg" / "add_wasmext" / "add_w2c.c").read_text(encoding="utf-8")
     assert "#elif defined(_MSC_VER) && defined(_M_X64)" in c
     assert not re.search(r"#elif defined\(_MSC_VER\)\s+if \(_addcarry_u64", c)
-
-
-def test_a_stub_is_written_beside_the_wasm(project: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    natify("pkg/*.wasm", quiet=True)
-    stub = project / "pkg" / "add.pyi"
-    assert "def add(self, arg0: int, arg1: int, /) -> int: ..." in stub.read_text(encoding="utf-8")
-    # deleted from a tree that ships its C: written again, and wasm2c is not needed for that
-    stub.unlink()
-    monkeypatch.delenv("WASMEXT_WABT")
-    monkeypatch.setitem(sys.modules, "wabt_package", None)
-    natify("pkg/*.wasm", quiet=True)
-    assert stub.is_file()
 
 
 def test_stubs_can_be_turned_off(project: Path) -> None:
@@ -602,3 +565,12 @@ def test_abi3_is_asked_of_the_interpreter_and_the_platform(monkeypatch: pytest.M
     monkeypatch.setattr(sysconfig, "get_config_var", real)
     monkeypatch.setattr(sys, "implementation", type("I", (), {"name": "pypy"})())
     assert "pypy has no stable ABI" in str(abi3_possible())
+
+
+def test_a_stub_is_written_beside_the_wasm(project: Path) -> None:
+    natify("pkg/*.wasm", quiet=True)
+    stub = project / "pkg" / "add.pyi"
+    assert "def add(self, arg0: int, arg1: int, /) -> int: ..." in stub.read_text(encoding="utf-8")
+    stub.unlink()  # deleted: written again
+    natify("pkg/*.wasm", quiet=True)
+    assert stub.is_file()

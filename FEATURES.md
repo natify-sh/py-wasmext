@@ -273,7 +273,7 @@ In this order (the first ones are small):
    flag); the rest of the examples of other projects (below).
 8. ~~**WASI**~~ (`wasi_snapshot_preview1` and `wasi_unstable`): done for WASI 0.1. Part of wasmext, compiled into the native module as a header, `wasi_preview1.h`, the system
    reached through `Python.h`; 42 of 46 calls, the official tests pass on Linux, macOS and Windows; see "Design: WASI". Not built **on purpose** (see "Decisions"): sockets (`sock_*` stay `ENOTSOCK`: nothing to compare a design to) and the clocks of the process and the thread in `poll_oneoff` (the specification leaves them without a use). Left: WASI 0.2 and 0.3.
-9. **A native path to files on Windows** (decided, not started; stage 3 of the single work in item 10). The aim is portability: the core of WASI as plain C that needs no interpreter and no toolchain
+9. **A native path to files on Windows** (stage 3 of the single work in item 10: **3a is built, 3b (`nt`) is not started**). The aim is portability: the core of WASI as plain C that needs no interpreter and no toolchain
    beyond a C compiler, so that the layers can be split (item 10) and a shared library or an executable (`--shared`, `--exe`) can be built with MSVC, MinGW or `zig cc`. Linux and macOS are confirmed; Windows
    is the one place that still goes through Python. Safety is not the aim: the walk that confines a path stays because the official tests and the behaviour of POSIX ask for it, not as a promise of a
    race-free sandbox (the way uvwasi and wasm3 resolve a path as a string, not as wasmtime does with a handle). How: the same walk, with its primitive (open one component) behind one small interface; the primitives
@@ -286,7 +286,7 @@ In this order (the first ones are small):
    library, no flag of the linker, the same source in the three compilers. It is an addition, not the aim: the aim (portability) is met by `portable`.
    CI runs both on Windows, as it runs the Python path of the files on Linux (`WASMEXT_WASI_PYTHON_FS`). Checked by the official tests on Windows
    (x64, ARM64, x86); Windows cannot be run here, so only CI tells. Not measured: what the Python way costs.
-10. **C first** (decided, not started; **the plan, final**). One work, of which item 9 (the native path to files on Windows) and the glue as files (see
+10. **C first** (**stages 1 to 7 are built, the plan is not closed**: what is open is listed after the stages, under "Open in item 10"; the plan below is the text as decided). One work, of which item 9 (the native path to files on Windows) and the glue as files (see
    "Decisions") are parts: the core of the glue and the core of WASI become plain C with hooks, and everything that uses them is a front end: the
    extension for CPython, the shared library with its ctypes wrapper, the executable, the C runner of the test suite. The shared library and the
    executable are meant for any host, not only for Python, so the work is **checked against a front end that has no Python**, or it would be a
@@ -387,6 +387,15 @@ In this order (the first ones are small):
    Not decided: whether stages 6 and 7 are one release or two; the hooks being `static inline` or function pointers (to be measured at stage 2 on a
    call that is on a hot path, the standard streams).
 
+   **Open in item 10 (and item 9), as of stage 7 built:**
+   - **Stage 3b (`nt`)** is not started: the handle-relative open (`NtCreateFile` with `RootDirectory`); `portable` (3a) is the default and the one in CI.
+   - **The file backend kept its form**, not the plan's: guest pointers and `trapped` in the `wasi_be_*` functions (the plan wanted `const char *`, no `trapped`, a handle).
+   - **Selection of the backend** is `_WIN32` and `WASMEXT_WASI_PYTHON_FS`, not `WASMEXT_WASI_FILES=posix|win32|nt|python` with a file for each (`wasi_files_nt.h`, `wasi_files_python.h` do not exist as planned).
+   - **Hooks as pointers or `static inline`** was never measured (nor what the Python way of files costs on Windows).
+   - **Names**: the file of `main` is `<name>_main.c`, not `<name>_exe.c`; `wasmext-run` is not a command.
+   - **CI coverage**: the official tests, the native backend and the executable run on Windows x64 only (ARM64 and x86 build the example wheels); `build_extension` skips Windows, so the tests of the extension front end do not run there (the way to close it: build with the compiler of setuptools).
+   - **Stage 7, still open**: where `<name>_api.h` goes in the wheel (today the project ships it with `package-data`), and how a package finds its own binary at run time (a helper; `examples/products` does it by hand).
+   - **abi3** was tested with Python 3.11 only; 3.15 and 3.15t are being brought in (a free-threaded build is native, `cp315t`: abi3t is not built, as cibuildwheel does not tag it yet).
 11. **Suspend, resume and snapshot** (an idea, later; nothing decided). wasm3 has it: `m3_SetSuspendable` (before the code is compiled, because only
     code made that way has the pause checks), `m3_RequestSuspend` (it takes effect at the next point of a pause: the back edge of a loop or the
     start of a function), `m3_IsSuspended`, `m3_ResumeRuntime`, and snapshots of a paused call (`m3_SaveSnapshot`/`m3_LoadSnapshot`, to a buffer,

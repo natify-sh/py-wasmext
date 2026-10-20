@@ -54,7 +54,9 @@ def test_pyproject_asks_for_a_library_and_a_program(tmp_path: Path, wabt: Path) 
     assert done.returncode == 0, done.stderr[-800:]
     package = root / "pkg"
     assert (package / product_filename("lib", "shared")).is_file()
-    assert (package / "lib_ctypes.py").is_file() and (package / "lib_ctypes.pyi").is_file()  # the wrapper comes with the library
+    assert (package / "lib_ctypes.py").is_file() and (
+        package / "lib_ctypes.pyi"
+    ).is_file()  # the wrapper comes with the library
     ran = subprocess.run([package / product_filename("hello", "exe")], capture_output=True, check=False)
     assert ran.stdout == b"hello, wasi\n" and ran.returncode == 3
 
@@ -98,4 +100,6 @@ def test_the_command_line_makes_one_product_in_place(tmp_path: Path, wabt: Path)
     both = run("--shared", "--exe", "pkg/lib.wasm")
     assert both.returncode == 2 and "not allowed with" in both.stderr  # one product for each run
     reactor = run("--exe", "pkg/lib.wasm")  # a library module is not a command
-    assert reactor.returncode == 1 and "serves the imports of WASI" in reactor.stderr and "Traceback" not in reactor.stderr
+    assert (
+        reactor.returncode == 1 and "serves the imports of WASI" in reactor.stderr and "Traceback" not in reactor.stderr
+    )

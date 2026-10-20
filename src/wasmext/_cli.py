@@ -273,7 +273,12 @@ def _build(base: Path, extensions: list[Extension], *, inplace: bool, force: boo
         )
     except SystemExit as exc:
         return 1 if exc.code not in (None, 0) else 0
-    except (WasmError, GenError, ValueError, RuntimeError) as exc:  # a library or a program that cannot be made: said as the other errors are
+    except (
+        WasmError,
+        GenError,
+        ValueError,
+        RuntimeError,
+    ) as exc:  # a library or a program that cannot be made: said as the other errors are
         print(f"wasmext: error: {exc}", file=sys.stderr)
         return 1
     else:

@@ -192,7 +192,8 @@ def test_memory_table_and_global_types() -> None:
         (HEADER + section(3, vec(leb(0))), "type index"),
         (HEADER + section(1, vec(functype([], []))) + section(3, vec(leb(0))), "bodies"),  # no code section
         (HEADER + section(1, vec(functype([], []))) + code(b"\x00\x0b"), "bodies"),  # code for nothing
-        (HEADER + section(5, vec(b"\x08" + leb(1))), "flags"),
+        (HEADER + section(5, vec(b"\x10" + leb(1))), "flags"),
+        (HEADER + section(5, vec(b"\x08" + leb(1))), "custom page size"),
         (HEADER + section(5, vec(b"\x00" + b"\xff\xff\xff\xff\x7f")), "32 bits"),
         (HEADER + section(7, vec(name("f") + b"\x00" + leb(0))), "out of range"),
         (HEADER + section(7, vec(name("f") + b"\x07" + leb(0))), "export kind"),

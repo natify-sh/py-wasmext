@@ -21,6 +21,11 @@ from wasmext import generate, parse
 from wasmext._gen import module_prefix
 from wasmext._natify import _export_tags, _tail_call_locals  # pyright: ignore[reportPrivateUsage]
 
+# the free-threaded build has no abi3 (3.15 has abi3t, which wasmext does not build: cibuildwheel does not tag it yet): there the extension is native
+needs_abi3 = pytest.mark.skipif(
+    bool(sysconfig.get_config_var("Py_GIL_DISABLED")), reason="no abi3 on a free-threaded build"
+)
+
 DATA = Path(__file__).parent / "data"
 WASMEXT_C = Path(__file__).parent.parent / "src" / "wasmext" / "c"
 

@@ -10,9 +10,11 @@ from typing import Any
 
 import pytest
 
-from .conftest import DATA
+from .conftest import DATA, needs_abi3
 
 Builder = Callable[..., ModuleType]
+
+pytestmark = needs_abi3
 
 
 @pytest.fixture(scope="module")

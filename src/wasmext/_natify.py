@@ -74,13 +74,17 @@ def abi3_possible() -> str | None:
 
     Two different things, kept apart. *Can this interpreter load an abi3 extension at all* is told by the interpreter itself, as setuptools asks it
     (`get_abi3_suffix`): `importlib.machinery.EXTENSION_SUFFIXES` has `.abi3.so` (on Windows the plain `.pyd`) only where it does. CPython has it; PyPy and the
-    free-threaded builds do not (PEP 703); the check does not tell the free-threaded build on Windows, where `.pyd` is in the list all the same, so that is asked of the build.
+    free-threaded builds do not (PEP 703; 3.15 adds `.abi3t.so` for them, which this does not count); the check does not tell the free-threaded build on Windows, where `.pyd` is in the list all the same, so that is asked of the build.
     *Is it wise to ship a wheel of it* is a decision, not a capability, and is a list: Emscripten (Pyodide), Android and iOS pin one exact CPython in the runtime
     (the extension links libpython there, or the app embeds one build), so an abi3 wheel would promise what the platform cannot keep."""
     suffixes = importlib.machinery.EXTENSION_SUFFIXES
-    can_load = any(".abi3" in suffix for suffix in suffixes) or (sys.platform == "win32" and ".pyd" in suffixes)
+    # ".abi3." and not ".abi3": 3.15 also lists ".abi3t.so" (the stable ABI of a free-threaded build, PEP 803), which is not what Py_LIMITED_API=3.11 makes
+    can_load = any(suffix.startswith(".abi3.") for suffix in suffixes) or (
+        sys.platform == "win32" and ".pyd" in suffixes
+    )
     if sysconfig.get_config_var("Py_GIL_DISABLED"):
-        return "a free-threaded build cannot use the limited API"
+        # abi3t (3.15) is not built: it needs another tag that cibuildwheel does not give yet, and a glue without PyObject_HEAD
+        return "a free-threaded build cannot use the limited API (abi3t is not built, the extension is native)"
     if sys.implementation.name != "cpython":
         return f"{sys.implementation.name} has no stable ABI"
     if not can_load:

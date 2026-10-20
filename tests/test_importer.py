@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from .conftest import DATA
+from .conftest import DATA, needs_abi3
 
 SIMPLE = DATA / "simple.wasm"
 
@@ -174,6 +174,7 @@ def test_a_change_of_how_it_is_built_makes_the_extension_again(tmp_path: Path, e
     assert so.stat().st_mtime_ns != stamp  # other settings: made again
 
 
+@needs_abi3
 def test_native_after_abi3_gives_the_native_extension_and_not_the_abi3_one_left_in_the_cache(
     tmp_path: Path, env: dict[str, str]
 ) -> None:

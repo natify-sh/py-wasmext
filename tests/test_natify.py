@@ -7,6 +7,7 @@ import re
 import shutil
 import subprocess
 import sys
+import sysconfig
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -16,7 +17,7 @@ from setuptools import Extension
 
 from wasmext import GenError, natify
 
-from .conftest import DATA
+from .conftest import DATA, needs_abi3
 
 SIMPLE = DATA / "simple.wasm"
 SETUP = """\
@@ -220,11 +221,13 @@ def test_stubs_can_be_turned_off(project: Path) -> None:
     assert not (project / "pkg" / "add.pyi").exists()
 
 
+@needs_abi3
 def test_abi3_is_the_default_where_the_interpreter_has_it(project: Path) -> None:
     [default] = natify("pkg/*.wasm", quiet=True)
     assert default.py_limited_api and ("Py_LIMITED_API", "0x030B0000") in default.define_macros
 
 
+@needs_abi3
 def test_native_on_request(project: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     [native] = natify("pkg/*.wasm", quiet=True, limited_api=False)
     assert not native.py_limited_api and not native.define_macros
@@ -257,8 +260,14 @@ def test_where_there_is_no_stable_abi_the_extension_is_native(
     assert not default.py_limited_api
 
 
+_VERSION = f"cp{sys.version_info.major}{sys.version_info.minor}"
+_NATIVE_TAG = f"-{_VERSION}-{_VERSION}{'t' if sysconfig.get_config_var('Py_GIL_DISABLED') else ''}-"
+# where abi3 is possible the default is abi3 (cp311-abi3); a free-threaded build has none and keeps its own tag
+_DEFAULT_TAG = _NATIVE_TAG if sysconfig.get_config_var("Py_GIL_DISABLED") else "-cp311-abi3-"
+
+
 @pytest.mark.parametrize(
-    ("arg", "tag"), [('"pkg/*.wasm"', "-cp311-abi3-"), ('"pkg/*.wasm", limited_api=False', "-cp311-cp311-")]
+    ("arg", "tag"), [('"pkg/*.wasm"', _DEFAULT_TAG), ('"pkg/*.wasm", limited_api=False', _NATIVE_TAG)]
 )
 def test_the_wheel_is_tagged_for_what_was_built(project: Path, arg: str, tag: str) -> None:
     """Nothing but natify() decides: abi3 gets its tag from wasmext's setuptools hook, native keeps the interpreter's."""
@@ -425,6 +434,7 @@ def test_a_runtime_that_lacks_files_is_refused_with_what_is_missing(
         find_toolchain()
 
 
+@needs_abi3
 def test_the_extensions_of_one_wheel_are_all_abi3_or_all_native(project: Path) -> None:
     """A wheel has one tag: the modules of wasmext follow what the others in it can be, and settings that contradict each other are an error."""
     from setuptools import Distribution, Extension
@@ -510,6 +520,7 @@ def test_guard_pages_are_decided_for_the_architecture_of_the_target(
     assert macro in by_env.define_macros
 
 
+@needs_abi3
 def test_abi3_is_asked_of_the_interpreter_and_the_platform(monkeypatch: pytest.MonkeyPatch) -> None:
     """What the interpreter loads is read from its own extension suffixes (as setuptools reads them); the platforms that pin one CPython are a decision on top."""
     import importlib.machinery
@@ -526,6 +537,11 @@ def test_abi3_is_asked_of_the_interpreter_and_the_platform(monkeypatch: pytest.M
     assert abi3_possible() is None
     # an interpreter that lists no .abi3 suffix cannot load such a file
     monkeypatch.setattr(importlib.machinery, "EXTENSION_SUFFIXES", [".cpython-311-x86_64-linux-gnu.so", ".so"])
+    assert "does not load abi3" in str(abi3_possible())
+    # 3.15 lists .abi3t.so too: it is the stable ABI of a free-threaded build, not abi3
+    monkeypatch.setattr(
+        importlib.machinery, "EXTENSION_SUFFIXES", [".cpython-315-x86_64-linux-gnu.so", ".abi3t.so", ".so"]
+    )
     assert "does not load abi3" in str(abi3_possible())
     # Windows: the plain .pyd is the abi3 suffix
     monkeypatch.setattr(importlib.machinery, "EXTENSION_SUFFIXES", [".cp311-win_amd64.pyd", ".pyd"])

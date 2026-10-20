@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from .conftest import DATA
+from .conftest import DATA, needs_abi3
 
 SIMPLE = DATA / "simple.wasm"
 
@@ -135,6 +135,7 @@ def test_stubs_are_written_unless_asked_not_to(project: Path, wabt: Path) -> Non
     assert not (project / "src" / "pkg" / "add.pyi").exists()
 
 
+@needs_abi3
 def test_abi3_builds_an_extension_that_runs(project: Path, wabt: Path) -> None:
     done = wasmext(project, wabt, "natify", "-q", "-i", "--limited-api", "src/pkg/add.wasm")
     assert done.returncode == 0, done.stderr
@@ -151,6 +152,7 @@ def test_abi3_builds_an_extension_that_runs(project: Path, wabt: Path) -> None:
     assert out.strip() == "42"
 
 
+@needs_abi3
 def test_inplace_removes_the_stale_variant_that_would_shadow_the_new_one(project: Path, wabt: Path) -> None:
     """Python tries `.cpython-3xx-<platform>.so` before `.abi3.so`: a native file left by an earlier build wins."""
     folder = project / "src" / "pkg"

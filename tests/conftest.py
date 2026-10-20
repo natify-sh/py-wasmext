@@ -129,17 +129,18 @@ def _build_by_setuptools(name: str, out: Path, runtime: Path, abi3: bool, define
     macros = [(d.partition("=")[0], d.partition("=")[2] or None) for d in defines]
     if abi3:
         macros.append(("Py_LIMITED_API", "0x030B0000"))
-    sources = [
-        out / f"{name}_py.c",
-        out / f"{name}_w2c.c",
-        runtime / "wasm-rt-impl.c",
-        runtime / "wasm-rt-mem-impl.c",
-        runtime / "wasm-rt-exceptions-impl.c",
-    ]
+    # as natify() does: the runtime is copied beside the C of the module and the sources are relative, so that the objects of MSVC are not under a
+    # copy of the whole path of each source (past the 260 characters of Windows in the directory of a test)
+    for runtime_file in ("wasm-rt-impl.c", "wasm-rt-mem-impl.c", "wasm-rt-exceptions-impl.c"):
+        shutil.copyfile(runtime / runtime_file, out / runtime_file)
+    for header in runtime.glob("wasm-rt*"):
+        if header.suffix in (".h", ".inc"):
+            shutil.copyfile(header, out / header.name)
+    sources = [f"{name}_py.c", f"{name}_w2c.c", "wasm-rt-impl.c", "wasm-rt-mem-impl.c", "wasm-rt-exceptions-impl.c"]
     extension = Extension(
         name,
-        [str(p) for p in sources],
-        include_dirs=[str(runtime), str(out)],
+        sources,
+        include_dirs=["."],
         define_macros=macros,
         py_limited_api=abi3,
     )
@@ -149,7 +150,7 @@ def _build_by_setuptools(name: str, out: Path, runtime: Path, abi3: bool, define
         setup(
             name=name,
             ext_modules=[extension],
-            script_args=["-q", "build_ext", "--build-lib", str(out), "--build-temp", str(out / f"{name}_build")],
+            script_args=["-q", "build_ext", "--build-lib", ".", "--build-temp", f"{name}_build"],
         )
     finally:
         os.chdir(cwd)

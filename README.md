@@ -95,7 +95,8 @@ or wrong import is `LinkError`; an exported global is an attribute. The stub `<m
 for the module at hand.
 
 The command line has a command for each thing it does (`wasmext --help`). `wasmext natify 'src/mypkg/*.wasm'` writes the C, in the manner of
-`cythonize`; `wasmext natify -i ...` also builds the extensions in place, `-b` under `build/`.
+`cythonize`; `wasmext natify -i ...` also builds the extensions in place, `-b` under `build/`. The settings of `natify()` are options: `-q`, `-f`, `-X`, `--build-dir`,
+`--parts`, `--limited-api` / `--no-limited-api`, `--guard-pages` / `--no-guard-pages` / `--guard-pages-for ARCH=on|off,...`, `--no-stubs`, and the product (`--shared` or `--exe`, below).
 
 `wasmext inspect 'src/mypkg/*.wasm'` says what a module imports (what the host has to provide) and exports, which exports become
 methods of `Instance` and which are left out, and why. It writes nothing and needs no `wasm2c`; the exit status is 1 for a module
@@ -218,9 +219,10 @@ module is somewhat slower, as a call from one file to another is not inlined); `
 
 ### Native or abi3 wheels
 
-The interpreter that builds decides, as it does in Cython: where it has a stable ABI (CPython 3.11 and later) the extension is
-**abi3** and the wheel is tagged `cp311-abi3`, one wheel for every CPython from 3.11 on; where it has not (PyPy,
-free-threaded `3.14t`, Emscripten/Pyodide, Android, iOS) the extension is native. So the `cibuildwheel` selector decides what
+The interpreter that builds decides. Cython and setuptools-rust leave abi3 to the project (the `Extension`, the macro and the tag of the wheel are
+written in its `setup.py`); here `natify()` does all three. Where the interpreter loads abi3 files (it says so in its extension suffixes, as setuptools reads them:
+CPython 3.11 and later) the extension is **abi3** and the wheel is tagged `cp311-abi3`, one wheel for every CPython from 3.11 on; where it does not (PyPy, free-threaded
+`3.14t`), or the platform pins one exact CPython (Emscripten/Pyodide, Android, iOS), the extension is native, with the usual name and tag. So the `cibuildwheel` selector decides what
 you get:
 
 ```toml
@@ -229,9 +231,12 @@ build = "cp311-* cp314t-*"   # cp311: the abi3 wheel; cp314t: a native free-thre
 ```
 
 `limited_api=True`/`False` in `natify()` (or `--limited-api` / `--no-limited-api`) forces one or the other (`True` still builds native where
-abi3 is impossible, and says so); `WASMEXT_LIMITED_API=0` turns abi3 off for a `None`. The wheel is tagged by a setuptools hook of
-wasmext, so nothing else needs to be set (a `[tool.distutils.bdist_wheel] py-limited-api` of the project wins). The glue uses only
-the limited API, so either kind builds from the same C.
+abi3 is impossible, and says so); `WASMEXT_LIMITED_API=0` turns abi3 off for a `None`. A wheel has one tag, so this is **one setting for the whole project**: in
+`pyproject.toml` it is `limited-api` under `[tool.wasmext]`, not in an entry; all the modules of wasmext in a wheel are built the same way, one that took the default follows
+a hand-written extension that is not abi3, and settings that contradict each other (`True` for one call of `natify()`, `False` for another) are an error. The wheel is tagged by a
+setuptools hook of wasmext, so nothing else needs to be set (a `[tool.distutils.bdist_wheel] py-limited-api` of the project wins). The glue uses only the limited API, so either
+kind builds from the same C. abi3 costs little here: on one machine (CPython 3.11, gcc `-O2`) calls into the module and the code inside it ran at the same speed as native, and a call from
+the module into a Python function about 5% slower.
 
 The C that wasmext writes (`<name>_wasmext/`) and the `.wasm` are the sources of the extension, not part of it. setuptools puts
 the sources of an extension into the manifest, and `include-package-data` (on by default in a `pyproject.toml`) then ships them in
@@ -293,7 +298,7 @@ The package is **not published on PyPI yet**; until it is, build the wheel from 
   notes in [FEATURES.md](FEATURES.md)); a symbolic link needs a privilege there (an administrator, or Developer Mode).
 - **Threads:** an extension is built with single-phase initialization and does not declare that it runs without the GIL, so importing it
   in a free-threaded build (`3.14t`) turns the GIL on again. The WebAssembly code runs with the GIL held.
-- **Memory that the runtime can move** (without guard pages, `--no-guard-pages`, and memory64): the runtime reallocates such a memory when it
+- **Memory that the runtime can move** (without guard pages, `--no-guard-pages`; on a 32-bit target, where the runtime does not use them; and memory64): the runtime reallocates such a memory when it
   grows. While a `memoryview` of it is alive, `memory.grow` answers -1 (WebAssembly allows that), as `bytearray` refuses to be resized while it is
   exported; drop the views (or `release()` them) to let it grow. With guard pages the buffer does not move, and a view keeps its length: take a new one
   after the memory grows. The same holds for the `memory` of the `ctypes` wrapper, and a C host of the shared library can `pin` a memory the same way.
@@ -321,8 +326,8 @@ The repository is [natify-sh/py-wasmext](https://github.com/natify-sh/py-wasmext
 wasm2c and WABT tools as wheels, is [natify-sh/wabt-package](https://github.com/natify-sh/wabt-package).
 
 Releasing: the version is the tag (`setuptools-scm`; nothing is written in `pyproject.toml`). A tag `v0.1.0a1` makes the sdist and the wheel
-`0.1.0a1` and starts `.github/workflows/publish.yml`, which builds them, checks the metadata, installs the wheel on the three systems and
-makes a GitHub Release (a pre-release for `a`, `b` and `rc`) and publishes to PyPI (trusted publishing: the environment `pypi` of the
+`0.1.0a1` and starts `.github/workflows/publish.yml`, which builds them, checks the metadata, installs the wheel on the three systems, checks that the
+test suite (`pre-commit.yml`) has passed on the tagged commit, and makes a GitHub Release (a pre-release for `a`, `b` and `rc`) and publishes to PyPI (trusted publishing: the environment `pypi` of the
 repository and a publisher for the project `wasmext` on PyPI); "Run workflow" with `testpypi` publishes to TestPyPI. `wasmext --version` and `wasmext.__version__` say which version is
 installed, and the stub written beside a module names the version when it is a release.
 

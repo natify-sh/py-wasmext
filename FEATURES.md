@@ -914,6 +914,25 @@ all 72 executables run clean under valgrind (this found the use of a freed table
 passes the probes for WASI with and without hooks, a preopened directory (a file is written), i64/f32/f64, several results, two instances, a growing memory, a free of NULL, and a clean valgrind.
 Not started: 6b (ctypes), stage 7 (`--shared`/`--exe` of the command line, `product` of `natify()` and of `pyproject.toml`, README and the table of products).
 
+### Audit, second round: what was fixed, and what is still not covered
+
+**Fixed, each with a test**: a half-made instance is freed when `instantiate` traps (a start function that traps, a data segment out of range), but **not after `NO_MEMORY`**: the memory that
+could not be had has a size and no data, and the runtime frees it with `munmap(NULL, 8 GiB)`, which unmapped the interpreter itself (found by `test_a_limit_on_address_space`; a memory of the module made
+before the failed one leaks then, which is rare and harmless next to a dead process); a table that cannot be allocated is a `MemoryError` (the glue tries the same `calloc` first); names with a NUL, with `*/` or a newline cannot
+break the C or its comments; imports are bound by the name of the import module, as wasm2c orders them; an exception tag with a payload of more than 256 bytes (what the runtime keeps) is reported when the extension is made; `wasi_python.h` used
+`Py_SETREF` and the `GET_SIZE` macros, which an abi3 build does not have (an `undefined symbol` at import; now only limited-API calls); the executable has `--help`, `--version`, `--argv0`, `--`, `HOST::GUEST:ro`, a validated `--env`,
+the errno in its errors, the number of the signal, UTF-8 arguments on Windows (checked under wine with `zig cc`) and a refusal of a `_start` that is not `() -> ()` in words; the table of `pyproject.toml` checks the type of each value and
+names the key; `wasmext inspect` takes the list of what is left out from the generator, so it cannot call a method what the generator does not expose; a module with GC types or a custom page size is refused with the name of the proposal; `-q` silences the
+warnings of the compiler for the C of wasm2c too; the release workflow does not publish a commit on which `pre-commit.yml` (pytest on three systems) has no successful run.
+
+**Not covered, and said so**:
+- The fixtures `build_extension` skips on Windows (it uses a `cc` and the build line of gcc/clang), so **the tests of the Python extension front end do not run on Windows**; there run the ctypes front end, the shared library, the executable, the official WASI suite and the example wheels
+  (all of them build the extension with MSVC). Turning `build_extension` into a build by the compiler of setuptools is the way to close this, and needs CI rounds on Windows.
+- abi3 is tested with Python 3.11 only (the wheels are tagged `cp311-abi3`; 3.12 and later run them without a test of ours).
+- The patches of the copy of the C that wasm2c writes are four: `_memory_error_not_abort` (the allocation of a memory traps, it does not `abort()`), `_export_tags` (the table of tags), `_tail_call_locals` (fixed in WABT master by `6c7af19`, not in a release),
+  `_portable_on_arm64` (`_addcarry_u64`, WABT #2885). Nothing in the runtime or the sources of wabt-package is changed; when WABT has a release with the fixes the patches go.
+- An exported `memoryview` of a memory without guard pages (`--no-guard-pages`) can outlive the buffer when the memory grows (the runtime then moves it); documented in the README; whether to change it is open.
+
 ## Decisions
 
 - **Platforms.** `wasmext` is a pure Python wheel (`py3-none-any`) that depends on the wabt-package, so it installs wherever the

@@ -115,10 +115,31 @@ jobs:
           smoke/bin/python -c "import wasmext" || smoke/Scripts/python -c "import wasmext"
         shell: bash
 
+  tested:
+    name: The tests passed on this commit
+    # A release is made from a commit that the test suite (workflow pre-commit.yml: pytest on Linux, macOS and Windows) has passed: a tag on a
+    # commit that was never tested, or that failed, is not published.
+    if: ${{ github.event_name == 'push' }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    steps:
+      - name: Find a successful run of pre-commit.yml for the commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ok=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/pre-commit.yml/runs?head_sha=$GITHUB_SHA&status=completed" \
+            --jq '[.workflow_runs[] | select(.conclusion == "success")] | length')
+          if [ "$ok" -lt 1 ]; then
+            echo "no successful run of the tests for $GITHUB_SHA: wait for them, or run them, then push the tag again"
+            exit 1
+          fi
+        shell: bash
+
   deploy:
     name: Publish
-    needs: [build, smoke]
-    if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.testpypi) }}
+    needs: [build, smoke, tested]
+    if: ${{ always() && !cancelled() && needs.build.result == 'success' && needs.smoke.result == 'success' && (github.event_name == 'push' && needs.tested.result == 'success' || github.event_name == 'workflow_dispatch' && inputs.testpypi) }}
     runs-on: ubuntu-latest
     environment: ${{ github.event_name == 'push' && 'pypi' || 'testpypi' }}
     permissions:

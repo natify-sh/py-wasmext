@@ -74,10 +74,13 @@ def test_clocks_random_and_yield(build_extension: Builder) -> None:
 
     _, inst = probe(build_extension)
     mem = inst.memory
+    slack = (
+        50_000_000  # the clock of the core is the precise one; time.time_ns() of Python on Windows ticks every 15 ms
+    )
     before = time.time_ns()
     assert inst.clock_time_get(0, 16) == 0
     now = int.from_bytes(mem[16:24], "little")
-    assert before <= now <= time.time_ns()
+    assert before - slack <= now <= time.time_ns() + slack
     assert inst.clock_time_get(1, 16) == 0
     first = int.from_bytes(mem[16:24], "little")
     assert inst.clock_time_get(1, 16) == 0

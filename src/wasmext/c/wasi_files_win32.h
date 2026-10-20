@@ -278,6 +278,8 @@ static inline int wasi_w_contained(const char *root, const char *path, int follo
     return inside;
 }
 
+#define WASI_W_NAME_MAX 255
+
 /* The path the program gave, below the directory `dir`: its place in the real file system. 0, with `*full` and `*newrel` in new
    memory (the caller frees them), or an errno of WASI: a name that leaves the directory ("..", an absolute name, a symbolic link
    that points out) is NOTCAPABLE. `*slash` is whether the name ended with a slash, which asks for a directory. */
@@ -322,6 +324,11 @@ static inline uint32_t wasi_w_resolve(wasmext_wasi *w, wasi_entry *dir, uint32_t
             while (n > 0 && out[n - 1] != '/') n--;
             if (n > 0) n--;
         } else if (tlen > 0 && !(tlen == 1 && cursor[0] == '.')) {
+            if (tlen > WASI_W_NAME_MAX) {  /* a name of a directory is at most 255 bytes, as on POSIX (the system's own error would come too late: it is NOTCAPABLE for a name that does not exist) */
+                WASI_FREE(joined);
+                WASI_FREE(out);
+                return WASI_E_NAMETOOLONG;
+            }
             if (n) out[n++] = '/';
             memcpy(out + n, cursor, tlen);
             n += tlen;

@@ -776,9 +776,8 @@ What was checked, and what was not:
   over a file, a directory over an empty directory, the refusals), `unlink`, `rmdir`, hard links, `..` out of the directory, an absolute
   name. They differ in the link count and size of a directory (Windows says 1 and 0), and in `a/../d1` where `a` does not exist (the name is
   resolved without looking at the disk, as in the Python backend).
-- **Not checked at all**: symbolic links and `atim` of `path_filestat_set_times`. Wine does not do the reparse points of Windows (`lstat` of a
-  link answers "not found" there) and ignores the access time; they need a real Windows, so the CI is the first test. The official tests of
-  WASI on Windows run with the new backend and, as a second job, with the Python one.
+- **Symbolic links and `atim` of `path_filestat_set_times`** could not be checked under wine (it does not do the reparse points of Windows and ignores the access time), so the CI was the first test:
+  **it is green** (the 72 official tests on `windows-latest` with this backend, and as a second job with the Python one). On x64 only: ARM64 and x86 are not run for the suite.
 - The official tests expected `symlink_filestat` to fail on Windows with Python before 3.13; with this backend it should pass, so the
   expectation file now belongs to the job of the Python backend only (`expectations-windows-python-fs.toml`), and the job of the native
   backend has none. Whatever fails there is read from the first run.
@@ -786,8 +785,8 @@ What was checked, and what was not:
 
 ### Stage 4 (the glue as files), first half: as built
 
-`generate()` makes three layers where it made one file. **Written and tested** (303 tests, 4 expected failures, plus a test that the glue of a module
-compiles with no path to `Python.h`); **not yet run in CI** at the time of writing.
+`generate()` makes three layers where it made one file. **Written and tested** (303 tests, 4 expected failures at the time, plus a test that the glue of a module
+compiles with no path to `Python.h`); **run in CI since, green on the three systems**.
 
 - `wasmext_glue.h` (static, no Python, copied beside every module): the trap codes that are not the runtime's (`WASMEXT_TRAP_HOST`,
   `_NO_MEMORY`, `_ENDED`), the fingerprint `WASMEXT_RUNTIME`, how a call of WebAssembly code is guarded (`WASMEXT_ENTER` / `LEAVE`, the
@@ -804,8 +803,8 @@ compiles with no path to `Python.h`); **not yet run in CI** at the time of writi
 Notes: a call across two instances is now a call of a function pointer with `user`, the same for a function of another instance, one of WASI
 and a Python callable (the old `lf`/`li` and `fn` fork is gone). The protocol of errors is what the glue does: a host function answers
 nonzero through `trapped`, the frames of the module are unwound with `WASMEXT_TRAP_HOST`, and the Python layer finds its exception where Python
-keeps it. The check (a) in CI (`core-without-python.yml`) does not cover the new headers yet; `test_the_glue_of_a_module_compiles_with_no_python`
-does it for now, on systems with a `cc`. **Second half of stage 4: built** (the tags, below). Still to do for the C API: stage 6.
+keeps it. The check (a) in CI (`core-without-python.yml`) does not cover the new headers; `test_the_glue_of_a_module_compiles_with_no_python`
+does it on systems with a `cc`, and the tests of the shared library and of the executable compile the glue with no path to Python on all three systems (MSVC included). **Second half of stage 4: built** (the tags, below). Still to do for the C API: stage 6.
 
 ### Stage 4, second half: the uncaught exception of WebAssembly, as built
 
@@ -830,7 +829,8 @@ WASI are served (`<name>_wasi_bind` in the glue); a module with any other import
 binary mode and the host path of a directory is made whole (`_fullpath`).
 
 **Checked**: on Linux the 72 official tests of the suite pass with these programs (all built in 80 s, run in 1.5 s, against about 7 s through Python); three tests in `tests/test_exe.py`
-(exit code and bytes, a trap, the refusals). **Not yet run**: the same on macOS and Windows; the CI jobs `(native executables)` of `wasi-testsuite.yml` are the first run there.
+(exit code and bytes, a trap, the refusals). **Then run on macOS and Windows** by the CI jobs `(native executables)` of `wasi-testsuite.yml`: Windows passed at once; macOS failed three tests (`path_link`, `stdio`, `path_open_preopen`, `NOTDIR` for `ISDIR`), which valgrind on Linux traced to
+`wasi_path_open` using the entry of the directory after `wasi_new_fd` had grown (reallocated) the table of descriptors; fixed, and all 72 programs are clean under valgrind. Green on the three systems.
 This is the tool of the test suite, not yet a command (`natify --exe` is stage 7).
 
 ### Stage 6a, the shared library with a C API: built, NOT closed

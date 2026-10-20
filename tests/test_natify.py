@@ -226,11 +226,11 @@ def test_abi3_is_the_default_where_the_interpreter_has_it(project: Path) -> None
 
 
 def test_native_on_request(project: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    [native] = natify("pkg/*.wasm", quiet=True, limited_api=False)
+    [native] = natify("pkg/*.wasm", quiet=True, limited_abi=False)
     assert not native.py_limited_api and not native.define_macros
-    monkeypatch.setenv("WASMEXT_LIMITED_API", "0")
+    monkeypatch.setenv("WASMEXT_LIMITED_ABI", "0")
     [from_env] = natify("pkg/*.wasm", quiet=True)
-    [code_wins] = natify("pkg/*.wasm", quiet=True, limited_api=True)
+    [code_wins] = natify("pkg/*.wasm", quiet=True, limited_abi=True)
     assert not from_env.py_limited_api and code_wins.py_limited_api
 
 
@@ -250,7 +250,7 @@ def test_where_there_is_no_stable_abi_the_extension_is_native(
         monkeypatch.setattr(_natify.sys.implementation, "name", "pypy", raising=False)
     elif why != "free-threaded":
         monkeypatch.setattr(_natify.sysconfig, "get_platform", lambda: f"{why}_4_0_arm64")
-    [ext] = natify("pkg/*.wasm", limited_api=True)  # asked for, but impossible: native, and it says why
+    [ext] = natify("pkg/*.wasm", limited_abi=True)  # asked for, but impossible: native, and it says why
     assert not ext.py_limited_api and not ext.define_macros
     assert "building a native extension" in capsys.readouterr().err
     [default] = natify("pkg/*.wasm", quiet=True)  # the default does not insist
@@ -258,7 +258,7 @@ def test_where_there_is_no_stable_abi_the_extension_is_native(
 
 
 @pytest.mark.parametrize(
-    ("arg", "tag"), [('"pkg/*.wasm"', "-cp311-abi3-"), ('"pkg/*.wasm", limited_api=False', "-cp311-cp311-")]
+    ("arg", "tag"), [('"pkg/*.wasm"', "-cp311-abi3-"), ('"pkg/*.wasm", limited_abi=False', "-cp311-cp311-")]
 )
 def test_the_wheel_is_tagged_for_what_was_built(project: Path, arg: str, tag: str) -> None:
     """Nothing but natify() decides: abi3 gets its tag from wasmext's setuptools hook, native keeps the interpreter's."""
@@ -425,24 +425,40 @@ def test_a_runtime_that_lacks_files_is_refused_with_what_is_missing(
         find_toolchain()
 
 
-def test_a_wheel_with_one_native_extension_is_not_tagged_abi3(project: Path) -> None:
-    """One extension that is not abi3 ties the whole wheel to the interpreter: it gets the normal tag. Libraries and programs do not count."""
+def test_the_extensions_of_one_wheel_are_all_abi3_or_all_native(project: Path) -> None:
+    """A wheel has one tag: the modules of wasmext follow what the others in it can be, and settings that contradict each other are an error."""
     from setuptools import Distribution, Extension
 
     from wasmext._setuptools import finalize_distribution_options  # pyright: ignore[reportPrivateUsage]
 
-    [abi3] = natify("pkg/*.wasm", quiet=True, limited_api=True)
-    [native] = natify("pkg/*.wasm", quiet=True, limited_api=False)
-    handwritten = Extension("pkg.other", ["other.c"])
-
-    def tagged(*extensions: Extension) -> bool:
+    def finalize(*extensions: Extension) -> Distribution:
         dist = Distribution({"name": "demo", "ext_modules": list(extensions)})
         finalize_distribution_options(dist)
-        return "py_limited_api" in dist.get_option_dict("bdist_wheel")
+        return dist
 
-    assert tagged(abi3)
-    assert not tagged(native)
-    assert not tagged(abi3, handwritten)  # the hand-written one is for one interpreter
-    assert not tagged(abi3, native)
+    def tagged(dist: Distribution) -> bool:
+        return "py_limited_abi" in dist.get_option_dict("bdist_wheel") or "py_limited_api" in dist.get_option_dict(
+            "bdist_wheel"
+        )
+
+    handwritten = Extension("pkg.other", ["other.c"])  # for one interpreter
+    [auto] = natify("pkg/*.wasm", quiet=True)
+    dist = finalize(
+        auto, handwritten
+    )  # the default follows the hand-written extension: native, with no abi3 mark and no macro
+    assert not tagged(dist) and not auto.py_limited_api and ("Py_LIMITED_API", "0x030B0000") not in auto.define_macros
+    [only] = natify("pkg/*.wasm", quiet=True)
+    assert tagged(finalize(only)) and only.py_limited_api  # alone it stays abi3
+    [forced] = natify("pkg/*.wasm", quiet=True, limited_abi=True)
+    with pytest.raises(ValueError, match="is not abi3"):
+        finalize(forced, handwritten)
+    [yes] = natify("pkg/*.wasm", quiet=True, limited_abi=True)
+    [no] = natify("pkg/*.wasm", quiet=True, limited_abi=False)
+    with pytest.raises(ValueError, match="one setting"):
+        finalize(yes, no)
+    [follow] = natify("pkg/*.wasm", quiet=True)
+    [native] = natify("pkg/*.wasm", quiet=True, limited_abi=False)
+    assert not tagged(finalize(follow, native)) and not follow.py_limited_api  # the default follows the explicit False
+    [abi3] = natify("pkg/*.wasm", quiet=True)
     [program] = natify("pkg/*.wasm", quiet=True, product="exe")
-    assert tagged(abi3, program)  # a program does not tie the wheel to a Python
+    assert tagged(finalize(abi3, program))  # a program does not tie the wheel to a Python

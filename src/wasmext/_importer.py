@@ -7,7 +7,7 @@
 
 It is a tool for development, as `pyximport` is: the first import of a module (and the first one after the `.wasm` or wasmext
 changed) runs `wasm2c` and a C compiler, and the result is kept in a cache directory (`~/.wasmbld`, or `build_dir`), so that
-the next imports only load it (until the file, wasmext, or how it is built, `guard_pages`, `limited_api`, `parts`, the flags of the
+the next imports only load it (until the file, wasmext, or how it is built, `guard_pages`, `limited_abi`, `parts`, the flags of the
 compiler, changes: a stamp of those settings is kept beside the extension). A `.py` file or an extension of the same name wins over the `.wasm`: the finder is put at the end of
 `sys.meta_path`. Importing a `.wasm` compiles code that came with it, so it is for files you trust.
 
@@ -97,7 +97,7 @@ class _Options:
         build_in_temp: bool,
         setup_args: dict[str, Any],
         guard_pages: bool | None,
-        limited_api: bool | None,
+        limited_abi: bool | None,
         stubs: bool,
         parts: int | None = None,
     ) -> None:
@@ -106,7 +106,7 @@ class _Options:
         self.build_in_temp = build_in_temp
         self.setup_args = setup_args
         self.guard_pages = guard_pages
-        self.limited_api = limited_api
+        self.limited_abi = limited_abi
         self.stubs = stubs
         self.parts = parts
 
@@ -135,7 +135,7 @@ def build_module(name: str, wasmfilename: str, options: _Options) -> str:
         force=False,
         quiet=True,
         stubs=options.stubs,
-        limited_api=options.limited_api,
+        limited_abi=options.limited_abi,
         guard_pages=options.guard_pages,
         parts=options.parts,
     )
@@ -220,7 +220,7 @@ def _find_built(lib: Path, name: str) -> Path | None:
 # the environment that changes what the compiler is given
 _BUILD_ENVIRONMENT = (
     "WASMEXT_GUARD_PAGES",
-    "WASMEXT_LIMITED_API",
+    "WASMEXT_LIMITED_ABI",
     "WASMEXT_PARTS",
     "CC",
     "CFLAGS",
@@ -242,7 +242,7 @@ def _fingerprint(options: _Options, ext: Extension, special_args: dict[str, Any]
     """What the extension was built with besides the files: a change of any of it makes the cached one stale (the files say nothing of it)."""
     settings = {
         "guard_pages": options.guard_pages,
-        "limited_api": options.limited_api,
+        "limited_abi": options.limited_abi,
         "parts": options.parts,
         "setup_args": options.setup_args,
         "special_args": special_args,
@@ -331,7 +331,7 @@ def install(
     setup_args: dict[str, Any] | None = None,
     inplace: bool = False,
     guard_pages: bool | None = None,
-    limited_api: bool | None = None,
+    limited_abi: bool | None = None,
     stubs: bool = False,
     parts: int | None = None,
 ) -> WasmFinder:
@@ -342,7 +342,7 @@ def install(
         `build_dir`: easier to look at when something goes wrong, and it can meet files of the same name.
     :param setup_args: arguments for `setuptools.setup()`; a `.wasmbld` file can add to them.
     :param inplace: put the built extension (`.so` or `.pyd`) next to the `.wasm`.
-    :param guard_pages: and :param limited_api: and :param parts: as for `natify()`.
+    :param guard_pages: and :param limited_abi: and :param parts: as for `natify()`.
     :param stubs: write a `<name>.pyi` beside each `.wasm` (not by default: the directory you import from stays as it is).
 
     A second call replaces the finder of the first (where `pyximport` keeps the first one).
@@ -354,7 +354,7 @@ def install(
         build_in_temp,
         dict(setup_args or {}),
         guard_pages,
-        limited_api,
+        limited_abi,
         stubs,
         parts,
     )

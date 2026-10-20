@@ -41,11 +41,12 @@ _WASMIZE_KEYS = {
     "force": "force",
     "quiet": "quiet",
     "stubs": "stubs",
-    "limited-api": "limited_api",
     "guard-pages": "guard_pages",
     "parts": "parts",
     "product": "product",
 }
+# ... and what holds for the whole project, because the wheel has one tag: [tool.wasmext] limited-abi
+_PROJECT_KEYS = {"limited-abi": "limited_abi"}
 
 
 # ... and what is added to each extension that the call makes, as `Extension()` has it (the flags, the macros, the libraries)
@@ -78,7 +79,7 @@ _KEY_TYPES = {
     "force": "bool",
     "quiet": "bool",
     "stubs": "bool",
-    "limited-api": "bool",
+    "limited-abi": "bool",
     "guard-pages": "bool",
     "parts": "int",
     "product": "product",
@@ -95,7 +96,7 @@ def _check_value(path: Path, key: str, value: Any) -> None:
     """A value of the wrong type is an error that names the key, not a TypeError from the depths of natify() (or, for a string where a list
     is wanted, a list of its characters)."""
     kind = _KEY_TYPES.get(key)
-    where = f"{path}: [tool.wasmext.ext-modules] {key}"
+    where = f"{path}: [tool.wasmext] {key}" if key in _PROJECT_KEYS else f"{path}: [tool.wasmext.ext-modules] {key}"
     strings = isinstance(value, list) and all(isinstance(v, str) for v in value)  # pyright: ignore[reportUnknownVariableType]
     if kind == "product" and value not in PRODUCTS:
         raise ValueError(f"{where} must be one of {', '.join(PRODUCTS)}, not {value!r}")
@@ -127,16 +128,25 @@ def pyproject_calls(root: Path) -> list[dict[str, Any]]:
     if not isinstance(table, dict):
         raise TypeError(f"{path}: [tool.wasmext] must be a table")
     for key in table:
-        if key != "ext-modules":
+        if key != "ext-modules" and key not in _PROJECT_KEYS:
             raise ValueError(
-                f"{path}: [tool.wasmext.{key}] is not something wasmext knows (it has [tool.wasmext.ext-modules])"
+                f"{path}: [tool.wasmext.{key}] is not something wasmext knows (it has [tool.wasmext.ext-modules] and, for the whole project, "
+                f"{', '.join(_PROJECT_KEYS)})"
             )
+    project = {_PROJECT_KEYS[key]: value for key, value in table.items() if key in _PROJECT_KEYS}
+    for key, value in table.items():
+        if key in _PROJECT_KEYS:
+            _check_value(path, key, value)
     wanted = table.get("ext-modules", [])
     entries: list[Any] = [wanted] if isinstance(wanted, dict) else wanted
     calls: list[dict[str, Any]] = []
     for entry in entries:
         if not isinstance(entry, dict):
             raise TypeError(f"{path}: [tool.wasmext.ext-modules] must be a table, or an array of tables")
+        if "limited-abi" in entry:
+            raise ValueError(
+                f"{path}: limited-abi is one setting for the whole project (the wheel has one tag): put it in [tool.wasmext], not in an entry of ext-modules"
+            )
         unknown = sorted(set(entry) - set(_WASMIZE_KEYS) - set(_EXTENSION_KEYS))
         if unknown:
             known = sorted([*_WASMIZE_KEYS, *_EXTENSION_KEYS])
@@ -150,6 +160,7 @@ def pyproject_calls(root: Path) -> list[dict[str, Any]]:
         for key, value in entry.items():  # pyright: ignore[reportUnknownVariableType]
             _check_value(path, key, value)  # pyright: ignore[reportUnknownArgumentType]
         call = {_WASMIZE_KEYS[key]: value for key, value in entry.items() if key in _WASMIZE_KEYS}
+        call.update(project)
         if isinstance(call.get("exclude"), str):
             call["exclude"] = [call["exclude"]]  # a lone pattern: not the characters of a string
         extension = {_EXTENSION_KEYS[key]: value for key, value in entry.items() if key in _EXTENSION_KEYS}
@@ -199,9 +210,32 @@ def wheel_without_python(base: type) -> type:
     return WasmextBdistWheel
 
 
+def _same_abi_for_the_wheel(extensions: list[Any]) -> None:
+    """A wheel has one tag, so its Python extensions are all abi3 or all native. When what was asked, or what the others are, does not allow abi3 for all of them, the
+    modules of wasmext that took the default are made native (the tag is then the normal one); two settings that contradict each other are an error."""
+    ours = [e for e in extensions if getattr(e, "_wasmext_made", False) and not getattr(e, "_wasmext_product", None)]
+    others = [e for e in extensions if e not in ours and not getattr(e, "_wasmext_product", None)]
+    asked = {e._wasmext_limited_abi for e in ours if getattr(e, "_wasmext_limited_abi", None) is not None}
+    if len(asked) > 1:
+        raise ValueError(
+            "limited_abi is True for some modules of this project and False for others: a wheel has one tag, so it is one setting for all of them"
+        )
+    foreign = next((e for e in others if not _is_abi3(e)), None)
+    if True in asked and foreign is not None:
+        raise ValueError(
+            f"limited_abi=True, but the extension {foreign.name} is not abi3: the wheel would be tagged for one interpreter"
+        )
+    if (False in asked or foreign is not None) and any(_is_abi3(e) for e in ours):
+        for e in ours:  # the others are built native already; these took the default, so they follow
+            if _is_abi3(e):
+                e.py_limited_api = False
+                e.define_macros = [m for m in (e.define_macros or []) if m[0] != "Py_LIMITED_API"]
+
+
 def finalize_distribution_options(dist: Any) -> None:
     _add_extensions_from_pyproject(dist)
     extensions: list[Any] = getattr(dist, "ext_modules", None) or []
+    _same_abi_for_the_wheel(extensions)
     if (
         extensions
         and all(getattr(e, "_wasmext_product", None) for e in extensions)
@@ -214,7 +248,7 @@ def finalize_distribution_options(dist: Any) -> None:
         and "build_ext" not in dist.cmdclass
     ):
         dist.cmdclass["build_ext"] = parallel_build_ext(dist.get_command_class("build_ext"))
-    # The wheel is abi3 only if every Python extension in it is: one native extension (a hand-written one, or a module made with limited_api=False) ties the whole wheel
+    # The wheel is abi3 only if every Python extension in it is: one native extension (a hand-written one, or a module made with limited_abi=False) ties the whole wheel
     # to the interpreter, and a wheel tagged cp311-abi3 that holds it would be installed, and fail, on another Python. Libraries and programs do not count.
     python_extensions = [e for e in extensions if not getattr(e, "_wasmext_product", None)]
     if python_extensions and all(_is_abi3(e) for e in python_extensions):

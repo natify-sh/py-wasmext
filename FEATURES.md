@@ -33,7 +33,7 @@ What each line says is tested (`tests/test_features.py`), not read from those do
 | Reference types, inside the module | done | `2.0 reference types, inside the module` |
 | Reference types in a signature (`funcref`, `externref`) | not yet | the function is left out (export) or the module is refused (import) |
 | SIMD (`v128`), inside the module | done | the C of `wasm2c` includes simde; the wabt-package (1.0.42.0 and later) ships the headers (`wabt_package.include_dir()`), and wasmext adds that directory to the include path of the extension when the C includes `simde/` (`_simde_include`; a tree that ships its C and has no SIMD still builds without the wabt-package). `2.0 SIMD, inside the module`, `test_a_module_with_simd_gets_the_include_directory_of_simde`. Native instructions are used only if the compiler flags allow, so a baseline x86-64 wheel runs SIMD in portable code |
-| `v128` in a signature | done | 16 bytes in the order of WebAssembly memory: `bytes` (or any bytes-like object of 16 bytes) in, `bytes` out; a wrong length is a `ValueError`, another type a `TypeError`. In exported and imported functions, multi-value, exported globals and imported immutable globals. Not on big-endian hosts (`#error`; the byte order of a v128 there is not checked). `test_v128_in_signatures_globals_and_imports` |
+| `v128` in a signature | done | 16 bytes in the order of WebAssembly memory: `bytes` (or any bytes-like object of 16 bytes) in, `bytes` out; a wrong length is a `ValueError`, another type a `TypeError`. In exported and imported functions, multi-value, exported globals and imported immutable globals. Not on big-endian hosts (`#error`; the byte order of a v128 there is not checked). `test_v128_in_signatures_globals_and_imports` **Added since:** in the shared library the same functions (exports, imports, multi-value) take and give a v128 as 16 bytes behind a pointer (`const uint8_t *` in, `uint8_t *` out, the same order); the wrapper for ctypes turns them into `bytes` as the extension does (`test_v128_in_signatures_is_16_bytes_in_each_front_end`, on both). Left out of the library: a global of that type and the link of such a function to another instance |
 | JavaScript BigInt to i64 | n/a | a part of the JavaScript API; here an `i64` is a Python `int` |
 
 ### 3.0
@@ -844,7 +844,7 @@ This is the tool of the test suite, not yet a command (`natify --exe` is stage 7
 links them into a shared library (the sources of wasm2c, the glue and the core of WASI; no Python, and no `main`). The life of an instance: `<name>_new(&config, &error)` (WASI is made and
 bound there), `<name>_set_import<k>(m, f, user)` for each import that is not WASI's (a host function `result f(void *user, params..., int *trapped)`, the protocol of errors above),
 `<name>_instantiate(m)` (0 or the code of a trap), each export as `int <name>_<export>(m, params..., results...)` (0 or the code of a trap; `<name>_trap_message(code)` is its text), `<name>_free(m)`.
-A module that imports a global or a memory, or has several results in an import, is served now (see "Then built" in the audit below); `v128` in an import is refused with a clear message.
+A module that imports a global or a memory, or has several results in an import, is served now (see "Then built" in the audit below); `v128` in an import was refused with a clear message (served now, as 16 bytes behind a pointer; see the row `v128` in a signature).
 Checked by `tests/test_shared.py` with a host written in C, on Linux, macOS and Windows (MSVC) in CI. What was open when 6a was written is closed: Windows runs it, the configuration of WASI has the
 hooks of the clock, random bytes, sleep and the end of the program, a reactor is initialized by `_instantiate`, the globals have accessors, the link record for linking instances is in the API.
 
@@ -893,7 +893,7 @@ goes through Python; the interruption of a sleep by Ctrl-C (the core sleeps in C
   host thread other than the one that created the instance needs `wasm_rt_init_thread()`.
 - The call in which a WASI program ends (`proc_exit`) answers `TRAP_HOST` ("a host function failed"); only later calls answer `TRAP_ENDED`, which is what the header documents for the end.
 - An executable of a command that imports nothing from WASI stops in a C `#error` of the generated `main` instead of running or being refused in words.
-- An export with `funcref`/`externref` in its signature is left out of the header without a word (a v128 one is said), and a table export is accepted where the extension refuses it.
+- An export with `funcref`/`externref` in its signature is left out of the header without a word (a v128 one was said; it is in the header now), and a table export is accepted where the extension refuses it.
 
 **Then built** (tests in `tests/test_shared.py`): the configuration of the library has the hooks `clock`, `random` and `sleep` as well as stdin and stdout; `_instantiate` runs `_initialize` of a reactor (a module that has it and no `_start`) after the instantiation, so that
 the first export already sees its effects (the extension does the same now, through the same function of the glue; see "Stage 7"); every exported global

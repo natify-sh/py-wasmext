@@ -456,3 +456,33 @@ def test_a_command_with_initialize_is_not_initialized_for_it(
     mod: Any = build_front_end(wat, f"command_{front_end}")
     inst = mod.Instance()
     assert inst.runs() == 0
+
+
+def test_v128_in_signatures_is_16_bytes_in_each_front_end(build_front_end: Builder, front_end: str) -> None:
+    """A v128 in an export or an import: 16 bytes in the order of WebAssembly memory, as `bytes` (the library takes them behind a pointer)."""
+    import struct
+
+    def lanes(*v: int) -> bytes:
+        return struct.pack("<4i", *v)
+
+    seen: list[type] = []
+
+    def twice(b: bytes) -> bytes:
+        seen.append(type(b))
+        return lanes(*(2 * x for x in struct.unpack("<4i", b)))
+
+    def split(b: bytes, n: int) -> tuple[int, bytes]:
+        return n + 1, b[::-1]
+
+    module = build_front_end(DATA / "v128_signatures.wat", f"v128_signatures_{front_end}")
+    i = module.Instance({"env": {"twice": twice, "split": split}})
+    assert i.double(lanes(1, 2, 3, 4)) == lanes(2, 4, 6, 8)
+    assert i.double(bytearray(lanes(5, 5, 5, 5))) == lanes(10, 10, 10, 10)  # any bytes-like object
+    assert i.pair(7, lanes(1, 1, 1, 1)) == (lanes(1, 1, 1, 1), 7)
+    assert i.via_import(lanes(1, 2, 3, 4)) == lanes(2, 4, 6, 8) and seen == [bytes]
+    assert i.via_split(lanes(1, 2, 3, 4), 9) == (10, lanes(1, 2, 3, 4)[::-1])
+    assert i.lane(lanes(0, 0, 0, 42)) == 42
+    for bad, exc in ((b"short", ValueError), (7, TypeError), ("0123456789abcdef", TypeError)):
+        with pytest.raises(exc):
+            i.double(bad)
+    assert i.double(lanes(1, 1, 1, 1)) == lanes(2, 2, 2, 2)  # the instance goes on after a wrong argument

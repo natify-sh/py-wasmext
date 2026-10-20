@@ -89,7 +89,7 @@ def build_extension(wabt: Path, tmp_path_factory: pytest.TempPathFactory) -> Cal
         assert cc is not None
         limited = ["-DPy_LIMITED_API=0x030B0000"] if abi3 else []
         so = out / (name + str(sysconfig.get_config_var("EXT_SUFFIX")))
-        include = [f"-I{runtime}", f"-I{out}", f"-I{sysconfig.get_paths()['include']}"]
+        include = [f"-I{runtime}", f"-I{out}", f"-I{sysconfig.get_paths()['include']}", *(f"-I{d}" for d in _simde())]
         glue_object = out / f"{name}_py.o"
         # The glue is ours, so it is built strictly: GCC 14 makes these errors (older ones warn), and the manylinux and
         # user machines have it. The C of wasm2c and its runtime are not ours to police.
@@ -130,6 +130,14 @@ def build_extension(wabt: Path, tmp_path_factory: pytest.TempPathFactory) -> Cal
     return build
 
 
+def _simde() -> list[str]:
+    """The headers of simde, which the C of wasm2c for a module with SIMD includes (they come with the wabt-package)."""
+    from wasmext._toolchain import find_toolchain  # pyright: ignore[reportPrivateUsage]
+
+    headers = find_toolchain().include
+    return [str(headers)] if headers is not None and (headers / "simde").is_dir() else []
+
+
 def _build_by_setuptools(name: str, out: Path, runtime: Path, abi3: bool, defines: tuple[str, ...]) -> None:
     """The extension `name`, whose C is in `out`, built as a user builds one: an `Extension` and the `build_ext` of setuptools."""
     from setuptools import Extension, setup
@@ -148,7 +156,7 @@ def _build_by_setuptools(name: str, out: Path, runtime: Path, abi3: bool, define
     extension = Extension(
         name,
         sources,
-        include_dirs=["."],
+        include_dirs=[".", *_simde()],
         define_macros=macros,
         py_limited_api=abi3,
     )

@@ -94,9 +94,22 @@ def _to_float(v: Any) -> float:
     raise TypeError(f"a float is wanted, not {type(v).__name__}")
 
 
-_CONVERT = {"i32": _to_i32, "i64": _to_i64, "f32": _to_float, "f64": _to_float}
-_CTYPE = {"i32": _c.c_int32, "i64": _c.c_int64, "f32": _c.c_float, "f64": _c.c_double}
-_PYTYPE = {"i32": int, "i64": int, "f32": float, "f64": float}
+def _to_v128(v: Any) -> Any:
+    """16 bytes, in the order of WebAssembly memory (what any bytes-like object of 16 bytes is)."""
+    try:
+        data = bytes(memoryview(v))
+    except TypeError:
+        raise TypeError(f"16 bytes are wanted for a v128, not {type(v).__name__}") from None
+    if len(data) != 16:
+        raise ValueError(f"a v128 is 16 bytes, got {len(data)}")
+    return (_c.c_uint8 * 16).from_buffer_copy(data)
+
+
+_CONVERT = {"i32": _to_i32, "i64": _to_i64, "f32": _to_float, "f64": _to_float, "v128": _to_v128}
+_CTYPE = {"i32": _c.c_int32, "i64": _c.c_int64, "f32": _c.c_float, "f64": _c.c_double, "v128": _c.c_uint8 * 16}
+# a parameter of the C functions: a v128 is passed by a pointer to its 16 bytes
+_ARG = {"i32": _c.c_int32, "i64": _c.c_int64, "f32": _c.c_float, "f64": _c.c_double, "v128": _c.POINTER(_c.c_uint8)}
+_PYTYPE = {"i32": int, "i64": int, "f32": float, "f64": float, "v128": bytes}
 
 
 # ---- the tables of the module ---------------------------------------------------------------------------------------------------
@@ -374,14 +387,19 @@ class Instance:
         raise KeyError(name)
 
     def _set_import(self, k: int, module: str, field: str, function: Any, params: tuple[str, ...], results: tuple[str, ...]) -> None:
-        several = len(results) > 1
+        several = len(results) > 1 or "v128" in results  # the results go through pointers
         returns = None if several else _CTYPE[results[0]] if results else None
-        outs = [_c.POINTER(_CTYPE[t]) for t in results] if several else []
-        prototype = _c.CFUNCTYPE(returns, _c.c_void_p, *[_CTYPE[t] for t in params], *outs, _c.POINTER(_c.c_int))
+        outs = [_c.POINTER(_c.c_uint8) if t == "v128" else _c.POINTER(_CTYPE[t]) for t in results] if several else []
+        prototype = _c.CFUNCTYPE(returns, _c.c_void_p, *[_ARG[t] for t in params], *outs, _c.POINTER(_c.c_int))
         weak = weakref.ref(self)
         count = len(params)
 
         def checked(value: Any, t: str) -> Any:
+            if t == "v128":
+                try:
+                    return _to_v128(value)
+                except TypeError:
+                    raise TypeError(f"the import '{module}.{field}' must return 16 bytes for a v128, not {type(value).__name__}") from None
             if _PYTYPE[t] is int and not isinstance(value, int) or _PYTYPE[t] is float and not isinstance(value, (int, float)):
                 raise TypeError(f"the import '{module}.{field}' must return {_PYTYPE[t].__name__}, not {type(value).__name__}")
             return _CONVERT[t](value)
@@ -389,14 +407,19 @@ class Instance:
         def callback(_user: Any, *args: Any) -> Any:
             trapped = args[-1]
             try:
-                value = function(*args[:count])
+                value = function(*[_c.string_at(a, 16) if t == "v128" else a for a, t in zip(args[:count], params)])
                 if several:
                     pointers = args[count:-1]
-                    if not isinstance(value, (tuple, list)) or len(value) != len(results):
+                    if len(results) == 1:
+                        value = (value,)
+                    elif not isinstance(value, (tuple, list)) or len(value) != len(results):
                         raise TypeError(f"the import '{module}.{field}' must return a tuple of {len(results)} values")
                     converted = [checked(v, t) for v, t in zip(value, results)]
-                    for pointer, v in zip(pointers, converted):
-                        pointer[0] = v
+                    for pointer, v, t in zip(pointers, converted, results):
+                        if t == "v128":
+                            _c.memmove(pointer, v, 16)
+                        else:
+                            pointer[0] = v
                     return None
                 if not results:
                     return None
@@ -417,16 +440,19 @@ class Instance:
 
     def _call(self, cname: str, params: tuple[str, ...], results: tuple[str, ...], args: tuple[Any, ...]) -> Any:
         function = _function(
-            cname, _c.c_int, [_c.c_void_p, *[_CTYPE[t] for t in params], *[_c.POINTER(_CTYPE[t]) for t in results]]
+            cname,
+            _c.c_int,
+            [_c.c_void_p, *[_ARG[t] for t in params], *[_c.POINTER(_c.c_uint8 if t == "v128" else _CTYPE[t]) for t in results]],
         )
         values = [_CONVERT[t](a) for t, a in zip(params, args)]
         outs = [_CTYPE[t]() for t in results]
-        code = function(self._h, *values, *[_c.byref(o) for o in outs])
+        code = function(self._h, *values, *[_c.cast(o, _c.POINTER(_c.c_uint8)) if t == "v128" else _c.byref(o) for o, t in zip(outs, results)])
         if code:
             raise self._error(code)
         if not results:
             return None
-        return outs[0].value if len(results) == 1 else tuple(o.value for o in outs)
+        got = [bytes(o) if t == "v128" else o.value for o, t in zip(outs, results)]
+        return got[0] if len(results) == 1 else tuple(got)
 
     # -- memories and globals -----------------------------------------------------------------------------------------------------
 
@@ -834,11 +860,7 @@ def generate_ctypes(model: ApiModel, *, library_file: str, version: str | None =
     """The text of `<name>_ctypes.py` for the module of `model`; `library_file` is the name of the shared library beside it."""
     name = model.last
     uses_wasi = model.uses_wasi
-    exports = [
-        (n, c, tuple(f.params), tuple(f.results))
-        for n, c, f in model.exports
-        if not ({"v128"} & {*f.params, *f.results})
-    ]
+    exports = [(n, c, tuple(f.params), tuple(f.results)) for n, c, f in model.exports]
     imports = [
         (k, module, field, tuple(f.params), tuple(f.results), wasi_call)
         for k, module, field, f, wasi_call in model.imports

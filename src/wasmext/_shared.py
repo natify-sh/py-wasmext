@@ -84,13 +84,25 @@ def _ident(name: str, taken: set[str]) -> str:
 def unsupported(imports: list[tuple[str, str, FuncType]], *, global_imports: bool, memory_imports: bool) -> str | None:
     """Why the module has no shared library yet, or None."""
     del (
+        imports,
         global_imports,
         memory_imports,
-    )  # served: the numbers and the exports of other instances (see the link functions)
-    for module, field_, func in imports:
-        if "v128" in (*func.params, *func.results):
-            return f"the import {module}.{field_} uses v128"
+    )  # served: the numbers, a v128 (as 16 bytes behind a pointer) and the exports of other instances (see the link functions)
     return None
+
+
+def _in(t: ValType, name: str) -> str:
+    """A parameter of the C API: a v128 is 16 bytes behind a pointer (in the order of WebAssembly memory, little-endian)."""
+    return f"const uint8_t *{name}" if t == "v128" else f"{_API_TYPE[t]} {name}"
+
+
+def _out(t: ValType, name: str) -> str:
+    """A result of the C API, by pointer: for a v128, where its 16 bytes are written."""
+    return f"uint8_t *{name}" if t == "v128" else f"{_API_TYPE[t]} *{name}"
+
+
+def _has_v128(func: FuncType) -> bool:
+    return "v128" in (*func.params, *func.results)
 
 
 def generate_shared(
@@ -109,8 +121,8 @@ def generate_shared(
     memory_imports: list[Any] | None = None,
     memory_limits: list[Any] | None = None,
 ) -> tuple[str, str, ApiModel]:
-    """The public header, the C of the library and the model of the API; `funcs` are the exports in the order of the glue (`<name>_call<i>`). An export with a v128 is left out
-    of the header (and said there)."""
+    """The public header, the C of the library and the model of the API; `funcs` are the exports in the order of the glue (`<name>_call<i>`). A v128 in a signature is 16 bytes behind a pointer
+    (`const uint8_t *` in, `uint8_t *` out, little-endian); a global of that type and the link of such a function to another instance are left out."""
     from ._gen import (
         _CTYPE,
         _MULTI_CODE,
@@ -244,6 +256,19 @@ def generate_shared(
     C("        api_ready = 1;")
     C("    }")
     C("}")
+    if any(_has_v128(f) for _m, _f, f, _w, _h, _s in imports) or any(_has_v128(f) for _n, f in funcs):
+        C("#if defined(__BYTE_ORDER__) && defined(__ORDER_BIG_ENDIAN__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__")
+        C('#error "wasmext: v128 in a signature is not supported on big-endian hosts"')
+        C("#endif")
+        C("/* a v128 crosses the API as 16 bytes in the order of WebAssembly memory (little-endian) */")
+        C("static v128 api_v128(const uint8_t *bytes) {")
+        C("    v128 v;")
+        C("    memcpy(&v, bytes, 16);")
+        C("    return v;")
+        C("}")
+        C("static void api_bytes(uint8_t *out, v128 v) {")
+        C("    memcpy(out, &v, 16);")
+        C("}")
     C(f"void {last}_thread_free(void) {{")
     C("    if (api_ready) {")
     C("        wasm_rt_free_thread();")
@@ -258,7 +283,7 @@ def generate_shared(
     C(
         f"    unsigned char gset[{max(len(global_imports or ()), 1)}], mset[{max(len(memory_imports or ()), 1)}];  /* the same for the globals and the memories */"
     )
-    if any(len(func.results) > 1 for _m, _f, func, _w, _h, _s in imports):
+    if any(len(func.results) > 1 or _has_v128(func) for _m, _f, func, _w, _h, _s in imports):
         C(
             f"    struct {{ void *fn; void *user; }} multi[{max(n_imports, 1)}];  /* the host function of an import with several results, and its user */"
         )
@@ -445,36 +470,70 @@ def generate_shared(
     # the imports: the types of the functions and where to set them (a call of WASI may be replaced too: what the host gives wins)
     for k, (module, field_, func, is_wasi, host, slot) in enumerate(imports):
         several = len(func.results) > 1
-        ret = "void" if several else _API_TYPE[func.results[0]] if func.results else "void"
-        params = "".join(f", {_API_TYPE[t]} a{j}" for j, t in enumerate(func.params))
-        outs = "".join(f", {_API_TYPE[t]} *r{j}" for j, t in enumerate(func.results)) if several else ""
+        wrapped = several or _has_v128(func)  # the host function is called through a function of this file
+        outs_style = several or "v128" in func.results  # the results go through pointers
+        ret = "void" if outs_style else _API_TYPE[func.results[0]] if func.results else "void"
+        params = "".join(f", {_in(t, f'a{j}')}" for j, t in enumerate(func.params))
+        outs = "".join(f", {_out(t, f'r{j}')}" for j, t in enumerate(func.results)) if outs_style else ""
         if is_wasi:
             A(
                 f"/* the call of WASI {_cc(module)}.{_cc(field_)}: the core has it; a function set here (not NULL) replaces it, as the host's own import does */"
             )
         else:
             A(
-                f"/* the import {_cc(module)}.{_cc(field_)}: set it before {last}_instantiate; a failure of the function is `*trapped` nonzero (and its own error, kept by the host){'; the results go through the pointers' if several else ''} */"
+                f"/* the import {_cc(module)}.{_cc(field_)}: set it before {last}_instantiate; a failure of the function is `*trapped` nonzero (and its own error, kept by the host){'; the results go through the pointers' if outs_style else ''}{'; a v128 is 16 bytes' if _has_v128(func) else ''} */"
             )
         model.imports.append((k, module, field_, func, is_wasi))
         A(f"typedef {ret} (*{last}_import{k}_fn)(void *user{params}{outs}, int *trapped);")
         A(f"WASMEXT_API void {last}_set_import{k}({last}_t *m, {last}_import{k}_fn function, void *user);")
-        if several:
-            codes = "".join(_MULTI_CODE[t] for t in func.results)
-            C(f"static struct wasm_multi_{codes} api_import{k}(void *self{params}, int *trapped) {{")
+        if wrapped:
+            glue_ret = (
+                f"struct wasm_multi_{''.join(_MULTI_CODE[t] for t in func.results)}"
+                if several
+                else _CTYPE[func.results[0]]
+                if func.results
+                else "void"
+            )
+            glue_params = "".join(f", {_CTYPE[t]} a{j}" for j, t in enumerate(func.params))
+            C(f"static {glue_ret} api_import{k}(void *self{glue_params}, int *trapped) {{")
             C(f"    {last}_t *m = ({last}_t *)self;")
-            C(f"    struct wasm_multi_{codes} r;")
-            C("    memset(&r, 0, sizeof r);")
+            if glue_ret != "void":
+                C(f"    {glue_ret} r;")
+                C("    memset(&r, 0, sizeof r);")
+            for j, t in enumerate(func.params):
+                if t == "v128":
+                    C(f"    uint8_t b{j}[16];")
+                    C(f"    api_bytes(b{j}, a{j});")
+            if outs_style:
+                for j, t in enumerate(func.results):
+                    if t == "v128":
+                        C(f"    uint8_t o{j}[16];")
+                        C(f"    memset(o{j}, 0, 16);")
             C(f"    {last}_import{k}_fn function = ({last}_import{k}_fn)m->multi[{k}].fn;")
-            args = "".join(f", a{j}" for j in range(len(func.params)))
-            refs = "".join(f", ({_API_TYPE[t]} *)&r.{_MULTI_CODE[t]}{j}" for j, t in enumerate(func.results))
-            C(f"    function(m->multi[{k}].user{args}{refs}, trapped);")
-            C("    return r;")
+            args = "".join(f", b{j}" if t == "v128" else f", a{j}" for j, t in enumerate(func.params))
+            if several:
+                refs = "".join(
+                    f", o{j}" if t == "v128" else f", ({_API_TYPE[t]} *)&r.{_MULTI_CODE[t]}{j}"
+                    for j, t in enumerate(func.results)
+                )
+                C(f"    function(m->multi[{k}].user{args}{refs}, trapped);")
+                for j, t in enumerate(func.results):
+                    if t == "v128":
+                        C(f"    memcpy(&r.{_MULTI_CODE[t]}{j}, o{j}, 16);")
+            elif outs_style:  # a single v128 result
+                C(f"    function(m->multi[{k}].user{args}, o0, trapped);")
+                C("    memcpy(&r, o0, sizeof r);")
+            elif func.results:
+                C(f"    r = ({_CTYPE[func.results[0]]})function(m->multi[{k}].user{args}, trapped);")
+            else:
+                C(f"    function(m->multi[{k}].user{args}, trapped);")
+            if glue_ret != "void":
+                C("    return r;")
             C("}")
             C(f"void {last}_set_import{k}({last}_t *m, {last}_import{k}_fn function, void *user) {{")
             C(f"    m->multi[{k}].fn = (void *)function;")
             C(f"    m->multi[{k}].user = user;")
-            C(f"    m->core.host{host}.fn[{slot}] = (void *)api_import{k};")
+            C(f"    m->core.host{host}.fn[{slot}] = (void *){'api_import' + str(k)};")
             C(f"    m->core.host{host}.user[{slot}] = m;")
         else:
             C(f"void {last}_set_import{k}({last}_t *m, {last}_import{k}_fn function, void *user) {{")
@@ -564,12 +623,9 @@ def generate_shared(
 
     # the exports
     for i, (name, func) in enumerate(funcs):
-        if "v128" in (*func.params, *func.results):
-            A(f"/* {_cc(name)}: not here, it has a v128 */")
-            continue
         ident = _ident(name, taken)
-        params = "".join(f", {_API_TYPE[t]} a{j}" for j, t in enumerate(func.params))
-        results = "".join(f", {_API_TYPE[t]} *r{k}" for k, t in enumerate(func.results))
+        params = "".join(f", {_in(t, f'a{j}')}" for j, t in enumerate(func.params))
+        results = "".join(f", {_out(t, f'r{k}')}" for k, t in enumerate(func.results))
         sig = f"{name}({', '.join(func.params)}) -> {', '.join(func.results) or 'nothing'}"
         A(f"/* {_cc(sig)}: 0, or the code of the trap */")
         model.exports.append((name, f"{last}_{ident}", func))
@@ -579,7 +635,9 @@ def generate_shared(
         if i == reactor_init:
             C("    if (m->core.initialized) return 0;  /* the reactor was initialized when the instance was made */")
         C("    int trapped = 0;")
-        args = "".join(f", ({_CTYPE[t]})a{j}" for j, t in enumerate(func.params))
+        args = "".join(
+            f", api_v128(a{j})" if t == "v128" else f", ({_CTYPE[t]})a{j}" for j, t in enumerate(func.params)
+        )
         call = f"{last}_call{i}(&m->core.inst{args}, &trapped)"
         if len(func.results) > 1:
             codes = "".join(_MULTI_CODE[t] for t in func.results)
@@ -606,7 +664,12 @@ def generate_shared(
         C("    if (trapped) return trapped;")
         if len(func.results) > 1:
             for k, t in enumerate(func.results):
-                C(f"    if (r{k} != NULL) *r{k} = ({_API_TYPE[t]})r.{_MULTI_CODE[t]}{k};")
+                if t == "v128":
+                    C(f"    if (r{k} != NULL) api_bytes(r{k}, r.{_MULTI_CODE[t]}{k});")
+                else:
+                    C(f"    if (r{k} != NULL) *r{k} = ({_API_TYPE[t]})r.{_MULTI_CODE[t]}{k};")
+        elif func.results and func.results[0] == "v128":
+            C("    if (r0 != NULL) api_bytes(r0, r);")
         elif func.results:
             C(f"    if (r0 != NULL) *r0 = ({_API_TYPE[func.results[0]]})r;")
         C("    return 0;")

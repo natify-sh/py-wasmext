@@ -206,11 +206,12 @@ class Generated:
 
 
 def _rel(path: Path) -> str:
-    """Relative to the working directory (what setuptools wants in `sources`), with forward slashes."""
+    """Relative to the working directory (what setuptools wants in `sources`), with the separator of the system: the pruning of `build/` from an
+    sdist (distutils, `egg_info`) matches by that separator, so with `/` on Windows the generated C went into the sdist."""
     try:
-        return Path(os.path.relpath(path)).as_posix()
+        return os.path.relpath(path)
     except ValueError:  # another drive on Windows
-        return path.as_posix()
+        return str(path)
 
 
 def _module_name(wasm: Path) -> str:

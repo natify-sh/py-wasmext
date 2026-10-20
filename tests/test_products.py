@@ -290,35 +290,3 @@ def test_a_path_too_long_for_windows_fails_the_build_and_says_why(tmp_path: Path
         check_path_lengths([str(tmp_path / ("x" * 60) / "module_w2c.h")], [], str(tmp_path), limit=40)
     if sys.platform != "win32":  # no limit where the system has none
         check_path_lengths([str(tmp_path / ("x" * 400))], [], str(tmp_path))
-
-
-def test_the_sdist_leaves_the_build_directory_out_whatever_the_separator() -> None:
-    """On Windows the paths of the sources have `/` and egg_info prunes by the separator of the system: the files under build/ stayed in the sdist."""
-    from wasmext._setuptools import sdist_without_build  # pyright: ignore[reportPrivateUsage]
-
-    class Filelist:
-        def __init__(self) -> None:
-            self.files = [
-                "pkg/lib.wasm",
-                "build/wasmext/pkg.lib/lib_w2c.c",
-                "build\\wasmext\\pkg.lib\\lib_api.h",
-                "pkg/build_notes.py",
-            ]
-
-    class Base:
-        def __init__(self) -> None:
-            self.filelist = Filelist()
-
-        def make_distribution(self) -> None:
-            pass
-
-        def get_finalized_command(self, _name: str) -> object:
-            return type("Build", (), {"build_base": "build"})()
-
-    sdist = sdist_without_build(Base)()
-    sdist.make_distribution()
-    kept = sdist.filelist.files
-    if os.sep == "\\":
-        assert kept == ["pkg/lib.wasm", "pkg/build_notes.py"]
-    else:
-        assert "build/wasmext/pkg.lib/lib_w2c.c" not in kept and "pkg/lib.wasm" in kept and "pkg/build_notes.py" in kept

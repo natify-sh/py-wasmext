@@ -49,8 +49,8 @@ def test_the_extensions_get_their_names_from_the_packages(project: Path) -> None
     [pkg_add] = natify("pkg/*.wasm", quiet=True)
     [top] = natify("top.wasm", quiet=True)
     assert (pkg_add.name, top.name) == ("pkg.add", "top")
-    assert pkg_add.sources[0] == "build/wasmext/pkg.add/add_py.c"
-    assert "build/wasmext/pkg.add" in pkg_add.include_dirs
+    assert Path(pkg_add.sources[0]).as_posix() == "build/wasmext/pkg.add/add_py.c"
+    assert "build/wasmext/pkg.add" in [Path(d).as_posix() for d in pkg_add.include_dirs]
     assert sorted(Path(s).name for s in pkg_add.sources) == [
         "add_py.c",
         "add_rt_exceptions.c",

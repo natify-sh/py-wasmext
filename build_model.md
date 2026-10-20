@@ -123,6 +123,16 @@ setup(ext_modules=natify("src/mypkg/engine.wasm", product="shared"), cmdclass={"
 The same is how a project puts anything else of `build/wasmext/` into the wheel or the source distribution.
 `[tool.setuptools.package-data]` cannot name a file outside the package, so it is not the way.
 
+## Build backends
+
+wasmext builds through setuptools (`natify()` returns `Extension` objects, the hook is a setuptools entry point). The sdist is whatever
+the backend makes of the source tree: wasmext adds no filter of its own, so nothing a user puts into the sdist is taken out. The
+generated files stay out because they are not in the source tree, and `build/` is left out by the backend's own rules (distutils prunes
+it; the paths given to setuptools use the separator of the system, or on Windows that pruning does not match them). `uv build` and
+`pip` run setuptools as the backend, so they work as they do. A project on another backend (hatch, scikit-build, meson) has no way
+to use `natify()` today; the generated files and the three products do not depend on setuptools, so a hook for another backend would
+only have to call `generate_c` and compile the sources, but none is written.
+
 ## What this removes
 
 - `<name>_wasmext/` in the source tree, and the `.gitignore` and `MANIFEST.in` lines for it.

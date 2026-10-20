@@ -262,8 +262,6 @@ def finalize_distribution_options(dist: Any) -> None:
         and "build_ext" not in dist.cmdclass
     ):
         dist.cmdclass["build_ext"] = parallel_build_ext(dist.get_command_class("build_ext"))
-    if any(getattr(e, "_wasmext_made", False) for e in extensions) and "sdist" not in dist.cmdclass:
-        dist.cmdclass["sdist"] = sdist_without_build(dist.get_command_class("sdist"))
     # The wheel is abi3 only if every Python extension in it is: one native extension (a hand-written one, or a module made with limited_api=False) ties the whole wheel
     # to the interpreter, and a wheel tagged cp311-abi3 that holds it would be installed, and fail, on another Python. Libraries and programs do not count.
     python_extensions = [e for e in extensions if not getattr(e, "_wasmext_product", None)]
@@ -347,23 +345,6 @@ def check_path_lengths(
             "(build/wasmext/<module name>/) and the name of the file. Build in a shorter folder (for example C:\\w\\project), "
             "or give the build a shorter place (`build_dir`, `--build-temp`), or shorten the name of the module."
         )
-
-
-def sdist_without_build(base: type) -> type:
-    """An `sdist` that leaves the build directory out on every system. The list of files comes from `egg_info`, which prunes `build/` by a
-    pattern with the separator of the system, while the paths in `Extension.sources` and `depends` have `/`: on Windows nothing matched and
-    the generated C went into the sdist (and the patterns of a `MANIFEST.in` did not match either). The list is cut again before the
-    archive is made."""
-
-    class WasmextSdist(base):  # type: ignore[misc, valid-type]
-        def make_distribution(self) -> None:
-            build = os.path.normcase(os.path.normpath(self.get_finalized_command("build").build_base))
-            self.filelist.files = [
-                f for f in self.filelist.files if not os.path.normcase(os.path.normpath(f)).startswith(build + os.sep)
-            ]
-            super().make_distribution()
-
-    return WasmextSdist
 
 
 def parallel_build_ext(base: type) -> type:

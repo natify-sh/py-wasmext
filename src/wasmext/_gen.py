@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import keyword
 from dataclasses import dataclass, field
+from typing import Any
 
 from ._wasm import FuncType, GlobalType, Import, Limits, Module, ValType
 
@@ -66,6 +67,9 @@ class Glue:
     api_header: str = ""  # the public header of the C API of the shared library (<name>_api.h), no Python in it
     shared: str = ""  # the C of the shared library (<name>_shared.c); both are empty when `shared_unsupported` says why
     shared_unsupported: str = ""
+    api_model: Any = (
+        None  # the ApiModel of the C API (wasmext._shared), None when there is no shared library for the module
+    )
     header: str = ""  # the C of the glue of the module (<name>_glue.h): typed functions, no Python; the Python layer (`source`, <name>_py.c) includes it
 
 
@@ -1441,8 +1445,9 @@ def generate(module: Module, name: str, *, version: str | None = None) -> Glue:
         memory_imports=bool(memory_imports),
     )
     api_header = shared = ""
+    api_model = None
     if reason is None:
-        api_header, shared = generate_shared(
+        api_header, shared, api_model = generate_shared(
             last,
             prefix,
             funcs,
@@ -1461,6 +1466,7 @@ def generate(module: Module, name: str, *, version: str | None = None) -> Glue:
         api_header=api_header,
         shared=shared,
         shared_unsupported=reason or "",
+        api_model=api_model,
         header="\n".join(h) + "\n",
     )
 

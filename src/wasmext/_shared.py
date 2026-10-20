@@ -10,6 +10,7 @@ code of the trap (`<name>_trap_message(code)` is its text); `<name>_free(m)`.
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass, field
 
 from ._wasm import FuncType, GlobalType, ValType
 
@@ -27,6 +28,26 @@ _RESERVED = {
     "value",
     "thread_free",
 }
+
+
+@dataclass
+class ApiModel:
+    """What the C API of a module has, by the names of the module: the header and the wrapper for ctypes are both made from it."""
+
+    last: str
+    uses_wasi: bool = False
+    has_tags: bool = False
+    exports: list[tuple[str, str, FuncType]] = field(
+        default_factory=list[tuple[str, str, FuncType]]
+    )  # name, C function, type
+    memories: list[tuple[str, str]] = field(default_factory=list[tuple[str, str]])  # name, C function
+    globals: list[tuple[str, str, str | None, ValType]] = field(
+        default_factory=list[tuple[str, str, str | None, ValType]]
+    )  # name, C getter, C setter (None: immutable), type
+    imports: list[tuple[int, str, str, FuncType]] = field(
+        default_factory=list[tuple[int, str, str, FuncType]]
+    )  # k (the C function is <last>_set_import<k>), module, field, type: the imports that are not WASI's
+    skipped: list[str] = field(default_factory=list[str])
 
 
 def _ident(name: str, taken: set[str]) -> str:
@@ -50,11 +71,11 @@ def unsupported(imports: list[tuple[str, str, FuncType]], *, global_imports: boo
     """Why the module has no shared library yet, or None."""
     if global_imports or memory_imports:
         return "it imports a global or a memory"
-    for module, field, func in imports:
+    for module, field_, func in imports:
         if "v128" in (*func.params, *func.results):
-            return f"the import {module}.{field} uses v128"
+            return f"the import {module}.{field_} uses v128"
         if len(func.results) > 1:
-            return f"the import {module}.{field} has several results"
+            return f"the import {module}.{field_} has several results"
     return None
 
 
@@ -70,12 +91,18 @@ def generate_shared(
     tags: int,
     skipped: list[str] | None = None,
     globals_: list[tuple[str, GlobalType]] | None = None,
-) -> tuple[str, str]:
-    """The public header and the C of the library; `funcs` are the exports in the order of the glue (`<name>_call<i>`). An export with a v128 is left out
+) -> tuple[str, str, ApiModel]:
+    """The public header, the C of the library and the model of the API; `funcs` are the exports in the order of the glue (`<name>_call<i>`). An export with a v128 is left out
     of the header (and said there)."""
     from ._gen import _CTYPE, _MULTI_CODE, _c_string, mangle  # pyright: ignore[reportPrivateUsage]
 
     big = last.upper()
+    model = ApiModel(
+        last,
+        uses_wasi=uses_wasi,
+        has_tags=bool(tags),
+        skipped=[x for x in skipped or () if "is not an attribute" not in x],
+    )
     taken: set[str] = set()
     a: list[str] = []  # the header
     c: list[str] = []  # the C
@@ -316,9 +343,9 @@ def generate_shared(
     C("")
     C(f"int {last}_instantiate({last}_t *m) {{")
     C("    api_enter();")
-    for k, (module, field, _func, is_wasi, _host, _slot) in enumerate(imports):
+    for k, (module, field_, _func, is_wasi, _host, _slot) in enumerate(imports):
         if not is_wasi:
-            C(f"    if (!m->set[{k}]) return {big}_LINK_ERROR;  /* {module}.{field} */")
+            C(f"    if (!m->set[{k}]) return {big}_LINK_ERROR;  /* {module}.{field_} */")
     init = next(
         (i for i, (name, func) in enumerate(funcs) if name == "_initialize" and not func.params and not func.results),
         None,
@@ -357,14 +384,15 @@ def generate_shared(
     C("")
 
     # the imports that are not WASI's: the types of the functions and where to set them
-    for k, (module, field, func, is_wasi, host, slot) in enumerate(imports):
+    for k, (module, field_, func, is_wasi, host, slot) in enumerate(imports):
         if is_wasi:
             continue
         ret = _API_TYPE[func.results[0]] if func.results else "void"
         params = "".join(f", {_API_TYPE[t]} a{j}" for j, t in enumerate(func.params))
         A(
-            f"/* the import {module}.{field}: set it before {last}_instantiate; a failure of the function is `*trapped` nonzero (and its own error, kept by the host) */"
+            f"/* the import {module}.{field_}: set it before {last}_instantiate; a failure of the function is `*trapped` nonzero (and its own error, kept by the host) */"
         )
+        model.imports.append((k, module, field_, func))
         A(f"typedef {ret} (*{last}_import{k}_fn)(void *user{params}, int *trapped);")
         A(f"WASMEXT_API void {last}_set_import{k}({last}_t *m, {last}_import{k}_fn function, void *user);")
         C(f"void {last}_set_import{k}({last}_t *m, {last}_import{k}_fn function, void *user) {{")
@@ -412,6 +440,7 @@ def generate_shared(
         results = "".join(f", {_API_TYPE[t]} *r{k}" for k, t in enumerate(func.results))
         sig = f"{name}({', '.join(func.params)}) -> {', '.join(func.results) or 'nothing'}"
         A(f"/* {sig}: 0, or the code of the trap */")
+        model.exports.append((name, f"{last}_{ident}", func))
         A(f"WASMEXT_API int {last}_{ident}({last}_t *m{params}{results});")
         C(f"int {last}_{ident}({last}_t *m{params}{results}) {{")
         C("    api_enter();")
@@ -454,6 +483,7 @@ def generate_shared(
     for name in memories:
         ident = f"memory_{_ident(name, taken_memories)}"
         A(f"/* the memory {name}: its bytes (valid until the module grows it) and their number */")
+        model.memories.append((name, f"{last}_{ident}"))
         A(f"WASMEXT_API uint8_t *{last}_{ident}({last}_t *m, size_t *size);")
         C(f"uint8_t *{last}_{ident}({last}_t *m, size_t *size) {{")
         C(f"    wasm_rt_memory_t *memory = w2c_{prefix}_{mangle(name)}(&m->core.inst);")
@@ -472,6 +502,9 @@ def generate_shared(
         kind = "mutable" if glob.mutable else "immutable"
         accessor = f"w2c_{prefix}_{mangle(name)}(&m->core.inst)"
         A(f"/* the {kind} global {name} ({glob.type}) */")
+        model.globals.append(
+            (name, f"{last}_global_{ident}", f"{last}_set_global_{ident}" if glob.mutable else None, glob.type)
+        )
         A(f"WASMEXT_API {ctype} {last}_global_{ident}({last}_t *m);")
         C(f"{ctype} {last}_global_{ident}({last}_t *m) {{")
         C(f"    return ({ctype})*{accessor};")
@@ -488,4 +521,4 @@ def generate_shared(
     A("}")
     A("#endif")
     A("#endif")
-    return "\n".join(a) + "\n", "\n".join(c) + "\n"
+    return "\n".join(a) + "\n", "\n".join(c) + "\n", model

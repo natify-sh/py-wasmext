@@ -30,7 +30,7 @@ setuptools. It is the idea of [wasm2mpy](https://github.com/vshymanskyy/wasm2mpy
 
 ## Requirements
 
-To **use** a built wheel you need only Python (3.11 or later): no compiler, no WebAssembly engine.
+To **use** a built wheel you need only Python (3.11 or later; the test suite runs on 3.11, on 3.15 and on the free-threaded 3.15t): no compiler, no WebAssembly engine.
 
 To **build** an extension (`pip install` from an sdist, `wasmext`, `wasmimport`, `cibuildwheel`) you need:
 
@@ -221,8 +221,9 @@ module is somewhat slower, as a call from one file to another is not inlined); `
 
 The interpreter that builds decides. Cython and setuptools-rust leave abi3 to the project (the `Extension`, the macro and the tag of the wheel are
 written in its `setup.py`); here `natify()` does all three. Where the interpreter loads abi3 files (it says so in its extension suffixes, as setuptools reads them:
-CPython 3.11 and later) the extension is **abi3** and the wheel is tagged `cp311-abi3`, one wheel for every CPython from 3.11 on; where it does not (PyPy, free-threaded
-`3.14t`), or the platform pins one exact CPython (Emscripten/Pyodide, Android, iOS), the extension is native, with the usual name and tag. So the `cibuildwheel` selector decides what
+CPython 3.11 and later; the file may be named `.abi3.so` or, as the newest interpreters do, `.abi3-<platform>.so`) the extension is **abi3** and the wheel is tagged `cp311-abi3`, one wheel for every CPython from 3.11 on; where it does not (PyPy, free-threaded
+`3.14t` and `3.15t`), or the platform pins one exact CPython (Emscripten/Pyodide, Android, iOS), the extension is native, with the usual name and tag (`cp315-cp315t` for 3.15t). 3.15 also has **abi3t**, a stable ABI for the free-threaded build (PEP 803,
+files `.abi3t.so`): wasmext does not build it (cibuildwheel does not tag it yet, and the glue would have to stop embedding `PyObject_HEAD`), and a free-threaded build gets a native extension. So the `cibuildwheel` selector decides what
 you get:
 
 ```toml
@@ -298,7 +299,7 @@ The package is **not published on PyPI yet**; until it is, build the wheel from 
 - **Files on Windows** use the Win32 API directly. Where Windows differs from POSIX the results differ too (see the Windows
   notes in [FEATURES.md](FEATURES.md)); a symbolic link needs a privilege there (an administrator, or Developer Mode).
 - **Threads:** an extension is built with single-phase initialization and does not declare that it runs without the GIL, so importing it
-  in a free-threaded build (`3.14t`) turns the GIL on again. The WebAssembly code runs with the GIL held.
+  in a free-threaded build (`3.14t`, `3.15t`) turns the GIL on again. The WebAssembly code runs with the GIL held.
 - **Memory that the runtime can move** (without guard pages, `--no-guard-pages`; on a 32-bit target, where the runtime does not use them; and memory64): the runtime reallocates such a memory when it
   grows. While a `memoryview` of it is alive, `memory.grow` answers -1 (WebAssembly allows that), as `bytearray` refuses to be resized while it is
   exported; drop the views (or `release()` them) to let it grow. With guard pages the buffer does not move, and a view keeps its length: take a new one

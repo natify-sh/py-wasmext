@@ -171,7 +171,7 @@ The examples (CoreMark, and Lua from commit `43324a2`) built by cibuildwheel and
 | Linux s390x (big-endian): `manylinux_2_28`, `musllinux_1_2` | local, the same way: the wheel is built, but the example's tests **fail**. Checked with a small module under QEMU: before the fix `i32.load` of the bytes 01 02 03 04 gave 0x01020304 instead of 0x04030201, because nothing defined `WABT_BIG_ENDIAN`; now it is defined and the value is right. The exported memory is refused there (`NotImplementedError`), and the example needs it, so on s390x the example still fails; `v128` in a signature is refused by an `#error` |
 | Linux i386, CPython 3.12 | by hand, one abi3 memory64 module (`gcc -m32`), not in the suite |
 
-The cibuildwheel configuration of the example is `build = "cp311-* cp314t-*"`.
+The cibuildwheel configuration of the example is `build = "cp311-* cp314t-*"` (`cp315t-*` would be the same as `cp314t-*`: a native free-threaded wheel; not in the examples yet).
 
 ### Not confirmed
 
@@ -264,7 +264,7 @@ One table for the whole plan, so that nothing is in only one place: the eleven i
 | 2 | SIMD, `v128` in signatures | done | relaxed SIMD (wasm2c aborts) |
 | 3 | Linking instances | partly | tables (imported and exported); a global, memory or table made by the host with no module behind it |
 | 4 | Threads, shared memory, atomics | open | all of it (`--enable-threads`, C11 atomics, `wasm_rt_init_thread`); after 3 |
-| 5 | CI | partly | s390x (big-endian) is not in CI; 3.15 and 3.15t have a workflow (`python-versions.yml`), its first run is not yet read |
+| 5 | CI | partly | s390x (big-endian) is not in CI; 3.15 and 3.15t run the whole suite on Linux, Windows and macOS (`python-versions.yml`: see "Python versions" below) |
 | 6 | Android, Pyodide, `pyproject.toml` configuration, PyPI, `.wat` as a source | partly | PyPI (the publisher is not set up); `.wat` as a source (an idea); Android arm64 is built, not run |
 | 7 | `funcref`/`externref` in signatures, custom page sizes, other projects' examples | open | a design for `externref` ownership; the flag for custom page sizes; the rest of the examples (below) |
 | 8 | WASI 0.1 | done | WASI 0.2 and 0.3; sockets and the CPU clocks of `poll_oneoff` are decided against for now ("Decisions") |
@@ -288,7 +288,11 @@ One table for the whole plan, so that nothing is in only one place: the eleven i
 | all | Deviations from the plan | open | backend chosen by `_WIN32` and `WASMEXT_WASI_PYTHON_FS`, not by `WASMEXT_WASI_FILES=posix\|win32\|nt\|python` with a file each; the file of `main` is `<name>_main.c`, not `<name>_exe.c`; `wasmext-run` is not a command; hooks as pointers or `static inline` never measured |
 | all | Tests | partly | the tests of the extension front end do not run on Windows (`build_extension` skips it; the ctypes front end, the library, the executable, the WASI suite and the example wheels do) |
 
-**Python versions.** 3.11 is the oldest; abi3 wheels are `cp311-abi3`. 3.15 (ordinary build) runs the whole suite (531 passed). 3.15t (free-threaded) runs it with the tests of abi3 skipped: a free-threaded build has no abi3, so the extension is native (`cp315-cp315t`). **abi3t** (the stable ABI of 3.15t, PEP 803) is not built: cibuildwheel does not tag it yet, and the glue would have to lose `PyObject_HEAD` (the object is opaque there; the type data would go through `PyObject_GetTypeData`).
+**Python versions.** 3.11 is the oldest; abi3 wheels are `cp311-abi3`. The whole suite runs on 3.15 (ordinary build) and 3.15t (free-threaded) on Linux, Windows and macOS (`python-versions.yml`).
+- **3.15t**: the tests of abi3 are skipped (`needs_abi3`): a free-threaded build has no abi3, so the extension is native (`cp315-cp315t`). Passed in CI on Linux, macOS and Windows (first run), and locally on Linux.
+- **3.15**: passed locally (531 tests) and in CI on Windows. On Linux and macOS the CI interpreter names an abi3 file with the platform (`add.abi3-x86_64-linux-gnu.so`, `add.abi3-darwin.so`), which two tests did not expect and `abi3_possible()` did not name; both now accept `.abi3.` and `.abi3-<platform>.` and not `.abi3t.so` (a test for each form).
+- **abi3t** (the stable ABI of 3.15t, PEP 803, files `.abi3t.so`) is **not built**: cibuildwheel does not tag it yet, and the glue would have to lose `PyObject_HEAD` (the object is opaque there; the type data would go through `PyObject_GetTypeData`). Checked: the generated C does not compile with `Py_TARGET_ABI3T=0x030f0000`, and `Py_LIMITED_API=0x030B0000` on a free-threaded 3.15 is an `#error` of its headers, so the resolver must keep saying "native" there.
+- Not done: `cp315t` in the `build` of the examples (they build `cp311-* cp314t-*`); an abi3 wheel run on 3.15 by a test of the wheel (the wheel is built and tested on 3.11).
 
 In this order (the first ones are small):
 

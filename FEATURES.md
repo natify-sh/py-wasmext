@@ -121,6 +121,7 @@ stub, or ctypes wrapper) go to `build/lib.*`, the wheel, or in place. Nothing ge
 | Pyodide wheel | done | `cibuildwheel --platform pyodide` on `examples/coremark`, Python 3.13, built and tested inside Pyodide, in CI; the `wasm2c` of the Linux wheel of the wabt-package does the translation on the host |
 | Android wheel | x86-64 tested, arm64 built | `cibuildwheel --platform android` in CI, Python 3.13, NDK 27, with the host wabt-package wheel. x86-64: built and tested in an emulator with KVM. arm64-v8a: built, not run (cibuildwheel tests on an emulator of the architecture of the build machine) |
 | `.wat` as a source (`wasmext natify -i m.wat`) | not yet (idea) | `wat2wasm` is in the wabt-package. Open: where the `.wasm` goes, flags for proposals that `wat2wasm` has off by default, and that the `.wasm` stays what is distributed |
+| Other build backends | partly | setuptools is the backend wasmext is built for (`setuptools>=84` is a dependency; public `distutils` and `setuptools.modified` only). hatchling works through a hook that runs `wasmext natify -i` (tried on `examples/coremark` and `examples/products`, not in CI). meson-python and scikit-build-core are not supported. Details: `build_model.md`, "Build backends" |
 | Published on PyPI | not yet | until then the examples are built with `--find-links` to the wheel of wasmext (see `example-wheels.yml`) |
 
 ### Examples

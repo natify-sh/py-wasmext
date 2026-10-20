@@ -125,27 +125,37 @@ The same is how a project puts anything else of `build/wasmext/` into the wheel 
 
 ## Build backends
 
-`natify()` returns `Extension` objects and the hook is a setuptools entry point, as `cythonize()` and its hook are: that is the setuptools
-integration, not the only way in. The sdist is whatever the backend makes of the source tree: wasmext adds no filter of its own, so
-nothing a user puts into the sdist is taken out. The generated files stay out because they are not in the source tree, and `build/` is left
-out by the backend's own rules (distutils prunes it; the paths given to setuptools use the separator of the system, or on Windows that
-pruning does not match them). `uv build` and `pip` run setuptools as the backend, so they work as they do.
+**Decision: wasmext builds through setuptools, and says so.** `natify()` returns `Extension` objects and the hook is a setuptools entry point,
+as with `cythonize()`. `setuptools>=84` is a dependency of `wasmext` (the version the suite runs with; `uv.lock`), and the compiler comes
+from the `distutils` that setuptools provides (`import setuptools`, then `distutils.ccompiler`; `newer_group` from `setuptools.modified`),
+not from its private `_distutils`. There is no alternative for the compiler driver of a Python extension (MSVC detection, the flags of the
+platform, the variables of cibuildwheel) outside distutils. The sdist is whatever the backend makes of the source tree: wasmext adds no filter
+of its own, so nothing a user puts into the sdist is taken out. The generated files stay out because they are not in the source tree, and
+`build/` is left out by the backend's own rules (distutils prunes it by the separator of the system, which is why the paths given to
+setuptools use that separator). `uv build` and `pip` run the project's backend, so with setuptools they work as they do.
 
-For another backend the way is the one Cython has, the command: `wasmext natify -i [--shared|--exe] FILE` builds in `build/` and puts the products in
-place, and the backend's own hook takes them from there. **Tried on `examples/coremark` and `examples/products` with hatchling** (a
-build hook that runs the command, `artifacts` for the built files, `build_data["tag"]` for the wheel tag; kept in the session, not in the
-repository): the wheels are `cp311-abi3-<plat>` (the extension and its `.pyi`) and `py3-none-<plat>` (the library with its ctypes wrapper
-and the program), the examples' tests pass in a clean environment, also from an isolated `uv build`. What that found:
+### What was tried, and found
 
-- `wasmext` needs setuptools to build whatever the backend is (the command and `natify()` use it, and its `_distutils`). It was not a
-  declared dependency (the projects had it as their own backend), so an isolated build on hatchling failed with `No module named
-  'setuptools'`. It is a dependency of `wasmext` now (`setuptools>=84`, the version the suite runs with; the compiler comes from the `distutils` that setuptools provides, `import setuptools` then `distutils.ccompiler`, not from its private `_distutils`). There is no alternative for the compiler driver of a Python extension (MSVC detection, the flags of the platform, the variables of cibuildwheel) outside distutils; meson and scikit-build have their own build systems and would not use it.
-- The project says the wheel tag itself on such a backend (abi3 or native, `py3-none`): the hook of setuptools that does it for a wheel
-  is not there.
-- The sdist is the backend's: hatchling puts `build/` into it unless the project's `.gitignore` has it, so a project on such a backend
-  ignores `build/` (and the built files in the source tree), as it would any build output.
-- Not done: `--print-build` (the sources, include directories and macros as JSON) for a backend that compiles the C itself (meson,
-  scikit-build); no hook for another backend is written.
+- **Cython is the same.** In Cython 3.3.0, Python 3.12, a venv with no setuptools: `cython m.pyx` works; `cythonize m.pyx` (generation
+  only) and `cythonize -i m.pyx` both fail with `No module named 'distutils'`. So `cythonize` is the setuptools layer, `cython` the translator.
+  `wasmext natify` is the `cythonize` of wasmext. There is no `cython` of wasmext (a command that writes the C and needs no setuptools) and
+  none is planned: the generated C is a step of the build and not a format of distribution (see above), so a standalone generate step
+  has no use of its own. `wasmext inspect` needs no setuptools; `natify`, even with no `-i`/`-b`, imports it.
+- **hatchling works, through a hook that runs the command.** `examples/coremark` and `examples/products` with `build-backend = "hatchling.build"`,
+  a build hook (`hatch_build.py`) that runs `python -m wasmext natify -q -i [--shared|--exe] FILE`, `artifacts` for the built files and
+  `build_data["tag"]` for the wheel tag: the wheels are `cp311-abi3-<plat>` (the extension and its `.pyi`) and `py3-none-<plat>` (the library with
+  its ctypes wrapper, and the program); the tests of the examples pass in a clean environment, also from an isolated `uv build`. Kept in the
+  session, not in the repository. It found: setuptools was not a declared dependency of `wasmext` (the examples had it as their own backend),
+  so the isolated build failed with `No module named 'setuptools'` (fixed: it is a dependency); the project says the wheel tag itself on such a
+  backend, as the hook of setuptools that does it is not there; and hatchling puts `build/` into the sdist unless the project's `.gitignore`
+  has it, as it would any build output.
+- **meson-python and scikit-build-core are not supported.** They rely on meson/CMake and ninja, find the compiler themselves (toolchain
+  detection, cross files) and do not use distutils. They would take the generated C as sources of their own targets. A sketch of such a project
+  (a `custom_target` with a fixed list of outputs, so `--parts 1`, in meson; a configure-time `execute_process` and `file(GLOB)` in CMake, compiling
+  per product only `<n>_py.c` / `<n>_shared.c` / `<n>_main.c` with the common files) shows what is missing: the include directories of the runtime of
+  the toolchain and of simde and the macros (`WASM_RT_USE_MMAP`, `Py_LIMITED_API`, `WABT_BIG_ENDIAN`) are not printed anywhere, and the ctypes wrapper
+  of a library is written by the build and not by the generation. None of it is built or tried. If someone needs it, a `--print-build` (JSON) on
+  `natify` and moving the wrapper into the generation are the first steps.
 
 ## What this removes
 

@@ -10,3 +10,9 @@ __pycache__/
 *_wasmext/
 poc/out/
 examples/*/uv.lock
+
+# coverage data (written by pytest --cov; the CI uploads coverage.xml)
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/

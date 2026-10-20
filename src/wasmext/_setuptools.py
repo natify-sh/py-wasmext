@@ -350,17 +350,18 @@ def check_path_lengths(
 
 
 def sdist_without_build(base: type) -> type:
-    """An `sdist` that leaves the build directory out on every system. distutils prunes `build/` by a pattern with the separator of the
-    system, and the paths in `Extension.sources` and `depends` have `/`: on Windows nothing matched and the generated C went into the
-    sdist (and the patterns of a `MANIFEST.in` did not match either)."""
+    """An `sdist` that leaves the build directory out on every system. The list of files comes from `egg_info`, which prunes `build/` by a
+    pattern with the separator of the system, while the paths in `Extension.sources` and `depends` have `/`: on Windows nothing matched and
+    the generated C went into the sdist (and the patterns of a `MANIFEST.in` did not match either). The list is cut again before the
+    archive is made."""
 
     class WasmextSdist(base):  # type: ignore[misc, valid-type]
-        def prune_file_list(self) -> None:
-            super().prune_file_list()
+        def make_distribution(self) -> None:
             build = os.path.normcase(os.path.normpath(self.get_finalized_command("build").build_base))
             self.filelist.files = [
                 f for f in self.filelist.files if not os.path.normcase(os.path.normpath(f)).startswith(build + os.sep)
             ]
+            super().make_distribution()
 
     return WasmextSdist
 

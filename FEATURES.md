@@ -849,7 +849,7 @@ has only the hooks of stdin and stdout (clock, random, sleep and `end` of the co
 builds only that; the extension is built only when it is the default or asked for. `--exe` needs a `_start` (a command). A reactor (WASI module with `_initialize` and no `_start`) is a
 `--shared` product: **not yet done**, the instantiation must call `_initialize` after the start of wasm2c.
 
-### Stage 7, how the products are asked for (built; the wheel tag and the C header in the wheel are open)
+### Stage 7, how the products are asked for (built, with the wheel tag; the C header goes into the wheel by `package-data`)
 
 A package may ship a shared library (a dll) or an executable instead of, or beside, a Python extension, so the product is a setting of **both** doors, not only of the command line:
 
@@ -932,7 +932,7 @@ warnings of the compiler for the C of wasm2c too; the release workflow does not 
 - abi3 is tested with Python 3.11 only (the wheels are tagged `cp311-abi3`; 3.12 and later run them without a test of ours).
 - The patches of the copy of the C that wasm2c writes are four: `_memory_error_not_abort` (the allocation of a memory traps, it does not `abort()`), `_export_tags` (the table of tags), `_tail_call_locals` (fixed in WABT master by `6c7af19`, not in a release),
   `_portable_on_arm64` (`_addcarry_u64`, WABT #2885). Nothing in the runtime or the sources of wabt-package is changed; when WABT has a release with the fixes the patches go.
-- An exported `memoryview` of a memory without guard pages (`--no-guard-pages`) can outlive the buffer when the memory grows (the runtime then moves it); documented in the README; whether to change it is open.
+- **Fixed:** an exported `memoryview` of a memory that the runtime moves when it grows (no guard pages, memory64) used to be able to outlive the buffer. Now `memory.grow` answers -1 while such a view is alive (the maximum is made the present size; `Py_bf_releasebuffer` puts it back), in the extension and in the ctypes wrapper (`<name>_memory_*_pin` of the C API, a finalizer of the view); `test_a_memory_that_can_move_does_not_grow_while_a_memoryview_of_it_is_alive`.
 
 ## Decisions
 

@@ -588,6 +588,13 @@ def generate(module: Module, name: str, *, version: str | None = None) -> Glue:
     add("    PyObject_HEAD")
     add(f"    {last}_instance core;")
     add("    PyObject *weakreflist;")
+    if memories:
+        add(
+            f"    long mem_pins[{len(memories)}];  /* the live buffers of each exported memory that can move (see Memory_getbuffer) */"
+        )
+        add(
+            f"    uint64_t mem_max_pages[{len(memories)}];  /* its own maximum, put back when the last buffer is gone */"
+        )
     for i, host in enumerate(hosts):
         # what the Python layer holds for the imports of a module: the callables, the owners of the exports of other instances
         k = max(slots.get(host, 0), 1)
@@ -602,6 +609,7 @@ def generate(module: Module, name: str, *, version: str | None = None) -> Glue:
         add("    InstanceObject *owner;")
         add(f"    wasm_rt_memory_t *(*get)(w2c_{prefix} *);")
         add("    int export_index;  /* its place in export_table: the reference to it is made from that */")
+        add("    size_t which;  /* which of the exported memories */")
         add("} MemoryObject;")
         add("")
     if tags:
@@ -1314,6 +1322,24 @@ def generate(module: Module, name: str, *, version: str | None = None) -> Glue:
 
     # the exported memories: an attribute that is a memoryview, held by an object that keeps the instance alive
     if memories:
+        add(
+            "/* A memory that the runtime allocates with calloc (no guard pages, or memory64, or another page size) is moved by realloc when it grows, and a"
+        )
+        add(
+            "   buffer would then point to freed memory. While a buffer of such a memory is alive, `memory.grow` fails (-1, which WebAssembly allows at any time):"
+        )
+        add(
+            "   the maximum is made the present size, as bytearray refuses to be resized while it is exported. With guard pages the memory does not move. */"
+        )
+        add("static int memory_can_move(const wasm_rt_memory_t *mem) {")
+        add("#if WASM_RT_USE_MMAP")
+        add("    return mem->is64 || mem->page_size != WASM_DEFAULT_PAGE_SIZE;")
+        add("#else")
+        add("    (void)mem;")
+        add("    return 1;")
+        add("#endif")
+        add("}")
+        add("")
         add("static int Memory_getbuffer(PyObject *self, Py_buffer *view, int flags) {")
         add("    MemoryObject *m = (MemoryObject *)self;")
         add("    wasm_rt_memory_t *mem = m->get(&m->owner->core.inst);")
@@ -1321,7 +1347,23 @@ def generate(module: Module, name: str, *, version: str | None = None) -> Glue:
         add('        PyErr_SetString(PyExc_MemoryError, "the memory is too big for a buffer");')
         add("        return -1;")
         add("    }")
-        add("    return PyBuffer_FillInfo(view, self, mem->data, (Py_ssize_t)mem->size, 0, flags);")
+        add("    if (PyBuffer_FillInfo(view, self, mem->data, (Py_ssize_t)mem->size, 0, flags) < 0) return -1;")
+        add("    if (memory_can_move(mem)) {")
+        add("        if (m->owner->mem_pins[m->which]++ == 0) {")
+        add("            m->owner->mem_max_pages[m->which] = mem->max_pages;")
+        add("            mem->max_pages = mem->pages;")
+        add("        }")
+        add("        view->internal = (void *)1;  /* this buffer holds the memory still */")
+        add("    }")
+        add("    return 0;")
+        add("}")
+        add("")
+        add("static void Memory_releasebuffer(PyObject *self, Py_buffer *view) {")
+        add("    MemoryObject *m = (MemoryObject *)self;")
+        add("    if (view->internal == NULL) return;")
+        add(
+            "    if (--m->owner->mem_pins[m->which] == 0) m->get(&m->owner->core.inst)->max_pages = m->owner->mem_max_pages[m->which];"
+        )
         add("}")
         add("")
         add(
@@ -1367,6 +1409,7 @@ def generate(module: Module, name: str, *, version: str | None = None) -> Glue:
         add("    Py_INCREF((PyObject *)self);")
         add("    m->owner = self;")
         add("    m->get = memory_getters[(size_t)closure];")
+        add("    m->which = (size_t)closure;")
         add(f"    m->export_index = {memory_base} + (int)(size_t)closure;")
         add("    view = PyMemoryView_FromObject((PyObject *)m);")
         add("    Py_DECREF(m);")
@@ -1445,6 +1488,7 @@ def generate(module: Module, name: str, *, version: str | None = None) -> Glue:
     if memories:
         add("static PyType_Slot memory_slots[] = {")
         add("    {Py_bf_getbuffer, Memory_getbuffer},")
+        add("    {Py_bf_releasebuffer, Memory_releasebuffer},")
         add("    {Py_tp_dealloc, Memory_dealloc},")
         add("    {Py_tp_getset, Memory_getset},")
         add("    {0, NULL}")

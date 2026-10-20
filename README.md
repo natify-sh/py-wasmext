@@ -120,8 +120,9 @@ a library holds no `main`). `setup.py build_ext` puts the file where an extensio
 (with its header `<name>_api.h` in `<name>_wasmext/`, and `<name>_ctypes.py` beside it: the interface of the extension over `ctypes`), or the program `<name>` /
 `<name>.exe`. A program needs a `_start` and no imports but WASI's (`--env NAME=VALUE`, `--dir HOST::GUEST[:ro]`, `--argv0`, `--help`); a
 library exports only its API. The settings of the extension (`libraries`, `extra-compile-args`, ...) are the flags of the build. A reactor
-(`_initialize`, no `_start`) is a library: it is initialized when the instance is made. Not done yet: the tag of a wheel that has no
-Python extension (it is tagged for the interpreter that built it), and `limited-api` and the stubs, which are for extensions only.
+(`_initialize`, no `_start`) is a library: it is initialized when the instance is made. A package whose compiled files are all libraries and programs gets a wheel tagged
+`py3-none-<platform>` (any Python 3), not for the interpreter that built it. The header `<name>_api.h` is in `<name>_wasmext/`: ship it with `package-data` if the wheel is to
+have it. `limited-api` and the stubs are for extensions only.
 
 ### Linking instances
 
@@ -273,8 +274,10 @@ The package is **not published on PyPI yet**; until it is, build the wheel from 
   notes in [FEATURES.md](FEATURES.md)); a symbolic link needs a privilege there (an administrator, or Developer Mode).
 - **Threads:** an extension is built with single-phase initialization and does not declare that it runs without the GIL, so importing it
   in a free-threaded build (`3.14t`) turns the GIL on again. The WebAssembly code runs with the GIL held.
-- **Memory without guard pages** (`--no-guard-pages`): an exported `memoryview` of a memory that grows can point to freed memory, as the
-  runtime then moves the buffer; take a new `memoryview` after any call that may grow it. With guard pages the buffer does not move.
+- **Memory that the runtime can move** (without guard pages, `--no-guard-pages`, and memory64): the runtime reallocates such a memory when it
+  grows. While a `memoryview` of it is alive, `memory.grow` answers -1 (WebAssembly allows that), as `bytearray` refuses to be resized while it is
+  exported; drop the views (or `release()` them) to let it grow. With guard pages the buffer does not move, and a view keeps its length: take a new one
+  after the memory grows. The same holds for the `memory` of the `ctypes` wrapper, and a C host of the shared library can `pin` a memory the same way.
 - **Big-endian hosts** (s390x): a memory cannot be exported as a `memoryview`, and `v128` in a signature is refused.
 - **Less tested in CI:** the example `coremark` is built and tested on Linux armv7l, i686, ppc64le, riscv64 and in Pyodide, and built (not run)
   for Android arm64; s390x (big-endian) and PyPy are not covered. Speed figures are from one machine.

@@ -365,3 +365,41 @@ def test_a_tag_with_a_payload_larger_than_the_runtime_keeps_is_reported(wabt: Pa
     subprocess.run([wabt / "bin" / "wat2wasm", wat, "-o", wasm], check=True)
     glue = generate(parse(wasm.read_bytes()), "bigtag")
     assert any("320 bytes" in note for note in glue.notes)
+
+
+@pytest.mark.parametrize("guard_pages", [False, True], ids=["no guard pages", "guard pages"])
+def test_a_memory_that_can_move_does_not_grow_while_a_memoryview_of_it_is_alive(
+    build_front_end: Callable[..., ModuleType], front_end: str, tmp_path: Path, guard_pages: bool
+) -> None:
+    """Without guard pages the runtime reallocates the memory when it grows, and a memoryview would point to freed memory: while a view is
+    alive memory.grow answers -1 (as bytearray refuses to be resized while it is exported); when the views are gone it grows."""
+    wat = tmp_path / "grower.wat"
+    wat.write_text(
+        '(module (memory (export "mem") 1) (func (export "grow") (param i32) (result i32) local.get 0 memory.grow))',
+        encoding="utf-8",
+    )
+    defines = () if guard_pages else ("WASM_RT_USE_MMAP=0",)
+    mod: Any = build_front_end(wat, f"grower_{front_end}_{'guard' if guard_pages else 'noguard'}", defines=defines)
+    inst = mod.Instance()
+    view = inst.mem
+    again = inst.mem
+    if (
+        guard_pages
+    ):  # the memory does not move: growing is fine with a view alive (the view keeps its length; a new one is longer)
+        assert inst.grow(1) == 1 and len(view) == 65536 and len(inst.mem) == 2 * 65536
+        return
+    assert inst.grow(1) == -1 and len(view) == 65536  # refused, and the view is still good
+    view[0] = 7
+    del view
+    gc.collect()
+    assert inst.grow(1) == -1  # a second view is still alive
+    del again
+    gc.collect()
+    assert inst.grow(1) == 1 and len(inst.mem) == 2 * 65536  # none left: it grows
+    gc.collect()
+    held = inst.mem
+    assert inst.grow(1) == -1
+    held.release()
+    del held
+    gc.collect()
+    assert inst.grow(1) == 2

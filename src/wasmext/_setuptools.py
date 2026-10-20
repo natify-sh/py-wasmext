@@ -10,6 +10,7 @@ that has not said anything itself (a `[tool.distutils.bdist_wheel]` setting wins
 
 from __future__ import annotations
 
+import contextlib
 import os
 import shutil
 import sys
@@ -186,9 +187,28 @@ def _add_extensions_from_pyproject(dist: Any) -> None:
     dist.ext_modules = extensions
 
 
+def wheel_without_python(base: type) -> type:
+    """A `bdist_wheel` that tags the wheel of a package whose compiled files are libraries and programs, none of them a Python extension: any Python 3
+    (`py3-none-<platform>`), not the interpreter that built it."""
+
+    class WasmextBdistWheel(base):  # type: ignore[misc, valid-type]
+        def get_tag(self) -> tuple[str, str, str]:
+            _impl, _abi, platform_tag = super().get_tag()
+            return "py3", "none", platform_tag
+
+    return WasmextBdistWheel
+
+
 def finalize_distribution_options(dist: Any) -> None:
     _add_extensions_from_pyproject(dist)
     extensions: list[Any] = getattr(dist, "ext_modules", None) or []
+    if (
+        extensions
+        and all(getattr(e, "_wasmext_product", None) for e in extensions)
+        and "bdist_wheel" not in dist.cmdclass
+    ):
+        with contextlib.suppress(Exception):  # no bdist_wheel (no wheel package): there is no wheel to tag
+            dist.cmdclass["bdist_wheel"] = wheel_without_python(dist.get_command_class("bdist_wheel"))
     if (
         any(getattr(e, "_wasmext_parallel", False) or getattr(e, "_wasmext_product", None) for e in extensions)
         and "build_ext" not in dist.cmdclass

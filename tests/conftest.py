@@ -46,7 +46,9 @@ def build_extension(wabt: Path, tmp_path_factory: pytest.TempPathFactory) -> Cal
     cc = shutil.which(os.environ.get("CC", "cc")) or shutil.which("gcc") or shutil.which("clang")
     # platform.system(), not sys.platform: pyright takes a comparison with sys.platform as fixed and then does not
     # type-check what follows the skip when it runs on that platform.
-    if cc is None or platform.system() == "Windows":
+    # Windows (and anywhere with WASMEXT_TEST_SETUPTOOLS=1) builds by setuptools, with the compiler of Python (MSVC): the way a user builds
+    by_setuptools = platform.system() == "Windows" or os.environ.get("WASMEXT_TEST_SETUPTOOLS") == "1"
+    if cc is None and not by_setuptools:
         pytest.skip("no C compiler of the cc kind")
     # a macOS extension finds the Python symbols in the interpreter that imports it
     link_flags: list[str] = ["-undefined", "dynamic_lookup"] if platform.system() == "Darwin" else []
@@ -74,6 +76,10 @@ def build_extension(wabt: Path, tmp_path_factory: pytest.TempPathFactory) -> Cal
             _export_tags(_tail_call_locals(w2c.read_bytes()), module_prefix(name))
         )  # the repairs that natify() makes
         runtime = wabt / "wasm2c"
+        if by_setuptools:
+            _build_by_setuptools(name, out, runtime, abi3, defines)
+            return importlib.import_module(name)
+        assert cc is not None
         limited = ["-DPy_LIMITED_API=0x030B0000"] if abi3 else []
         so = out / (name + str(sysconfig.get_config_var("EXT_SUFFIX")))
         include = [f"-I{runtime}", f"-I{out}", f"-I{sysconfig.get_paths()['include']}"]
@@ -104,7 +110,7 @@ def build_extension(wabt: Path, tmp_path_factory: pytest.TempPathFactory) -> Cal
         )
         subprocess.run(
             [
-                cc, "-O1", "-w", "-shared", "-fPIC", *link_flags, *limited, *include,
+                cc, "-O1", "-w", "-shared", "-fPIC", *link_flags, *limited, *(f"-D{d}" for d in defines), *include,
                 glue_object, out / f"{name}_w2c.c", runtime / "wasm-rt-impl.c", runtime / "wasm-rt-mem-impl.c",
                 runtime / "wasm-rt-exceptions-impl.c",
                 "-o", so,
@@ -116,10 +122,43 @@ def build_extension(wabt: Path, tmp_path_factory: pytest.TempPathFactory) -> Cal
     return build
 
 
+def _build_by_setuptools(name: str, out: Path, runtime: Path, abi3: bool, defines: tuple[str, ...]) -> None:
+    """The extension `name`, whose C is in `out`, built as a user builds one: an `Extension` and the `build_ext` of setuptools."""
+    from setuptools import Extension, setup
+
+    macros = [(d.partition("=")[0], d.partition("=")[2] or None) for d in defines]
+    if abi3:
+        macros.append(("Py_LIMITED_API", "0x030B0000"))
+    sources = [
+        out / f"{name}_py.c",
+        out / f"{name}_w2c.c",
+        runtime / "wasm-rt-impl.c",
+        runtime / "wasm-rt-mem-impl.c",
+        runtime / "wasm-rt-exceptions-impl.c",
+    ]
+    extension = Extension(
+        name,
+        [str(p) for p in sources],
+        include_dirs=[str(runtime), str(out)],
+        define_macros=macros,
+        py_limited_api=abi3,
+    )
+    cwd = os.getcwd()
+    os.chdir(out)
+    try:
+        setup(
+            name=name,
+            ext_modules=[extension],
+            script_args=["-q", "build_ext", "--build-lib", str(out), "--build-temp", str(out / f"{name}_build")],
+        )
+    finally:
+        os.chdir(cwd)
+
+
 @pytest.fixture(scope="session")
 def build_ctypes(wabt: Path, tmp_path_factory: pytest.TempPathFactory) -> Callable[..., ModuleType]:
     """The other front end of a module: the shared library and its wrapper for ctypes (`<name>_ctypes.py`), imported; the same arguments as `build_extension`."""
-    from wasmext._exe import build_shared  # pyright: ignore[reportPrivateUsage]
+    from wasmext._exe import BuildFlags, build_shared  # pyright: ignore[reportPrivateUsage]
 
     out = tmp_path_factory.mktemp("ctypes")
     sys.path.insert(0, str(out))
@@ -127,7 +166,7 @@ def build_ctypes(wabt: Path, tmp_path_factory: pytest.TempPathFactory) -> Callab
     built: dict[str, ModuleType] = {}  # a loaded library is not made again under the feet of the process
 
     def build(source: Path, name: str, *, abi3: bool = False, defines: tuple[str, ...] = ()) -> ModuleType:
-        del abi3, defines  # of the extension
+        del abi3  # of the extension
         if name in built:
             return built[name]
         wasm = source
@@ -135,7 +174,16 @@ def build_ctypes(wabt: Path, tmp_path_factory: pytest.TempPathFactory) -> Callab
             wasm = out / f"{name}.wasm"
             subprocess.run([wabt / "bin" / "wat2wasm", source, "-o", wasm], check=True)
         suffix = ".dll" if platform.system() == "Windows" else ".dylib" if platform.system() == "Darwin" else ".so"
-        build_shared(wasm, out / f"lib{name}{suffix}", name=name, work=out / f"{name}_work", optimize=False, quiet=True)
+        macros = [(d.partition("=")[0], d.partition("=")[2] or None) for d in defines]
+        build_shared(
+            wasm,
+            out / f"lib{name}{suffix}",
+            name=name,
+            work=out / f"{name}_work",
+            optimize=False,
+            quiet=True,
+            flags=BuildFlags(define_macros=macros),
+        )
         built[name] = importlib.import_module(f"{name}_ctypes")
         return built[name]
 

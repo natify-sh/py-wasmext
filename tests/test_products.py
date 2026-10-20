@@ -103,3 +103,29 @@ def test_the_command_line_makes_one_product_in_place(tmp_path: Path, wabt: Path)
     assert (
         reactor.returncode == 1 and "serves the imports of WASI" in reactor.stderr and "Traceback" not in reactor.stderr
     )
+
+
+def test_the_wheel_of_a_package_with_only_libraries_and_programs_is_not_tied_to_an_interpreter(
+    tmp_path: Path, wabt: Path
+) -> None:
+    root = _project(
+        tmp_path,
+        wabt,
+        '[[tool.wasmext.ext-modules]]\nmodule-list = "pkg/hello.wasm"\nproduct = "exe"\n',
+    )
+    env = {**os.environ, "WASMEXT_WABT": str(wabt)}
+    done = subprocess.run(
+        [sys.executable, "-c", "from setuptools import setup; setup()", "-q", "bdist_wheel", "-d", str(root / "dist")],
+        cwd=root,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert done.returncode == 0, done.stderr[-800:]
+    (wheel,) = (root / "dist").glob("*.whl")
+    assert wheel.name.startswith("prodtest-0-py3-none-"), wheel.name  # not cp311-cp311-...
+    import zipfile
+
+    with zipfile.ZipFile(wheel) as z:
+        assert f"pkg/{product_filename('hello', 'exe')}" in z.namelist()  # the program is in the wheel

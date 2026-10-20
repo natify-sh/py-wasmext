@@ -130,6 +130,13 @@ def _function(cname: str, restype: Any, argtypes: list[Any]) -> Any:
     return function
 
 
+def _unpin(instance: Any, pin: Any) -> None:
+    """The view of a memory is gone: let it grow again (the instance is alive still, the view keeps it)."""
+    target = instance()
+    if target is not None:
+        pin(target._h, 0)
+
+
 def _signature(name: str, params: tuple[str, ...], results: tuple[str, ...]) -> str:
     return f"{name}({', '.join(params)}) -> {', '.join(results) if results else 'None'}"
 
@@ -430,6 +437,10 @@ class Instance:
         if not address:
             return memoryview(bytearray())
         buffer = (_c.c_uint8 * size.value).from_address(address)
+        # where the runtime moves a memory that grows, the view holds it still: memory.grow answers -1 while the view is alive
+        pin = _function(cname + "_pin", None, [_c.c_void_p, _c.c_int])
+        pin(self._h, 1)
+        weakref.finalize(buffer, _unpin, weakref.ref(self), pin)
         buffer._instance = self  # type: ignore[attr-defined]  # the view keeps the instance (and so the memory) alive
         buffer.__wasmext_ref__ = self._reference(name)  # type: ignore[attr-defined]  # what an instance that is given the view takes it by
         return memoryview(buffer).cast("B")

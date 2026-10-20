@@ -262,6 +262,9 @@ def generate_shared(
         C(
             f"    struct {{ void *fn; void *user; }} multi[{max(n_imports, 1)}];  /* the host function of an import with several results, and its user */"
         )
+    if memories:
+        C(f"    long mem_pins[{len(memories)}];  /* the pins of each exported memory (see <name>_memory_*_pin) */")
+        C(f"    uint64_t mem_max_pages[{len(memories)}];")
     C("    int how; uint32_t value;  /* how the WASI program ended */")
     C("    int (*stdin_read)(void *user, uint8_t *buf, size_t cap, size_t *got);")
     C("    int (*stdout_write)(void *user, int fd, const uint8_t *buf, size_t n);")
@@ -620,6 +623,31 @@ def generate_shared(
         C(f"    wasm_rt_memory_t *memory = w2c_{prefix}_{mangle(name)}(&m->core.inst);")
         C("    if (size != NULL) *size = (size_t)memory->size;")
         C("    return memory->data;")
+        C("}")
+        C("")
+        A(
+            f"/* pin (1) or unpin (0) the memory {_cc(name)}: while it is pinned, `memory.grow` answers -1 where the runtime moves a memory that grows (no guard pages, memory64),"
+            " so the bytes stay where they are; pins count. */"
+        )
+        A(f"WASMEXT_API void {last}_{ident}_pin({last}_t *m, int pin);")
+        C(f"void {last}_{ident}_pin({last}_t *m, int pin) {{")
+        C(f"    wasm_rt_memory_t *memory = w2c_{prefix}_{mangle(name)}(&m->core.inst);")
+        C("#if WASM_RT_USE_MMAP")
+        C("    int moves = memory->is64 || memory->page_size != WASM_DEFAULT_PAGE_SIZE;")
+        C("#else")
+        C("    int moves = 1;")
+        C("#endif")
+        C("    if (!moves) return;")
+        C(f"    long *pins = &m->mem_pins[{len(model.memories) - 1}];")
+        C(f"    uint64_t *saved = &m->mem_max_pages[{len(model.memories) - 1}];")
+        C("    if (pin) {")
+        C("        if ((*pins)++ == 0) {")
+        C("            *saved = memory->max_pages;")
+        C("            memory->max_pages = memory->pages;")
+        C("        }")
+        C("    } else if (*pins > 0 && --(*pins) == 0) {")
+        C("        memory->max_pages = *saved;")
+        C("    }")
         C("}")
         C("")
     # the exported globals

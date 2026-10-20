@@ -11,6 +11,7 @@ that has not said anything itself (a `[tool.distutils.bdist_wheel]` setting wins
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 import shutil
 import sys
@@ -19,7 +20,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
-from ._natify import LIMITED_API_VERSION, PRODUCTS, natify
+from ._natify import LIMITED_API_VERSION, PRODUCTS, _version, natify, wasm_digest  # pyright: ignore[reportPrivateUsage]
+from ._toolchain import find_toolchain
 
 
 def wheel_tag() -> str:
@@ -279,6 +281,35 @@ def _jobs(command: Any, count: int) -> int:
     return max(1, min(wanted, count))
 
 
+def _product_fingerprint(ext: Any, wasm: Path, parts: int | None) -> str:
+    """What a library or a program was made from and with: the content of the .wasm (not its time), this wasmext and WABT, the number of files
+    and the flags of the build. A change of any of it makes the file stale; the time of a file says nothing of them."""
+    try:
+        wabt = find_toolchain().version
+    except RuntimeError:  # built where there is no WABT: the C is there already
+        wabt = None
+    settings = {
+        "wasm": wasm_digest(wasm.read_bytes()),
+        "wasmext": _version(),
+        "wabt": wabt,
+        "product": ext._wasmext_product,
+        "parts": parts,
+        "flags": {
+            key: getattr(ext, key, None)
+            for key in (
+                "extra_compile_args",
+                "extra_link_args",
+                "define_macros",
+                "undef_macros",
+                "include_dirs",
+                "libraries",
+                "library_dirs",
+            )
+        },
+    }
+    return json.dumps(settings, sort_keys=True, default=repr)
+
+
 def parallel_build_ext(base: type) -> type:
     """A `build_ext` that compiles the sources of an extension from `natify()` that is split into files at the same time.
 
@@ -345,12 +376,16 @@ def parallel_build_ext(base: type) -> type:
             wasm = Path(ext.sources[0])
             target = Path(self.get_ext_fullpath(ext.name))
             settings = ext._wasmext_settings
+            work = settings["work"]
+            stamp = Path(work) / f"{target.stem.split('.')[0]}.{ext._wasmext_product}.stamp"
+            fingerprint = _product_fingerprint(ext, wasm, settings["parts"])
             if (
                 not (self.force or settings["force"])
                 and target.is_file()
-                and target.stat().st_mtime_ns >= wasm.stat().st_mtime_ns
+                and stamp.is_file()
+                and stamp.read_text(encoding="utf-8") == fingerprint
             ):
-                return  # up to date
+                return  # up to date: made from this .wasm, by this wasmext, with these flags
             flags = BuildFlags(
                 extra_compile_args=ext.extra_compile_args or (),
                 extra_link_args=ext.extra_link_args or (),
@@ -361,11 +396,12 @@ def parallel_build_ext(base: type) -> type:
                 library_dirs=ext.library_dirs or (),
             )
             target.parent.mkdir(parents=True, exist_ok=True)
-            work = settings["work"]
             if ext._wasmext_product == "shared":
                 build_shared(wasm, target, work=work, parts=settings["parts"], quiet=settings["quiet"], flags=flags)
             else:
                 build(wasm, target, work=work, parts=settings["parts"], flags=flags)
+            Path(work).mkdir(parents=True, exist_ok=True)
+            stamp.write_text(fingerprint, encoding="utf-8")
 
         def copy_extensions_to_source(self) -> None:
             super().copy_extensions_to_source()

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import copy
 import glob
+import hashlib
 import importlib.machinery
 import importlib.metadata
 import os
@@ -218,11 +219,17 @@ def _release_version() -> str | None:
     return version if _RELEASE_VERSION.fullmatch(version) else None
 
 
-def _marker(wabt: str, parts: int = 1) -> str:
-    return f"{MARKER}{_version()} (WABT {wabt}, parts {parts}) */\n"
+def wasm_digest(data: bytes) -> str:
+    """What the C is made from, by its content (not by the time of the file, which a cache, a copy or an archive does not keep)."""
+    return hashlib.sha256(data).hexdigest()
 
 
-_PARTS_IN_MARKER = re.compile(r", parts (\d+)\) \*/")
+def _marker(wabt: str, parts: int = 1, digest: str = "") -> str:
+    return f"{MARKER}{_version()} (WABT {wabt}, parts {parts}{f', wasm {digest}' if digest else ''}) */\n"
+
+
+_PARTS_IN_MARKER = re.compile(r", parts (\d+)(?:, wasm [0-9a-f]{64})?\) \*/")
+_WASM_IN_MARKER = re.compile(r", wasm ([0-9a-f]{64})\) \*/")
 
 
 def _choose_parts(size: int, requested: int | None) -> int:
@@ -268,8 +275,8 @@ def _existing_parts(out_dir: Path, last: str) -> int:
     return count
 
 
-def _made_by_this_wasmext(path: Path) -> bool:
-    """The first line of `path` says it was made by this wasmext and, where a WABT is installed, by this WABT."""
+def _made_by_this_wasmext(path: Path, digest: str) -> bool:
+    """The first line of `path` says it was made by this wasmext, from the .wasm with this `digest`, and, where a WABT is installed, by this WABT."""
     try:
         with path.open("r", encoding="utf-8") as f:
             first = f.readline()
@@ -277,12 +284,19 @@ def _made_by_this_wasmext(path: Path) -> bool:
         return False
     if not first.startswith(f"{MARKER}{_version()} (WABT "):
         return False
+    of = _WASM_IN_MARKER.search(first)
+    if (
+        of is None or of.group(1) != digest
+    ):  # made from another .wasm (or before the digest was written): not this one's C
+        return False
     try:
         wabt = find_toolchain().version
-    except RuntimeError:  # a tree that ships its C, built where there is no WABT: what wasmext made stays
+    except (
+        RuntimeError
+    ):  # a tree that ships its C, built where there is no WABT: what wasmext made from this .wasm stays
         return True
     found = _PARTS_IN_MARKER.search(first)
-    return found is not None and first.rstrip() == _marker(wabt, int(found.group(1))).rstrip()
+    return found is not None and first.rstrip() == _marker(wabt, int(found.group(1)), digest).rstrip()
 
 
 # wasm2c 1.0.42 checks the sum of 64-bit addresses with `_addcarry_u64` whenever the compiler is MSVC, an intrinsic that only
@@ -390,6 +404,7 @@ def _prepare(
 ) -> _Prepared:
     last = name.rsplit(".", 1)[-1]
     data = wasm.read_bytes()
+    digest = wasm_digest(data)
     glue_c = out_dir / f"{last}_py.c"  # the Python layer; the glue of the module, {last}_glue.h, is beside it
     wanted = _choose_parts(len(data), parts)
 
@@ -437,21 +452,15 @@ def _prepare(
     for c_name in _shared_headers(glue):
         _write_if_changed(out_dir / c_name, (C_DIR / c_name).read_bytes())
 
-    # As cythonize() does: the C is made again when it is missing, was made by another wasmext (or WABT), is older
-    # than the .wasm, or when forced (`force`, or WASMEXT_FORCE_REGEN=1 for build systems). A tree that has the C in a
+    # As cythonize() does, but by the content of the .wasm and not by its time (a cache, a copy or an archive does not keep the times): the C is made
+    # again when it is missing, was made by another wasmext (or WABT) or from another .wasm, or when forced (`force`, or WASMEXT_FORCE_REGEN=1 for build systems). A tree that has the C in a
     # number of files other than the one wanted is made again too, where there is a wasm2c to do it; where there is none,
     # what is there is used.
     force = force or os.environ.get("WASMEXT_FORCE_REGEN") == "1"
     have = _existing_parts(out_dir, last)
     first = _w2c_files(out_dir, last, have)[0] if have else None
     complete = bool(have) and all(p.is_file() for p in (glue_c, out_dir / RUNTIME_SOURCES[0]))
-    if (
-        not force
-        and complete
-        and first is not None
-        and _made_by_this_wasmext(first)
-        and first.stat().st_mtime >= wasm.stat().st_mtime
-    ):
+    if not force and complete and first is not None and _made_by_this_wasmext(first, digest):
         if have == wanted:
             return outputs(glue.skipped, have)
         try:
@@ -471,13 +480,13 @@ def _prepare(
         raise RuntimeError(f"wasm2c failed on {wasm}:\n{result.stderr.strip()}")
     for part in _w2c_files(out_dir, last, wanted):
         part.write_bytes(
-            _marker(toolchain.version, wanted).encode()
+            _marker(toolchain.version, wanted, digest).encode()
             + _export_tags(_tail_call_locals(_portable_on_arm64(part.read_bytes())), module_prefix(name))
         )
     shared = out_dir / f"{last}_w2c-impl.h"  # the code every file includes, when there are several
     if shared.is_file():
         shared.write_bytes(_portable_on_arm64(shared.read_bytes()))
-    _write_if_changed(glue_c, (_marker(toolchain.version, wanted) + glue.source).encode("utf-8"))
+    _write_if_changed(glue_c, (_marker(toolchain.version, wanted, digest) + glue.source).encode("utf-8"))
     for src in toolchain.runtime.glob("wasm-rt*"):
         if src.suffix in (".c", ".h", ".inc"):
             shutil.copyfile(src, out_dir / src.name)

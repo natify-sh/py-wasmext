@@ -129,3 +129,45 @@ def test_the_wheel_of_a_package_with_only_libraries_and_programs_is_not_tied_to_
 
     with zipfile.ZipFile(wheel) as z:
         assert f"pkg/{product_filename('hello', 'exe')}" in z.namelist()  # the program is in the wheel
+
+
+_LIBRARY_TABLE = '[[tool.wasmext.ext-modules]]\nmodule-list = "pkg/lib.wasm"\nproduct = "shared"\n'
+
+
+def test_a_library_is_made_again_by_the_content_of_the_wasm_not_its_time(tmp_path: Path, wabt: Path) -> None:
+    """Nothing is built twice for the same content; another module put in place with an older time is built, and its library is not the old one."""
+    import ctypes
+
+    root = _project(tmp_path, wabt, _LIBRARY_TABLE)
+    assert _build_ext(root, wabt).returncode == 0
+    library = root / "pkg" / product_filename("lib", "shared")
+    built = library.stat().st_mtime_ns
+    assert _build_ext(root, wabt).returncode == 0
+    assert library.stat().st_mtime_ns == built  # the same .wasm, the same flags: left as it is
+    wasm = root / "pkg" / "lib.wasm"
+    os.utime(wasm, None)  # touched, the same bytes: still left as it is
+    assert _build_ext(root, wabt).returncode == 0
+    assert library.stat().st_mtime_ns == built
+    (root / "other.wat").write_text('(module (func (export "other") (result i32) i32.const 7))', encoding="utf-8")
+    subprocess.run([wabt / "bin" / "wat2wasm", root / "other.wat", "-o", wasm], check=True)
+    os.utime(wasm, (946684800, 946684800))  # the year 2000: older than the library
+    done = _build_ext(root, wabt)
+    assert done.returncode == 0, done.stderr[-600:]
+    assert library.stat().st_mtime_ns != built
+    assert hasattr(ctypes.CDLL(str(library)), "lib_other")  # the library of the new module
+
+
+def test_a_library_is_made_again_when_its_flags_change(tmp_path: Path, wabt: Path) -> None:
+    root = _project(tmp_path, wabt, _LIBRARY_TABLE)
+    assert _build_ext(root, wabt).returncode == 0
+    library = root / "pkg" / product_filename("lib", "shared")
+    built = library.stat().st_mtime_ns
+    pyproject = root / "pyproject.toml"
+    pyproject.write_text(
+        pyproject.read_text(encoding="utf-8").replace(
+            'product = "shared"\n', 'product = "shared"\ndefine-macros = [["WASMEXT_TEST_FLAG", "1"]]\n'
+        ),
+        encoding="utf-8",
+    )
+    assert _build_ext(root, wabt).returncode == 0
+    assert library.stat().st_mtime_ns != built

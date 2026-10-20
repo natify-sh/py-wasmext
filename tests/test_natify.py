@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import shutil
@@ -134,7 +135,8 @@ def test_a_c_that_cannot_be_checked_for_wabt_is_kept(project: Path, monkeypatch:
     assert w2c.stat().st_mtime_ns == before
 
 
-def test_a_newer_wasm_or_force_generates_the_c_again(project: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_different_wasm_or_force_generates_the_c_again(project: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The C is stale by the content of the .wasm, not by its time: a cache, a copy or an archive does not keep the times."""
     natify("pkg/*.wasm", quiet=True)
     out = project / "pkg" / "add_wasmext"
     w2c = out / "add_w2c.c"
@@ -143,13 +145,33 @@ def test_a_newer_wasm_or_force_generates_the_c_again(project: Path, monkeypatch:
     natify("pkg/*.wasm", quiet=True)
     assert marker.read_text(encoding="utf-8") == "old"  # same wasm, same maker: nothing is written
     wasm = project / "pkg" / "add.wasm"
-    os.utime(wasm, (w2c.stat().st_mtime + 10, w2c.stat().st_mtime + 10))
+    os.utime(wasm, (w2c.stat().st_mtime + 10, w2c.stat().st_mtime + 10))  # touched, the same bytes
     natify("pkg/*.wasm", quiet=True)
-    assert marker.read_text(encoding="utf-8") != "old"
+    assert marker.read_text(encoding="utf-8") == "old"
     marker.write_text("old", encoding="utf-8")
     monkeypatch.setenv("WASMEXT_FORCE_REGEN", "1")
     natify("pkg/*.wasm", quiet=True)
     assert marker.read_text(encoding="utf-8") != "old"
+
+
+def test_a_wasm_of_other_content_makes_the_c_again_whatever_its_time(project: Path) -> None:
+    """A module put in place of another with an older time (a copy that keeps the times, a restored cache) must not leave the C of the old one."""
+    natify("pkg/*.wasm", quiet=True)
+    out = project / "pkg" / "add_wasmext"
+    before = (out / "add_w2c.c").read_bytes()
+    wasm = project / "pkg" / "add.wasm"
+    other = DATA / "kitchen_sink.wasm"
+    wasm.write_bytes(other.read_bytes())
+    os.utime(wasm, (946684800, 946684800))  # the year 2000: older than the C that is there
+    natify("pkg/*.wasm", quiet=True)
+    after = (out / "add_w2c.c").read_bytes()
+    assert after != before
+    assert (
+        hashlib.sha256(other.read_bytes()).hexdigest().encode() in after.split(b"\n", 1)[0]
+    )  # the first line names the .wasm it was made from
+    assert (out / "add_py.c").read_bytes().split(b"\n", 1)[0] == after.split(b"\n", 1)[
+        0
+    ]  # and the Python layer is of the same module
 
 
 def test_a_changed_wasm_is_generated_again(project: Path) -> None:

@@ -186,10 +186,10 @@ def test_native_after_abi3_gives_the_native_extension_and_not_the_abi3_one_left_
         name = Path(printed.strip()).name
         return ".abi3." in name or name.count(".") == 1
 
-    abi3 = python(tmp_path, env, f"wasmimport.install(limited_abi=True)\n{use}")
+    abi3 = python(tmp_path, env, f"wasmimport.install(limited_api=True)\n{use}")
     assert abi3.returncode == 0, abi3.stderr[-600:]
     assert is_abi3(abi3.stdout)
-    native = python(tmp_path, env, f"wasmimport.install(limited_abi=False)\n{use}")
+    native = python(tmp_path, env, f"wasmimport.install(limited_api=False)\n{use}")
     assert native.returncode == 0, native.stderr[-600:]
     assert not is_abi3(native.stdout)
     assert len(cached(tmp_path)) == 1  # the stale one is gone, not left to shadow the new one

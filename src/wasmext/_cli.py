@@ -66,7 +66,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("-q", "--quiet", action="store_true", help="say nothing about what is not exposed or built")
     parser.add_argument(
-        "--limited-abi",
+        "--limited-api",
         action=argparse.BooleanOptionalAction,
         default=None,
         help="force the stable ABI (abi3) or a native extension; default: abi3 where this Python has one",
@@ -151,7 +151,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             force=args.force,
             quiet=args.quiet,
             stubs=not args.no_stubs,
-            limited_abi=args.limited_abi,
+            limited_api=args.limited_api,
             guard_pages=args.guard_pages,
             parts=args.parts,
             product=args.product,
@@ -186,7 +186,7 @@ def _prune_stale(base: Path, module: str) -> None:
     """After an in-place build, leave one extension file for `module`: the newest.
 
     Python tries `.cpython-311-<platform>.so` before `.abi3.so`, so a native file left by an earlier build would be imported
-    in place of the abi3 one just built (and the other way round after `--no-limited-abi`: the `.abi3.so` is tried second)."""
+    in place of the abi3 one just built (and the other way round after `--no-limited-api`: the `.abi3.so` is tried second)."""
     *package, stem = module.split(".")
     folder = base.joinpath(*package)
     files = [p for p in folder.glob(f"{stem}.*") if p.suffix in (".so", ".pyd") and p.name.split(".")[0] == stem]

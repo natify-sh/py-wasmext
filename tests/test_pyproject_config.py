@@ -177,22 +177,22 @@ def test_a_lone_exclude_pattern_is_one_pattern(tmp_path: Path) -> None:
     assert pyproject_calls(tmp_path)[0]["exclude"] == ["skip*"]
 
 
-def test_limited_abi_is_one_setting_of_the_project(tmp_path: Path) -> None:
+def test_limited_api_is_one_setting_of_the_project(tmp_path: Path) -> None:
     (tmp_path / "pyproject.toml").write_text(
-        "[tool.wasmext]\nlimited-abi = false\n[[tool.wasmext.ext-modules]]\nmodule-list = 'a'\n[[tool.wasmext.ext-modules]]\nmodule-list = 'b'\n",
+        "[tool.wasmext]\nlimited-api = false\n[[tool.wasmext.ext-modules]]\nmodule-list = 'a'\n[[tool.wasmext.ext-modules]]\nmodule-list = 'b'\n",
         encoding="utf-8",
     )
-    assert [call["limited_abi"] for call in pyproject_calls(tmp_path)] == [
+    assert [call["limited_api"] for call in pyproject_calls(tmp_path)] == [
         False,
         False,
     ]  # every entry is built the same way
     (tmp_path / "pyproject.toml").write_text(
-        "[[tool.wasmext.ext-modules]]\nmodule-list = 'a'\nlimited-abi = true\n", encoding="utf-8"
+        "[[tool.wasmext.ext-modules]]\nmodule-list = 'a'\nlimited-api = true\n", encoding="utf-8"
     )
     with pytest.raises(ValueError, match="one setting for the whole project"):
         pyproject_calls(tmp_path)
     (tmp_path / "pyproject.toml").write_text(
-        "[tool.wasmext]\nlimited-abi = 'yes'\n[[tool.wasmext.ext-modules]]\nmodule-list = 'a'\n", encoding="utf-8"
+        "[tool.wasmext]\nlimited-api = 'yes'\n[[tool.wasmext.ext-modules]]\nmodule-list = 'a'\n", encoding="utf-8"
     )
-    with pytest.raises(TypeError, match="limited-abi must be true or false"):
+    with pytest.raises(TypeError, match="limited-api must be true or false"):
         pyproject_calls(tmp_path)

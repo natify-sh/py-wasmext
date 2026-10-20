@@ -92,10 +92,10 @@ def _guard_pages(requested: bool | None) -> bool:
     return requested
 
 
-def _use_limited_abi(requested: bool | None, quiet: bool) -> bool:
-    """True forces abi3 where it is possible, False never; None takes WASMEXT_LIMITED_ABI (1/0), else abi3 where possible."""
+def _use_limited_api(requested: bool | None, quiet: bool) -> bool:
+    """True forces abi3 where it is possible, False never; None takes WASMEXT_LIMITED_API (1/0), else abi3 where possible."""
     if requested is None:
-        env = os.environ.get("WASMEXT_LIMITED_ABI", "").strip().lower()
+        env = os.environ.get("WASMEXT_LIMITED_API", "").strip().lower()
         if env in ("0", "false", "no", "off"):
             return False
         requested = True  # "1" or not set: the stable ABI wherever this interpreter has one
@@ -434,7 +434,7 @@ def natify(
     force: bool = False,
     quiet: bool = False,
     stubs: bool = True,
-    limited_abi: bool | None = None,
+    limited_api: bool | None = None,
     guard_pages: bool | None = None,
     parts: int | None = None,
     product: str = "extension",
@@ -451,10 +451,10 @@ def natify(
     another wasmext or WABT (the first line of the file says which), is older than the `.wasm`, or with `force` (or
     WASMEXT_FORCE_REGEN=1); otherwise `wasm2c` is not needed at all. `quiet` stops the notes about exports that are not exposed.
 
-    `limited_abi` chooses between the stable ABI (abi3: one wheel for CPython 3.11 and later, tagged `cp311-abi3` by
+    `limited_api` chooses between the stable ABI (abi3: one wheel for CPython 3.11 and later, tagged `cp311-abi3` by
     wasmext itself) and one native extension per interpreter. None, the default, is abi3 wherever the interpreter that builds
     has a stable ABI (not PyPy, free-threaded, Emscripten, Android, iOS): with `cibuildwheel`, the selector `cp311-*` makes
-    the abi3 wheel and `cp314t-*` a native one. WASMEXT_LIMITED_ABI=0 turns abi3 off for a None; True and False decide in
+    the abi3 wheel and `cp314t-*` a native one. WASMEXT_LIMITED_API=0 turns abi3 off for a None; True and False decide in
     the code (True still builds native where abi3 is impossible, and says so).
 
     `guard_pages` (None, the default, is True unless WASMEXT_GUARD_PAGES=0) is how the memories of the modules are checked
@@ -474,7 +474,7 @@ def natify(
     for each call: a module that is wanted in two ways is two calls (or two tables of `pyproject.toml`). The result is still `Extension` objects, marked
     for `wasmext._setuptools`, whose `build_ext` makes the file and puts it where an extension would go; the settings of the extension
     (`libraries`, `define_macros`, `extra_compile_args`, ...) are the flags of the build. A shared library is `lib<stem>.so`, `lib<stem>.dylib`
-    or `<stem>.dll`; a program is `<stem>` or `<stem>.exe`. `limited_abi` and `stubs` are for extensions and do nothing for the other products.
+    or `<stem>.dll`; a program is `<stem>` or `<stem>.exe`. `limited_api` and `stubs` are for extensions and do nothing for the other products.
 
     With `stubs` (the default) a `<stem>.pyi` is written beside each `.wasm`: the types of the extension for editors and type
     checkers (ship it in the wheel with `package-data`).
@@ -488,7 +488,7 @@ def natify(
             force=force,
             quiet=quiet,
             stubs=stubs,
-            limited_abi=limited_abi,
+            limited_api=limited_api,
             guard_pages=guard_pages,
             parts=parts,
             product=product,
@@ -504,7 +504,7 @@ def _natify(
     force: bool,
     quiet: bool,
     stubs: bool,
-    limited_abi: bool | None,
+    limited_api: bool | None,
     guard_pages: bool | None = None,
     parts: int | None = None,
     product: str = "extension",
@@ -514,7 +514,7 @@ def _natify(
 
     if product not in PRODUCTS:
         raise ValueError(f"product must be one of {', '.join(map(repr, PRODUCTS))}, not {product!r}")
-    use_limited_abi = _use_limited_abi(limited_abi, quiet) if product == "extension" else False
+    use_limited_api = _use_limited_api(limited_api, quiet) if product == "extension" else False
     use_guard_pages = _guard_pages(guard_pages)
 
     if isinstance(module_list, (str, os.PathLike, Extension)):
@@ -546,7 +546,7 @@ def _natify(
         prepared = _prepare(wasm, name, out_dir, force=force, quiet=quiet, stubs=stubs, parts=parts)
         ext = copy.copy(template) if template else Extension(name, [])
         ext.name = name
-        ext._wasmext_limited_abi = limited_abi  # type: ignore[attr-defined]  # what was asked (None: whatever the interpreter allows), for wasmext._setuptools to make the wheel consistent
+        ext._wasmext_limited_api = limited_api  # type: ignore[attr-defined]  # what was asked (None: whatever the interpreter allows), for wasmext._setuptools to make the wheel consistent
         rest = [s for s in (template.sources if template else []) if not str(s).endswith(".wasm")]
         ext.sources = [*rest, *prepared.sources]
         ext._wasmext_parallel = prepared.parts > 1  # type: ignore[attr-defined]  # wasmext._setuptools compiles the files at once
@@ -561,7 +561,7 @@ def _natify(
             ext.define_macros = [*ext.define_macros, ("WASM_RT_USE_MMAP", "0")]
         if sys.byteorder == "big":  # the C of wasm2c reads this to lay the memory out reversed; nothing else sets it
             ext.define_macros = [*ext.define_macros, ("WABT_BIG_ENDIAN", "1")]
-        if use_limited_abi:  # one wheel for every CPython from 3.11 on (wasmext._setuptools tags the wheel)
+        if use_limited_api:  # one wheel for every CPython from 3.11 on (wasmext._setuptools tags the wheel)
             ext.py_limited_api = True
             ext.define_macros = [*ext.define_macros, ("Py_LIMITED_API", LIMITED_API_VERSION)]
         result.append((wasm, ext))

@@ -63,9 +63,10 @@ setup(ext_modules=natify("src/mypkg/*.wasm"))  # build-system.requires = ["setup
 
 Or with no `setup.py` at all, in `pyproject.toml` (a hook of wasmext, an entry point of setuptools, reads the table). The keys are the
 arguments of `natify()` with dashes: `module-list` (a glob pattern, or a list of them), `exclude`, `build-dir`, `force`, `quiet`, `stubs`,
-`limited-abi`, `guard-pages`, `parts`; and, added to each extension the table makes, those of `Extension`: `extra-compile-args`,
+`guard-pages`, `parts`, `product`; and, added to each extension the table makes, those of `Extension`: `extra-compile-args`,
 `extra-link-args`, `define-macros` (`"NAME"`, `"NAME=value"` or `["NAME", "value"]`), `undef-macros`, `include-dirs`, `libraries`,
-`library-dirs`. (In a `setup.py` the same settings are those of an `Extension` given to `natify()`, as to `cythonize()`.)
+`library-dirs`. One setting is for the whole project, not an entry, because a wheel has one tag: `limited-api` goes in `[tool.wasmext]` (above the entries), and all the modules
+are built the same way; a module of wasmext that took the default follows a hand-written extension that is not abi3, and settings that contradict each other are an error. (In a `setup.py` the same settings are those of an `Extension` given to `natify()`, as to `cythonize()`.)
 
 ```toml
 [build-system]
@@ -122,7 +123,7 @@ a library holds no `main`). `setup.py build_ext` puts the file where an extensio
 library exports only its API. The settings of the extension (`libraries`, `extra-compile-args`, ...) are the flags of the build. A reactor
 (`_initialize`, no `_start`) is a library: it is initialized when the instance is made. A package whose compiled files are all libraries and programs gets a wheel tagged
 `py3-none-<platform>` (any Python 3), not for the interpreter that built it. The header `<name>_api.h` is in `<name>_wasmext/`: ship it with `package-data` if the wheel is to
-have it. `limited-abi` and the stubs are for extensions only.
+have it. `limited-api` and the stubs are for extensions only.
 
 ### Linking instances
 
@@ -209,8 +210,8 @@ you get:
 build = "cp311-* cp314t-*"   # cp311: the abi3 wheel; cp314t: a native free-threaded one
 ```
 
-`limited_abi=True`/`False` in `natify()` (or `--limited-abi` / `--no-limited-abi`) forces one or the other (`True` still builds native where
-abi3 is impossible, and says so); `WASMEXT_LIMITED_ABI=0` turns abi3 off for a `None`. The wheel is tagged by a setuptools hook of
+`limited_api=True`/`False` in `natify()` (or `--limited-api` / `--no-limited-api`) forces one or the other (`True` still builds native where
+abi3 is impossible, and says so); `WASMEXT_LIMITED_API=0` turns abi3 off for a `None`. The wheel is tagged by a setuptools hook of
 wasmext, so nothing else needs to be set (a `[tool.distutils.bdist_wheel] py-limited-api` of the project wins). The glue uses only
 the limited API, so either kind builds from the same C.
 
@@ -229,7 +230,7 @@ wabt-package, which is not needed when the executable and the runtime are given.
 To try a module without building a wheel, `wasmimport` works as `pyximport` does (a development tool: it runs a C compiler on import). The
 extension is kept in a cache, `~/.wasmbld` (or `WASMIMPORT_BUILD_DIR`, or `install(build_dir=...)`; `install(inplace=True)` puts it beside
 the `.wasm`), one folder for each file and each Python, and is made again when the `.wasm`, wasmext, or how it is built (`guard_pages`,
-`limited_abi`, `parts`, the flags of the compiler) changes:
+`limited_api`, `parts`, the flags of the compiler) changes:
 
 ```python
 import wasmimport

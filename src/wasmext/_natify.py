@@ -63,6 +63,7 @@ MAX_AUTO_PARTS = (
 WARN_PART_BYTES = 4096
 # The oldest CPython an abi3 extension supports (3.11): the buffer protocol joined the limited API there.
 LIMITED_API_VERSION = "0x030B0000"
+PRODUCTS = ("extension", "shared", "exe")  # what natify(product=...) can make
 # The C of wasm2c for a module with SIMD includes the headers of simde, which the wabt-package carries.
 _USES_SIMDE = re.compile(rb'^\s*#\s*include\s*[<"]simde/', re.MULTILINE)
 
@@ -436,6 +437,7 @@ def natify(
     limited_api: bool | None = None,
     guard_pages: bool | None = None,
     parts: int | None = None,
+    product: str = "extension",
 ) -> list[Extension]:
     """The extensions for the `.wasm` modules in `module_list`, ready for `setup(ext_modules=...)`.
 
@@ -467,6 +469,13 @@ def natify(
     or less than 4 KiB of the module in a file). A split costs some speed of the code (a call from one file to another is not inlined), so a small
     module is better whole; for a big one it is the difference between minutes and an hour.
 
+    `product` is what is made of each module: `"extension"` (the default, a Python extension), `"shared"` (a shared library with a C API, and
+    beside it a `<stem>_ctypes.py` wrapper with the interface of the extension) or `"exe"` (a program, for a command with a `_start`). One product
+    for each call: a module that is wanted in two ways is two calls (or two tables of `pyproject.toml`). The result is still `Extension` objects, marked
+    for `wasmext._setuptools`, whose `build_ext` makes the file and puts it where an extension would go; the settings of the extension
+    (`libraries`, `define_macros`, `extra_compile_args`, ...) are the flags of the build. A shared library is `lib<stem>.so`, `lib<stem>.dylib`
+    or `<stem>.dll`; a program is `<stem>` or `<stem>.exe`. `limited_api` and `stubs` are for extensions and do nothing for the other products.
+
     With `stubs` (the default) a `<stem>.pyi` is written beside each `.wasm`: the types of the extension for editors and type
     checkers (ship it in the wheel with `package-data`).
     """
@@ -482,6 +491,7 @@ def natify(
             limited_api=limited_api,
             guard_pages=guard_pages,
             parts=parts,
+            product=product,
         )
     ]
 
@@ -497,11 +507,14 @@ def _natify(
     limited_api: bool | None,
     guard_pages: bool | None = None,
     parts: int | None = None,
+    product: str = "extension",
 ) -> list[tuple[Path | None, Extension]]:
     """`natify()` with the `.wasm` file of each extension (None for an ordinary extension that passed through)."""
     from setuptools import Extension  # a build-time dependency of the projects that call this
 
-    use_limited_api = _use_limited_api(limited_api, quiet)
+    if product not in PRODUCTS:
+        raise ValueError(f"product must be one of {', '.join(map(repr, PRODUCTS))}, not {product!r}")
+    use_limited_api = _use_limited_api(limited_api, quiet) if product == "extension" else False
     use_guard_pages = _guard_pages(guard_pages)
 
     if isinstance(module_list, (str, os.PathLike, Extension)):
@@ -519,6 +532,17 @@ def _natify(
         if not name.rsplit(".", 1)[-1].isidentifier():
             raise ValueError(f"{wasm}: {name!r} is not a module name; give the module an Extension with a name")
         out_dir = Path(build_dir) / name if build_dir else wasm.parent / f"{wasm.stem}_wasmext"
+        if product != "extension":  # the C is made by the build_ext of wasmext._setuptools, when it builds the file
+            ext = copy.copy(template) if template else Extension(name, [])
+            ext.name = name
+            ext.sources = [wasm.as_posix()]
+            if not use_guard_pages:
+                ext.define_macros = [*ext.define_macros, ("WASM_RT_USE_MMAP", "0")]
+            ext._wasmext_made = True  # type: ignore[attr-defined]
+            ext._wasmext_product = product  # type: ignore[attr-defined]
+            ext._wasmext_settings = {"work": out_dir.resolve(), "parts": parts, "quiet": quiet, "force": force}  # type: ignore[attr-defined]
+            result.append((wasm, ext))
+            return
         prepared = _prepare(wasm, name, out_dir, force=force, quiet=quiet, stubs=stubs, parts=parts)
         ext = copy.copy(template) if template else Extension(name, [])
         ext.name = name

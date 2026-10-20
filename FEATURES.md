@@ -849,14 +849,15 @@ has only the hooks of stdin and stdout (clock, random, sleep and `end` of the co
 builds only that; the extension is built only when it is the default or asked for. `--exe` needs a `_start` (a command). A reactor (WASI module with `_initialize` and no `_start`) is a
 `--shared` product: **not yet done**, the instantiation must call `_initialize` after the start of wasm2c.
 
-### Stage 7, how the products are asked for (decided, not built)
+### Stage 7, how the products are asked for (built; the wheel tag and the C header in the wheel are open)
 
 A package may ship a shared library (a dll) or an executable instead of, or beside, a Python extension, so the product is a setting of **both** doors, not only of the command line:
 
 - `natify(..., product="extension" | "shared" | "exe")` (default `"extension"`) and, with the same name, a key `product` in `[[tool.wasmext.ext-modules]]` of `pyproject.toml` (the hook reads the table and calls `natify()`); `natify()` keeps returning `Extension` objects.
 - One product for each entry: several products of one `.wasm` are several entries (an array of tables), each with its own output name. The command line says the same with `--shared` and `--exe` (`--extension` is the default when none is named), one product for each run, since a library holds no `main`.
 - A product that is not an extension is an `Extension` with a mark that `wasmext._setuptools` (the `build_ext` it already puts in) knows: it compiles `<name>_shared.c` or `<name>_main.c` in place of the Python layer, links a library (`lib<name>.so`, `lib<name>.dylib`, `<name>.dll` with its import library) or an executable (`<name>`, `<name>.exe`) and puts the file where an extension would go, so `package-data`, `inplace` and wheels work as they do for an extension.
-- To settle when it is built: the tag of a wheel that has no Python extension (`py3-none-<platform>`, not `cp311`); where the header `<name>_api.h` goes (beside the library, in the wheel); how a package finds its own binary at run time (a small helper, not a path written by hand); `--exe` needs `_start`, and a reactor (`_initialize`, no `_start`) is a `--shared` product whose instantiation must call `_initialize`.
+- **Built:** `natify(product=)`, the `product` key of the table (type-checked), `--extension`/`--shared`/`--exe` (exclusive; a product other than the extension implies `-i`), the `build_ext` of `wasmext._setuptools` (`get_ext_filename`, `build_extension`, the wrapper copied to the source folder with `-i`), `tests/test_products.py`. The C of a product is made when it is built, not when `natify()` is called; the CLI ignores the table of the project it runs in (`WASMEXT_NO_PYPROJECT`).
+- To settle (still open): the tag of a wheel that has no Python extension (`py3-none-<platform>`, not `cp311`); where the header `<name>_api.h` goes (beside the library, in the wheel); how a package finds its own binary at run time (a small helper, not a path written by hand); `--exe` needs `_start`, and a reactor (`_initialize`, no `_start`) is a `--shared` product whose instantiation must call `_initialize`.
 
 ### Stage 6b, the wrapper for ctypes, as built
 

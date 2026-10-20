@@ -100,6 +100,29 @@ The command line has a command for each thing it does (`wasmext --help`). `wasme
 methods of `Instance` and which are left out, and why. It writes nothing and needs no `wasm2c`; the exit status is 1 for a module
 that cannot be wrapped.
 
+### Shared libraries and programs
+
+A module can be made into something other than a Python extension, for a package that ships a shared library (for C, or for Python over
+`ctypes`) or a program. The product is a setting of both doors, one for each entry:
+
+```toml
+[[tool.wasmext.ext-modules]]
+module-list = "src/pkg/engine.wasm"
+product = "shared"      # "extension" (the default), "shared" or "exe"
+
+[[tool.wasmext.ext-modules]]
+module-list = "src/pkg/tool.wasm"
+product = "exe"
+```
+
+`natify(..., product="shared")` is the same, and `wasmext natify --shared FILE` / `--exe FILE` makes one product in place (they exclude each other:
+a library holds no `main`). `setup.py build_ext` puts the file where an extension would go: `lib<name>.so` / `lib<name>.dylib` / `<name>.dll`
+(with its header `<name>_api.h` in `<name>_wasmext/`, and `<name>_ctypes.py` beside it: the interface of the extension over `ctypes`), or the program `<name>` /
+`<name>.exe`. A program needs a `_start` and no imports but WASI's (`--env NAME=VALUE`, `--dir HOST::GUEST[:ro]`, `--argv0`, `--help`); a
+library exports only its API. The settings of the extension (`libraries`, `extra-compile-args`, ...) are the flags of the build. A reactor
+(`_initialize`, no `_start`) is a library: it is initialized when the instance is made. Not done yet: the tag of a wheel that has no
+Python extension (it is tagged for the interpreter that built it), and `limited-api` and the stubs, which are for extensions only.
+
 ### Linking instances
 
 An instance can take its imports from the exports of another one, with no Python in between: a function is then called

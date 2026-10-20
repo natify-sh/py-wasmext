@@ -11,12 +11,14 @@ that has not said anything itself (a `[tool.distutils.bdist_wheel]` setting wins
 from __future__ import annotations
 
 import os
+import shutil
+import sys
 import tomllib
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
-from ._natify import LIMITED_API_VERSION, natify
+from ._natify import LIMITED_API_VERSION, PRODUCTS, natify
 
 
 def wheel_tag() -> str:
@@ -41,6 +43,7 @@ _WASMIZE_KEYS = {
     "limited-api": "limited_api",
     "guard-pages": "guard_pages",
     "parts": "parts",
+    "product": "product",
 }
 
 
@@ -77,6 +80,7 @@ _KEY_TYPES = {
     "limited-api": "bool",
     "guard-pages": "bool",
     "parts": "int",
+    "product": "product",
     "extra-compile-args": "list",
     "extra-link-args": "list",
     "undef-macros": "list",
@@ -92,6 +96,8 @@ def _check_value(path: Path, key: str, value: Any) -> None:
     kind = _KEY_TYPES.get(key)
     where = f"{path}: [tool.wasmext.ext-modules] {key}"
     strings = isinstance(value, list) and all(isinstance(v, str) for v in value)  # pyright: ignore[reportUnknownVariableType]
+    if kind == "product" and value not in PRODUCTS:
+        raise ValueError(f"{where} must be one of {', '.join(PRODUCTS)}, not {value!r}")
     if kind == "str" and not isinstance(value, str):
         raise TypeError(f"{where} must be a string, not {value!r}")
     if kind == "bool" and not isinstance(value, bool):
@@ -157,6 +163,10 @@ def pyproject_calls(root: Path) -> list[dict[str, Any]]:
 def _add_extensions_from_pyproject(dist: Any) -> None:
     """Put the extensions of `[tool.wasmext.ext-modules]` into `dist.ext_modules`, after those that a `setup.py` gave (it is not needed;
     one that has an extension of its own, a hand-written C one, goes with the table)."""
+    if os.environ.get(
+        "WASMEXT_NO_PYPROJECT"
+    ):  # the command line builds what it was asked, not what the table of the project says
+        return
     root = Path(getattr(dist, "src_root", None) or os.getcwd())
     calls = pyproject_calls(root)
     if not calls:
@@ -179,11 +189,23 @@ def _add_extensions_from_pyproject(dist: Any) -> None:
 def finalize_distribution_options(dist: Any) -> None:
     _add_extensions_from_pyproject(dist)
     extensions: list[Any] = getattr(dist, "ext_modules", None) or []
-    if any(getattr(e, "_wasmext_parallel", False) for e in extensions) and "build_ext" not in dist.cmdclass:
+    if (
+        any(getattr(e, "_wasmext_parallel", False) or getattr(e, "_wasmext_product", None) for e in extensions)
+        and "build_ext" not in dist.cmdclass
+    ):
         dist.cmdclass["build_ext"] = parallel_build_ext(dist.get_command_class("build_ext"))
     marked = [e for e in extensions if _is_abi3(e)]
     if marked:
         dist.get_option_dict("bdist_wheel").setdefault("py_limited_api", ("wasmext", wheel_tag()))
+
+
+def product_filename(stem: str, product: str) -> str:
+    """The file of a product that is not a Python extension, by the convention of the system."""
+    if product == "exe":
+        return f"{stem}.exe" if sys.platform == "win32" else stem
+    if sys.platform == "win32":
+        return f"{stem}.dll"
+    return f"lib{stem}.dylib" if sys.platform == "darwin" else f"lib{stem}.so"
 
 
 def _jobs(command: Any, count: int) -> int:
@@ -203,7 +225,24 @@ def parallel_build_ext(base: type) -> type:
     """
 
     class WasmextBuildExt(base):  # type: ignore[misc, valid-type]
+        def _product_of(self, ext_name: str) -> Any:
+            # distutils asks for the file of the last part of the name (`get_ext_fullpath`), setuptools for the whole name (editable installs)
+            for e in self.extensions:
+                if getattr(e, "_wasmext_product", None) and ext_name in (e.name, e.name.rpartition(".")[2]):
+                    return e
+            return None
+
+        def get_ext_filename(self, ext_name: str) -> str:
+            """The name of a product that is not an extension: `lib<stem>.so`, `lib<stem>.dylib`, `<stem>.dll` or the program."""
+            ext = self._product_of(ext_name)
+            if ext is None:
+                return super().get_ext_filename(ext_name)
+            *package, stem = ext_name.split(".")
+            return os.path.join(*package, product_filename(stem, ext._wasmext_product))
+
         def build_extension(self, ext: Any) -> None:
+            if getattr(ext, "_wasmext_product", None):
+                return self._build_product(ext)
             sources = list(ext.sources or [])
             if not getattr(ext, "_wasmext_parallel", False) or len(sources) < 2:
                 return super().build_extension(ext)
@@ -236,5 +275,45 @@ def parallel_build_ext(base: type) -> type:
                 super().build_extension(ext)  # nothing to compile now: it links
             finally:
                 ext.sources, ext.extra_objects, self.force = saved
+
+        def _build_product(self, ext: Any) -> None:
+            """A shared library or a program: made by `wasmext._exe` from the `.wasm` and put where the extension would be."""
+            from ._exe import BuildFlags, build, build_shared
+
+            wasm = Path(ext.sources[0])
+            target = Path(self.get_ext_fullpath(ext.name))
+            settings = ext._wasmext_settings
+            if (
+                not (self.force or settings["force"])
+                and target.is_file()
+                and target.stat().st_mtime_ns >= wasm.stat().st_mtime_ns
+            ):
+                return  # up to date
+            flags = BuildFlags(
+                extra_compile_args=ext.extra_compile_args or (),
+                extra_link_args=ext.extra_link_args or (),
+                define_macros=ext.define_macros or (),
+                undef_macros=ext.undef_macros or (),
+                include_dirs=ext.include_dirs or (),
+                libraries=ext.libraries or (),
+                library_dirs=ext.library_dirs or (),
+            )
+            target.parent.mkdir(parents=True, exist_ok=True)
+            work = settings["work"]
+            if ext._wasmext_product == "shared":
+                build_shared(wasm, target, work=work, parts=settings["parts"], quiet=settings["quiet"], flags=flags)
+            else:
+                build(wasm, target, work=work, parts=settings["parts"], flags=flags)
+
+        def copy_extensions_to_source(self) -> None:
+            super().copy_extensions_to_source()
+            for ext in self.extensions:  # the wrapper of a library goes to the source folder with it
+                if getattr(ext, "_wasmext_product", None) != "shared":
+                    continue
+                *package, stem = ext.name.split(".")
+                source = Path(self.get_finalized_command("build_py").get_package_dir(".".join(package))).resolve()
+                built = Path(self.build_lib).joinpath(*package)
+                for extra in built.glob(f"{stem}_ctypes.py*"):
+                    shutil.copyfile(extra, source / extra.name)
 
     return WasmextBuildExt

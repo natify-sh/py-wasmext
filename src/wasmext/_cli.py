@@ -17,7 +17,7 @@ import sys
 import tempfile
 from collections.abc import Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from ._gen import GenError
 from ._inspect import read
@@ -85,6 +85,29 @@ def _parser() -> argparse.ArgumentParser:
         help="write the C of each module in N files, which are compiled at the same time (1: one file); default: WASMEXT_PARTS, "
         "else one file for a module under 1 MiB and one for each 128 KiB of a larger one",
     )
+    what = parser.add_mutually_exclusive_group()
+    what.add_argument(
+        "--extension",
+        dest="product",
+        action="store_const",
+        const="extension",
+        help="make a Python extension (the default)",
+    )
+    what.add_argument(
+        "--shared",
+        dest="product",
+        action="store_const",
+        const="shared",
+        help="make a shared library with a C API and a ctypes wrapper, instead of an extension (it is built: -i is implied)",
+    )
+    what.add_argument(
+        "--exe",
+        dest="product",
+        action="store_const",
+        const="exe",
+        help="make a program of a command (a module with _start), instead of an extension (it is built: -i is implied)",
+    )
+    parser.set_defaults(product="extension")
     parser.add_argument("--no-stubs", action="store_true", help="do not write a .pyi beside each .wasm")
     parser.add_argument(
         "-X", "--exclude", action="append", default=[], metavar="GLOB", help="leave out files matching GLOB"
@@ -131,6 +154,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             limited_api=args.abi3,
             guard_pages=args.guard_pages,
             parts=args.parts,
+            product=args.product,
         )
     except (WasmError, GenError, ValueError, RuntimeError) as exc:
         print(f"wasmext: error: {exc}", file=sys.stderr)
@@ -138,7 +162,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not made:
         print("wasmext: no .wasm files to process", file=sys.stderr)
         return 1
-    if not args.quiet:
+    if args.product != "extension" and not (args.inplace or args.build):
+        args.inplace = True  # the C of a library or a program is made when it is built: there is nothing to see before
+    if not args.quiet and args.product == "extension":
         for wasm, ext in made:
             print(f"wasmext: {Path(wasm).as_posix() if wasm else wasm} -> {ext.name} ({ext.include_dirs[-1]}/)")
     if not (args.inplace or args.build):
@@ -220,6 +246,9 @@ def _build(base: Path, extensions: list[Extension], *, inplace: bool, force: boo
     if quiet:
         script_args.insert(0, "-q")
     cwd = os.getcwd()
+    os.environ["WASMEXT_NO_PYPROJECT"] = (
+        "1"  # setuptools' hook of wasmext must not add the extensions of the table of a project to this build
+    )
     temp: str | None = None
     leave_build = (base / "build").exists()
     try:
@@ -227,14 +256,32 @@ def _build(base: Path, extensions: list[Extension], *, inplace: bool, force: boo
         if inplace:  # nothing but the extensions is left behind (cythonize keeps its objects out of build/ too)
             temp = tempfile.mkdtemp(dir=base)
             script_args += ["--build-temp", temp]
-        setup(name="wasmext-cli", ext_modules=moved, packages=[], py_modules=[], script_args=script_args)
+        cmdclass: dict[str, Any] = {}
+        if any(getattr(e, "_wasmext_product", None) for e in moved):
+            from setuptools.command.build_ext import build_ext
+
+            from ._setuptools import parallel_build_ext
+
+            cmdclass["build_ext"] = parallel_build_ext(build_ext)
+        setup(
+            name="wasmext-cli",
+            ext_modules=moved,
+            packages=[],
+            py_modules=[],
+            script_args=script_args,
+            cmdclass=cmdclass,
+        )
     except SystemExit as exc:
         return 1 if exc.code not in (None, 0) else 0
+    except (WasmError, GenError, ValueError, RuntimeError) as exc:  # a library or a program that cannot be made: said as the other errors are
+        print(f"wasmext: error: {exc}", file=sys.stderr)
+        return 1
     else:
         if inplace:
             for ext in moved:
                 _prune_stale(base, ext.name)
     finally:
+        os.environ.pop("WASMEXT_NO_PYPROJECT", None)
         os.chdir(cwd)
         if temp is not None:
             shutil.rmtree(temp, ignore_errors=True)

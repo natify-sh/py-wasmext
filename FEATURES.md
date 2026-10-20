@@ -991,6 +991,8 @@ warnings of the compiler for the C of wasm2c too; the release workflow does not 
 
 ## Decisions
 
+- **The public interface (alpha).** Three tiers, written in the README ("Public interface"): *stable* (the module that wasmext makes, `natify()` and the options and `pyproject.toml` keys, the user's environment variables, the products' header, wrapper and command line, `__version__`, `GenError`, `WasmError`), *provisional* (`generate`, `parse`, `Glue` and the parsed types, `find_toolchain`, `Toolchain`, `wasmimport`), *private* (the `_*` modules, the setuptools hook, the C and its headers, the `WASMEXT_*` macros, and the link between instances). The link record (`wasmext.export.v1`, `wasmext_export`, `<name>_export`) is **private and opaque**: it was said to be private "until a second user exists", and the header of a library does carry its struct, so the rule is that a reader passes it and does not read its fields; it is not a contract for other hosts. Open: whether to move the struct out of the public header; a test that pins its layout; the fingerprint `WASMEXT_RUNTIME` does not yet cover `wasm_rt_funcref_t`, `wasm_rt_externref_table_t` and `wasm_rt_shared_memory_t`, so adding tables, references or threads to the link would change it.
+
 - **Platforms.** `wasmext` is a pure Python wheel (`py3-none-any`) that depends on the wabt-package, so it installs wherever the
   wabt-package has a wheel (or builds from its sdist with a C++20 compiler): the platforms of `wasmext` are the platforms of the
   wabt-package, and nothing else limits them. Both packages cover the desktop platforms of `cibuildwheel` and nothing outside them

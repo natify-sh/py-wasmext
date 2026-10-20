@@ -289,6 +289,26 @@ seven platforms, and the WASI programs of the official test suite run on all thr
 The package is **not published on PyPI yet**; until it is, build the wheel from a checkout (`uv build`) and install it with
 `pip install --find-links <the folder of the wheel> wasmext`, as the examples do in CI.
 
+### Public interface
+
+What may be relied on, and what may change. This is the boundary for the alpha; a change to the first tier is written in the release notes, a change to the others may come without one.
+
+**Stable** (the interface that users of a built wheel, and of the build, see):
+
+- The module that wasmext makes: `Instance(imports, wasi=...)`; an export as an attribute or a method; `instance["name"]` and `instance.__exports__` (a reference to give to another instance as an import; its content is opaque);
+  an exported memory as a `memoryview`; an exported global as an attribute; a `v128` as 16 bytes; the exceptions `Trap` and `LinkError`, `UncaughtException` (for a module that has exception tags) and, for a module that uses WASI, `WasiExit`, `WasiSignal`, `WasiTerminated`; the `.pyi` written beside the `.wasm`.
+- The build: `natify()` and its keyword arguments, the options of `wasmext natify` (and `wasmext inspect`, whose text is for people, not for programs), the keys of `[[tool.wasmext.ext-modules]]` and `limited-api` of `[tool.wasmext]` in `pyproject.toml`, and the values of `product`.
+- The environment variables of a user: `WASMEXT_WABT`, `WASMEXT_WASM2C`, `WASMEXT_WASM2C_RUNTIME`, `WASMEXT_WASM2C_INCLUDE`, `WASMEXT_LIMITED_API`, `WASMEXT_GUARD_PAGES`, `WASMEXT_PARTS`, `WASMEXT_JOBS`, `WASMEXT_NO_PYPROJECT`.
+- The products: the header `<name>_api.h` of a shared library (its functions, `<name>_config`, the trap codes) and the wrapper `<name>_ctypes.py`, which has the interface of the extension; the command line of a program made with `--exe` (`--env`, `--dir`, `--argv0`, `--help`, `--version`) and its exit codes.
+- `wasmext.__version__`, `GenError` and `WasmError`.
+
+**Provisional** (works, used by the tests, but its shape is not settled): `generate()`, `parse()`, `mangle()`, `Glue` and the types of a parsed module (`Module`, `Import`, `Export`, `FuncType`, `GlobalType`, `TableType`, `Limits`, `ValType`);
+`find_toolchain()` and `Toolchain`; `wasmimport` (`install`, `uninstall`, `clean`, `WasmFinder`, `WasmImportLoader`), a development tool.
+
+**Private** (no promise at all): every module whose name begins with an underscore (`wasmext._*`), the setuptools hook that `pyproject.toml` entry points register, the headers in `wasmext/c/`, the C that wasmext writes (`*_glue.h`, `*_w2c.*`, `*_py.c`, the `<name>_wasmext/` folder: it is what is built, not an interface), the `WASMEXT_*` macros of those headers,
+the cache of `wasmimport`, and the **link between instances**: the capsule `wasmext.export.v1` and the record behind it (`wasmext_export`, `<name>_export` in a header). A reference is only passed from `_export_find` to a `_link_*` function or to another instance; do not read its fields.
+A module links to a module made by another version of wasmext only if both have the same record version and the same layout of the wasm2c runtime; otherwise the link is a `LinkError`, and nothing more is promised between versions of the alpha.
+
 ### Known limitations
 
 - **WebAssembly:** tables are not exposed or linked (an exported table is left out and reported; a module that imports one is refused); no threads or shared memory;

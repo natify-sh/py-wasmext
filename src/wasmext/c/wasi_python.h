@@ -193,21 +193,21 @@ static inline PyObject *wasi_read_bytes(wasmext_wasi_py *p, Py_ssize_t size) {
     PyObject *buffer = PyObject_GetAttrString(source, "buffer");
     if (buffer == NULL) {  /* a text stream with no binary side: its text, as UTF-8; what does not fit in this read waits for the next */
         PyErr_Clear();
-        if (p->stdin_rest == NULL || PyBytes_GET_SIZE(p->stdin_rest) == 0) {
+        if (p->stdin_rest == NULL || PyBytes_Size(p->stdin_rest) == 0) {
             Py_CLEAR(p->stdin_rest);
             PyObject *chars = PyObject_CallMethod(source, "read", "n", size);
             p->stdin_rest = chars ? PyUnicode_AsUTF8String(chars) : NULL;
             Py_XDECREF(chars);
             if (p->stdin_rest == NULL) return NULL;
         }
-        Py_ssize_t have = PyBytes_GET_SIZE(p->stdin_rest), n = have < size ? have : size;
-        PyObject *head = PyBytes_FromStringAndSize(PyBytes_AS_STRING(p->stdin_rest), n);
-        PyObject *tail = head ? PyBytes_FromStringAndSize(PyBytes_AS_STRING(p->stdin_rest) + n, have - n) : NULL;
+        Py_ssize_t have = PyBytes_Size(p->stdin_rest), n = have < size ? have : size;
+        PyObject *head = PyBytes_FromStringAndSize(PyBytes_AsString(p->stdin_rest), n);
+        PyObject *tail = head ? PyBytes_FromStringAndSize(PyBytes_AsString(p->stdin_rest) + n, have - n) : NULL;
         if (tail == NULL) {
             Py_XDECREF(head);
             return NULL;
         }
-        Py_SETREF(p->stdin_rest, tail);
+        { PyObject *old_ = p->stdin_rest; p->stdin_rest = tail; Py_XDECREF(old_); }
         return head;
     }
     PyObject *bytes = PyObject_HasAttrString(buffer, "read1") ? PyObject_CallMethod(buffer, "read1", "n", size)
@@ -544,7 +544,7 @@ static inline int wasi_apply_option(wasmext_wasi_py *p, wasi_py_options *o, cons
                 Py_CLEAR(strings);
                 break;
             }
-            if (PyUnicode_GET_LENGTH(key) == 0 || PyUnicode_FindChar(key, '=', 0, PyUnicode_GET_LENGTH(key), 1) >= 0) {
+            if (PyUnicode_GetLength(key) == 0 || PyUnicode_FindChar(key, '=', 0, PyUnicode_GetLength(key), 1) >= 0) {
                 PyErr_SetString(PyExc_ValueError, "wasi: env: a name is not empty and has no '=' in it");
                 Py_CLEAR(strings);
                 break;

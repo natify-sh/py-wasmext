@@ -608,14 +608,23 @@ def _natify(
         if not name.rsplit(".", 1)[-1].isidentifier():
             raise ValueError(f"{wasm}: {name!r} is not a module name; give the module an Extension with a name")
         out_dir = Path(build_dir) / name if build_dir else wasm.parent / f"{wasm.stem}_wasmext"
-        if product != "extension":  # the C is made by the build_ext of wasmext._setuptools, when it builds the file
+        if product != "extension":
+            # The C is made now, as an extension's is (so a source distribution carries it, and a file of it can be named in package-data on the first build);
+            # the file itself, the library or the program, is made by the build_ext of wasmext._setuptools.
+            from ._exe import generate_program, generate_shared
+
+            generated = (generate_shared if product == "shared" else generate_program)(
+                wasm, work=out_dir.resolve(), parts=parts, force=force
+            )
             ext = copy.copy(template) if template else Extension(name, [])
             ext.name = name
             ext.sources = [wasm.as_posix()]
+            ext.depends = [*ext.depends, *generated.files]
             if not use_guard_pages:
                 ext.define_macros = [*ext.define_macros, ("WASM_RT_USE_MMAP", "0")]
             ext._wasmext_made = True  # type: ignore[attr-defined]
             ext._wasmext_product = product  # type: ignore[attr-defined]
+            ext._wasmext_generated = generated  # type: ignore[attr-defined]
             ext._wasmext_settings = {"work": out_dir.resolve(), "parts": parts, "quiet": quiet, "force": force}  # type: ignore[attr-defined]
             result.append((wasm, ext))
             return

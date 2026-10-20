@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -78,7 +79,7 @@ def test_a_product_that_is_not_known_is_refused_in_pyproject(tmp_path: Path) -> 
         pyproject_calls(tmp_path)
 
 
-def test_the_command_line_makes_one_product_in_place(tmp_path: Path, wabt: Path) -> None:
+def test_the_command_line_makes_one_product_in_place_with_i(tmp_path: Path, wabt: Path) -> None:
     root = _project(tmp_path, wabt, "")
     env = {**os.environ, "WASMEXT_WABT": str(wabt)}
 
@@ -92,14 +93,16 @@ def test_the_command_line_makes_one_product_in_place(tmp_path: Path, wabt: Path)
             check=False,
         )
 
-    assert run("--exe", "pkg/hello.wasm").returncode == 0
+    assert run("-i", "--exe", "pkg/hello.wasm").returncode == 0
     ran = subprocess.run([root / "pkg" / product_filename("hello", "exe")], capture_output=True, check=False)
     assert ran.stdout == b"hello, wasi\n"
-    assert run("--shared", "pkg/lib.wasm").returncode == 0
+    assert run("-i", "--shared", "pkg/lib.wasm").returncode == 0
     assert (root / "pkg" / product_filename("lib", "shared")).is_file()
     both = run("--shared", "--exe", "pkg/lib.wasm")
     assert both.returncode == 2 and "not allowed with" in both.stderr  # one product for each run
-    reactor = run("--exe", "pkg/lib.wasm")  # a library module is not a command
+    reactor = run(
+        "--exe", "pkg/lib.wasm"
+    )  # a library module is not a command (refused when the C is made, before any build)
     assert (
         reactor.returncode == 1 and "serves the imports of WASI" in reactor.stderr and "Traceback" not in reactor.stderr
     )
@@ -171,3 +174,84 @@ def test_a_library_is_made_again_when_its_flags_change(tmp_path: Path, wabt: Pat
     )
     assert _build_ext(root, wabt).returncode == 0
     assert library.stat().st_mtime_ns != built
+
+
+def test_without_i_or_b_the_command_line_only_writes_the_c_of_a_product(tmp_path: Path, wabt: Path) -> None:
+    """As `cythonize` without -b: the C is made (so it can be shipped, or named in package-data), nothing is compiled."""
+    root = _project(tmp_path, wabt, "")
+    env = {**os.environ, "WASMEXT_WABT": str(wabt)}
+
+    def run(*args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, "-m", "wasmext", "natify", *args],
+            cwd=root,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    done = run("--shared", "pkg/lib.wasm")
+    assert done.returncode == 0, done.stderr[-600:]
+    work = root / "pkg" / "lib_wasmext"
+    assert (work / "lib_api.h").is_file() and (work / "lib_shared.c").is_file() and (work / "lib_w2c.c").is_file()
+    assert "the C of the shared lib" in done.stdout
+    assert not (root / "pkg" / product_filename("lib", "shared")).exists()  # nothing was compiled
+    done = run("--exe", "pkg/hello.wasm")
+    assert done.returncode == 0, done.stderr[-600:]
+    assert (root / "pkg" / "hello_wasmext" / "hello_main.c").is_file()
+    assert not (root / "pkg" / product_filename("hello", "exe")).exists()
+
+
+def test_the_c_of_a_product_is_made_when_natify_is_called_and_is_in_the_depends(
+    tmp_path: Path, wabt: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """So a source distribution carries it and a file of it can be named in package-data on the first build."""
+    root = _project(tmp_path, wabt, "")
+    monkeypatch.setenv("WASMEXT_WABT", str(wabt))
+    monkeypatch.chdir(root)
+    [ext] = natify("pkg/lib.wasm", product="shared", quiet=True)
+    assert (root / "pkg" / "lib_wasmext" / "lib_api.h").is_file()  # made now, not at the build
+    depends = [str(p) for p in ext.depends]
+    for name in ("lib_api.h", "lib_shared.c", "lib_w2c.c", "lib_glue.h", "wasm-rt-impl.c"):
+        assert any(d.endswith(name) for d in depends), name
+    assert not any(d.endswith("lib_py.c") for d in depends)  # the Python layer is not part of a library
+
+
+def test_a_source_distribution_carries_the_c_and_package_data_gets_the_header_on_the_first_build(
+    tmp_path: Path, wabt: Path
+) -> None:
+    """The C of a product is made when the project is read, so a clean tree (CI, a build from an sdist) has it before the files of package-data are listed."""
+    import tarfile
+    import zipfile
+
+    root = _project(
+        tmp_path,
+        wabt,
+        _LIBRARY_TABLE + '[tool.setuptools.package-data]\npkg = ["lib_wasmext/lib_api.h"]\n',
+    )
+    env = {**os.environ, "WASMEXT_WABT": str(wabt)}
+
+    def setup(*args: str) -> None:
+        done = subprocess.run(
+            [sys.executable, "-c", "from setuptools import setup; setup()", "-q", *args],
+            cwd=root,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert done.returncode == 0, done.stderr[-800:]
+
+    assert not (root / "pkg" / "lib_wasmext").exists()  # a clean tree
+    setup("sdist", "-d", str(root / "dist"))
+    (sdist,) = (root / "dist").glob("*.tar.gz")
+    with tarfile.open(sdist) as t:
+        names = t.getnames()
+    for name in ("lib_api.h", "lib_shared.c", "lib_w2c.c", "lib.wasm"):
+        assert any(n.endswith((f"pkg/{name}", f"pkg/lib_wasmext/{name}")) for n in names), name
+    shutil.rmtree(root / "pkg" / "lib_wasmext")  # clean again: the wheel is the first build
+    setup("bdist_wheel", "-d", str(root / "dist"))
+    (wheel,) = (root / "dist").glob("*.whl")
+    with zipfile.ZipFile(wheel) as z:
+        assert "pkg/lib_wasmext/lib_api.h" in z.namelist()

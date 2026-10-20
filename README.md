@@ -117,16 +117,25 @@ module-list = "src/pkg/tool.wasm"
 product = "exe"
 ```
 
-`natify(..., product="shared")` is the same, and `wasmext natify --shared FILE` / `--exe FILE` makes one product in place (they exclude each other:
+`natify(..., product="shared")` is the same. The C of a product is made when `natify()` runs, as an extension's is (so a source distribution carries it, below), and `wasmext natify --shared FILE` / `--exe FILE`
+writes only that C, as `cythonize` does without `-b`; with `-i` (or `-b`) the library or the program is built too, in place (the two options exclude each other:
 a library holds no `main`). `setup.py build_ext` puts the file where an extension would go: `lib<name>.so` / `lib<name>.dylib` / `<name>.dll`
 (with its header `<name>_api.h` in `<name>_wasmext/`, and `<name>_ctypes.py` beside it: the interface of the extension over `ctypes`), or the program `<name>` /
 `<name>.exe`. A program needs a `_start` and no imports but WASI's (`--env NAME=VALUE`, `--dir HOST::GUEST[:ro]`, `--argv0`, `--help`); a
 library exports only its API. The settings of the extension (`libraries`, `extra-compile-args`, ...) are the flags of the build. A reactor
 (`_initialize`, no `_start`) is a library, and is initialized when the instance is made, in the extension and in the library alike (WASI says the host runs `_initialize` once, before any other export; a later explicit call of it does nothing). A package whose compiled files are all libraries and programs gets a wheel tagged
 `py3-none-<platform>` (any Python 3), not for the interpreter that built it. The header `<name>_api.h` is in `<name>_wasmext/`: nothing in a Python package needs it (the wrapper knows the signatures), it is for a host in C or another language that is built against the
-library, so a wheel does not have it unless the project asks: wasmext does not put it there, and a `package-data` entry for it (`engine_wasmext/engine_api.h`) reaches the wheel only when the file already exists in the source tree when the files of `package-data` are collected, which a clean build (CI, a wheel built from an sdist) does not have (checked on `examples/products`: missing on a clean build, present on the second). A host that needs it takes it from `<name>_wasmext/` after a build. wasmext builds the files and the project distributes them: it writes no helper that finds a program or a library at run time
+library, so a wheel does not have it unless the project asks: wasmext does not put it there, and a `package-data` entry for it (`pkg = ["engine_wasmext/engine_api.h"]`) puts it in the wheel, also on a clean build (CI, a wheel built from an sdist), because the C is made before the files of `package-data` are listed (checked on `examples/products`). wasmext builds the files and the project distributes them: it writes no helper that finds a program or a library at run time
 (a library has its wrapper, which looks beside itself; for a program, a package does what suits it: `Path(__file__).with_name(...)` as `examples/products` does, `importlib.resources`, a `main()` of its own run by a `[project.scripts]` entry, or none of it; a project may have several programs
 and may not want a launcher at all). `limited-api` and the stubs are for extensions only.
+
+### What a source distribution carries
+
+An sdist made from a project that uses wasmext has the `.wasm` **and** the C that wasmext made from it (`<name>_wasmext/`: the glue, the C of wasm2c, its runtime and, for a product, `<name>_api.h` and `<name>_shared.c` or `<name>_main.c`), for an
+extension and for a library or a program alike: the C is made when the project is read, and the files are named in the sources and the dependencies of the extension, which setuptools puts in the sdist. The C is not trusted by its time:
+it carries the SHA-256 of the `.wasm` it was made from, and is made again if the `.wasm`, wasmext or WABT is another (so a file restored from a cache, or copied with its old time, cannot leave a stale C behind).
+Cython advises against shipping generated C in an sdist and a build requirement on the generator instead, which is what `requires = ["setuptools", "wasmext"]` does here; a project that does not want the C in its sdist adds
+`global-exclude *_wasmext/*` and `prune src/pkg/*_wasmext` (the names of its folders) to `MANIFEST.in`. Shipping the C and not the `.wasm`, to be built with a C compiler and no wasmext, is not tested.
 
 ### Linking instances
 

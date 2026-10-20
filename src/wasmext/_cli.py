@@ -104,14 +104,14 @@ def _parser() -> argparse.ArgumentParser:
         dest="product",
         action="store_const",
         const="shared",
-        help="make a shared library with a C API and a ctypes wrapper, instead of an extension (it is built: -i is implied)",
+        help="make a shared library with a C API and a ctypes wrapper, instead of an extension (like an extension: the C is written, -i or -b builds it)",
     )
     what.add_argument(
         "--exe",
         dest="product",
         action="store_const",
         const="exe",
-        help="make a program of a command (a module with _start), instead of an extension (it is built: -i is implied)",
+        help="make a program of a command (a module with _start), instead of an extension (like an extension: the C is written, -i or -b builds it)",
     )
     parser.set_defaults(product="extension")
     parser.add_argument("--no-stubs", action="store_true", help="do not write a .pyi beside each .wasm")
@@ -180,11 +180,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not made:
         print("wasmext: no .wasm files to process", file=sys.stderr)
         return 1
-    if args.product != "extension" and not (args.inplace or args.build):
-        args.inplace = True  # the C of a library or a program is made when it is built: there is nothing to see before
-    if not args.quiet and args.product == "extension":
+    if not args.quiet:
         for wasm, ext in made:
-            print(f"wasmext: {Path(wasm).as_posix() if wasm else wasm} -> {ext.name} ({ext.include_dirs[-1]}/)")
+            shown = Path(wasm).as_posix() if wasm else wasm
+            if args.product == "extension":
+                print(f"wasmext: {shown} -> {ext.name} ({ext.include_dirs[-1]}/)")
+                continue
+            generated = ext._wasmext_generated  # type: ignore[attr-defined]
+            print(
+                f"wasmext: {shown} -> the C of the {args.product} {generated.last} ({Path(generated.out_dir).as_posix()}/)"
+            )
+            for item in generated.skipped:
+                print(f"wasmext: {shown}: not in the library: {item}", file=sys.stderr)
     if not (args.inplace or args.build):
         return 0
 

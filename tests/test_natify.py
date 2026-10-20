@@ -492,8 +492,10 @@ def test_the_extensions_of_one_wheel_are_all_abi3_or_all_native(project: Path) -
     [native] = natify("pkg/*.wasm", quiet=True, limited_api=False)
     assert not tagged(finalize(follow, native)) and not follow.py_limited_api  # the default follows the explicit False
     [abi3] = natify("pkg/*.wasm", quiet=True)
-    [program] = natify("pkg/*.wasm", quiet=True, product="exe")
-    assert tagged(finalize(abi3, program))  # a program does not tie the wheel to a Python
+    [library] = natify(
+        "pkg/*.wasm", quiet=True, product="shared"
+    )  # (a program needs a WASI command, and is refused when natify() runs)
+    assert tagged(finalize(abi3, library))  # a library or a program does not tie the wheel to a Python
 
 
 @pytest.mark.parametrize(

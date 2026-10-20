@@ -538,6 +538,13 @@ def test_abi3_is_asked_of_the_interpreter_and_the_platform(monkeypatch: pytest.M
     # an interpreter that lists no .abi3 suffix cannot load such a file
     monkeypatch.setattr(importlib.machinery, "EXTENSION_SUFFIXES", [".cpython-311-x86_64-linux-gnu.so", ".so"])
     assert "does not load abi3" in str(abi3_possible())
+    # an interpreter that names the file with the platform: .abi3-<platform>.so
+    monkeypatch.setattr(
+        importlib.machinery,
+        "EXTENSION_SUFFIXES",
+        [".cpython-315-x86_64-linux-gnu.so", ".abi3-x86_64-linux-gnu.so", ".so"],
+    )
+    assert abi3_possible() is None
     # 3.15 lists .abi3t.so too: it is the stable ABI of a free-threaded build, not abi3
     monkeypatch.setattr(
         importlib.machinery, "EXTENSION_SUFFIXES", [".cpython-315-x86_64-linux-gnu.so", ".abi3t.so", ".so"]

@@ -7,6 +7,7 @@ import importlib
 import importlib.util
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -22,6 +23,13 @@ from wasmext._gen import module_prefix
 from wasmext._natify import _export_tags, _tail_call_locals  # pyright: ignore[reportPrivateUsage]
 
 # the free-threaded build has no abi3 (3.15 has abi3t, which wasmext does not build: cibuildwheel does not tag it yet): there the extension is native
+
+
+def is_abi3_file(name: str) -> bool:
+    """Whether a file name is that of an abi3 extension: `.abi3.so`, or `.abi3-<platform>.so` as the newest interpreters name it (not `.abi3t.so`)."""
+    return re.search(r"\.abi3[.-]", name) is not None
+
+
 needs_abi3 = pytest.mark.skipif(
     bool(sysconfig.get_config_var("Py_GIL_DISABLED")), reason="no abi3 on a free-threaded build"
 )

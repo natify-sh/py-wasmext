@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from .conftest import DATA, needs_abi3
+from .conftest import DATA, is_abi3_file, needs_abi3
 
 SIMPLE = DATA / "simple.wasm"
 
@@ -140,7 +140,7 @@ def test_abi3_builds_an_extension_that_runs(project: Path, wabt: Path) -> None:
     done = wasmext(project, wabt, "natify", "-q", "-i", "--limited-api", "src/pkg/add.wasm")
     assert done.returncode == 0, done.stderr
     [extension] = built(project / "src" / "pkg", "add")
-    assert ".abi3." in extension.name or extension.suffix == ".pyd"
+    assert is_abi3_file(extension.name) or extension.suffix == ".pyd"
     out = subprocess.run(
         [sys.executable, "-c", "from pkg import add; print(add.Instance().add(40, 2))"],
         cwd=project,
@@ -158,7 +158,7 @@ def test_inplace_removes_the_stale_variant_that_would_shadow_the_new_one(project
     folder = project / "src" / "pkg"
     assert wasmext(project, wabt, "natify", "-q", "-i", "--no-limited-api", "src/pkg/add.wasm").returncode == 0
     [native] = built(folder, "add")
-    assert ".abi3." not in native.name
+    assert not is_abi3_file(native.name)
     done = wasmext(project, wabt, "natify", "-q", "-i", "--limited-api", "src/pkg/add.wasm")
     assert done.returncode == 0, done.stderr
     [only] = built(folder, "add")

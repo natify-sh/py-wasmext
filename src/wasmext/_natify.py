@@ -66,6 +66,7 @@ WARN_PART_BYTES = 4096
 LIMITED_API_VERSION = "0x030B0000"
 PRODUCTS = ("extension", "shared", "exe")  # what natify(product=...) can make
 # The C of wasm2c for a module with SIMD includes the headers of simde, which the wabt-package carries.
+_ABI3_SUFFIX = re.compile(r"\.abi3[.-]")  # not ".abi3t.so" (abi3t, PEP 803)
 _USES_SIMDE = re.compile(rb'^\s*#\s*include\s*[<"]simde/', re.MULTILINE)
 
 
@@ -78,8 +79,8 @@ def abi3_possible() -> str | None:
     *Is it wise to ship a wheel of it* is a decision, not a capability, and is a list: Emscripten (Pyodide), Android and iOS pin one exact CPython in the runtime
     (the extension links libpython there, or the app embeds one build), so an abi3 wheel would promise what the platform cannot keep."""
     suffixes = importlib.machinery.EXTENSION_SUFFIXES
-    # ".abi3." and not ".abi3": 3.15 also lists ".abi3t.so" (the stable ABI of a free-threaded build, PEP 803), which is not what Py_LIMITED_API=3.11 makes
-    can_load = any(suffix.startswith(".abi3.") for suffix in suffixes) or (
+    # ".abi3." or ".abi3-<platform>." and not ".abi3": 3.15 also lists ".abi3t.so" (the stable ABI of a free-threaded build, PEP 803), which is not what Py_LIMITED_API=3.11 makes
+    can_load = any(_ABI3_SUFFIX.match(suffix) for suffix in suffixes) or (
         sys.platform == "win32" and ".pyd" in suffixes
     )
     if sysconfig.get_config_var("Py_GIL_DISABLED"):

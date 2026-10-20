@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from .conftest import DATA, needs_abi3
+from .conftest import DATA, is_abi3_file, needs_abi3
 
 SIMPLE = DATA / "simple.wasm"
 
@@ -185,7 +185,7 @@ def test_native_after_abi3_gives_the_native_extension_and_not_the_abi3_one_left_
         printed: str,
     ) -> bool:  # fast.abi3.so, or fast.pyd on Windows; a native one has the tag of the interpreter too
         name = Path(printed.strip()).name
-        return ".abi3." in name or name.count(".") == 1
+        return is_abi3_file(name) or name.count(".") == 1
 
     abi3 = python(tmp_path, env, f"wasmimport.install(limited_api=True)\n{use}")
     assert abi3.returncode == 0, abi3.stderr[-600:]

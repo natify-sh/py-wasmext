@@ -52,5 +52,8 @@ jobs:
       - name: Install
         run: uv sync --python ${{ matrix.python }}
 
+      - name: The interpreter
+        run: uv run --python ${{ matrix.python }} python -c "import sys, sysconfig, importlib.machinery as m; print(sys.version); print(m.EXTENSION_SUFFIXES); print(sysconfig.get_config_var('Py_GIL_DISABLED'))"
+
       - name: Test
         run: uv run --python ${{ matrix.python }} pytest -q

@@ -55,7 +55,13 @@ def build_extension(wabt: Path, tmp_path_factory: pytest.TempPathFactory) -> Cal
     out = tmp_path_factory.mktemp("ext")
     sys.path.insert(0, str(out))
 
+    built: dict[
+        str, ModuleType
+    ] = {}  # a loaded extension is not made again under the feet of the process (Windows cannot overwrite a loaded .pyd)
+
     def build(source: Path, name: str, *, abi3: bool = False, defines: tuple[str, ...] = ()) -> ModuleType:
+        if name in built:
+            return built[name]
         wasm = source
         if source.suffix == ".wat":
             wasm = out / f"{name}.wasm"
@@ -78,7 +84,8 @@ def build_extension(wabt: Path, tmp_path_factory: pytest.TempPathFactory) -> Cal
         runtime = wabt / "wasm2c"
         if by_setuptools:
             _build_by_setuptools(name, out, runtime, abi3, defines)
-            return importlib.import_module(name)
+            built[name] = importlib.import_module(name)
+            return built[name]
         assert cc is not None
         limited = ["-DPy_LIMITED_API=0x030B0000"] if abi3 else []
         so = out / (name + str(sysconfig.get_config_var("EXT_SUFFIX")))
@@ -117,7 +124,8 @@ def build_extension(wabt: Path, tmp_path_factory: pytest.TempPathFactory) -> Cal
             ],
             check=True,
         )  # fmt: skip
-        return importlib.import_module(name)
+        built[name] = importlib.import_module(name)
+        return built[name]
 
     return build
 

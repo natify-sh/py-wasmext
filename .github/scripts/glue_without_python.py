@@ -21,7 +21,7 @@ MODULES = ("wasi_hello.wat", "shared_module.wat", "features.wat")
 
 
 def main(out: Path) -> int:
-    import wabt_package  # noqa: PLC0415
+    import wabt_package
 
     wabt = Path(wabt_package.__file__).parent
     out.mkdir(parents=True, exist_ok=True)

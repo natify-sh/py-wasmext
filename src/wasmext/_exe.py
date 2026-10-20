@@ -65,28 +65,96 @@ static char *run_pack(char **items, int count, size_t *size) {
 
 static @LAST@_instance instance;
 
+#ifdef _WIN32
+#include <windows.h>
+/* the arguments as UTF-8: the narrow ones of the C runtime are in the code page of the console, and lose what it cannot hold */
+static char **run_utf8_argv(int *count) {
+    int n = __argc;
+    wchar_t **wide = __wargv;
+    if (wide == NULL) return NULL;
+    char **out = (char **)calloc((size_t)n + 1, sizeof(char *));
+    for (int i = 0; out != NULL && i < n; i++) {
+        int size = WideCharToMultiByte(CP_UTF8, 0, wide[i], -1, NULL, 0, NULL, NULL);
+        out[i] = (char *)malloc((size_t)size + 1);
+        if (out[i] == NULL || WideCharToMultiByte(CP_UTF8, 0, wide[i], -1, out[i], size, NULL, NULL) == 0) return NULL;
+    }
+    *count = n;
+    return out;
+}
+#endif
+
+static void run_usage(FILE *to, const char *self) {
+    fprintf(to,
+            "usage: %s [options] [--] [program-name [arguments]]\n"
+            "  --env NAME=VALUE      an environment variable of the program (repeatable)\n"
+            "  --dir HOST[::GUEST][:ro]\n"
+            "                        a directory the program may reach, as GUEST (\"/\" by default); :ro: read only (repeatable)\n"
+            "  --argv0 NAME          the name the program has for itself (else the first argument that is not an option)\n"
+            "  --version             print the name of the module and of wasmext\n"
+            "  -h, --help            this text\n"
+            "the program ends with the code of proc_exit, 134 on a trap, 2 when the options are wrong\n",
+            self);
+}
+
 int main(int argc, char **argv) {
 #ifdef _WIN32
     _setmode(0, _O_BINARY);  /* the bytes of the program, not text: no "\n" turned into "\r\n" */
     _setmode(1, _O_BINARY);
     _setmode(2, _O_BINARY);
+    {
+        char **utf8 = run_utf8_argv(&argc);
+        if (utf8 != NULL) argv = utf8;
+    }
 #endif
     char **env = (char **)calloc((size_t)argc + 1, sizeof(char *));
     char **dirs = (char **)calloc((size_t)argc + 1, sizeof(char *));
+    const char *argv0 = NULL;
     int nenv = 0, ndirs = 0, i = 1;
     for (; i < argc; i++) {  /* the options come first, then the program, then its arguments */
-        if (strcmp(argv[i], "--env") == 0 && i + 1 < argc) env[nenv++] = argv[++i];
-        else if (strcmp(argv[i], "--dir") == 0 && i + 1 < argc) dirs[ndirs++] = argv[++i];
-        else break;
+        const char *a = argv[i];
+        int more = i + 1 < argc;
+        if (strcmp(a, "--") == 0) {
+            i++;
+            break;
+        } else if (strcmp(a, "-h") == 0 || strcmp(a, "--help") == 0) {
+            run_usage(stdout, argv[0]);
+            return 0;
+        } else if (strcmp(a, "--version") == 0) {
+            printf("@LAST@ (wasmext @VERSION@)\n");
+            return 0;
+        } else if (strcmp(a, "--env") == 0 || strcmp(a, "--dir") == 0 || strcmp(a, "--argv0") == 0) {
+            if (!more) {
+                fprintf(stderr, "%s: %s needs a value\n", argv[0], a);
+                return 2;
+            }
+            char *value = argv[++i];
+            if (strcmp(a, "--env") == 0) {
+                const char *eq = strchr(value, '=');
+                if (eq == NULL || eq == value) {
+                    fprintf(stderr, "%s: --env wants NAME=VALUE, not \"%s\"\n", argv[0], value);
+                    return 2;
+                }
+                env[nenv++] = value;
+            } else if (strcmp(a, "--dir") == 0) {
+                dirs[ndirs++] = value;
+            } else {
+                argv0 = value;
+            }
+        } else if (a[0] == '-' && a[1] == '-') {
+            fprintf(stderr, "%s: unknown option %s (-h for the list)\n", argv[0], a);
+            return 2;
+        } else {
+            break;
+        }
     }
-    if (i >= argc) {
-        fprintf(stderr, "usage: %s [--env NAME=VALUE]... [--dir HOST::GUEST]... module.wasm [arguments]\n", argv[0]);
-        return 2;
+    char *program = i < argc ? argv[i] : argv[0];  /* argv[0] of the program is the path it is given as */
+    if (argv0 != NULL) {  /* named by --argv0: everything that follows is for the program */
+        program = (char *)argv0;
+        i--;
     }
-    char *program = argv[i];
-    char **args = (char **)calloc((size_t)(argc - i) + 1, sizeof(char *));
+    char **args = (char **)calloc((size_t)(argc - i) + 2, sizeof(char *));
     int nargs = 0;
-    args[nargs++] = program;  /* argv[0] of the program is the path it is given as */
+    args[nargs++] = program;
     for (int k = i + 1; k < argc; k++) args[nargs++] = argv[k];
 
     wasmext_wasi_config config;
@@ -94,6 +162,11 @@ int main(int argc, char **argv) {
     wasmext_wasi_preopen *preopens = (wasmext_wasi_preopen *)calloc((size_t)ndirs + 1, sizeof *preopens);
     for (int k = 0; k < ndirs; k++) {
         char *separator = strstr(dirs[k], "::");
+        size_t length = strlen(dirs[k]);
+        if (length >= 3 && strcmp(dirs[k] + length - 3, ":ro") == 0 && (separator != NULL || length > 3)) {
+            dirs[k][length - 3] = '\0';
+            preopens[k].readonly = 1;
+        }
         if (separator != NULL) *separator = '\0';
         preopens[k].host = dirs[k];
 #ifdef _WIN32
@@ -120,11 +193,12 @@ int main(int argc, char **argv) {
     config.user = &ended;
 
     wasm_rt_init();
-    int error;
-    size_t bad;
+    int error = 0;
+    size_t bad = (size_t)-1;
     instance.wasi = wasmext_wasi_create(&config, &error, &bad);
     if (instance.wasi == NULL) {
-        fprintf(stderr, "%s: cannot set up WASI: %s\n", argv[0], bad != (size_t)-1 ? dirs[bad] : strerror(error));
+        if (bad != (size_t)-1) fprintf(stderr, "%s: --dir %s: %s\n", argv[0], dirs[bad], strerror(error));
+        else fprintf(stderr, "%s: cannot set up WASI: %s\n", argv[0], strerror(error));
         return 2;
     }
     wasmext_wasi_bind(instance.wasi, w2c_@PREFIX@_memory(&instance.inst));
@@ -136,8 +210,11 @@ int main(int argc, char **argv) {
     int code = 0;
     if (ended.how == WASI_END_EXIT) {
         code = (int)ended.value;
+    } else if (ended.how == WASI_END_SIGNAL) {
+        fprintf(stderr, "%s: the program was ended by the signal %u\n", argv[0], (unsigned)ended.value);
+        code = 134;
     } else if (trapped) {
-        fprintf(stderr, "trap: %s\n", ended.how ? "the program was ended by a signal" : wasm_rt_strerror((wasm_rt_trap_t)trapped));
+        fprintf(stderr, "trap: %s\n", wasm_rt_strerror((wasm_rt_trap_t)trapped));
         code = 134;
     }
     fflush(stdout);
@@ -150,7 +227,14 @@ int main(int argc, char **argv) {
 
 def main_c(last: str, prefix: str) -> str:
     """The C of the `main()` of a program for the module `last` (`prefix`: the name wasm2c makes of it)."""
-    return _MAIN.replace("@LAST_U@", last.upper()).replace("@LAST@", last).replace("@PREFIX@", prefix)
+    from . import __version__  # noqa: PLC0415
+
+    return (
+        _MAIN.replace("@LAST_U@", last.upper())
+        .replace("@LAST@", last)
+        .replace("@PREFIX@", prefix)
+        .replace("@VERSION@", __version__)
+    )
 
 
 @dataclass(frozen=True)
@@ -319,8 +403,11 @@ def build(
         )
     if not any(i.module in ("wasi_snapshot_preview1", "wasi_unstable") for i in parsed.imports):
         raise GenError(f"{wasm_path}: an executable is a WASI program, and the module imports nothing from WASI")
-    if not any(e.kind == "func" and e.name == "_start" for e in parsed.exports):
+    start = next((t for n, t in parsed.func_exports() if n == "_start"), None)
+    if start is None:
         raise GenError(f"{wasm_path}: an executable runs the _start of a command, and the module has none")
+    if start.params or start.results:
+        raise GenError(f"{wasm_path}: _start is ({', '.join(start.params)}) -> ({', '.join(start.results)}), a command has _start () -> ()")
     last = name or "".join(c if c.isalnum() else "_" for c in wasm_path.stem)
     if not last or last[0].isdigit():
         last = f"m_{last}"

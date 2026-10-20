@@ -276,6 +276,7 @@ and `uv run pytest` in its folder.
 | [`examples/lua`](examples/lua) | Lua 5.4, a WASI program: `luawasm.run(["script.lua"], root="dir")`, files in the directory it is given and nowhere else |
 | [`examples/wabt`](examples/wabt) | WABT itself: `wat2wasm` and `wasm2c` as WASI programs in extensions (`wabtwasm.wat2wasm(...)`), and a directory for `WASMEXT_WABT` made of them, so that wasmext translates with a `wasm2c` that wasmext built; the C they write is the same bytes as the native tools' |
 | [`examples/quickjs`](examples/quickjs) | QuickJS-ng, a JavaScript engine as a WASI program: `qjswasm.run(["script.js"], root="dir")`, an error of the script is code 1 and a message, as on the command line |
+| [`examples/products`](examples/products) | one wheel with a shared library (used through `ctypes`) and a WASI program as a native executable, both made by wasmext; `py3-none-<platform>` |
 
 What is supported, what is not yet, and the plan are in [FEATURES.md](FEATURES.md).
 

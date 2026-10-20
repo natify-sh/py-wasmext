@@ -33,8 +33,9 @@ classifiers = [
 ]
 dependencies = [
     "wabt-package>=1.0.42.0",
-    # natify(), the command and the import hook all build through setuptools (and its _distutils), whichever backend a project has
-    "setuptools>=77",
+    # natify(), the command and the import hook all build through setuptools and its _distutils (the compiler, the flags of the platform),
+    # whichever backend a project has; the lower bound is the version the suite runs with (uv.lock), since _distutils is not a public interface
+    "setuptools>=84",
 ]
 dynamic = ["version"]
 

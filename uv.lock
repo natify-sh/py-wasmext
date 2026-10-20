@@ -414,7 +414,7 @@ wasm = [
 
 [package.metadata]
 requires-dist = [
-    { name = "setuptools", specifier = ">=77" },
+    { name = "setuptools", specifier = ">=84" },
     { name = "wabt-package", specifier = ">=1.0.42.0" },
 ]
 

@@ -9,6 +9,7 @@ test suite answers too). Only the imports of WASI are served: another import is 
 
 from __future__ import annotations
 
+import importlib
 import os
 import re
 import shutil
@@ -282,8 +283,12 @@ def _system_libraries(msvc: bool, *, program: bool = False) -> list[str]:
 
 
 def _compiler() -> Any:
-    from setuptools._distutils import sysconfig
-    from setuptools._distutils.ccompiler import new_compiler
+    from distutils import sysconfig  # pyright: ignore[reportMissingModuleSource]
+    from distutils.ccompiler import new_compiler  # pyright: ignore[reportMissingModuleSource]
+
+    importlib.import_module(
+        "setuptools"
+    )  # puts the distutils of setuptools in place of the one of the standard library
 
     compiler = new_compiler()
     sysconfig.customize_compiler(compiler)

@@ -394,10 +394,8 @@ def parallel_build_ext(base: type) -> type:
             sources = list(ext.sources or [])
             if not getattr(ext, "_wasmext_parallel", False) or len(sources) < 2:
                 return super().build_extension(ext)
-            try:
-                from setuptools._distutils.dep_util import newer_group  # type: ignore[import-not-found]
-            except ImportError:  # pragma: no cover - an old setuptools
-                from distutils.dep_util import newer_group  # type: ignore[import-not-found, no-redef]
+            from setuptools.modified import newer_group
+
             if not (self.force or newer_group([*sources, *ext.depends], self.get_ext_fullpath(ext.name), "newer")):
                 return super().build_extension(ext)  # up to date: it says so itself
             macros = list(ext.define_macros or []) + [(undef,) for undef in ext.undef_macros or []]

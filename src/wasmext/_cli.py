@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import copy
 import glob
+import importlib
 import os
 import sys
 from collections.abc import Sequence
@@ -259,7 +260,11 @@ def _build(base: Path, extensions: list[Extension], *, inplace: bool, force: boo
 
     moved = [_rebase(ext, base) for ext in extensions]
     if quiet:  # -q: the warnings of the C that wasm2c makes (an unused function, ...) are not the user's to read; their own flags come after and win
-        from setuptools._distutils.ccompiler import get_default_compiler
+        from distutils.ccompiler import get_default_compiler  # pyright: ignore[reportMissingModuleSource]
+
+        importlib.import_module(
+            "setuptools"
+        )  # puts the distutils of setuptools in place of the one of the standard library
 
         if get_default_compiler() != "msvc":  # cl says it is overriding /W3 with /w, which is a warning of its own
             for ext in moved:

@@ -139,7 +139,7 @@ and the program), the examples' tests pass in a clean environment, also from an 
 
 - `wasmext` needs setuptools to build whatever the backend is (the command and `natify()` use it, and its `_distutils`). It was not a
   declared dependency (the projects had it as their own backend), so an isolated build on hatchling failed with `No module named
-  'setuptools'`. It is a dependency of `wasmext` now (`setuptools>=84`, the version the suite runs with: `_distutils` is not a public interface). There is no alternative for the compiler driver of a Python extension (MSVC detection, the flags of the platform, the variables of cibuildwheel) outside distutils; meson and scikit-build have their own build systems and would not use it.
+  'setuptools'`. It is a dependency of `wasmext` now (`setuptools>=84`, the version the suite runs with; the compiler comes from the `distutils` that setuptools provides, `import setuptools` then `distutils.ccompiler`, not from its private `_distutils`). There is no alternative for the compiler driver of a Python extension (MSVC detection, the flags of the platform, the variables of cibuildwheel) outside distutils; meson and scikit-build have their own build systems and would not use it.
 - The project says the wheel tag itself on such a backend (abi3 or native, `py3-none`): the hook of setuptools that does it for a wheel
   is not there.
 - The sdist is the backend's: hatchling puts `build/` into it unless the project's `.gitignore` has it, so a project on such a backend

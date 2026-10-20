@@ -1,4 +1,6 @@
 build/
+# what older versions of wasmext wrote beside the .wasm (the C is in build/wasmext/ now)
+*_wasmext/
 __pycache__/
 *.so
 *.pyd

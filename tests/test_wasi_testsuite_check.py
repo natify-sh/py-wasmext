@@ -24,15 +24,16 @@ def _suite(
     xpassed: int = 0,
     name: str = "WASI tests [wasm32-wasip1]",
 ) -> dict[str, Any]:
-    names = passed + failed + skipped + xfailed + xpassed
+    """A suite as the runner reports it: an expected failure is in `passed` as well as in `xfailed`, and each test says how it ended."""
+    outcomes = ["pass"] * passed + ["fail"] * failed + ["skip"] * skipped + ["xfail"] * xfailed + ["xpass"] * xpassed
     return {
         "name": name,
-        "passed": passed,
+        "passed": passed + xfailed,
         "failed": failed,
         "skipped": skipped,
         "xfailed": xfailed,
         "xpassed": xpassed,
-        "tests": [{"name": f"t{i}"} for i in range(names)],
+        "tests": [{"name": f"t{i}", "outcome": outcome} for i, outcome in enumerate(outcomes)],
     }
 
 
@@ -64,10 +65,10 @@ def test_a_failed_a_skipped_and_a_stale_expectation_are_noticed() -> None:
     assert "1 tests passed that were expected to fail" in problems
 
 
-def test_counts_that_do_not_add_up_are_noticed() -> None:
+def test_a_test_that_ended_in_some_other_way_is_noticed() -> None:
     broken = _suite(46)
-    broken["passed"] = 40
-    assert any("add up" in p for p in check(_report(_suite(12), _suite(14), broken)))
+    broken["tests"][0]["outcome"] = "error"
+    assert check(_report(_suite(12), _suite(14), broken)) == ["tests ended as error"]
 
 
 def test_the_tests_of_wasi_0_3_that_are_skipped_on_purpose_do_not_count() -> None:

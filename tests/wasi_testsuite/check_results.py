@@ -31,11 +31,11 @@ def check(report: dict[str, Any], expected: int = PROGRAMS) -> list[str]:
         count = sum(int(suite.get(key, 0)) for suite in suites)
         if count:
             problems.append(f"{count} tests {what}")
-    counted = sum(
-        int(suite.get(key, 0)) for suite in suites for key in ("passed", "failed", "skipped", "xfailed", "xpassed")
-    )
-    if counted != total:
-        problems.append(f"the counts add up to {counted}, the tests listed are {total}")
+    # what each test says of itself: `pass` or an expected failure (`xfail`); the counters of the runner count an expected failure as passed too, so they do not add up to the tests
+    outcomes = [str(test.get("outcome")) for suite in suites for test in suite.get("tests", [])]
+    odd = sorted({o for o in outcomes if o not in ("pass", "xfail")})
+    if odd:
+        problems.append(f"tests ended as {', '.join(odd)}")
     return problems
 
 

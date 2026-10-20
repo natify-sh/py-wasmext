@@ -214,6 +214,13 @@ def _rel(path: Path) -> str:
         return str(path)
 
 
+def _absolute(paths: Iterable[str]) -> list[str]:
+    """The generated files as `Extension.depends`, absolute. setuptools puts a relative dependency into the manifest of an sdist, always with `/`
+    (`build_ext._get_internal_depends`), and the pruning of `build/` matches by the separator of the system, so on Windows the generated
+    files went into the sdist; an absolute one is left out of the manifest (and still makes the extension be built again when it changes)."""
+    return [os.path.abspath(p) for p in paths]
+
+
 def _module_name(wasm: Path) -> str:
     """The dotted name from the path: the packages (directories with `__init__.py`) the file is in, then its stem."""
     parts = [wasm.stem]
@@ -696,7 +703,7 @@ def _natify(
             ext = copy.copy(template) if template else Extension(name, [])
             ext.name = name
             ext.sources = [wasm.as_posix()]
-            ext.depends = [*ext.depends, *generated.files]
+            ext.depends = [*ext.depends, *_absolute(generated.files)]
             if not use_guard_pages:
                 ext.define_macros = [*ext.define_macros, ("WASM_RT_USE_MMAP", "0")]
             ext._wasmext_made = True  # type: ignore[attr-defined]
@@ -714,7 +721,7 @@ def _natify(
         ext.sources = [*rest, *chosen.sources]
         ext._wasmext_parallel = prepared.parts > 1  # type: ignore[attr-defined]  # wasmext._setuptools compiles the files at once
         ext._wasmext_made = True  # type: ignore[attr-defined]  # made by natify(): the table of pyproject.toml is not for a project that calls it
-        ext.depends = [*ext.depends, *(f for f in generated.files if f not in chosen.sources)]
+        ext.depends = [*ext.depends, *_absolute(f for f in generated.files if f not in chosen.sources)]
         ext.include_dirs = [
             *ext.include_dirs,
             *prepared.extra_include_dirs,

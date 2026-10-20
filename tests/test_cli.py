@@ -264,6 +264,5 @@ def test_quiet_inplace_prints_nothing_not_even_warnings_of_the_compiler(project:
     assert done.returncode == 0, done.stderr[-600:]
     if sys.platform != "win32":  # cl and link say what they compile and link whatever -q says
         assert done.stdout == "" and done.stderr == ""
-    assert (project / "gen").is_dir() and list(
-        (project / "src" / "pkg").glob("add.*so")
-    )  # --build-dir is honoured with -i
+    built = [p for p in (project / "src" / "pkg").glob("add.*") if p.suffix in (".so", ".pyd")]
+    assert (project / "gen").is_dir() and built  # --build-dir is honoured with -i

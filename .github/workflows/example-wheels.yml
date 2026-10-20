@@ -134,7 +134,7 @@ jobs:
         run: |
           ls wheels
           uv venv --python ${{ matrix.python }} "$RUNNER_TEMP/abi3"
-          uv pip install --python "$RUNNER_TEMP/abi3" wheels/*-abi3-*.whl pytest
+          uv pip install --python "$RUNNER_TEMP/abi3" wheels/*-abi3-manylinux*.whl pytest  # the glibc one: the musllinux wheel is for Alpine
         shell: bash
 
       # not from the checkout: the source of the example must not be what the tests import

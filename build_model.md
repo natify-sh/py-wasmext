@@ -82,14 +82,15 @@ build/
 
 | | extension | shared library | program |
 |---|---|---|---|
-| **platform wheel** (`cp311-abi3-<plat>`, `cp315-cp315t-<plat>`, ...) | `pkg/add.abi3.so`, `pkg/add.pyi` | — (the tag is `py3-none` when all are products) | — |
-| **`py3-none-<plat>` wheel** (only libraries and programs) | — | `pkg/libengine.so`, `pkg/engine_ctypes.py`, `pkg/engine_ctypes.pyi` | `pkg/hello` |
+| **wheel with an extension** (`cp311-abi3-<plat>`, `cp315-cp315t-<plat>`: platform and Python ABI) | `pkg/add.abi3.so`, `pkg/add.pyi` | — (the tag is `py3-none` when all are products) | — |
+| **wheel of libraries and programs only** (`py3-none-<plat>`: platform, not Python) | — | `pkg/libengine.so`, `pkg/engine_ctypes.py`, `pkg/engine_ctypes.pyi` | `pkg/hello` |
 | **mixed wheel** | the tag of the extensions (abi3 or native) | the same files as above | the same |
 | **in place** (`-i`, editable) | `src/pkg/add.abi3.so`, `src/pkg/add.pyi` next to `add.wasm` | `src/pkg/libengine.so`, `engine_ctypes.py`, `engine_ctypes.pyi` | `src/pkg/hello` |
 | **sdist** | `add.wasm`, `pyproject.toml`, `setup.cfg`, `PKG-INFO`, the Python of the project | the same | the same |
 
-- A `py3-none-any` wheel does not exist for wasmext products: any extension, library or program has a binary, so a wheel has a platform tag.
-  What is `py3-none-<plat>` is a wheel of libraries and programs only. (`wasmext` itself is `py3-none-any`.)
+- The tag follows what is in the wheel: only Python, `py3-none-any`; only libraries and programs, `py3-none-<plat>` (depends on the platform,
+  not on Python); an extension in it, `cp311-abi3-<plat>` or `cpXY-cpXY-<plat>`. So a wheel with any product of wasmext is never `any`.
+  (`wasmext` itself is `py3-none-any`.)
 - `<name>_api.h`, the C, the objects, the stamps and `build/wasmext/` are in no wheel and no sdist. A project that wants a header in the wheel
   copies it (see above).
 - The `.wasm` is in the sdist; whether it is in the wheel is the project's (`include-package-data = false` and `package-data`).

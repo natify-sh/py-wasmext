@@ -1084,12 +1084,12 @@ def generate(module: Module, name: str, *, version: str | None = None) -> Glue:
     hadd("/* instantiation: 0, or the code of the trap of the start function */")
     hadd(f"static int {last}_glue_instantiate({last}_instance *self) {{")
     # The runtime of wasm2c does not check the allocation of a table (1.0.42: a NULL that the first use trips over; later releases: abort()). The same
-    # allocation is tried first, here, so that a table that cannot be had is the error of memory it is, and no part of the runtime is patched for it.
+    # allocation is tried first, here (through a volatile pointer: clang at -O2 drops an allocation that is only freed), so that a table that cannot be had is the error of memory it is, and no part of the runtime is patched for it.
     for t in module.tables:
         if t.limits.min > 0:
             element = "wasm_rt_externref_t" if t.elem == "externref" else "wasm_rt_funcref_t"
             hadd(
-                f"    {{ void *probe_ = calloc((size_t){t.limits.min}ULL, sizeof({element})); if (probe_ == NULL) return (int)WASMEXT_TRAP_NO_MEMORY; free(probe_); }}"
+                f"    {{ void *volatile probe_ = calloc((size_t){t.limits.min}ULL, sizeof({element})); if (probe_ == NULL) return (int)WASMEXT_TRAP_NO_MEMORY; free(probe_); }}"
             )
     # a trap while the instance is made (a start function that traps, a data segment out of range) leaves what was allocated: it is freed
     # here. Not after NO_MEMORY: the memory that could not be had has size but no data, and the runtime frees it with munmap(NULL, size),

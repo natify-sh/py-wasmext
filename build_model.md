@@ -125,13 +125,17 @@ The same is how a project puts anything else of `build/wasmext/` into the wheel 
 
 ## Build backends
 
-wasmext builds through setuptools (`natify()` returns `Extension` objects, the hook is a setuptools entry point). The sdist is whatever
-the backend makes of the source tree: wasmext adds no filter of its own, so nothing a user puts into the sdist is taken out. The
-generated files stay out because they are not in the source tree, and `build/` is left out by the backend's own rules (distutils prunes
-it; the paths given to setuptools use the separator of the system, or on Windows that pruning does not match them). `uv build` and
-`pip` run setuptools as the backend, so they work as they do. A project on another backend (hatch, scikit-build, meson) has no way
-to use `natify()` today; the generated files and the three products do not depend on setuptools, so a hook for another backend would
-only have to call `generate_c` and compile the sources, but none is written.
+`natify()` returns `Extension` objects and the hook is a setuptools entry point, as `cythonize()` and its hook are: that is the setuptools
+integration, not the only way in. The sdist is whatever the backend makes of the source tree: wasmext adds no filter of its own, so
+nothing a user puts into the sdist is taken out. The generated files stay out because they are not in the source tree, and `build/` is left
+out by the backend's own rules (distutils prunes it; the paths given to setuptools use the separator of the system, or on Windows that
+pruning does not match them). `uv build` and `pip` run setuptools as the backend, so they work as they do.
+
+For another backend (hatch, scikit-build, meson) the way is the one Cython has, the command: `wasmext natify FILE` (no `-i`, no `-b`)
+only generates the C into `build/wasmext/<module name>/`, and the backend compiles it. What is **missing** for that to be convenient is how
+to compile: the list of sources, the include directories (the runtime of the toolchain, simde) and the macros (`WASM_RT_USE_MMAP`,
+`Py_LIMITED_API` for an extension, `WABT_BIG_ENDIAN`) are not printed, so a backend would have to guess them. A `--print-build` (JSON) is the
+small step that closes it; it is not written, and no hook for another backend is.
 
 ## What this removes
 

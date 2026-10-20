@@ -272,7 +272,7 @@ In this order (the first ones are small):
 7. `funcref`/`externref` in signatures (a design is needed first: who owns an `externref`); custom page sizes (`wasm2c` can, with a
    flag); the rest of the examples of other projects (below).
 8. ~~**WASI**~~ (`wasi_snapshot_preview1` and `wasi_unstable`): done for WASI 0.1. Part of wasmext, compiled into the native module as a header, `wasi_preview1.h`, the system
-   reached through `Python.h`; 42 of 46 calls, the official tests pass on Linux, macOS and Windows; see "Design: WASI". Left: the clocks of the process and the thread in `poll_oneoff`, sockets (the specification allows them, on a socket the host gives to the program; wasmext gives none: its `wasi=` has only directories), WASI 0.2 and 0.3.
+   reached through `Python.h`; 42 of 46 calls, the official tests pass on Linux, macOS and Windows; see "Design: WASI". Not built **on purpose** (see "Decisions"): sockets (`sock_*` stay `ENOTSOCK`: nothing to compare a design to) and the clocks of the process and the thread in `poll_oneoff` (the specification leaves them without a use). Left: WASI 0.2 and 0.3.
 9. **A native path to files on Windows** (decided, not started; stage 3 of the single work in item 10). The aim is portability: the core of WASI as plain C that needs no interpreter and no toolchain
    beyond a C compiler, so that the layers can be split (item 10) and a shared library or an executable (`--shared`, `--exe`) can be built with MSVC, MinGW or `zig cc`. Linux and macOS are confirmed; Windows
    is the one place that still goes through Python. Safety is not the aim: the walk that confines a path stays because the official tests and the behaviour of POSIX ask for it, not as a promise of a
@@ -586,7 +586,7 @@ preopen (a retry as a directory on `EISDIR`); the rights of an opened directory 
 `os.utime` of a file by its descriptor (it has none: the path is kept), the inode of `.` and `..` in a listing, no `O_NOFOLLOW` (a link is not opened without following it: `ELOOP`, checked by hand), links made with `/`,
 `O_APPEND` (it cannot be taken off again: `fd_write` seeks to the end), `os.link` that does not follow a link, and the times of a link (`follow_symlinks=False` only for a link).
 It also found that the runner kills a program after 5 s unless the adapter says more, and that what a killed program started goes on on Windows and held the runner for 30 minutes.
-Not built: sockets, threads, and the clocks of the process and the thread in `poll_oneoff`. Tests: `tests/test_wasi.py` and `tests/test_wasi_fs.py` (through `build_extension`, not on
+Not built: threads; sockets and the clocks of the process and the thread in `poll_oneoff` are decided against for now (see "Decisions"). Tests: `tests/test_wasi.py` and `tests/test_wasi_fs.py` (through `build_extension`, not on
 Windows; the file tests are run for both ways of reaching the file system), `test_a_wasi_module_is_built_with_the_wasi_header_of_wasmext`
 and `test_wasi_files_work_on_every_platform_of_ci` (the whole path, every platform of CI). `lua.wasm` (imports `wasi_unstable`) is built and run by `examples/lua` (its tests, and the wheels of CI).
 
@@ -987,6 +987,7 @@ warnings of the compiler for the C of wasm2c too; the release workflow does not 
   currently supported"), `--tcplisten` of its CLI is "experimental, legacy wasip1 implementation only" (how that one numbered the descriptors was not
   found out), and the official test suite has no test of sockets for WASI 0.1 (those it has are for 0.3). The design would be ours alone, and a public
   interface that nothing checks. The four `sock_*` stay `ENOTSOCK`. To be taken up when a program needs them.
+- **`poll_oneoff` waits on the realtime and the monotonic clock only.** The clocks of the process and of the thread (CPU time) are not built: the specification of the first snapshot does not say what it means to wait for a CPU clock, which does not advance while the program waits, so there is no behaviour to implement or to check against (the official tests do not ask for one). A subscription to them is answered at once with `EINVAL` in its event (`wasi_subscription_wait`), not a hang. To be taken up if the specification or a program gives a meaning.
 - **C first: the layers do not depend on `Python.h`; only the exports of the module and the hooks do (the direction is decided, nothing of
   it is built).** Four layers, each knowing only those below it:
   1. the C of `wasm2c` (already plain C: the instance, the exports as C functions, the imports as C functions, the memory);

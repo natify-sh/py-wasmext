@@ -508,3 +508,46 @@ def test_guard_pages_are_decided_for_the_architecture_of_the_target(
     monkeypatch.setenv("WASMEXT_GUARD_PAGES", f"{here}=off")
     [by_env] = natify("pkg/*.wasm", quiet=True)
     assert macro in by_env.define_macros
+
+
+def test_abi3_is_asked_of_the_interpreter_and_the_platform(monkeypatch: pytest.MonkeyPatch) -> None:
+    """What the interpreter loads is read from its own extension suffixes (as setuptools reads them); the platforms that pin one CPython are a decision on top."""
+    import importlib.machinery
+    import sys
+    import sysconfig
+
+    from wasmext._natify import abi3_possible  # pyright: ignore[reportPrivateUsage]
+
+    monkeypatch.setattr(
+        importlib.machinery, "EXTENSION_SUFFIXES", [".cpython-311-x86_64-linux-gnu.so", ".abi3.so", ".so"]
+    )
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(sysconfig, "get_platform", lambda: "linux-x86_64")
+    assert abi3_possible() is None
+    # an interpreter that lists no .abi3 suffix cannot load such a file
+    monkeypatch.setattr(importlib.machinery, "EXTENSION_SUFFIXES", [".cpython-311-x86_64-linux-gnu.so", ".so"])
+    assert "does not load abi3" in str(abi3_possible())
+    # Windows: the plain .pyd is the abi3 suffix
+    monkeypatch.setattr(importlib.machinery, "EXTENSION_SUFFIXES", [".cp311-win_amd64.pyd", ".pyd"])
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert abi3_possible() is None
+    # a platform that pins one CPython, though it loads abi3 files
+    monkeypatch.setattr(
+        importlib.machinery, "EXTENSION_SUFFIXES", [".cpython-313-wasm32-emscripten.so", ".abi3.so", ".so"]
+    )
+    for target, platform in (
+        ("emscripten", "emscripten-4.0.9-wasm32"),
+        ("android", "android-24-arm64_v8a"),
+        ("ios", "ios-13.0-arm64-iphoneos"),
+    ):
+        monkeypatch.setattr(sysconfig, "get_platform", lambda platform=platform: platform)
+        assert target in str(abi3_possible())
+    # free-threaded: even where .pyd is listed (Windows)
+    monkeypatch.setattr(sysconfig, "get_platform", lambda: "win-amd64")
+    real = sysconfig.get_config_var
+    monkeypatch.setattr(sysconfig, "get_config_var", lambda name: 1 if name == "Py_GIL_DISABLED" else real(name))
+    assert "free-threaded" in str(abi3_possible())
+    # not CPython
+    monkeypatch.setattr(sysconfig, "get_config_var", real)
+    monkeypatch.setattr(sys, "implementation", type("I", (), {"name": "pypy"})())
+    assert "pypy has no stable ABI" in str(abi3_possible())

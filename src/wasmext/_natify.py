@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import copy
 import glob
+import importlib.machinery
 import importlib.metadata
 import os
 import re
@@ -69,12 +70,22 @@ _USES_SIMDE = re.compile(rb'^\s*#\s*include\s*[<"]simde/', re.MULTILINE)
 
 
 def abi3_possible() -> str | None:
-    """None if the interpreter that builds can make an abi3 extension, else why not (a native one is built then)."""
-    platform = sysconfig.get_platform()
-    if sys.implementation.name != "cpython":
-        return f"{sys.implementation.name} has no stable ABI"
+    """None if the interpreter that builds can make an abi3 extension, else why not (a native one is built then).
+
+    Two different things, kept apart. *Can this interpreter load an abi3 extension at all* is told by the interpreter itself, as setuptools asks it
+    (`get_abi3_suffix`): `importlib.machinery.EXTENSION_SUFFIXES` has `.abi3.so` (on Windows the plain `.pyd`) only where it does. CPython has it; PyPy and the
+    free-threaded builds do not (PEP 703); the check does not tell the free-threaded build on Windows, where `.pyd` is in the list all the same, so that is asked of the build.
+    *Is it wise to ship a wheel of it* is a decision, not a capability, and is a list: Emscripten (Pyodide), Android and iOS pin one exact CPython in the runtime
+    (the extension links libpython there, or the app embeds one build), so an abi3 wheel would promise what the platform cannot keep."""
+    suffixes = importlib.machinery.EXTENSION_SUFFIXES
+    can_load = any(".abi3" in suffix for suffix in suffixes) or (sys.platform == "win32" and ".pyd" in suffixes)
     if sysconfig.get_config_var("Py_GIL_DISABLED"):
         return "a free-threaded build cannot use the limited API"
+    if sys.implementation.name != "cpython":
+        return f"{sys.implementation.name} has no stable ABI"
+    if not can_load:
+        return f"this interpreter does not load abi3 extensions (its extension suffixes are {', '.join(suffixes)})"
+    platform = sysconfig.get_platform()
     for target in ("emscripten", "android", "ios"):  # each pins one CPython: nothing stable about it
         if target in platform:
             return f"{target} wheels are for one exact CPython"

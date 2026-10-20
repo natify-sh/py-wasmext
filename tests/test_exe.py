@@ -70,7 +70,14 @@ def test_the_options_give_the_program_its_name_environment_and_arguments(wabt: P
 
 def test_wrong_options_are_told_with_exit_2_and_help_and_version_work(wabt: Path, tmp_path: Path) -> None:
     program = _program(wabt, tmp_path, "wasi_args.wat")
-    for bad in (["--env", "NOEQUALS"], ["--env", "=x"], ["--env"], ["--dir"], ["--nonsense"], ["--dir", "/no/such/dir"]):
+    for bad in (
+        ["--env", "NOEQUALS"],
+        ["--env", "=x"],
+        ["--env"],
+        ["--dir"],
+        ["--nonsense"],
+        ["--dir", "/no/such/dir"],
+    ):
         ran = _run(program, *bad)
         assert ran.returncode == 2 and ran.stderr and not ran.stdout, bad
     helped = _run(program, "--help")

@@ -283,7 +283,10 @@ def test_a_table_that_cannot_be_allocated_is_a_memory_error(
 ) -> None:
     """The runtime of wasm2c does not check the allocation of a table; wasmext tries the same allocation first, so that it is an error of memory and not a NULL."""
     wat = tmp_path / "bigtable.wat"
-    wat.write_text('(module (table i64 1152921504606846976 funcref) (func (export "f") (result i32) i32.const 1))', encoding="utf-8")
+    wat.write_text(
+        '(module (table i64 1152921504606846976 funcref) (func (export "f") (result i32) i32.const 1))',
+        encoding="utf-8",
+    )
     mod = build_front_end(wat, f"bigtable_{front_end}")
     with pytest.raises(MemoryError):
         mod.Instance()

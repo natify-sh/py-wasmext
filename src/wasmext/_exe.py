@@ -227,7 +227,7 @@ int main(int argc, char **argv) {
 
 def main_c(last: str, prefix: str) -> str:
     """The C of the `main()` of a program for the module `last` (`prefix`: the name wasm2c makes of it)."""
-    from . import __version__  # noqa: PLC0415
+    from . import __version__
 
     return (
         _MAIN.replace("@LAST_U@", last.upper())
@@ -407,7 +407,9 @@ def build(
     if start is None:
         raise GenError(f"{wasm_path}: an executable runs the _start of a command, and the module has none")
     if start.params or start.results:
-        raise GenError(f"{wasm_path}: _start is ({', '.join(start.params)}) -> ({', '.join(start.results)}), a command has _start () -> ()")
+        raise GenError(
+            f"{wasm_path}: _start is ({', '.join(start.params)}) -> ({', '.join(start.results)}), a command has _start () -> ()"
+        )
     last = name or "".join(c if c.isalnum() else "_" for c in wasm_path.stem)
     if not last or last[0].isdigit():
         last = f"m_{last}"

@@ -98,7 +98,13 @@ def inspect(data: bytes, label: str) -> tuple[str, bool]:
         verdict = _export_verdict(exp.kind, thing)
         if (exp.kind, exp.name) in left_out and not verdict.startswith("not "):
             verdict = f"not exposed: {left_out[(exp.kind, exp.name)]}"
-        export_rows.append((repr(exp.name)[1:-1] if "\0" in exp.name else exp.name, f"{exp.kind} {_describe(exp.kind, thing)}", verdict))
+        export_rows.append(
+            (
+                repr(exp.name)[1:-1] if "\0" in exp.name else exp.name,
+                f"{exp.kind} {_describe(exp.kind, thing)}",
+                verdict,
+            )
+        )
     out += _rows(export_rows) or ["  (none)"]
 
     extras = [

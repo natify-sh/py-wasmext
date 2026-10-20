@@ -263,4 +263,6 @@ def test_quiet_inplace_prints_nothing_not_even_warnings_of_the_compiler(project:
     done = wasmext(project, wabt, "natify", "-q", "-i", "--build-dir", "gen", "src/pkg/add.wasm")
     assert done.returncode == 0, done.stderr[-600:]
     assert done.stdout == "" and done.stderr == ""
-    assert (project / "gen").is_dir() and list((project / "src" / "pkg").glob("add.*so"))  # --build-dir is honoured with -i
+    assert (project / "gen").is_dir() and list(
+        (project / "src" / "pkg").glob("add.*so")
+    )  # --build-dir is honoured with -i

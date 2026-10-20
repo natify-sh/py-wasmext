@@ -13,7 +13,7 @@ dependencies = []
 [tool.setuptools]
 package-dir = { "" = "src" }
 packages = ["qjswasm"]
-# The generated C (qjswasm/_qjs_wasmext/) and the .wasm are the sources of the extension, not part of it: only what package-data
+# The .wasm is the source of the extension (the generated C is in build/wasmext/, not part of it): only what package-data
 # names goes into the wheel.
 include-package-data = false
 

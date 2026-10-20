@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import os
-import platform
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -194,13 +192,13 @@ def test_without_i_or_b_the_command_line_only_writes_the_c_of_a_product(tmp_path
 
     done = run("--shared", "pkg/lib.wasm")
     assert done.returncode == 0, done.stderr[-600:]
-    work = root / "pkg" / "lib_wasmext"
+    work = root / "build" / "wasmext" / "pkg.lib"
     assert (work / "lib_api.h").is_file() and (work / "lib_shared.c").is_file() and (work / "lib_w2c.c").is_file()
     assert "the C of the shared lib" in done.stdout
     assert not (root / "pkg" / product_filename("lib", "shared")).exists()  # nothing was compiled
     done = run("--exe", "pkg/hello.wasm")
     assert done.returncode == 0, done.stderr[-600:]
-    assert (root / "pkg" / "hello_wasmext" / "hello_main.c").is_file()
+    assert (root / "build" / "wasmext" / "pkg.hello" / "hello_main.c").is_file()
     assert not (root / "pkg" / product_filename("hello", "exe")).exists()
 
 
@@ -212,31 +210,25 @@ def test_the_c_of_a_product_is_made_when_natify_is_called_and_is_in_the_depends(
     monkeypatch.setenv("WASMEXT_WABT", str(wabt))
     monkeypatch.chdir(root)
     [ext] = natify("pkg/lib.wasm", product="shared", quiet=True)
-    assert (root / "pkg" / "lib_wasmext" / "lib_api.h").is_file()  # made now, not at the build
+    assert (root / "build" / "wasmext" / "pkg.lib" / "lib_api.h").is_file()  # made now, not at the build
     depends = [str(p) for p in ext.depends]
     for name in ("lib_api.h", "lib_shared.c", "lib_w2c.c", "lib_glue.h", "lib_rt_impl.c", "lib_py.c"):
         assert any(d.endswith(name) for d in depends), name  # the C of every target, the extension's too
     assert not any(d.endswith("lib_main.c") for d in depends)  # lib.wasm is not a command: it has no program
 
 
-def test_a_source_distribution_carries_the_c_and_package_data_gets_the_header_on_the_first_build(
-    tmp_path: Path, wabt: Path
-) -> None:
-    """The C of a product is made when the project is read, so a clean tree (CI, a build from an sdist) has it before the files of package-data are listed."""
+def test_a_source_distribution_has_no_generated_c_and_a_wheel_can_be_built_from_it(tmp_path: Path, wabt: Path) -> None:
+    """The C is a step of the build, in build/wasmext/: not a source, so not in the sdist (distutils leaves build/ out), and the sdist builds, because wasm2c is a build requirement."""
     import tarfile
     import zipfile
 
-    root = _project(
-        tmp_path,
-        wabt,
-        _LIBRARY_TABLE + '[tool.setuptools.package-data]\npkg = ["lib_wasmext/lib_api.h"]\n',
-    )
+    root = _project(tmp_path, wabt, _LIBRARY_TABLE)
     env = {**os.environ, "WASMEXT_WABT": str(wabt)}
 
-    def setup(*args: str) -> None:
+    def setup(cwd: Path, *args: str) -> None:
         done = subprocess.run(
             [sys.executable, "-c", "from setuptools import setup; setup()", "-q", *args],
-            cwd=root,
+            cwd=cwd,
             env=env,
             capture_output=True,
             text=True,
@@ -244,18 +236,22 @@ def test_a_source_distribution_carries_the_c_and_package_data_gets_the_header_on
         )
         assert done.returncode == 0, done.stderr[-800:]
 
-    assert not (root / "pkg" / "lib_wasmext").exists()  # a clean tree
-    setup("sdist", "-d", str(root / "dist"))
+    setup(root, "sdist", "-d", str(root / "dist"))
     (sdist,) = (root / "dist").glob("*.tar.gz")
     with tarfile.open(sdist) as t:
         names = t.getnames()
-    for name in ("lib_api.h", "lib_shared.c", "lib_w2c.c", "lib.wasm"):
-        assert any(n.endswith((f"pkg/{name}", f"pkg/lib_wasmext/{name}")) for n in names), name
-    shutil.rmtree(root / "pkg" / "lib_wasmext")  # clean again: the wheel is the first build
-    setup("bdist_wheel", "-d", str(root / "dist"))
-    (wheel,) = (root / "dist").glob("*.whl")
+        assert (root / "build" / "wasmext" / "pkg.lib" / "lib_w2c.c").is_file()  # made when the project was read
+        assert any(n.endswith("pkg/lib.wasm") for n in names)
+        assert not any(n.endswith((".c", "_api.h", "_glue.h")) for n in names), names
+        unpacked = tmp_path / "from_sdist"
+        t.extractall(unpacked, filter="data")
+    (project,) = unpacked.iterdir()
+    setup(project, "bdist_wheel", "-d", str(tmp_path / "whl"))
+    (wheel,) = (tmp_path / "whl").glob("*.whl")
     with zipfile.ZipFile(wheel) as z:
-        assert "pkg/lib_wasmext/lib_api.h" in z.namelist()
+        listed = z.namelist()
+    assert any(n.startswith("pkg/") and n.endswith(product_filename("lib", "shared")) for n in listed)
+    assert "pkg/lib_ctypes.py" in listed and not any(n.endswith("_api.h") for n in listed)
 
 
 def test_the_c_of_every_target_the_module_can_have_is_generated_at_once(
@@ -265,7 +261,7 @@ def test_the_c_of_every_target_the_module_can_have_is_generated_at_once(
     root = _project(tmp_path, wabt, "")
     monkeypatch.setenv("WASMEXT_WABT", str(wabt))
     monkeypatch.chdir(root)
-    work = root / "pkg" / "hello_wasmext"
+    work = root / "build" / "wasmext" / "pkg.hello"
     natify("pkg/hello.wasm", quiet=True)  # an extension was asked for
     wanted = ("hello_py.c", "hello_shared.c", "hello_api.h", "hello_main.c", "hello_w2c.c", "hello_glue.h")
     for name in wanted:
@@ -277,33 +273,7 @@ def test_the_c_of_every_target_the_module_can_have_is_generated_at_once(
         name: (work / name).stat().st_mtime_ns for name in wanted
     } == before  # nothing is made again for another product
     natify("pkg/lib.wasm", quiet=True)  # not a command: no program, and no error for the other targets
-    lib = root / "pkg" / "lib_wasmext"
+    lib = root / "build" / "wasmext" / "pkg.lib"
     assert (lib / "lib_py.c").is_file() and (lib / "lib_shared.c").is_file() and not (lib / "lib_main.c").exists()
     with pytest.raises(Exception, match="serves the imports of WASI"):
         natify("pkg/lib.wasm", product="exe", quiet=True)  # only when the program itself is asked for
-
-
-@pytest.mark.skipif(
-    platform.system() == "Windows",
-    reason="open: on Windows the patterns of MANIFEST.in did not match the paths of the generated C (CI, Python 3.15t); they have forward slashes, the patterns get the separator of the system",
-)
-def test_a_manifest_can_leave_the_generated_c_out_of_the_source_distribution(tmp_path: Path, wabt: Path) -> None:
-    """The C goes into an sdist by default; a project that follows the advice of Cython (the generator is a build requirement) says so in MANIFEST.in."""
-    import tarfile
-
-    root = _project(tmp_path, wabt, _LIBRARY_TABLE)
-    (root / "MANIFEST.in").write_text("global-exclude *_wasmext/*\n", encoding="utf-8")
-    done = subprocess.run(
-        [sys.executable, "-c", "from setuptools import setup; setup()", "-q", "sdist", "-d", str(root / "dist")],
-        cwd=root,
-        env={**os.environ, "WASMEXT_WABT": str(wabt)},
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert done.returncode == 0, done.stderr[-800:]
-    (sdist,) = (root / "dist").glob("*.tar.gz")
-    with tarfile.open(sdist) as t:
-        names = t.getnames()
-    assert not any("_wasmext/" in n for n in names)
-    assert any(n.endswith("pkg/lib.wasm") for n in names)

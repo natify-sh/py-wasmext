@@ -44,7 +44,7 @@ def test_without_flags_it_writes_the_c_and_builds_nothing(project: Path, wabt: P
     done = wasmext(project, wabt, "natify", "src/pkg/*.wasm")
     assert done.returncode == 0, done.stderr
     assert "src/pkg/add.wasm -> pkg.add" in done.stdout
-    generated = project / "src" / "pkg" / "add_wasmext"
+    generated = project / "build" / "wasmext" / "pkg.add"
     assert (generated / "add_py.c").is_file() and (generated / "add_w2c.c").is_file()
     assert not built(project / "src", "add", recursive=True) and not (project / "src" / "build").exists()
 
@@ -102,7 +102,7 @@ def test_errors_have_a_message_and_a_nonzero_exit(project: Path, wabt: Path) -> 
 
 
 def test_a_failed_build_exits_nonzero(project: Path, wabt: Path) -> None:
-    glue = project / "src" / "pkg" / "add_wasmext"
+    glue = project / "build" / "wasmext" / "pkg.add"
     assert wasmext(project, wabt, "natify", "src/pkg/add.wasm").returncode == 0
     (glue / "add_py.c").write_text("this is not C;\n", encoding="utf-8")
     # the first line says the C is current, so they are not written again: the compiler meets the broken one
@@ -117,14 +117,17 @@ def test_help_lists_the_flags(project: Path, wabt: Path) -> None:
         assert flag in done.stdout
 
 
-def test_inplace_leaves_no_build_directory_and_handles_several_places(project: Path, wabt: Path) -> None:
+def test_inplace_puts_the_extensions_in_place_and_the_rest_in_build(project: Path, wabt: Path) -> None:
     other = project / "tools"
     other.mkdir()
     shutil.copy(SIMPLE, other / "calc.wasm")
     done = wasmext(project, wabt, "natify", "-q", "-i", "src/pkg/add.wasm", "tools/calc.wasm")
     assert done.returncode == 0, done.stderr
     assert built(project / "src" / "pkg", "add") and built(other, "calc")
-    assert not list(project.rglob("build")) and not list(project.rglob("tmp*"))
+    assert (
+        project / "build" / "wasmext" / "pkg.add"
+    ).is_dir()  # the C and the objects are in build/, the extension is where the .wasm is
+    assert not list(project.rglob("tmp*"))
 
 
 def test_stubs_are_written_unless_asked_not_to(project: Path, wabt: Path) -> None:

@@ -120,7 +120,7 @@ def test_build_in_temp_false_writes_the_c_beside_the_wasm(tmp_path: Path, env: d
         tmp_path, env, "wasmimport.install(build_in_temp=False)\nimport fast\nprint(fast.Instance().add(1, 2))"
     )
     assert done.returncode == 0, done.stderr[-600:]
-    assert (tmp_path / "fast_wasmext" / "fast_w2c.c").is_file()
+    assert (tmp_path / "build" / "wasmext" / "fast" / "fast_w2c.c").is_file()
 
 
 def test_a_wasmbld_file_says_how_the_extension_is_made(tmp_path: Path, env: dict[str, str]) -> None:

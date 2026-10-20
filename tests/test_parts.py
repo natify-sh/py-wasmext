@@ -97,7 +97,7 @@ def _run(project: Path) -> str:
 
 def test_a_module_in_three_files_is_built_and_runs_the_same(tmp_path: Path, wabt: Path) -> None:
     project = _project(tmp_path)
-    c_dir = project / "src" / "pk" / "cm_wasmext"
+    c_dir = project / "build" / "wasmext" / "pk.cm"
     built = _build(project, wabt, 3, WASMEXT_JOBS="2")
     assert built.returncode == 0, built.stderr[-800:]
     assert sorted(p.name for p in c_dir.glob("cm_w2c*")) == [
@@ -138,7 +138,7 @@ def test_the_cli_takes_the_number_of_parts(tmp_path: Path, wabt: Path) -> None:
         check=False,
     )
     assert ran.returncode == 0, ran.stderr
-    assert _existing_parts(project / "src" / "pk" / "cm_wasmext", "cm") == 2
+    assert _existing_parts(project / "build" / "wasmext" / "pk.cm", "cm") == 2
 
 
 def test_setuptools_gets_a_build_ext_that_compiles_at_once(

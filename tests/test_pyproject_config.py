@@ -63,7 +63,7 @@ def test_a_project_with_no_setup_py_gets_its_extensions_from_pyproject(tmp_path:
     built = _build(project, wabt)
     assert built.returncode == 0, built.stderr[-800:]
     assert any(p.name.startswith("cm.") and p.suffix in (".so", ".pyd") for p in (project / "src" / "pk").iterdir())
-    assert len(list((project / "src" / "pk" / "cm_wasmext").glob("cm_w2c_*.c"))) == 2  # parts = 2 was read
+    assert len(list((project / "build" / "wasmext" / "pk.cm").glob("cm_w2c_*.c"))) == 2  # parts = 2 was read
     assert not (project / "src" / "pk" / "cm.pyi").exists()  # stubs = false was read
 
 

@@ -131,7 +131,7 @@ def build_module(name: str, wasmfilename: str, options: _Options) -> str:
     [(_, ext)] = _natify(
         template,
         None,
-        build_dir=work / "c" if options.build_in_temp else None,
+        build_dir=work / "c" if options.build_in_temp else wasm.parent / "build" / "wasmext",
         force=False,
         quiet=True,
         stubs=options.stubs,
@@ -338,7 +338,7 @@ def install(
     """Main entry point: let `import` find `.wasm` files, for this process. Returns the finder (to hand to `uninstall()`).
 
     :param build_dir: where the modules are made; by default `.wasmbld` in the home directory (or `WASMIMPORT_BUILD_DIR`).
-    :param build_in_temp: if False the C is written beside the `.wasm` (`<name>_wasmext/`), as `wasmext` does, instead of into
+    :param build_in_temp: if False the C is written in `build/wasmext/` beside the `.wasm`, as `wasmext` does, instead of into
         `build_dir`: easier to look at when something goes wrong, and it can meet files of the same name.
     :param setup_args: arguments for `setuptools.setup()`; a `.wasmbld` file can add to them.
     :param inplace: put the built extension (`.so` or `.pyd`) next to the `.wasm`.

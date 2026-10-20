@@ -12,9 +12,7 @@ import argparse
 import copy
 import glob
 import os
-import shutil
 import sys
-import tempfile
 from collections.abc import Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -59,7 +57,10 @@ def _parser() -> argparse.ArgumentParser:
         "-i", "--inplace", action="store_true", help="build the extensions in place, next to the .wasm files"
     )
     parser.add_argument(
-        "-b", "--build", action="store_true", help="build the extensions (under build/, or in place with -i)"
+        "-b",
+        "--build",
+        action="store_true",
+        help="build the extensions (in build/lib.*, or in place with -i; the objects are in build/temp.* either way)",
     )
     parser.add_argument(
         "-f", "--force", action="store_true", help="write the C and build again even if nothing changed"
@@ -119,7 +120,7 @@ def _parser() -> argparse.ArgumentParser:
         "-X", "--exclude", action="append", default=[], metavar="GLOB", help="leave out files matching GLOB"
     )
     parser.add_argument(
-        "--build-dir", metavar="DIR", help="write the C to DIR/<module name>/ instead of beside the .wasm"
+        "--build-dir", metavar="DIR", help="write the C to DIR/<module name>/ (default: build/wasmext/)"
     )
     inspect = commands.add_parser(
         "inspect",
@@ -274,13 +275,8 @@ def _build(base: Path, extensions: list[Extension], *, inplace: bool, force: boo
     os.environ["WASMEXT_NO_PYPROJECT"] = (
         "1"  # setuptools' hook of wasmext must not add the extensions of the table of a project to this build
     )
-    temp: str | None = None
-    leave_build = (base / "build").exists()
     try:
         os.chdir(base)
-        if inplace:  # nothing but the extensions is left behind (cythonize keeps its objects out of build/ too)
-            temp = tempfile.mkdtemp(dir=base)
-            script_args += ["--build-temp", temp]
         cmdclass: dict[str, Any] = {}
         if any(getattr(e, "_wasmext_product", None) for e in moved):
             from setuptools.command.build_ext import build_ext
@@ -313,8 +309,4 @@ def _build(base: Path, extensions: list[Extension], *, inplace: bool, force: boo
     finally:
         os.environ.pop("WASMEXT_NO_PYPROJECT", None)
         os.chdir(cwd)
-        if temp is not None:
-            shutil.rmtree(temp, ignore_errors=True)
-        if inplace and not leave_build:  # setuptools makes an empty build/ even when it builds in place
-            shutil.rmtree(base / "build", ignore_errors=True)
     return 0

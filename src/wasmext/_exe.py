@@ -273,6 +273,14 @@ def _export_args(names: list[str], out_dir: Path, last: str) -> list[str]:
     return [f"-Wl,--version-script={script.as_posix()}"]
 
 
+def _system_libraries(msvc: bool, *, program: bool = False) -> list[str]:
+    """What the C of wasmext needs from the system: the maths library; on Windows `bcrypt` (the random bytes; MSVC finds it by a pragma, MinGW has to be told) and,
+    for a program, `shell32` (its arguments as UTF-8)."""
+    if sys.platform == "win32":
+        return ["bcrypt", *(["shell32"] if program else [])]
+    return [] if msvc else ["m"]
+
+
 def _compiler() -> Any:
     from setuptools._distutils import sysconfig
     from setuptools._distutils.ccompiler import new_compiler
@@ -361,7 +369,7 @@ def build_shared(
     compiler.link_shared_object(
         objects,
         str(library_path),
-        libraries=[*([] if msvc else ["m"]), *flags.libraries],
+        libraries=[*_system_libraries(msvc), *flags.libraries],
         library_dirs=list(flags.library_dirs),
         extra_postargs=[*_export_args(_exported_names(glue.api_header), out_dir, last), *flags.extra_link_args],
     )

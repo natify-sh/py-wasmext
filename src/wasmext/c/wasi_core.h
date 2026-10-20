@@ -63,7 +63,9 @@
 #ifdef _WIN32
 #include <windows.h>
 #include <bcrypt.h>
-#pragma comment(lib, "bcrypt")
+#ifdef _MSC_VER
+#pragma comment(lib, "bcrypt") /* MSVC links it by this; MinGW (zig cc) is told with -lbcrypt, by wasmext._exe */
+#endif
 #endif
 #if !WASI_DIRS_ARE_PATHS
 #include <dirent.h>
@@ -1970,14 +1972,7 @@ static inline uint32_t wasi_poll_oneoff(void *s, uint32_t in, uint32_t out, uint
     return wasi_poll(w, in, out, count, nevents, 0, trapped);
 }
 
-/* ---- not yet: ENOSYS, as the specification allows (ENOTSOCK for the sockets, which will not be there) --------------------- */
-
-#define WASI_NOT_PROVIDED(name, code, ...) \
-    static inline uint32_t wasi_##name(void *s, __VA_ARGS__, int *trapped) { \
-        (void)s; \
-        (void)trapped; \
-        return code; \
-    }
+/* ---- sockets: a program cannot make one, so there is none to speak of --------------------------------------------------------- */
 
 /* a descriptor is never a socket (a program cannot make one): the call says so, or that there is no such descriptor */
 #define WASI_SOCKET(name, ...) \

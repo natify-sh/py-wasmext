@@ -270,7 +270,7 @@ def _emit_links(
         where = f"{imp.module}.{imp.field}"
         hadd(f"/* the import {_cc(where)}: a function of another instance */")
         hadd(
-            f"static int {last}_link_func{k}({last}_instance *core, const wasmext_export *e, char *msg, size_t cap) {{"
+            f"static inline int {last}_link_func{k}({last}_instance *core, const wasmext_export *e, char *msg, size_t cap) {{"
         )
         hadd(
             f"    if (!wasmext_export_ok(e)) return wasmext_link_fail(msg, cap, {_c_string(f'import {where}: {incompatible}')});"
@@ -294,7 +294,7 @@ def _emit_links(
         expected = f"{'mutable ' if g.mutable else ''}{g.type}"
         hadd(f"/* the import {_cc(where)}: a global of another instance, or (an immutable one) a value */")
         hadd(
-            f"static int {last}_link_global{j}({last}_instance *core, const wasmext_export *e, char *msg, size_t cap) {{"
+            f"static inline int {last}_link_global{j}({last}_instance *core, const wasmext_export *e, char *msg, size_t cap) {{"
         )
         hadd(
             f"    if (!wasmext_export_ok(e)) return wasmext_link_fail(msg, cap, {_c_string(f'import {where}: {incompatible}')});"
@@ -311,7 +311,7 @@ def _emit_links(
         hadd("}")
         hadd("")
         if not g.mutable:
-            hadd(f"static void {last}_set_global{j}({last}_instance *core, {_CTYPE[g.type]} value) {{")
+            hadd(f"static inline void {last}_set_global{j}({last}_instance *core, {_CTYPE[g.type]} value) {{")
             hadd(f"    core->host{g.host}.g{g.slot} = value;")
             hadd(f"    core->host{g.host}.gp{g.slot} = &core->host{g.host}.g{g.slot};")
             hadd("}")
@@ -321,7 +321,7 @@ def _emit_links(
         lim = m.limits
         hadd(f"/* the import {_cc(where)}: the memory of another instance */")
         hadd(
-            f"static int {last}_link_memory{j}({last}_instance *core, const wasmext_export *e, char *msg, size_t cap) {{"
+            f"static inline int {last}_link_memory{j}({last}_instance *core, const wasmext_export *e, char *msg, size_t cap) {{"
         )
         hadd(
             f"    if (!wasmext_export_ok(e)) return wasmext_link_fail(msg, cap, {_c_string(f'import {where}: {incompatible}')});"
@@ -1042,7 +1042,7 @@ def generate(module: Module, name: str, *, version: str | None = None) -> Glue:
 
     if tags:
         hadd("/* the index of the tag of an exception in this module, or -1 (the tag of another module) */")
-        hadd(f"static int {last}_tag_of(wasm_rt_tag_t tag) {{")
+        hadd(f"static inline int {last}_tag_of(wasm_rt_tag_t tag) {{")
         hadd(f"    for (int i = 0; i < {last.upper()}_TAG_COUNT; i++)")
         hadd(f"        if (wasmext_tags_{prefix}[i] == tag) return i;")
         hadd("    return -1;")
@@ -1052,7 +1052,7 @@ def generate(module: Module, name: str, *, version: str | None = None) -> Glue:
             "/* The values of an exception of the tag `tag`, from the bytes the runtime keeps (`size` of them): how many, or -1 when the bytes are not"
         )
         hadd("   the values of that tag, or -2 when a type of the tag has no decoding here (a reference). */")
-        hadd(f"static int {last}_tag_values(int tag, const void *payload, uint32_t size, wasmext_value *out) {{")
+        hadd(f"static inline int {last}_tag_values(int tag, const void *payload, uint32_t size, wasmext_value *out) {{")
         hadd("    switch (tag) {")
         for k, tag in enumerate(tags):
             types = tag.params
@@ -1092,7 +1092,7 @@ def generate(module: Module, name: str, *, version: str | None = None) -> Glue:
     is_command = any(exp_name == "_start" for exp_name, _ in funcs)
     finish_on_trap = "wasmext_wasi_finish(self->wasi, WASI_END_TRAP, 0); " if uses_wasi and is_command else ""
     hadd("/* instantiation: 0, or the code of the trap of the start function */")
-    hadd(f"static int {last}_glue_instantiate({last}_instance *self) {{")
+    hadd(f"static inline int {last}_glue_instantiate({last}_instance *self) {{")
     # The runtime of wasm2c does not check the allocation of a table (1.0.42: a NULL that the first use trips over; later releases: abort()). The same
     # allocation is tried first, here (through a volatile pointer: clang at -O2 drops an allocation that is only freed), so that a table that cannot be had is the error of memory it is, and no part of the runtime is patched for it.
     for t in module.tables:
@@ -1124,7 +1124,7 @@ def generate(module: Module, name: str, *, version: str | None = None) -> Glue:
         hadd(f"#define {last.upper()}_START {last}_call{start}")
     if uses_wasi:
         hadd("/* the imports of WASI over the functions of the core, with the state `self->wasi` (made first): 0 */")
-        hadd(f"static int {last}_wasi_bind({last}_instance *self) {{")
+        hadd(f"static inline int {last}_wasi_bind({last}_instance *self) {{")
         for imp in imports:
             if imp.module in _WASI_HEADERS:
                 own = imp.module == _WASI_UNSTABLE and imp.field in _WASI_UNSTABLE_OWN
@@ -1133,7 +1133,7 @@ def generate(module: Module, name: str, *, version: str | None = None) -> Glue:
         hadd("    return 0;")
         hadd("}")
         hadd("")
-    hadd(f"static void {last}_glue_free({last}_instance *self) {{")
+    hadd(f"static inline void {last}_glue_free({last}_instance *self) {{")
     hadd(f"    if (self->instantiated) wasm2c_{prefix}_free(&self->inst);")
     hadd("    self->instantiated = 0;")
     hadd("}")
@@ -1151,7 +1151,7 @@ def generate(module: Module, name: str, *, version: str | None = None) -> Glue:
         names = "".join(f", a{j}" for j in range(len(func.params)))
         give = "return zero;" if func.results else "return;"
         hadd(f"/* {_cc(exp_name)}{_signature(func)} */")
-        hadd(f"static {ret} {last}_call{i}(void *inst{params}, int *trapped) {{")
+        hadd(f"static inline {ret} {last}_call{i}(void *inst{params}, int *trapped) {{")
         if func.results:
             hadd(f"    {ret} zero;")
             hadd("    memset(&zero, 0, sizeof zero);")
@@ -1249,7 +1249,7 @@ def generate(module: Module, name: str, *, version: str | None = None) -> Glue:
     hadd(
         "/* runs `_initialize` of a reactor once, after the instance is made: 0, or the code of a trap; nothing for any other module */"
     )
-    hadd(f"static int {last}_glue_initialize({last}_instance *self) {{")
+    hadd(f"static inline int {last}_glue_initialize({last}_instance *self) {{")
     if reactor_init is None:
         hadd("    (void)self;")
         hadd("    return 0;")

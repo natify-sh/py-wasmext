@@ -148,3 +148,30 @@ def test_a_macro_that_is_not_a_macro_is_refused(tmp_path: Path) -> None:
     )
     with pytest.raises(TypeError, match="not NAME"):
         pyproject_calls(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("line", "message"),
+    [
+        ('quiet = "yes"', "quiet must be true or false"),
+        ("parts = 0", "parts must be a whole number"),
+        ("parts = true", "parts must be a whole number"),
+        ("build-dir = 3", "build-dir must be a string"),
+        ("module-list = 5", "module-list must be a string or a list"),
+        ('libraries = "m"', "libraries must be a list of strings"),
+        ("extra-compile-args = [1]", "extra-compile-args must be a list of strings"),
+        ('define-macros = "A"', "define-macros must be a list"),
+    ],
+)
+def test_a_value_of_the_wrong_type_is_refused_by_the_key(tmp_path: Path, line: str, message: str) -> None:
+    body = "module-list = 'x'\n" if not line.startswith("module-list") else ""
+    (tmp_path / "pyproject.toml").write_text(f"[tool.wasmext.ext-modules]\n{body}{line}\n", encoding="utf-8")
+    with pytest.raises(TypeError, match=message):
+        pyproject_calls(tmp_path)
+
+
+def test_a_lone_exclude_pattern_is_one_pattern(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        "[tool.wasmext.ext-modules]\nmodule-list = 'x'\nexclude = 'skip*'\n", encoding="utf-8"
+    )
+    assert pyproject_calls(tmp_path)[0]["exclude"] == ["skip*"]

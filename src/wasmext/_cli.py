@@ -206,6 +206,12 @@ def _build(base: Path, extensions: list[Extension], *, inplace: bool, force: boo
     from setuptools import setup
 
     moved = [_rebase(ext, base) for ext in extensions]
+    if quiet:  # -q: the warnings of the C that wasm2c makes (an unused function, ...) are not the user's to read; their own flags come after and win
+        from setuptools._distutils.ccompiler import get_default_compiler  # noqa: PLC0415
+
+        silence = "/w" if get_default_compiler() == "msvc" else "-w"
+        for ext in moved:
+            ext.extra_compile_args = [silence, *(ext.extra_compile_args or [])]
     script_args = ["build_ext"]
     if inplace:
         script_args.append("--inplace")

@@ -65,6 +65,23 @@ def inspect(data: bytes, label: str) -> tuple[str, bool]:
 
     out = [f"{label} ({len(data)} bytes)"]
     ok = True
+    # the generator decides what is exposed: its list of what it leaves out wins over the rules above (a name with a NUL, a name that
+    # would hide a special name of Instance, ...), so that the report cannot say "method of Instance" for what is not one
+    generator_error: str | None = None
+    left_out: dict[tuple[str, str], str] = {}
+    notes: list[str] = []
+    try:
+        glue = generate(module, "module")
+    except GenError as exc:
+        generator_error = str(exc)
+        ok = False
+    else:
+        notes = glue.notes
+        for item in glue.skipped:
+            for exp in module.exports:
+                for head in (f"{exp.kind} {exp.name!r}", f"function {exp.name!r}"):
+                    if item.startswith(head):
+                        left_out[(exp.kind, exp.name)] = item[len(head) :].strip() or f"a {exp.kind}"
 
     out.append(f"imports ({len(module.imports)}), which the host has to provide:")
     import_rows: list[tuple[str, str, str]] = []
@@ -78,7 +95,10 @@ def inspect(data: bytes, label: str) -> tuple[str, bool]:
     export_rows: list[tuple[str, str, str]] = []
     for exp in module.exports:
         thing = _export_type(module, exp.kind, exp.index)
-        export_rows.append((exp.name, f"{exp.kind} {_describe(exp.kind, thing)}", _export_verdict(exp.kind, thing)))
+        verdict = _export_verdict(exp.kind, thing)
+        if (exp.kind, exp.name) in left_out and not verdict.startswith("not "):
+            verdict = f"not exposed: {left_out[(exp.kind, exp.name)]}"
+        export_rows.append((repr(exp.name)[1:-1] if "\0" in exp.name else exp.name, f"{exp.kind} {_describe(exp.kind, thing)}", verdict))
     out += _rows(export_rows) or ["  (none)"]
 
     extras = [
@@ -93,16 +113,14 @@ def inspect(data: bytes, label: str) -> tuple[str, bool]:
         + (f", {defined}" if defined else "")
     )
 
-    try:
-        generate(module, "module")
-    except GenError as exc:
-        ok = False
-        out.append(f"result: cannot be wrapped: {exc}")
+    if generator_error is not None:
+        out.append(f"result: cannot be wrapped: {generator_error}")
     else:
         out.append(
             "result: can be wrapped"
             + ("" if not any(r[2].startswith("not ") for r in export_rows) else ", but some exports are left out")
         )
+        out += [f"note: {n}" for n in notes]
     return "\n".join(out) + "\n", ok
 
 

@@ -270,7 +270,8 @@ class _Reader:
         try:
             return _VALTYPES[code]
         except KeyError:
-            raise WasmError(f"unsupported value type 0x{code:02x} at offset {self.pos - 1}") from None
+            reference = " (a reference type of the GC proposal, which wasm2c does not support)" if code in (0x63, 0x64, 0x6A, 0x6B, 0x6C, 0x6D, 0x6E, 0x71, 0x72, 0x73, 0x74) else ""
+            raise WasmError(f"unsupported value type 0x{code:02x} at offset {self.pos - 1}{reference}") from None
 
     def reftype(self) -> ValType:
         t = self.valtype()
@@ -280,6 +281,10 @@ class _Reader:
 
     def limits(self) -> Limits:
         flags = self.byte()
+        if flags & 0x08:
+            raise WasmError(
+                f"a memory with a custom page size (the custom-page-sizes proposal) is not supported: wasm2c has no such memory (offset {self.pos - 1})"
+            )
         if flags & ~0x07:
             raise WasmError(f"unknown limits flags 0x{flags:02x} at offset {self.pos - 1}")
         is64 = bool(flags & 0x04)
@@ -401,6 +406,10 @@ def _section(module: Module, section_id: int, body: _Reader) -> None:
 
 def _functype(r: _Reader) -> FuncType:
     form = r.byte()
+    if form in (0x4E, 0x4F, 0x50, 0x5E, 0x5F):  # rec, sub final, sub, struct, array
+        raise WasmError(
+            f"the module uses the types of the GC proposal (struct, array, sub, rec: form 0x{form:02x} at offset {r.pos - 1}), which wasm2c does not support"
+        )
     if form != 0x60:
         raise WasmError(f"unsupported type form 0x{form:02x} at offset {r.pos - 1}")
     params = tuple(r.vec(r.valtype))

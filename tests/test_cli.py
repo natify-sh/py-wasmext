@@ -231,3 +231,36 @@ def test_a_command_is_needed_and_a_file_is_not_one(tmp_path: Path) -> None:
     assert nothing.returncode == 2 and "COMMAND" in nothing.stderr
     help_ = wasmext(tmp_path, None, "--help")
     assert help_.returncode == 0 and "natify" in help_.stdout and "inspect" in help_.stdout
+
+
+def test_inspect_agrees_with_the_generator_about_a_name_that_is_not_an_attribute(tmp_path: Path) -> None:
+    name = b"__exports__"  # would hide a special name of Instance: the generator leaves it out of the attributes
+    module = (
+        b"\0asm\1\0\0\0"
+        + bytes([1, 4, 1, 0x60, 0, 0])
+        + bytes([3, 2, 1, 0])
+        + bytes([7, 3 + len(name) + 1, 1, len(name)])
+        + name
+        + bytes([0, 0])
+        + bytes([10, 4, 1, 2, 0, 0x0B])
+    )
+    (tmp_path / "r.wasm").write_bytes(module)
+    done = wasmext(tmp_path, None, "inspect", "r.wasm")
+    assert done.returncode == 0, done.stderr
+    assert "not exposed: is not an attribute" in done.stdout and "method of Instance" not in done.stdout
+
+
+def test_the_proposals_that_wasm2c_lacks_are_named_in_words(tmp_path: Path) -> None:
+    gc = b"\0asm\1\0\0\0" + bytes([1, 5, 1, 0x5E, 0x7F, 0, 0])  # a struct type
+    pages = b"\0asm\1\0\0\0" + bytes([5, 4, 1, 0x08, 1, 0x10])  # a memory with a custom page size
+    (tmp_path / "gc.wasm").write_bytes(gc)
+    (tmp_path / "pages.wasm").write_bytes(pages)
+    said = wasmext(tmp_path, None, "inspect", "gc.wasm", "pages.wasm").stdout
+    assert "GC proposal" in said and "custom page size" in said
+
+
+def test_quiet_inplace_prints_nothing_not_even_warnings_of_the_compiler(project: Path, wabt: Path) -> None:
+    done = wasmext(project, wabt, "natify", "-q", "-i", "--build-dir", "gen", "src/pkg/add.wasm")
+    assert done.returncode == 0, done.stderr[-600:]
+    assert done.stdout == "" and done.stderr == ""
+    assert (project / "gen").is_dir() and list((project / "src" / "pkg").glob("add.*so"))  # --build-dir is honoured with -i

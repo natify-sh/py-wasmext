@@ -66,6 +66,46 @@ def _macro(value: Any) -> tuple[str, str | None]:
     raise TypeError(f"define-macros: {value!r} is not NAME, NAME=value or [NAME, value]")
 
 
+# the type that each key wants: "str", "bool", "int", or "strs" (a string, or a list of strings)
+_KEY_TYPES = {
+    "module-list": "strs",
+    "exclude": "strs",
+    "build-dir": "str",
+    "force": "bool",
+    "quiet": "bool",
+    "stubs": "bool",
+    "limited-api": "bool",
+    "guard-pages": "bool",
+    "parts": "int",
+    "extra-compile-args": "list",
+    "extra-link-args": "list",
+    "undef-macros": "list",
+    "include-dirs": "list",
+    "libraries": "list",
+    "library-dirs": "list",
+}
+
+
+def _check_value(path: Path, key: str, value: Any) -> None:
+    """A value of the wrong type is an error that names the key, not a TypeError from the depths of natify() (or, for a string where a list
+    is wanted, a list of its characters)."""
+    kind = _KEY_TYPES.get(key)
+    where = f"{path}: [tool.wasmext.ext-modules] {key}"
+    strings = isinstance(value, list) and all(isinstance(v, str) for v in value)  # pyright: ignore[reportUnknownVariableType]
+    if kind == "str" and not isinstance(value, str):
+        raise TypeError(f"{where} must be a string, not {value!r}")
+    if kind == "bool" and not isinstance(value, bool):
+        raise TypeError(f"{where} must be true or false, not {value!r}")
+    if kind == "int" and (isinstance(value, bool) or not isinstance(value, int) or value < 1):
+        raise TypeError(f"{where} must be a whole number of at least 1, not {value!r}")
+    if kind == "strs" and not (isinstance(value, str) or strings):
+        raise TypeError(f"{where} must be a string or a list of strings, not {value!r}")
+    if kind == "list" and not strings:
+        raise TypeError(f"{where} must be a list of strings, not {value!r}")
+    if key == "define-macros" and not isinstance(value, list):
+        raise TypeError(f"{where} must be a list, not {value!r}")
+
+
 def pyproject_calls(root: Path) -> list[dict[str, Any]]:
     """The calls of `natify()` that `pyproject.toml` in `root` asks for: `[tool.wasmext.ext-modules]`, or several as `[[tool.wasmext.ext-modules]]`,
     as the keyword arguments of the function, and under the key "extension" what is added to the extensions it makes. An empty list where
@@ -100,7 +140,11 @@ def pyproject_calls(root: Path) -> list[dict[str, Any]]:
             raise ValueError(
                 f"{path}: [tool.wasmext.ext-modules] needs module-list (the .wasm files, as a glob pattern or a list of them)"
             )
+        for key, value in entry.items():  # pyright: ignore[reportUnknownVariableType]
+            _check_value(path, key, value)  # pyright: ignore[reportUnknownArgumentType]
         call = {_WASMIZE_KEYS[key]: value for key, value in entry.items() if key in _WASMIZE_KEYS}
+        if isinstance(call.get("exclude"), str):
+            call["exclude"] = [call["exclude"]]  # a lone pattern: not the characters of a string
         extension = {_EXTENSION_KEYS[key]: value for key, value in entry.items() if key in _EXTENSION_KEYS}
         if "define_macros" in extension:
             extension["define_macros"] = [_macro(m) for m in extension["define_macros"]]

@@ -418,9 +418,16 @@ def _shared_headers(glue: Glue) -> tuple[str, ...]:
     return (*GLUE_SHARED, *WASI_SHARED, *glue.wasi_headers) if glue.wasi_headers else GLUE_SHARED
 
 
+def _write_atomic(path: Path, data: bytes) -> None:
+    """Whole or not at all: two builds of one project (several Pythons, in parallel) share build/wasmext/ and must never read half a file."""
+    temp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    temp.write_bytes(data)
+    os.replace(temp, path)
+
+
 def _write_if_changed(path: Path, data: bytes) -> None:
     if not path.is_file() or path.read_bytes() != data:
-        path.write_bytes(data)
+        _write_atomic(path, data)
 
 
 def _prepare(
@@ -467,9 +474,11 @@ def _prepare(
         and (parts or os.environ.get("WASMEXT_PARTS"))
     ):
         print(f"wasmext: {wasm}: {note}", file=sys.stderr)  # only for a number somebody asked for
-    if stubs:
-        stub = wasm.with_suffix(".pyi")
-        _write_if_changed(stub, glue.stub.encode("utf-8"))
+    out_dir.mkdir(parents=True, exist_ok=True)
+    if (
+        stubs
+    ):  # a part of the extension: the build puts it beside the extension, where it is built (build/lib.*, or in place)
+        _write_if_changed(out_dir / f"{last}.pyi", glue.stub.encode("utf-8"))
     # the C that wasmext brings, and the glue of the module, beside the C of the module (not made by wasm2c, so always put there)
     out_dir.mkdir(parents=True, exist_ok=True)
     _write_if_changed(out_dir / f"{last}_glue.h", glue.header.encode("utf-8"))
@@ -503,13 +512,14 @@ def _prepare(
     if result.returncode:
         raise RuntimeError(f"wasm2c failed on {wasm}:\n{result.stderr.strip()}")
     for part in _w2c_files(out_dir, last, wanted):
-        part.write_bytes(
+        _write_atomic(
+            part,
             _marker(toolchain.version, wanted, digest).encode()
-            + _export_tags(_tail_call_locals(_portable_on_arm64(part.read_bytes())), module_prefix(name))
+            + _export_tags(_tail_call_locals(_portable_on_arm64(part.read_bytes())), module_prefix(name)),
         )
     shared = out_dir / f"{last}_w2c-impl.h"  # the code every file includes, when there are several
     if shared.is_file():
-        shared.write_bytes(_portable_on_arm64(shared.read_bytes()))
+        _write_atomic(shared, _portable_on_arm64(shared.read_bytes()))
     _write_if_changed(glue_c, (_marker(toolchain.version, wanted, digest) + glue.source).encode("utf-8"))
     for key, text in _RUNTIME_WRAPPERS.items():
         _write_if_changed(out_dir / f"{last}_rt_{key}.c", text.encode())
@@ -616,7 +626,7 @@ def natify(
     (`libraries`, `define_macros`, `extra_compile_args`, ...) are the flags of the build. A shared library is `lib<stem>.so`, `lib<stem>.dylib`
     or `<stem>.dll`; a program is `<stem>` or `<stem>.exe`. `limited_api` and `stubs` are for extensions and do nothing for the other products.
 
-    With `stubs` (the default) a `<stem>.pyi` is written beside each `.wasm`: the types of the extension for editors and type
+    With `stubs` (the default) a `<stem>.pyi` is made with the C and the build puts it beside the extension: the types of the extension for editors and type
     checkers (ship it in the wheel with `package-data`).
     """
     return [
@@ -696,6 +706,8 @@ def _natify(
             return
         ext = copy.copy(template) if template else Extension(name, [])
         ext.name = name
+        if stubs:
+            ext._wasmext_stub = str((out_dir / f"{wasm.stem}.pyi").resolve())  # type: ignore[attr-defined]
         ext._wasmext_limited_api = limited_api  # type: ignore[attr-defined]  # what was asked (None: whatever the interpreter allows), for wasmext._setuptools to make the wheel consistent
         rest = [s for s in (template.sources if template else []) if not str(s).endswith(".wasm")]
         ext.sources = [*rest, *chosen.sources]

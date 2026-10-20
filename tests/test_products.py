@@ -277,3 +277,17 @@ def test_the_c_of_every_target_the_module_can_have_is_generated_at_once(
     assert (lib / "lib_py.c").is_file() and (lib / "lib_shared.c").is_file() and not (lib / "lib_main.c").exists()
     with pytest.raises(Exception, match="serves the imports of WASI"):
         natify("pkg/lib.wasm", product="exe", quiet=True)  # only when the program itself is asked for
+
+
+def test_a_path_too_long_for_windows_fails_the_build_and_says_why(tmp_path: Path) -> None:
+    from wasmext._setuptools import check_path_lengths  # pyright: ignore[reportPrivateUsage]
+
+    source = "build/wasmext/pkg.module/module_w2c.c"
+    check_path_lengths([], [source], str(tmp_path / "build" / "temp"), limit=10_000)  # inside the limit
+    with pytest.raises(RuntimeError, match=r"(?s)Windows allows 40.*build/temp.*shorter"):
+        check_path_lengths([], [source], str(tmp_path / "build" / "temp"), limit=40)
+    with pytest.raises(RuntimeError, match="module_w2c"):  # the file itself counts, not only its object
+        check_path_lengths([str(tmp_path / ("x" * 60) / "module_w2c.h")], [], str(tmp_path), limit=40)
+    check_path_lengths(
+        [str(tmp_path / ("x" * 400))], [], str(tmp_path)
+    )  # no limit where the system has none (this is not Windows)

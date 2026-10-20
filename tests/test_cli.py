@@ -130,12 +130,18 @@ def test_inplace_puts_the_extensions_in_place_and_the_rest_in_build(project: Pat
     assert not list(project.rglob("tmp*"))
 
 
-def test_stubs_are_written_unless_asked_not_to(project: Path, wabt: Path) -> None:
+def test_the_stub_follows_the_extension_unless_asked_not_to(project: Path, wabt: Path) -> None:
+    stub = project / "src" / "pkg" / "add.pyi"
     assert wasmext(project, wabt, "natify", "-q", "src/pkg/add.wasm").returncode == 0
-    assert (project / "src" / "pkg" / "add.pyi").is_file()
-    (project / "src" / "pkg" / "add.pyi").unlink()
-    assert wasmext(project, wabt, "natify", "-q", "--no-stubs", "src/pkg/add.wasm").returncode == 0
-    assert not (project / "src" / "pkg" / "add.pyi").exists()
+    assert (
+        project / "build" / "wasmext" / "pkg.add" / "add.pyi"
+    ).is_file() and not stub.exists()  # made, not placed: nothing is built
+    assert wasmext(project, wabt, "natify", "-q", "-i", "src/pkg/add.wasm").returncode == 0
+    assert stub.is_file()  # beside the extension that was put in place
+    stub.unlink()
+    shutil.rmtree(project / "build")
+    assert wasmext(project, wabt, "natify", "-q", "-i", "--no-stubs", "src/pkg/add.wasm").returncode == 0
+    assert not stub.exists()
 
 
 @needs_abi3

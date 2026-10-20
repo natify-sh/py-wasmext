@@ -173,6 +173,9 @@ def build_module(name: str, wasmfilename: str, options: _Options) -> str:
     built = _find_built(lib, name)
     if built is None:
         raise RuntimeError(f"the build left no extension for {name} in {lib}")
+    stub = getattr(ext, "_wasmext_stub", None)
+    if options.stubs and stub and Path(stub).is_file():  # asked for: the types go beside the .wasm that is imported
+        shutil.copyfile(stub, wasm.with_suffix(".pyi"))
     from ._cli import _prune_stale  # pyright: ignore[reportPrivateUsage]
 
     _prune_stale(

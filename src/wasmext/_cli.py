@@ -115,7 +115,7 @@ def _parser() -> argparse.ArgumentParser:
         help="make a program of a command (a module with _start), instead of an extension (like an extension: the C is written, -i or -b builds it)",
     )
     parser.set_defaults(product="extension")
-    parser.add_argument("--no-stubs", action="store_true", help="do not write a .pyi beside each .wasm")
+    parser.add_argument("--no-stubs", action="store_true", help="do not make the .pyi of each extension")
     parser.add_argument(
         "-X", "--exclude", action="append", default=[], metavar="GLOB", help="leave out files matching GLOB"
     )
@@ -278,7 +278,7 @@ def _build(base: Path, extensions: list[Extension], *, inplace: bool, force: boo
     try:
         os.chdir(base)
         cmdclass: dict[str, Any] = {}
-        if any(getattr(e, "_wasmext_product", None) for e in moved):
+        if any(getattr(e, "_wasmext_product", None) or getattr(e, "_wasmext_stub", None) for e in moved):
             from setuptools.command.build_ext import build_ext
 
             from ._setuptools import parallel_build_ext

@@ -151,7 +151,7 @@ def test_setuptools_gets_a_build_ext_that_compiles_at_once(
     dist = Distribution({"name": "x", "ext_modules": split})
     dist.finalize_options()
     assert dist.cmdclass["build_ext"].__name__ == "WasmextBuildExt"
-    whole = natify("src/pk/cm.wasm", parts=1, quiet=True)
+    whole = natify("src/pk/cm.wasm", parts=1, quiet=True, stubs=False)
     plain = Distribution({"name": "y", "ext_modules": whole})
     plain.finalize_options()
     assert "build_ext" not in plain.cmdclass  # one file: setuptools as it is

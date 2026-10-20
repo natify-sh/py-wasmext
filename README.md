@@ -47,8 +47,8 @@ Building a native extension has been tested on Linux (x86-64 glibc and musl, ARM
 Silicon, Intel), Pyodide, Android x86-64 (in an emulator), and, built but not run, Android arm64-v8a; the details and what is not confirmed are in
 [FEATURES.md](FEATURES.md#platforms-where-a-native-extension-was-built-and-tested).
 
-`wasm2c` is needed only to make the C. A tree that ships the C (`<name>_wasmext/`, for example in an sdist) builds with the
-compiler and the headers alone.
+`wasm2c` is needed to make the C, and so for every build: the C is a step of the build (it is in `build/wasmext/`, not in the
+sources and not in an sdist), and `wabt-package` is a build requirement. Where everything is made and put: [build_model.md](build_model.md).
 
 ## Use
 
@@ -91,11 +91,11 @@ inst.add(2, 3)  # the exports are methods; an exported memory is a memoryview at
 The values are Python's own: an `i32` or `i64` is an `int` (a result comes back signed, an argument is wrapped to the width, as the
 JavaScript API does), an `f32` or `f64` a `float`, a `v128` 16 bytes (`bytes`, or any bytes-like object, in the order of WebAssembly
 memory); an export with several results returns a tuple. A trap is `Trap` (a `RuntimeError`; an exception of WebAssembly that nothing catches is `UncaughtException`, a `Trap` with `.tag`, the index of the tag in the module, and `.values`) and the instance stays usable (a WASI command, which exports `_start`, is over after one); a missing
-or wrong import is `LinkError`; an exported global is an attribute. The stub `<module>.pyi` written beside the `.wasm` says all that
+or wrong import is `LinkError`; an exported global is an attribute. The stub `<module>.pyi`, which the build puts beside the extension, says all that
 for the module at hand.
 
 The command line has a command for each thing it does (`wasmext --help`). `wasmext natify 'src/mypkg/*.wasm'` writes the C, in the manner of
-`cythonize`; `wasmext natify -i ...` also builds the extensions in place, `-b` under `build/`. The settings of `natify()` are options: `-q`, `-f`, `-X`, `--build-dir`,
+`cythonize`; `wasmext natify -i ...` also builds the extensions in place, `-b` in `build/`. The settings of `natify()` are options: `-q`, `-f`, `-X`, `--build-dir`,
 `--parts`, `--limited-api` / `--no-limited-api`, `--guard-pages` / `--no-guard-pages` / `--guard-pages-for ARCH=on|off,...`, `--no-stubs`, and the product (`--shared` or `--exe`, below).
 
 `wasmext inspect 'src/mypkg/*.wasm'` says what a module imports (what the host has to provide) and exports, which exports become
@@ -118,23 +118,19 @@ product = "exe"
 ```
 
 `natify(..., product="shared")` is the same. Whatever product is asked for, `natify()` makes the C of **every** product that the module can have (an extension, a library, and a program if the module is a WASI command), and the build only chooses the sources to compile, so the
-C made for one product never has to be made again for another (a source distribution carries all of it, below). `wasmext natify FILE`, with `--shared` or `--exe` too, writes only that C, as `cythonize` does without `-b`; with `-i` (or `-b`) the extension, the library or the program is built too
+C made for one product never has to be made again for another (it is all in `build/wasmext/`). `wasmext natify FILE`, with `--shared` or `--exe` too, writes only that C, as `cythonize` does without `-b`; with `-i` (or `-b`) the extension, the library or the program is built too
 (the options `--shared` and `--exe` exclude each other: a library holds no `main`; a program of a module that is not a command is refused). `setup.py build_ext` puts the file where an extension would go: `lib<name>.so` / `lib<name>.dylib` / `<name>.dll`
-(with its header `<name>_api.h` in `<name>_wasmext/`, and `<name>_ctypes.py` beside it: the interface of the extension over `ctypes`), or the program `<name>` /
+(with `<name>_ctypes.py` and its `.pyi` beside it, and its header `<name>_api.h` in `build/wasmext/`: the interface of the extension over `ctypes`), or the program `<name>` /
 `<name>.exe`. A program needs a `_start` and no imports but WASI's (`--env NAME=VALUE`, `--dir HOST::GUEST[:ro]`, `--argv0`, `--help`); a
 library exports only its API. The settings of the extension (`libraries`, `extra-compile-args`, ...) are the flags of the build. A reactor
 (`_initialize`, no `_start`) is a library, and is initialized when the instance is made, in the extension and in the library alike (WASI says the host runs `_initialize` once, before any other export; a later explicit call of it does nothing). A package whose compiled files are all libraries and programs gets a wheel tagged
-`py3-none-<platform>` (any Python 3), not for the interpreter that built it. The header `<name>_api.h` is in `<name>_wasmext/`: nothing in a Python package needs it (the wrapper knows the signatures), it is for a host in C or another language that is built against the
-library, so a wheel does not have it unless the project asks: wasmext does not put it there, and a `package-data` entry for it (`pkg = ["engine_wasmext/engine_api.h"]`) puts it in the wheel, also on a clean build (CI, a wheel built from an sdist), because the C is made before the files of `package-data` are listed (checked on `examples/products`). wasmext builds the files and the project distributes them: it writes no helper that finds a program or a library at run time
+`py3-none-<platform>` (any Python 3), not for the interpreter that built it. The header `<name>_api.h` is in `build/wasmext/<module name>/`: nothing in a Python package needs it (the wrapper knows the signatures), it is for a host in C or another language that is built against the library, so a wheel does not have it; a project that wants it there copies it from the build directory (a `build_ext` subclass in `setup.py`, shown in [build_model.md](build_model.md)). wasmext builds the files and the project distributes them: it writes no helper that finds a program or a library at run time
 (a library has its wrapper, which looks beside itself; for a program, a package does what suits it: `Path(__file__).with_name(...)` as `examples/products` does, `importlib.resources`, a `main()` of its own run by a `[project.scripts]` entry, or none of it; a project may have several programs
 and may not want a launcher at all). `limited-api` and the stubs are for extensions only.
 
 ### What a source distribution carries
 
-An sdist made from a project that uses wasmext has the `.wasm` **and** the C that wasmext made from it (`<name>_wasmext/`: the glue, the C of wasm2c, its runtime and the front end of every target the module can have: `<name>_py.c`, `<name>_api.h` and `<name>_shared.c`, and `<name>_main.c` for a WASI command), whichever product the project builds: the C is made when the project is read, and the files are named in the sources and the dependencies of the extension, which setuptools puts in the sdist. The C is not trusted by its time:
-it carries the SHA-256 of the `.wasm` it was made from, and is made again if the `.wasm`, wasmext or WABT is another (so a file restored from a cache, or copied with its old time, cannot leave a stale C behind).
-Cython advises against shipping generated C in an sdist and a build requirement on the generator instead, which is what `requires = ["setuptools", "wasmext"]` does here; a project that does not want the C in its sdist puts
-`global-exclude *_wasmext/*` (or a `prune` for each folder, as `prune src/pkg/engine_wasmext`) in `MANIFEST.in`; the sdist then has the `.wasm` only (checked on `examples/products` on Linux; **on Windows it did not work in CI**: the patterns of `MANIFEST.in` get the separator of the system and the paths that wasmext gives have `/`). The generated C is **a step of the build, not a format of distribution**: building it needs wasmext (and the wabt-package that wasmext brings, which has the runtime of wasm2c and the headers of simde for a module with SIMD), so a package that ships the C and no wasmext, to be built with a C compiler alone, is not supported.
+The `.wasm` and the project files, nothing that wasmext made: the C is a step of the build, in `build/wasmext/` (distutils leaves `build/` out of an sdist), and a build from the sdist makes it again with the wasm2c of `wabt-package`, a build requirement. A package that ships generated C and no wasmext, to be built by a C compiler alone, is not supported. The C is made again only when its SHA-256 digest says it is stale (another `.wasm`, wasmext or WABT, or `force`), never by the time of a file.
 
 ### Linking instances
 
@@ -177,7 +173,7 @@ and a capture in a test or a notebook keep their order; or bytes / an object wit
 input, an output thrown away), `preopens` (`{name the program sees: directory of the host}`; default: none, the program sees no files),
 `readonly` (`True`, a name or a list of names of the preopens that cannot be changed), `clock` (a function: the id of the clock ->
 nanoseconds; default: the clocks of the system) and `random` (a function: how many -> that many bytes; default: the random bytes of the
-system). The types are in the `.pyi` that is written beside the module. A call can also be replaced as any import can:
+system). The types are in the `.pyi` that the build puts beside the module. A call can also be replaced as any import can:
 `Instance({"wasi_snapshot_preview1": {"clock_time_get": my_clock}})`; what you give wins, call by call.
 
 A program is kept inside the directories it was given: `..` out of a directory, an absolute name, or a symbolic link that leads out is
@@ -249,10 +245,9 @@ setuptools hook of wasmext, so nothing else needs to be set (a `[tool.distutils.
 kind builds from the same C. abi3 costs little here: on one machine (CPython 3.11, gcc `-O2`) calls into the module and the code inside it ran at the same speed as native, and a call from
 the module into a Python function about 5% slower.
 
-The C that wasmext writes (`<name>_wasmext/`) and the `.wasm` are the sources of the extension, not part of it. setuptools puts
-the sources of an extension into the manifest, and `include-package-data` (on by default in a `pyproject.toml`) then ships them in
-the wheel: set `include-package-data = false` under `[tool.setuptools]` and name what you do ship in `package-data` (the stub,
-`py.typed`), as `examples/coremark` does. The sdist keeps them, so that it builds without `wasm2c`.
+The `.wasm` is the source of the extension, not part of it. `include-package-data` (on by default in a `pyproject.toml`) would ship
+it in the wheel: set `include-package-data = false` under `[tool.setuptools]` and name what you do ship in `package-data`
+(`py.typed`), as `examples/coremark` does. The stub `<name>.pyi` is made by the build and put beside the extension, in the wheel too.
 
 [`examples/coremark`](examples/coremark) is a package built that way: three lines of `setup.py`, and `cibuildwheel` builds its
 wheels. The build needs a C compiler and `wasm2c` (the wabt-package, or `WASMEXT_WABT`: a directory with its `bin/` and
@@ -306,7 +301,7 @@ What may be relied on, and what may change. This is the boundary for the alpha; 
 **Stable** (the interface that users of a built wheel, and of the build, see):
 
 - The module that wasmext makes: `Instance(imports, wasi=...)`; an export as an attribute or a method; `instance["name"]` and `instance.__exports__` (a reference to give to another instance as an import; its content is opaque);
-  an exported memory as a `memoryview`; an exported global as an attribute; a `v128` as 16 bytes; the exceptions `Trap` and `LinkError`, `UncaughtException` (for a module that has exception tags) and, for a module that uses WASI, `WasiExit`, `WasiSignal`, `WasiTerminated`; the `.pyi` written beside the `.wasm`.
+  an exported memory as a `memoryview`; an exported global as an attribute; a `v128` as 16 bytes; the exceptions `Trap` and `LinkError`, `UncaughtException` (for a module that has exception tags) and, for a module that uses WASI, `WasiExit`, `WasiSignal`, `WasiTerminated`; the `.pyi` beside the built module.
 - The build: `natify()` and its keyword arguments, the options of `wasmext natify` (and `wasmext inspect`, whose text is for people, not for programs), the keys of `[[tool.wasmext.ext-modules]]` and `limited-api` of `[tool.wasmext]` in `pyproject.toml`, and the values of `product`.
 - The environment variables of a user: `WASMEXT_WABT`, `WASMEXT_WASM2C`, `WASMEXT_WASM2C_RUNTIME`, `WASMEXT_WASM2C_INCLUDE`, `WASMEXT_LIMITED_API`, `WASMEXT_GUARD_PAGES`, `WASMEXT_PARTS`, `WASMEXT_JOBS`, `WASMEXT_NO_PYPROJECT`.
 - The products: the header `<name>_api.h` of a shared library (its functions, `<name>_config`, the trap codes) and the wrapper `<name>_ctypes.py`, which has the interface of the extension; the command line of a program made with `--exe` (`--env`, `--dir`, `--argv0`, `--help`, `--version`) and its exit codes.
@@ -315,7 +310,7 @@ What may be relied on, and what may change. This is the boundary for the alpha; 
 **Provisional** (works, used by the tests, but its shape is not settled): `generate()`, `parse()`, `mangle()`, `Glue` and the types of a parsed module (`Module`, `Import`, `Export`, `FuncType`, `GlobalType`, `TableType`, `Limits`, `ValType`);
 `find_toolchain()` and `Toolchain`; `wasmimport` (`install`, `uninstall`, `clean`, `WasmFinder`, `WasmImportLoader`), a development tool.
 
-**Private** (no promise at all): every module whose name begins with an underscore (`wasmext._*`), the setuptools hook that `pyproject.toml` entry points register, the headers in `wasmext/c/`, the C that wasmext writes (`*_glue.h`, `*_w2c.*`, `*_py.c`, the `<name>_wasmext/` folder: it is what is built, not an interface), the `WASMEXT_*` macros of those headers,
+**Private** (no promise at all): every module whose name begins with an underscore (`wasmext._*`), the setuptools hook that `pyproject.toml` entry points register, the headers in `wasmext/c/`, the C that wasmext writes (`*_glue.h`, `*_w2c.*`, `*_py.c`, the `build/wasmext/` folder: it is what is built, not an interface), the `WASMEXT_*` macros of those headers,
 the cache of `wasmimport`, and the **link between instances**: the capsule `wasmext.export.v1` and the record behind it (`wasmext_export`, `<name>_export` in a header). A reference is only passed from `_export_find` to a `_link_*` function or to another instance; do not read its fields.
 A module links to a module made by another version of wasmext only if both have the same record version and the same layout of the wasm2c runtime; otherwise the link is a `LinkError`, and nothing more is promised between versions of the alpha.
 

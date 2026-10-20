@@ -1,0 +1,23 @@
+{
+  global:
+    engine_new;
+    engine_free;
+    engine_thread_free;
+    engine_instantiate;
+    engine_trap_message;
+    engine_trap_is_exception;
+    engine_wasi_end;
+    engine_set_import0;
+    engine_link_import0;
+    engine_exception;
+    engine_add;
+    engine_twice;
+    engine_call_log;
+    engine_boom;
+    engine_trap;
+    engine_memory_mem;
+    engine_memory_mem_pin;
+    engine_export_find;
+  local:
+    *;
+};

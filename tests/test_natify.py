@@ -567,10 +567,12 @@ def test_abi3_is_asked_of_the_interpreter_and_the_platform(monkeypatch: pytest.M
     assert "pypy has no stable ABI" in str(abi3_possible())
 
 
-def test_a_stub_is_written_beside_the_wasm(project: Path) -> None:
-    natify("pkg/*.wasm", quiet=True)
-    stub = project / "pkg" / "add.pyi"
+def test_a_stub_is_made_with_the_c_and_not_written_beside_the_wasm(project: Path) -> None:
+    [ext] = natify("pkg/*.wasm", quiet=True)
+    stub = project / "build" / "wasmext" / "pkg.add" / "add.pyi"
     assert "def add(self, arg0: int, arg1: int, /) -> int: ..." in stub.read_text(encoding="utf-8")
-    stub.unlink()  # deleted: written again
+    assert Path(ext._wasmext_stub) == stub.resolve()  # type: ignore[attr-defined]  # absolute: the build puts it beside the extension
+    assert not (project / "pkg" / "add.pyi").exists()
+    stub.unlink()  # deleted: made again
     natify("pkg/*.wasm", quiet=True)
     assert stub.is_file()

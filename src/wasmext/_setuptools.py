@@ -16,6 +16,7 @@ import os
 import shutil
 import sys
 import tomllib
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
@@ -252,7 +253,12 @@ def finalize_distribution_options(dist: Any) -> None:
         with contextlib.suppress(Exception):  # no bdist_wheel (no wheel package): there is no wheel to tag
             dist.cmdclass["bdist_wheel"] = wheel_without_python(dist.get_command_class("bdist_wheel"))
     if (
-        any(getattr(e, "_wasmext_parallel", False) or getattr(e, "_wasmext_product", None) for e in extensions)
+        any(
+            getattr(e, "_wasmext_parallel", False)
+            or getattr(e, "_wasmext_product", None)
+            or getattr(e, "_wasmext_stub", None)
+            for e in extensions
+        )
         and "build_ext" not in dist.cmdclass
     ):
         dist.cmdclass["build_ext"] = parallel_build_ext(dist.get_command_class("build_ext"))
@@ -310,6 +316,37 @@ def _product_fingerprint(ext: Any, wasm: Path, parts: int | None) -> str:
     return json.dumps(settings, sort_keys=True, default=repr)
 
 
+WINDOWS_PATH_LIMIT = (
+    259  # MAX_PATH is 260 with the terminating NUL; the compilers (cl) and many tools of Windows still stop there
+)
+
+
+def check_path_lengths(
+    files: Sequence[str], compiled: Sequence[str], build_temp: str, *, limit: int | None = None
+) -> None:
+    """Fail the build, saying why, when a path of it is too long for Windows. `files` are read (their own paths count); of `compiled`
+    the objects of setuptools count too: they are in `<build_temp>/<path of the source>.obj`, so the folder of the project, the tag of
+    the platform and the name of the module add up. Where the system has no such limit (anything but Windows) this does nothing,
+    unless a `limit` is given."""
+    if limit is None:
+        if sys.platform != "win32":
+            return
+        limit = WINDOWS_PATH_LIMIT
+    suffix = ".obj" if sys.platform == "win32" else ".o"
+    paths = [os.path.abspath(f) for f in (*files, *compiled)]
+    for source in compiled:
+        relative = os.path.splitext(os.path.splitdrive(str(source))[1].lstrip("/\\"))[0] + suffix
+        paths.append(os.path.abspath(os.path.join(build_temp, relative)))
+    length, path = max((len(p), p) for p in paths) if paths else (0, "")
+    if length > limit:
+        raise RuntimeError(
+            f"wasmext: a path of the build is {length} characters, Windows allows {limit}:\n  {path}\n"
+            "The path is the folder of the project, the build folder (build/temp.<platform>), the path of the generated C "
+            "(build/wasmext/<module name>/) and the name of the file. Build in a shorter folder (for example C:\\w\\project), "
+            "or give the build a shorter place (`build_dir`, `--build-temp`), or shorten the name of the module."
+        )
+
+
 def parallel_build_ext(base: type) -> type:
     """A `build_ext` that compiles the sources of an extension from `natify()` that is split into files at the same time.
 
@@ -334,6 +371,24 @@ def parallel_build_ext(base: type) -> type:
             return os.path.join(*package, product_filename(stem, ext._wasmext_product))
 
         def build_extension(self, ext: Any) -> None:
+            if getattr(ext, "_wasmext_made", False):
+                product = bool(
+                    getattr(ext, "_wasmext_product", None)
+                )  # a library or a program compiles flat object names of its own
+                check_path_lengths(
+                    [str(f) for f in ext.depends or []],
+                    [] if product else [str(f) for f in ext.sources or []],
+                    self.build_temp,
+                )
+            self._build_one(ext)
+            stub = getattr(ext, "_wasmext_stub", None)
+            if (
+                stub and Path(stub).is_file()
+            ):  # the types of the extension are beside it, as the wrapper of a library is
+                target = Path(self.get_ext_fullpath(ext.name))
+                shutil.copyfile(stub, target.parent / f"{ext.name.rpartition('.')[2]}.pyi")
+
+        def _build_one(self, ext: Any) -> None:
             if getattr(ext, "_wasmext_product", None):
                 return self._build_product(ext)
             sources = list(ext.sources or [])
@@ -405,7 +460,13 @@ def parallel_build_ext(base: type) -> type:
 
         def copy_extensions_to_source(self) -> None:
             super().copy_extensions_to_source()
-            for ext in self.extensions:  # the wrapper of a library goes to the source folder with it
+            for (
+                ext
+            ) in self.extensions:  # the wrapper of a library, the types of an extension: to the source folder with it
+                stub = getattr(ext, "_wasmext_stub", None)
+                if stub and Path(stub).is_file():
+                    package_dir = self.get_finalized_command("build_py").get_package_dir(ext.name.rpartition(".")[0])
+                    shutil.copyfile(stub, Path(package_dir) / Path(stub).name)
                 if getattr(ext, "_wasmext_product", None) != "shared":
                     continue
                 *package, stem = ext.name.split(".")

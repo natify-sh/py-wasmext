@@ -1,0 +1,120 @@
+name: WASI test suite
+
+# The official tests of WASI 0.1 (https://github.com/WebAssembly/wasi-testsuite, the precompiled programs of its
+# prod/testsuite-base branch) run on wasmext: each program is turned into a native extension (tests/wasi_testsuite/run_wasmext.py,
+# without optimizing: it is the calls that are tested) and run by the test runner of the suite, with the adapter
+# tests/wasi_testsuite/adapter.py. A test that is expected to fail on a system is in tests/wasi_testsuite/expectations-*.toml.
+
+on:
+  push:
+    paths-ignore:
+      - "**.md"
+  pull_request:
+    paths-ignore:
+      - "**.md"
+  workflow_dispatch:
+
+concurrency:
+  group: wasi-testsuite-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # the commit of prod/testsuite-base that the results were taken from; change it on purpose
+  WASI_TESTSUITE_REF: d552798a246242c3efe6931314cdfa93d6eefa52
+
+jobs:
+  wasi-testsuite:
+    name: WASI test suite on ${{ matrix.os }}${{ matrix.python_fs && ' (files through Python)' || '' }}${{ matrix.exe && ' (native executables)' || '' }}
+    runs-on: ${{ matrix.os }}
+    # a branch of this repository is run by its push; a pull request is run only when it comes from a fork (a push to a fork is not seen here)
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # the files as the system gives them (openat on POSIX, Win32 on Windows) ...
+          - { os: ubuntu-latest }
+          - { os: macos-latest }
+          - { os: windows-latest }
+          # ... and through Python (os.stat, os.open ...): the way Windows had before the native one (wasi_files_win32.h)
+          - { os: ubuntu-latest, python_fs: true }
+          - { os: windows-latest, python_fs: true }
+          # ... and as native executables with no Python in them (wasmext._exe: the C of the module, its glue and the core of WASI): check (b) of the plan
+          - { os: ubuntu-latest, exe: true }
+          - { os: macos-latest, exe: true }
+          - { os: windows-latest, exe: true }
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # setuptools-scm
+
+      - uses: actions/checkout@v7
+        with:
+          repository: WebAssembly/wasi-testsuite
+          ref: ${{ env.WASI_TESTSUITE_REF }}
+          path: wasi-testsuite
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          python-version: "3.11" # wasmext itself, on the oldest Python it supports
+          github-token: ${{ github.token }}
+
+      - name: Install wasmext and the test runner
+        run: |
+          uv venv .venv
+          uv pip install --python .venv --no-cache -e . setuptools
+          # the test runner of the suite needs Python 3.12 (Path.relative_to(walk_up=...)): it has an interpreter of its own
+          uv venv --python 3.12 .runner
+          uv pip install --python .runner -r wasi-testsuite/test-runner/requirements/prod.txt
+        shell: bash
+
+      - name: Build the programs
+        env:
+          WASMEXT_TESTSUITE_CACHE: ${{ runner.temp }}/wasmext-testsuite
+          WASMEXT_TESTSUITE_CFLAGS: ${{ matrix.python_fs && '-DWASMEXT_WASI_PYTHON_FS=1' || '' }}
+          WASMEXT_TESTSUITE_EXE: ${{ matrix.exe && '1' || '' }}
+        run: |
+          WORK="$GITHUB_WORKSPACE"
+          if [ "$RUNNER_OS" = "Windows" ]; then PY="$WORK\\.venv\\Scripts\\python.exe"; else PY="$WORK/.venv/bin/python"; fi
+          "$PY" "$WORK/tests/wasi_testsuite/prebuild.py" "$WORK/wasi-testsuite/tests"
+        shell: bash
+
+      - name: Run the tests
+        env:
+          WASMEXT_TESTSUITE_CACHE: ${{ runner.temp }}/wasmext-testsuite
+          WASMEXT_TESTSUITE_CFLAGS: ${{ matrix.python_fs && '-DWASMEXT_WASI_PYTHON_FS=1' || '' }}
+          WASMEXT_TESTSUITE_EXE: ${{ matrix.exe && '1' || '' }}
+        run: |
+          # paths in the form of the system (GITHUB_WORKSPACE has C:\ on Windows, $PWD in bash has /c/)
+          WORK="$GITHUB_WORKSPACE"
+          if [ "$RUNNER_OS" = "Windows" ]; then PY="$WORK\\.venv\\Scripts\\python.exe"; RUNNER="$WORK\\.runner\\Scripts\\python.exe"
+          else PY="$WORK/.venv/bin/python"; RUNNER="$WORK/.runner/bin/python"; fi
+          export WASMEXT_PYTHON="$PY"
+          EXPECT="tests/wasi_testsuite/expectations-$(echo "$RUNNER_OS" | tr 'A-Z' 'a-z')${{ matrix.python_fs && '-python-fs' || '' }}.toml"
+          ARGS=()
+          if [ -f "$EXPECT" ]; then ARGS=(--expectations "$WORK/$EXPECT"); fi
+          cd wasi-testsuite
+          "$RUNNER" run-tests -r "$WORK/tests/wasi_testsuite/adapter.py" --disable-colors --verbose \
+            --json-output-location "$RUNNER_TEMP/wasi-testsuite.json" "${ARGS[@]}"
+        shell: bash
+
+      # the runner fails the job for a test that fails, not for a test that is gone (a program that was not built, a suite that moved): all 72 programs must have run
+      - name: All the programs ran
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then PY="$GITHUB_WORKSPACE\\.venv\\Scripts\\python.exe"; else PY="$GITHUB_WORKSPACE/.venv/bin/python"; fi
+          "$PY" tests/wasi_testsuite/check_results.py "$RUNNER_TEMP/wasi-testsuite.json"
+        shell: bash
+
+      - name: Upload the results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: wasi-testsuite-${{ matrix.os }}${{ matrix.python_fs && '-python-fs' || '' }}${{ matrix.exe && '-exe' || '' }}
+          path: ${{ runner.temp }}/wasi-testsuite.json
+          retention-days: 7
+          if-no-files-found: ignore

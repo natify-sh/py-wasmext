@@ -1,0 +1,52 @@
+name: WABT main
+
+# A canary for the maintainers, not a check of a pull request: it builds WABT from its main branch and runs the one test that says whether the layout of the
+# structs of its wasm2c runtime is still the one the ABI of wasmext promises (WASMEXT_LAYOUT in wasmext_glue.h, docs/abi_policy.md). It is run once a week and by
+# hand. A red run is the signal to look at what changed in WABT: support both layouts, or keep to the WABT that the wabt-package brings. (Today it is red:
+# main has a memory without `data_end` and `page_size`, 48 bytes where 1.0.42 has 56.)
+
+on:
+  schedule:
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  layout:
+    name: the layout of the runtime of WABT main
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # setuptools-scm has to see the tags
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          python-version: "3.11"
+          enable-cache: true
+          github-token: ${{ github.token }}
+
+      - name: Install
+        run: uv sync --python 3.11
+
+      - name: Build WABT main (wat2wasm, wasm2c)
+        run: |
+          git clone --depth 1 https://github.com/WebAssembly/wabt "$RUNNER_TEMP/wabt"
+          git -C "$RUNNER_TEMP/wabt" submodule update --init --depth 1 third_party/picosha2 third_party/simde
+          git -C "$RUNNER_TEMP/wabt" log -1 --format='WABT main at %H (%cs)'
+          cmake -S "$RUNNER_TEMP/wabt" -B "$RUNNER_TEMP/wabt/build" -G Ninja -DBUILD_TESTS=OFF -DCMAKE_BUILD_TYPE=Release -DWITH_WASI=OFF
+          cmake --build "$RUNNER_TEMP/wabt/build" --target wat2wasm wasm2c
+
+      - name: A directory for WASMEXT_WABT
+        run: |
+          mkdir -p "$RUNNER_TEMP/wabt-main/bin" "$RUNNER_TEMP/wabt-main/include"
+          cp "$RUNNER_TEMP/wabt/build/wat2wasm" "$RUNNER_TEMP/wabt/build/wasm2c" "$RUNNER_TEMP/wabt-main/bin/"
+          cp -r "$RUNNER_TEMP/wabt/wasm2c" "$RUNNER_TEMP/wabt-main/wasm2c"
+          cp -r "$RUNNER_TEMP/wabt/third_party/simde/simde" "$RUNNER_TEMP/wabt-main/include/simde"
+          echo "WASMEXT_WABT=$RUNNER_TEMP/wabt-main" >> "$GITHUB_ENV"
+
+      - name: The layout of the runtime
+        run: uv run --python 3.11 pytest -q tests/test_abi.py

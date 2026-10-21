@@ -1,0 +1,128 @@
+name: Core without Python
+
+# Check (a) of the "C first" plan (FEATURES.md, "C first"): the core of WASI (wasi_core.h with the two snapshots) compiles with no Python on the
+# include path, so the layers stay apart. Only the compiler and the runtime of wasm2c (wasm-rt.h) are given. On Windows (MSVC) the file backend
+# is wasi_files_win32.h (Win32 only), since stage 3a of the plan. The same for the C that wasmext writes for a module (the glue, the C API and the main() of a
+# program): made for a few modules by .github/scripts/glue_without_python.py and compiled strictly (-Wall -Wextra -Werror; the pytest builds have the warnings off,
+# for the C of wasm2c) with no Python on the include path, also for MinGW (zig cc).
+
+on:
+  push:
+    paths:
+      - "src/wasmext/c/**"
+      - "src/wasmext/_gen.py"
+      - "src/wasmext/_shared.py"
+      - "src/wasmext/_exe.py"
+      - ".github/scripts/glue_without_python.py"
+      - ".github/workflows/core-without-python.yml"
+  pull_request:
+    paths:
+      - "src/wasmext/c/**"
+      - "src/wasmext/_gen.py"
+      - "src/wasmext/_shared.py"
+      - "src/wasmext/_exe.py"
+      - ".github/scripts/glue_without_python.py"
+      - ".github/workflows/core-without-python.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: core-without-python-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  core:
+    name: ${{ matrix.os }} ${{ matrix.cc }}
+    runs-on: ${{ matrix.os }}
+    # a branch of this repository is run by its push; a pull request is run only when it comes from a fork (a push to a fork is not seen here)
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, cc: gcc }
+          - { os: ubuntu-latest, cc: clang }
+          - { os: macos-latest, cc: clang }
+          - { os: windows-latest, cc: msvc }
+          - { os: ubuntu-latest, cc: zig } # MinGW: the target of a Windows build that is not MSVC
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          python-version: "3.11"
+          github-token: ${{ github.token }}
+
+      # Python is used here only to find wasm-rt.h; it is not on the include path of the compiler below.
+      - name: Find the runtime of wasm2c
+        shell: bash
+        run: |
+          uv venv .venv
+          uv pip install --python .venv -e . ziglang
+          PY=.venv/bin/python
+          if [ ! -f "$PY" ]; then PY=.venv/Scripts/python.exe; fi
+          echo "WASM_RT=$("$PY" -c 'import wabt_package, pathlib; print(pathlib.Path(wabt_package.__file__).parent / "wasm2c")')" >> "$GITHUB_ENV"
+          printf '#include "wasi_core.h"\n#include "wasi_preview1.h"\n#include "wasi_unstable.h"\nint main(void) { return 0; }\n' > core_check.c
+
+      - name: Compile the core with no Python.h
+        if: runner.os != 'Windows' && matrix.cc != 'zig'
+        run: ${{ matrix.cc }} -std=c11 -Wall -Wextra -Wno-unused-parameter -Werror -fsyntax-only -Isrc/wasmext/c -I"$WASM_RT" core_check.c
+
+      - name: Compile the core with no Python.h (MinGW, zig cc)
+        if: matrix.cc == 'zig'
+        run: .venv/bin/python -m ziglang cc -target x86_64-windows-gnu -std=c11 -Wall -Wextra -Wno-unused-parameter -Werror -c -o core_check.o -Isrc/wasmext/c -I"$WASM_RT" core_check.c
+
+      - name: Compile the core with no Python.h (MSVC)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          cmd /c "call `"$vs\VC\Auxiliary\Build\vcvars64.bat`" && cl /nologo /W3 /c /Fo:core_check.obj /Isrc\wasmext\c /I`"$env:WASM_RT`" core_check.c"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      # The glue is C with POSIX calls (signals), so gnu11 and not c11; the core above is strict C11.
+      - name: Make the glue, the C API and the main() of a few modules
+        id: glue
+        shell: bash
+        run: |
+          PY=.venv/bin/python
+          if [ ! -f "$PY" ]; then PY=.venv/Scripts/python.exe; fi
+          "$PY" .github/scripts/glue_without_python.py glue_check > glue_files.txt
+          cat glue_files.txt
+
+      - name: Compile them with no Python.h
+        if: runner.os != 'Windows' && matrix.cc != 'zig'
+        shell: bash
+        run: |
+          while read -r f; do
+            ${{ matrix.cc }} -std=gnu11 -Wall -Wextra -Wno-unused-parameter -Werror -fsyntax-only -Isrc/wasmext/c -I"$WASM_RT" -Iglue_check "$f"
+          done < glue_files.txt
+
+      - name: Compile them with no Python.h (MinGW, zig cc)
+        if: matrix.cc == 'zig'
+        shell: bash
+        run: |
+          while read -r f; do
+            .venv/bin/python -m ziglang cc -target x86_64-windows-gnu -std=gnu11 -Wall -Wextra -Wno-unused-parameter -Werror -c -o glue_check/x.o -Isrc/wasmext/c -I"$WASM_RT" -Iglue_check "$f"
+          done < glue_files.txt
+
+      - name: Compile them with no Python.h (MSVC)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          foreach ($f in Get-Content glue_files.txt) {
+            cmd /c "call `"$vs\VC\Auxiliary\Build\vcvars64.bat`" && cl /nologo /W3 /c /Fo:glue_check\x.obj /Isrc\wasmext\c /I`"$env:WASM_RT`" /Iglue_check $f"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+
+      - name: The core does not name Python
+        shell: bash
+        run: |
+          if grep -nE "Python\.h|PyObject|Py_|PyErr|PyMem" src/wasmext/c/wasi_core.h src/wasmext/c/wasi_files_win32.h src/wasmext/c/wasi_preview1.h src/wasmext/c/wasi_unstable.h; then
+            echo "wasi_core.h and the snapshot headers must not use the Python C API" >&2
+            exit 1
+          fi

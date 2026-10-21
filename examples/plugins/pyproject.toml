@@ -1,0 +1,36 @@
+[build-system]
+# wasmext turns the .wasm files into extensions (see setup.py); it brings wasm2c with it (wabt-package).
+requires = ["setuptools>=77", "wasmext"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wasmext-example-plugins"
+version = "0.1.0"
+description = "A host and two plugins, WebAssembly modules turned into native CPython extensions by wasmext, that share a funcref table"
+requires-python = ">=3.11"
+dependencies = []
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+packages = ["plugindemo"]
+# The generated C and the .wasm are the sources of the extensions, not part of them.
+include-package-data = false
+
+[tool.setuptools.package-data]
+plugindemo = ["py.typed", "*.pyi"]
+
+[tool.cibuildwheel]
+build = "cp311-* cp314t-* cp315t-*"
+test-requires = "pytest"
+test-command = "pytest {package}/tests"
+
+[tool.uv.sources]
+# For `uv build` / `uv sync` in a checkout: wasmext (not on PyPI yet) comes from the root of this repository, build requirement included.
+# pip and cibuildwheel ignore this table (CI gives them the wheel with --find-links).
+wasmext = { path = "../..", editable = false }
+
+[dependency-groups]
+dev = ["pytest>=9"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

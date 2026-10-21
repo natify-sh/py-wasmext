@@ -1,0 +1,47 @@
+[build-system]
+# wasmext turns the .wasm files into a shared library and a program (see the tables below); it brings wasm2c with it (wabt-package).
+requires = ["setuptools>=77", "wasmext"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wasmext-example-products"
+version = "0.1.0"
+description = "A WebAssembly module as a shared library used through ctypes, and a WASI program as an executable, both made by wasmext and shipped in one wheel"
+requires-python = ">=3.11"
+dependencies = []
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+packages = ["productsdemo"]
+# The generated C and the .wasm are the sources of the products, not part of them: only what package-data names goes into the wheel.
+include-package-data = false
+
+# The library, the program and the ctypes wrapper that wasmext writes beside the library are put into the package by the build.
+[tool.setuptools.package-data]
+productsdemo = ["py.typed", "*.pyi", "*_ctypes.py"]
+
+# Neither product is a Python extension, so the wheel does not depend on the version of Python (tag py3-none-<platform>).
+[[tool.wasmext.ext-modules]]
+module-list = "src/productsdemo/engine.wasm"
+product = "shared"
+
+[[tool.wasmext.ext-modules]]
+module-list = "src/productsdemo/hello.wasm"
+product = "exe"
+
+[tool.cibuildwheel]
+# the wheel is the same for every Python: one build per platform
+build = "cp311-*"
+test-requires = "pytest"
+test-command = "pytest {package}/tests"
+
+[tool.uv.sources]
+# For `uv build` / `uv sync` in a checkout: wasmext (not on PyPI yet) comes from the root of this repository, build requirement included.
+# pip and cibuildwheel ignore this table (CI gives them the wheel with --find-links).
+wasmext = { path = "../..", editable = false }
+
+[dependency-groups]
+dev = ["pytest>=9"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

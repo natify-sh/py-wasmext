@@ -1,0 +1,313 @@
+{
+  "about": "The public surface of the ABI of wasmext (docs/abi_policy.md), read from the code by tests/abi_surface.py. A difference between it and the code fails tests/test_abi_declaration.py: check the compatibility by hand, update this file (python -m tests.abi_surface --update) and set the version that fits.",
+  "api": {
+    "abi_surface.wat": {
+      "constants": {
+        "<NAME>_HOOK_TRAP": "0x10000",
+        "<NAME>_LINK_ERROR": "0x7003",
+        "<NAME>_TRAP_ENDED": "0x7002",
+        "<NAME>_TRAP_HOST": "0x7000",
+        "<NAME>_TRAP_LINKED": "0x20000",
+        "<NAME>_TRAP_NO_MEMORY": "0x7001"
+      },
+      "functions": {
+        "<name>_add": "int <name>_add(<name>_t *m, int32_t a0, int32_t a1, int32_t *r0)",
+        "<name>_call_host": "int <name>_call_host(<name>_t *m, int32_t a0, int32_t *r0)",
+        "<name>_export_find": "int <name>_export_find(<name>_t *m, const char *name, void *owner, <name>_export *out)",
+        "<name>_free": "void <name>_free(<name>_t *m)",
+        "<name>_funcref_call0": "int <name>_funcref_call0(const void *funcref, int32_t a0, int32_t *r0)",
+        "<name>_funcref_call1": "int <name>_funcref_call1(const void *funcref, int32_t a0, int32_t a1, int32_t *r0)",
+        "<name>_funcref_call2": "int <name>_funcref_call2(const void *funcref, int64_t a0, float a1, double a2, int64_t *r0, int32_t *r1)",
+        "<name>_funcref_copy": "void * <name>_funcref_copy(const void *funcref)",
+        "<name>_funcref_export": "void <name>_funcref_export(const void *funcref, void *owner, <name>_export *out)",
+        "<name>_funcref_free": "void <name>_funcref_free(void *funcref)",
+        "<name>_funcref_hash": "uint64_t <name>_funcref_hash(const void *funcref)",
+        "<name>_funcref_same": "int <name>_funcref_same(const void *a, const void *b)",
+        "<name>_funcref_type": "int <name>_funcref_type(const void *funcref)",
+        "<name>_global_counter": "int32_t <name>_global_counter(<name>_t *m)",
+        "<name>_global_limit": "int32_t <name>_global_limit(<name>_t *m)",
+        "<name>_instantiate": "int <name>_instantiate(<name>_t *m)",
+        "<name>_link_global_import0": "int <name>_link_global_import0(<name>_t *m, const <name>_export *e, char *message, size_t capacity)",
+        "<name>_link_import0": "int <name>_link_import0(<name>_t *m, const <name>_export *e, char *message, size_t capacity)",
+        "<name>_link_table_import0": "int <name>_link_table_import0(<name>_t *m, const <name>_export *e, char *message, size_t capacity)",
+        "<name>_memory_mem": "uint8_t * <name>_memory_mem(<name>_t *m, size_t *size)",
+        "<name>_memory_mem_pin": "void <name>_memory_mem_pin(<name>_t *m, int pin)",
+        "<name>_new": "<name>_t * <name>_new(const <name>_config *config, int *error)",
+        "<name>_pick": "int <name>_pick(<name>_t *m, const void *a0, void **r0)",
+        "<name>_set_global_counter": "void <name>_set_global_counter(<name>_t *m, int32_t value)",
+        "<name>_set_import0": "void <name>_set_import0(<name>_t *m, <name>_import0_fn function, void *user)",
+        "<name>_table_export": "void <name>_table_export(void *table, void *owner, <name>_export *out)",
+        "<name>_table_free": "void <name>_table_free(void *table)",
+        "<name>_table_get_ref": "void * <name>_table_get_ref(const void *table, uint32_t index)",
+        "<name>_table_grow": "int64_t <name>_table_grow(void *table, uint32_t delta)",
+        "<name>_table_is": "int <name>_table_is(const void *table, uint32_t index, const void *funcref)",
+        "<name>_table_is_null": "int <name>_table_is_null(const void *table, uint32_t index)",
+        "<name>_table_maximum": "uint32_t <name>_table_maximum(const void *table)",
+        "<name>_table_new": "void * <name>_table_new(uint32_t initial, uint32_t maximum)",
+        "<name>_table_set": "int <name>_table_set(void *table, uint32_t index, const void *funcref)",
+        "<name>_table_size": "uint32_t <name>_table_size(const void *table)",
+        "<name>_thread_free": "void <name>_thread_free(void)",
+        "<name>_trap_is_exception": "int <name>_trap_is_exception(int code)",
+        "<name>_trap_message": "const char * <name>_trap_message(int code)",
+        "<name>_traps": "const void * <name>_traps(void)",
+        "<name>_traps_use": "int <name>_traps_use(const void *traps)",
+        "<name>_unlink_tables": "void <name>_unlink_tables(<name>_t *m)",
+        "<name>_wasi_end": "int <name>_wasi_end(<name>_t *m, uint32_t *value)",
+        "<name>_wide": "int <name>_wide(<name>_t *m, int64_t a0, float a1, double a2, int64_t *r0, int32_t *r1)"
+      },
+      "macros": {},
+      "opaque": [
+        "<name>_t"
+      ],
+      "structs": {
+        "<name>_config": [
+          "const char *const *args",
+          "size_t nargs",
+          "const char *const *env",
+          "size_t nenv",
+          "const char *const *dirs",
+          "size_t ndirs",
+          "const int *dirs_readonly",
+          "int (*stdin_read)(void *user, uint8_t *buf, size_t cap, size_t *got)",
+          "int (*stdout_write)(void *user, int fd, const uint8_t *buf, size_t n)",
+          "int (*clock)(void *user, uint32_t id, uint64_t *ns)",
+          "int (*random)(void *user, uint8_t *buf, size_t n)",
+          "int (*sleep)(void *user, uint64_t ns)",
+          "void *user"
+        ],
+        "<name>_export": [
+          "uint32_t size, abi, kind, type, flags",
+          "void *owner, *address, *instance",
+          "const char *signature",
+          "uint32_t runtime",
+          "const void *funcref",
+          "uint32_t floor"
+        ]
+      },
+      "stub": [
+        "# Generated by wasmext from the WebAssembly module of <name>: do not edit.",
+        "# ruff: noqa",
+        "# ruff: noqa: PGH004",
+        "# fmt: off",
+        "from collections.abc import Callable",
+        "from typing import TypedDict",
+        "from typing import Literal, overload",
+        "class Trap(RuntimeError): ...",
+        "class LinkError(Exception): ...",
+        "_Imports0 = TypedDict('_Imports0', {'host': Callable[[int], int], 'itab': object, 'iglobal': object})",
+        "Imports = TypedDict('Imports', {'env': _Imports0})",
+        "class Function:",
+        "    \"\"\"A function that a table holds. It is called if its type is one this module declares (signature is not None); equal to another of the same function and instance.\"\"\"",
+        "    @property",
+        "    def name(self) -> str | None: ...",
+        "    @property",
+        "    def signature(self) -> tuple[tuple[str, ...], tuple[str, ...]] | None: ...",
+        "    def __call__(self, *args: int | float | bytes) -> object: ...",
+        "class Table:",
+        "    \"\"\"A table of funcref that modules import: Table(initial, maximum=None), or the table that instance['name'] gives for one a module exports.\"\"\"",
+        "    def __init__(self, initial: int, maximum: int | None = None, /) -> None: ...",
+        "    @property",
+        "    def size(self) -> int: ...",
+        "    @property",
+        "    def maximum(self) -> int | None: ...",
+        "    def __len__(self) -> int: ...",
+        "    def grow(self, delta: int, /) -> int: ...",
+        "    def get(self, index: int, /) -> Function | None: ...",
+        "    def set(self, index: int, function: Callable[..., object] | None, /) -> None: ...",
+        "class Instance:",
+        "    def __init__(self, imports: Imports) -> None: ...",
+        "    @property",
+        "    def __exports__(self) -> dict[str, object]: ...",
+        "    @overload",
+        "    def __getitem__(self, name: Literal['tab'], /) -> Table: ...",
+        "    @overload",
+        "    def __getitem__(self, name: str, /) -> object: ...",
+        "    def add(self, arg0: int, arg1: int, /) -> int: ...",
+        "    def wide(self, arg0: int, arg1: float, arg2: float, /) -> tuple[int, int]: ...",
+        "    def pick(self, arg0: Function | Callable[..., object] | None, /) -> Function | None: ...",
+        "    def call_host(self, arg0: int, /) -> int: ...",
+        "    counter: int",
+        "    @property",
+        "    def limit(self) -> int: ...",
+        "    @property",
+        "    def mem(self) -> memoryview: ..."
+      ],
+      "typedefs": {
+        "<name>_import0_fn": "typedef int32_t (*<name>_import0_fn)(void *user, int32_t a0, int *trapped)"
+      }
+    },
+    "abi_surface_more.wat": {
+      "constants": {
+        "<NAME>_HOOK_TRAP": "0x10000",
+        "<NAME>_LINK_ERROR": "0x7003",
+        "<NAME>_TRAP_ENDED": "0x7002",
+        "<NAME>_TRAP_HOST": "0x7000",
+        "<NAME>_TRAP_LINKED": "0x20000",
+        "<NAME>_TRAP_NO_MEMORY": "0x7001"
+      },
+      "functions": {
+        "<name>_boom": "int <name>_boom(<name>_t *m, int32_t a0)",
+        "<name>_call_vhost": "int <name>_call_vhost(<name>_t *m, const uint8_t *a0, uint8_t *r0)",
+        "<name>_exception": "int <name>_exception(<name>_t *m, int *tag, <name>_value *values, size_t capacity, size_t *count)",
+        "<name>_export_find": "int <name>_export_find(<name>_t *m, const char *name, void *owner, <name>_export *out)",
+        "<name>_free": "void <name>_free(<name>_t *m)",
+        "<name>_instantiate": "int <name>_instantiate(<name>_t *m)",
+        "<name>_link_import0": "int <name>_link_import0(<name>_t *m, const <name>_export *e, char *message, size_t capacity)",
+        "<name>_link_memory_import0": "int <name>_link_memory_import0(<name>_t *m, const <name>_export *e, char *message, size_t capacity)",
+        "<name>_memory_big": "uint8_t * <name>_memory_big(<name>_t *m, size_t *size)",
+        "<name>_memory_big_pin": "void <name>_memory_big_pin(<name>_t *m, int pin)",
+        "<name>_new": "<name>_t * <name>_new(const <name>_config *config, int *error)",
+        "<name>_set_import0": "void <name>_set_import0(<name>_t *m, <name>_import0_fn function, void *user)",
+        "<name>_thread_free": "void <name>_thread_free(void)",
+        "<name>_trap_is_exception": "int <name>_trap_is_exception(int code)",
+        "<name>_trap_message": "const char * <name>_trap_message(int code)",
+        "<name>_two": "int <name>_two(<name>_t *m, int32_t a0, int32_t *r0, int32_t *r1)",
+        "<name>_vadd": "int <name>_vadd(<name>_t *m, const uint8_t *a0, const uint8_t *a1, uint8_t *r0)",
+        "<name>_wasi_end": "int <name>_wasi_end(<name>_t *m, uint32_t *value)"
+      },
+      "macros": {},
+      "opaque": [
+        "<name>_t"
+      ],
+      "structs": {
+        "<name>_config": [
+          "const char *const *args",
+          "size_t nargs",
+          "const char *const *env",
+          "size_t nenv",
+          "const char *const *dirs",
+          "size_t ndirs",
+          "const int *dirs_readonly",
+          "int (*stdin_read)(void *user, uint8_t *buf, size_t cap, size_t *got)",
+          "int (*stdout_write)(void *user, int fd, const uint8_t *buf, size_t n)",
+          "int (*clock)(void *user, uint32_t id, uint64_t *ns)",
+          "int (*random)(void *user, uint8_t *buf, size_t n)",
+          "int (*sleep)(void *user, uint64_t ns)",
+          "void *user"
+        ],
+        "<name>_export": [
+          "uint32_t size, abi, kind, type, flags",
+          "void *owner, *address, *instance",
+          "const char *signature",
+          "uint32_t runtime",
+          "const void *funcref",
+          "uint32_t floor"
+        ],
+        "<name>_value": [
+          "int type",
+          "union { int32_t i32; int64_t i64; float f32; double f64; } as"
+        ]
+      },
+      "stub": [
+        "# Generated by wasmext from the WebAssembly module of <name>: do not edit.",
+        "# ruff: noqa",
+        "# ruff: noqa: PGH004",
+        "# fmt: off",
+        "from collections.abc import Callable",
+        "from typing import TypedDict",
+        "class Trap(RuntimeError): ...",
+        "class LinkError(Exception): ...",
+        "class UncaughtException(Trap):",
+        "    tag: int | None  # the index of the tag in the module; None for the tag of another module",
+        "    values: tuple[int | float | bytes, ...]",
+        "_Imports0 = TypedDict('_Imports0', {'mem': object, 'vhost': Callable[[bytes], bytes]})",
+        "Imports = TypedDict('Imports', {'env': _Imports0})",
+        "class Instance:",
+        "    def __init__(self, imports: Imports) -> None: ...",
+        "    @property",
+        "    def __exports__(self) -> dict[str, object]: ...",
+        "    def __getitem__(self, name: str, /) -> object: ...",
+        "    def vadd(self, arg0: bytes, arg1: bytes, /) -> bytes: ...",
+        "    def boom(self, arg0: int, /) -> None: ...",
+        "    def two(self, arg0: int, /) -> tuple[int, int]: ...",
+        "    def call_vhost(self, arg0: bytes, /) -> bytes: ...",
+        "    @property",
+        "    def big(self) -> memoryview: ..."
+      ],
+      "typedefs": {
+        "<name>_import0_fn": "typedef void (*<name>_import0_fn)(void *user, const uint8_t *a0, uint8_t *r0, int *trapped)"
+      }
+    }
+  },
+  "capsules": {
+    "export": "wasmext.export.v0",
+    "traps": "wasmext.traps.v0"
+  },
+  "glue": {
+    "constants": {
+      "WASMEXT_ABI": "((uint32_t)(((uint32_t)WASMEXT_ABI_X << 24) | ((uint32_t)WASMEXT_ABI_Y << 16) | ((uint32_t)WASMEXT_ABI_Z << 8) | WASMEXT_ABI_LS))",
+      "WASMEXT_ABI_LS": "0xA1",
+      "WASMEXT_ABI_X": "0",
+      "WASMEXT_ABI_Y": "0",
+      "WASMEXT_ABI_Z": "1",
+      "WASMEXT_EXPORT": "\"wasmext.export.v\" WASMEXT_STRING(WASMEXT_ABI_X)",
+      "WASMEXT_EXPORT_BASE": "(offsetof(wasmext_export, floor) + sizeof(uint32_t))",
+      "WASMEXT_FUNC": "0",
+      "WASMEXT_GLOBAL": "3",
+      "WASMEXT_MAX_RUNTIMES": "64",
+      "WASMEXT_MEMORY": "2",
+      "WASMEXT_SINCE_FUNCREF": "0x000001A1u",
+      "WASMEXT_SINCE_RECORD": "0x000001A1u",
+      "WASMEXT_SINCE_TABLE": "0x000001A1u",
+      "WASMEXT_TABLE": "1",
+      "WASMEXT_TABLE_NO_MAXIMUM": "0xFFFFFFFFu",
+      "WASMEXT_TRAPS": "\"wasmext.traps.v\" WASMEXT_STRING(WASMEXT_ABI_X)",
+      "WASMEXT_TRAP_ENDED": "((wasm_rt_trap_t)0x7002)",
+      "WASMEXT_TRAP_HOST": "((wasm_rt_trap_t)0x7000)",
+      "WASMEXT_TRAP_LINKED": "0x20000",
+      "WASMEXT_TRAP_NO_MEMORY": "((wasm_rt_trap_t)0x7001)"
+    },
+    "functions": {},
+    "macros": {
+      "WASMEXT_ENTER_PLAIN": "(CODE, FAIL)",
+      "WASMEXT_ENTER_REENTRANT": "(CODE, FAIL)",
+      "WASMEXT_ENTER_SHARED": "(CODE, FAIL)",
+      "WASMEXT_LEAVE_PLAIN": "()",
+      "WASMEXT_LEAVE_REENTRANT": "()",
+      "WASMEXT_LEAVE_SHARED": "()",
+      "WASMEXT_SET_UP_TRAP_": "()",
+      "WASMEXT_TRAP_OF": "(TRAPPED)",
+      "WASMEXT_TRY": "(BUF)",
+      "WASMEXT_VERSION_X": "(V)",
+      "WASMEXT_VERSION_Y": "(V)",
+      "WASMEXT_VERSION_Z": "(V)"
+    },
+    "opaque": [],
+    "structs": {
+      "wasmext_entry": [
+        "wasm_rt_jmp_buf buf",
+        "struct wasmext_entry *prev"
+      ],
+      "wasmext_export": [
+        "uint32_t size",
+        "uint32_t abi",
+        "uint32_t kind",
+        "uint32_t type",
+        "uint32_t flags",
+        "void *owner",
+        "void *address",
+        "void *instance",
+        "const char *signature",
+        "uint32_t runtime",
+        "const void *funcref",
+        "uint32_t floor"
+      ],
+      "wasmext_traps": [
+        "uint32_t size",
+        "uint32_t runtime",
+        "void (*enter)(wasmext_entry *e)",
+        "void (*leave)(wasmext_entry *e)",
+        "void (*trap)(wasm_rt_trap_t code)",
+        "int (*join)(void (*set_unwind_target)(WASM_RT_UNWIND_TARGET *))"
+      ],
+      "wasmext_value": [
+        "uint8_t type",
+        "union { uint32_t i; uint64_t j; float f; double d; uint8_t o[16]; } as"
+      ]
+    },
+    "typedefs": {}
+  },
+  "version": {
+    "WASMEXT_ABI": "0x000001A1"
+  }
+}

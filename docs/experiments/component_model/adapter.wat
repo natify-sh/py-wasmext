@@ -1,0 +1,16 @@
+;; _adapter.wat: canon lower/lift for interface demo:text/host, by hand
+(module
+  (import "guest" "memory" (memory $g 0))
+  (import "prov" "memory" (memory $p 0))
+  (import "prov" "cabi_realloc" (func $realloc (param i32 i32 i32 i32) (result i32)))
+  (import "prov" "lookup" (func $p_lookup (param i32 i32) (result i32)))
+  (import "prov" "log" (func $p_log (param i32 i32)))
+  (func $copy (param $ptr i32) (param $len i32) (result i32)
+    (local $dst i32)
+    (local.set $dst (call $realloc (i32.const 0) (i32.const 0) (i32.const 1) (local.get $len)))
+    (memory.copy $p $g (local.get $dst) (local.get $ptr) (local.get $len))
+    (local.get $dst))
+  (func (export "lookup") (param i32 i32) (result i32)
+    (call $p_lookup (call $copy (local.get 0) (local.get 1)) (local.get 1)))
+  (func (export "log") (param i32 i32)
+    (call $p_log (call $copy (local.get 0) (local.get 1)) (local.get 1))))

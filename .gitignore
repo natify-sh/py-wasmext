@@ -1,0 +1,19 @@
+build/
+# what older versions of wasmext wrote beside the .wasm (the C is in build/wasmext/ now)
+*_wasmext/
+__pycache__/
+*.so
+*.pyd
+*.dylib
+*.egg-info/
+.venv/
+.pytest_cache/
+.ruff_cache/
+poc/out/
+examples/*/uv.lock
+
+# coverage data (written by pytest --cov; the CI uploads coverage.xml)
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/

@@ -1,0 +1,44 @@
+[build-system]
+# wasmext turns the .wasm into an extension (see setup.py); it brings wasm2c with it (wabt-package).
+requires = ["setuptools>=77", "wasmext"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wasmext-example-quickjs"
+version = "0.1.0"
+description = "QuickJS, a JavaScript engine in WebAssembly (a WASI program), as a native CPython extension built by wasmext"
+requires-python = ">=3.11"
+dependencies = []
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+packages = ["qjswasm"]
+# The .wasm is the source of the extension (the generated C is in build/wasmext/, not part of it): only what package-data
+# names goes into the wheel.
+include-package-data = false
+
+[tool.setuptools.package-data]
+qjswasm = ["py.typed", "*.pyi"]
+
+# No setup.py: the hook of wasmext (an entry point of setuptools) reads this table and makes the extension from the .wasm. The C that wasm2c
+# writes for it is in 4 files, compiled at the same time.
+[[tool.wasmext.ext-modules]]
+module-list = "src/qjswasm/*.wasm"
+parts = 4
+
+[tool.cibuildwheel]
+# cp311-* builds the abi3 wheel (every CPython from 3.11 on); cp314t-* has no stable ABI and gets a native one.
+build = "cp311-* cp314t-* cp315t-*"
+test-requires = "pytest"
+test-command = "pytest {package}/tests"
+
+[tool.uv.sources]
+# For `uv build` / `uv sync` in a checkout: wasmext (not on PyPI yet) comes from the root of this repository, build requirement included.
+# pip and cibuildwheel ignore this table (CI gives them the wheel with --find-links).
+wasmext = { path = "../..", editable = false }
+
+[dependency-groups]
+dev = ["pytest>=9"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

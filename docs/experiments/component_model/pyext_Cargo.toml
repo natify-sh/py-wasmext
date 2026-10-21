@@ -1,0 +1,10 @@
+# pyext/Cargo.toml
+[dependencies]
+wasmtime = { version = "50", default-features = false, features = ["runtime", "component-model", "std"] }
+pyo3 = { version = "0.27", features = ["extension-module", "abi3-py311"] }
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

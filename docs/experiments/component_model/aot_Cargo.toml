@@ -1,0 +1,2 @@
+# aot/Cargo.toml
+wasmtime = { version = "50", default-features = false, features = ["cranelift", "component-model", "std", "all-arch", "pulley"] }

@@ -27,7 +27,7 @@ The paths in "Ways" are **possible paths, not decisions**; a decision is written
 
 | Question | Answer | How known |
 | --- | --- | --- |
-| Does `wasm2c` read a component? | No: `error: wasm components are not yet supported in this tool` (`wasm-validate` says the same); `wasmext inspect` says `unsupported WebAssembly binary version 0d000100` | [again] |
+| Does `wasm2c` read a component? | No: `error: wasm components are not yet supported in this tool` (`wasm-validate` says the same); `wasmext inspect` said `unsupported WebAssembly binary version 0d000100`; since `wasi_flavor` it says this is a component and to use `wasm-tools component unbundle` or `meld fuse` | [again] |
 | How to get core modules out of a component? | `wasm-tools component unbundle` (modules **above `--threshold`, 10240 bytes by default**, are taken out; `--threshold 0` takes all) | [again] |
 | Does the core module of a WASI 0.2 command run as a wasmext extension? | **Yes**, with a host of about 40 lines of Python (hello) or 156 (a TCP client with real sockets); `examples/wasi2_unbundled` | [run], its tests pass [again] |
 | Does a WASI 0.3 C program run? | **Yes**, through `wasm2c` with a host of 94 lines of C (`printf`, `usleep`, stdin, stderr, clocks), about 100 KB stripped | [reported], [again] |
@@ -77,8 +77,8 @@ How to tell the WASI of a file before anything is generated:
 A core module taken out of a WASI 0.2 component is not recognised as WASI by wasmext (it looks for the 0.1 names only), so its imports are shown as "the host has
 to provide" and can be given as Python callables: `Instance({"wasi:io/streams@0.2.12": {"[method]output-stream.write": f, …}})`.
 
-What wasmext says today of a component **[again]**: `not a module wasmext can read: unsupported WebAssembly binary version 0d000100` (a `WasmError` raised in `src/wasmext/_wasm.py`). The recognition
-described above (`wasi_flavor`) does not exist yet. A module fused by meld carries custom sections of its own, among them `meld.signature-manifest` (when built with `--emit-manifest`),
+What wasmext said of a component **[again]**: `not a module wasmext can read: unsupported WebAssembly binary version 0d000100` (a `WasmError` raised in `src/wasmext/_wasm.py`). The recognition
+described above is built as `wasmext.wasi_flavor` (`component`, `fused`, `core-0.1`, `core-0.2`, `core-0.3`, `none`, `unknown`): `parse()` refuses a component with what to do, `inspect` prints a `wasi:` line, `natify` warns (only) about 0.2, 0.3 and fused modules; `tests/test_wasi_flavor.py`. A module fused by meld carries custom sections of its own, among them `meld.signature-manifest` (when built with `--emit-manifest`),
 `wsc.transformation.attestation`, `component-provenance` and `producers` **[again]**; the check "this module is already fused" could rest on `meld.*`, but those are names of a young tool (0.64).
 
 ## What the tools do with a component
@@ -1085,7 +1085,7 @@ component model, if it comes, is a replacement and not a precondition.
 3. **WASI 0.3:** all of the above and a runtime of the async model (waitable sets, subtasks, streams and futures, the task hook).
 4. **Components made of components:** the semantics of the component model itself (the instance graph, `canon lift` and `canon lower` between memories, resources across components);
    `unbundle` is not enough. That is what Wasmtime and `jco` do; wasmext would rather leave it to an engine that does (py-wasmhost with wasmtime).
-5. The cheaper start: a function that tells the kind of a file (`wasi_flavor`: 0.1, 0.2, 0.3, component) from the bytes above, so that `natify` and `inspect` say what the file is and what to do (take the core
+5. **Built.** The cheaper start: a function that tells the kind of a file (`wasi_flavor`: 0.1, 0.2, 0.3, component) from the bytes above, so that `natify` and `inspect` say what the file is and what to do (take the core
    module with `wasm-tools component unbundle`) instead of "not a module".
 
 Details for the host of a WASI 0.2 command (from the analysis of the first report, **[read]** with the run above as the base):
@@ -1107,7 +1107,7 @@ Details for the host of a WASI 0.2 command (from the analysis of the first repor
 
 #### Stages of extending wasmext (one at a time, in any order after the first)
 
-1. **`wasi_flavor`** in `inspect` and `natify`: recognise core 0.1, core 0.2, core 0.3 or a component and suggest what to do (`wasm-tools component unbundle`). The cheapest step, and it removes the unclear "not a module".
+1. **`wasi_flavor`** in `inspect` and `natify` (**built**): recognise core 0.1, core 0.2, core 0.3 or a component and suggest what to do (`wasm-tools component unbundle`). The cheapest step, and it removes the unclear "not a module".
 2. **A typed WIT layer (a generator in Python, without Rust).** Take the types from `wasm-tools component wit --json`, port lift and lower from `design/mvp/canonical-abi/definitions.py`, and use `run_tests.py` as the oracle. The output is C code in the extension (a call of an export: lower → call → lift → `cabi_post_*`; an import: the other way) and a typed `.pyi`. Begin with `string`, `list`, `record`, `option`, `result`, `variant`, `enum`, `flags`; add resources (`own`/`borrow`, `[dtor]`) as a separate step.
 3. **A generator of adapters between modules (WAT).** The same as `adapter.wat`, but generated from the WIT for each function. Do the copying between memories either by the multi-memory `memory.copy` (works in WABT and wasmext) or by a built-in function `transcode` in C, as in FACT. Resolve the cycle "the adapter needs the guest's memory" at the level of the instance graph: either a memory taken out into a separate module, or a deferred binding.
 4. **A WASI 0.2 host** ("What wasmext would have to do"). The key of an import without the patch version, unknown imports return an error and not a trap. There are three ways, and none is a drop-in ("Ready native layers"):
@@ -1212,8 +1212,8 @@ wasm-tools is already on PyPI (`wasm-tools-package`), and meld is not. If conven
 
 **There is one risk:** the user built without `--emit-manifest`, and there will be no typed layer. Then wasmext has to work as it does now (raw core functions), and only warn that the types are unavailable and how to get them.
 
-Facts checked about this on 2026-10-21 **[again]**: `wasmext inspect` / `natify` today say `unsupported WebAssembly binary version 0d000100` on a component (a `WasmError` from `src/wasmext/_wasm.py`), the
-recognition does not exist; `wasm-tools-package` is on PyPI **only as a pre-release** (`1.262.0.0b1`), the same state in which `wabt-package` was before 1.0.42.0; a package named `meld` on PyPI is MELD of the
+Facts checked about this on 2026-10-21 **[again]**: `wasmext inspect` / `natify` said `unsupported WebAssembly binary version 0d000100` on a component (a `WasmError` from `src/wasmext/_wasm.py`); the
+recognition has since been built (`wasi_flavor`); `wasm-tools-package` is on PyPI **only as a pre-release** (`1.262.0.0b1`), the same state in which `wabt-package` was before 1.0.42.0; a package named `meld` on PyPI is MELD of the
 Krishnaswamy Lab and the crate `meld` on crates.io is a project of Merkle trees, neither is this tool, so meld has to be installed from source; the names `meld.*` are those of a young tool (0.64). The proposal agrees with
 the rule of the project that a built module needs nothing of `wasmext` when it runs. Nothing in the repository was changed because of these messages.
 

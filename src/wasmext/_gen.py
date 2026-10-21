@@ -1,0 +1,2975 @@
+"""The C glue of an extension module: a parsed WebAssembly module in, the source of a CPython extension out.
+
+    glue = generate(parse(wasm_bytes), "pkg.fast")
+    glue.source        # C, to be compiled together with the C that `wasm2c --module-name=fast` writes
+    glue.skipped       # exports that the extension does not expose, with the reason
+
+The extension has a class `Instance`: `Instance(imports)` instantiates the module (`imports` is `{module: {name:
+callable}}`, needed only if the module imports functions), the exported functions are its methods and an exported
+memory is a read-write `memoryview` attribute. A trap is `Trap` (a `RuntimeError`), a missing import `LinkError`. Integers
+are what WebAssembly has: arguments are taken modulo 2**32 / 2**64 and results are signed (as in the JavaScript API). An
+exported function with several results gives them back as a tuple; an imported one returns one. An exported global is an
+attribute (read-only if the global is immutable); an imported immutable global is a number in the imports.
+
+The C uses only the limited API (PEP 384, 3.11+), so defining `Py_LIMITED_API` builds an abi3 extension.
+
+Not yet: reference types, imported memories/tables and mutable globals, exported tables.
+"""
+
+from __future__ import annotations
+
+import keyword
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from typing import Any
+
+from ._wasm import FuncType, GlobalType, Import, Limits, Module, TableType, ValType
+
+__all__ = ["GenError", "Glue", "generate", "mangle"]
+
+_CTYPE: dict[ValType, str] = {
+    "i32": "u32",
+    "i64": "u64",
+    "f32": "f32",
+    "f64": "f64",
+    "v128": "v128",
+    "funcref": "wasm_rt_funcref_t",  # in the signature of an export only (see _why_not)
+}
+# Python -> wasm value, wasm -> Python value, and the Py_BuildValue code with the cast it needs. An integer comes back
+# signed, as the JavaScript API, wasmtime and wasm3 give it (and a negative or too big one is taken, wrapped).
+_TO_WASM: dict[ValType, str] = {
+    "i32": "(u32)PyLong_AsUnsignedLongMask({0})",
+    "i64": "(u64)PyLong_AsUnsignedLongLongMask({0})",
+    "f32": "(f32)PyFloat_AsDouble({0})",
+    "f64": "PyFloat_AsDouble({0})",
+    "v128": "wasmext_bytes_v128({0})",
+    "funcref": "funcref_arg(self, {0})",
+}
+_FROM_WASM: dict[ValType, str] = {
+    "i32": "PyLong_FromLong((long)(int32_t){0})",
+    "i64": "PyLong_FromLongLong((long long)(int64_t){0})",
+    "f32": "PyFloat_FromDouble((double){0})",
+    "f64": "PyFloat_FromDouble({0})",
+    "v128": "wasmext_v128_bytes({0})",
+    "funcref": "funcref_result({0}, (PyObject *)self)",
+}
+_BUILD: dict[ValType, tuple[str, str]] = {
+    "i32": ("l", "(long)(int32_t){0}"),
+    "i64": ("L", "(long long)(int64_t){0}"),
+    "f32": ("d", "(double){0}"),
+    "f64": ("d", "(double){0}"),
+    "v128": ("N", "wasmext_v128_bytes({0})"),
+    "funcref": ("N", "funcref_result({0}, (PyObject *)self)"),
+}
+
+
+class GenError(ValueError):
+    """The module cannot be turned into an extension (yet)."""
+
+
+@dataclass(frozen=True, slots=True)
+class Glue:
+    source: str  # the C of the glue
+    skipped: list[str] = field(default_factory=list[str])
+    notes: list[str] = field(default_factory=list[str])  # things worth saying that do not lose anything
+    stub: str = ""  # the .pyi of the extension module
+    wasi_headers: tuple[
+        str, ...
+    ] = ()  # the headers of wasmext for WASI that the glue includes (and those they share: wasi_core.h, wasi_files_win32.h and wasi_python.h): copied beside it
+    api_header: str = ""  # the public header of the C API of the shared library (<name>_api.h), no Python in it
+    shared: str = ""  # the C of the shared library (<name>_shared.c); both are empty when `shared_unsupported` says why
+    shared_unsupported: str = ""
+    api_model: Any = (
+        None  # the ApiModel of the C API (wasmext._shared), None when there is no shared library for the module
+    )
+    header: str = ""  # the C of the glue of the module (<name>_glue.h): typed functions, no Python; the Python layer (`source`, <name>_py.c) includes it
+    trap_handler: str = ""  # a module that shares tables is built, as an extension, with WASMEXT_TRAP_HANDLER=<this> and WASM_RT_TRAP_HANDLER=<this> (see wasmext_glue.h); empty for the others
+
+
+def module_prefix(name: str) -> str:
+    """The `<prefix>` of `w2c_<prefix>_...`: what wasm2c makes of the name of the extension module (dotted, as it is imported)."""
+    return mangle(_ident(name), module=True)
+
+
+def mangle(name: str, *, module: bool = False) -> str:
+    """The C identifier `wasm2c` makes of a WebAssembly name (CWriter::Mangle in WABT); `module` for module names.
+
+    Letters and digits stay, anything else (and an underscore at either end or after another one, and a hex digit of
+    capitals after "0x") becomes `0xHH` of its UTF-8 bytes; in a module name every underscore is doubled."""
+    data = name.encode("utf-8")
+    out: list[str] = []
+    state = "any"  # any, zero ("0" seen), zerox ("0x" seen)
+    last_underscore = False
+    for i, ch in enumerate(data):
+        c = chr(ch)
+        if state == "zerox" and (c.isdigit() or "A" <= c <= "F") and ch < 0x80:
+            out.append(f"0x{ch:02X}")  # rule 1
+            last_underscore = False
+            state = "any"
+            continue
+        state = {"any": "zero" if c == "0" else "any", "zero": "zerox" if c == "x" else "any", "zerox": "any"}[state]
+        if c == "_" and (i == 0 or i == len(data) - 1 or last_underscore):  # rule 2
+            out.append(f"0x{ch:02X}")
+            last_underscore = False
+        elif module and c == "_":  # rule 3
+            out.append("__")
+            last_underscore = True
+        elif ch < 0x80 and (c.isalnum() or c == "_"):  # rule 4
+            out.append(c)
+            last_underscore = c == "_"
+        else:
+            out.append(f"0x{ch:02X}")
+            last_underscore = False
+    return "".join(out)
+
+
+def _cc(text: str) -> str:
+    """`text` made safe to stand in a C comment: a name in the module can be anything, even `*/` and a line end followed by code."""
+    plain = "".join(c if c.isprintable() else "?" for c in text)
+    return plain.replace("*/", "* /").replace("/*", "/ *")
+
+
+def _c_string(text: str) -> str:
+    """A C string literal (octal escapes: they cannot swallow the characters that follow, as hex ones would)."""
+    out = ['"']
+    for b in text.encode("utf-8"):
+        if b in (0x22, 0x5C):
+            out.append("\\" + chr(b))
+        elif 0x20 <= b < 0x7F and chr(b) != "?":
+            out.append(chr(b))
+        else:
+            out.append(f"\\{b:03o}")
+    out.append('"')
+    return "".join(out)
+
+
+def _signature_code(func: FuncType) -> str:
+    """The parameters, '>', the results as one letter each: what two extensions compare before one calls the other."""
+    return "".join(_MULTI_CODE[t] for t in func.params) + ">" + "".join(_MULTI_CODE[t] for t in func.results)
+
+
+def _signature(func: FuncType) -> str:
+    return f"({', '.join(func.params)}) -> {', '.join(func.results) or 'None'}"
+
+
+# the types that a global, an exception value or a function of the host can have: a funcref is only in the signature of an export (and an element of a table)
+_PLAIN: frozenset[str] = frozenset({"i32", "i64", "f32", "f64", "v128"})
+
+
+def _why_not(func: FuncType, *, several_results: bool = False, funcref: bool = False) -> str | None:
+    """Why the glue cannot take a function of this type, or None. A function may have several results (an exported one
+    gives them back as a tuple, an imported one is to return a tuple) when `several_results` is true. A `funcref` is taken in an exported function (`funcref`)."""
+    bad = sorted({t for t in (*func.params, *func.results) if t not in _CTYPE or (t == "funcref" and not funcref)})
+    if bad:
+        return f"uses {', '.join(bad)}"
+    if len(func.results) > 1 and not several_results:
+        return "has several results"
+    return None
+
+
+def _ident(name: str) -> str:
+    """The module name the C side uses: the last component of the dotted Python name."""
+    last = name.rsplit(".", 1)[-1]
+    if not last.isidentifier() or not last.isascii():
+        raise GenError(f"{name!r} is not a valid extension module name")
+    return last
+
+
+# the modules a WASI program imports its system calls from; wasmext gives them (the headers of src/wasmext/c) unless the caller does
+_WASI_PREVIEW1 = "wasi_snapshot_preview1"
+_WASI_UNSTABLE = "wasi_unstable"  # the first snapshot
+_WASI_HEADERS = {_WASI_PREVIEW1: "wasi_preview1.h", _WASI_UNSTABLE: "wasi_unstable.h"}
+# the 46 calls of WASI 0.1 and their signatures (the witx files of the wasi-0.1 branch of WebAssembly/WASI): wasi_preview1.h has a
+# function for each, and a module that imports one with another signature is refused when the glue is made
+_WASI_PREVIEW1_SIGNATURES = {
+    "args_get": "ii>i",
+    "args_sizes_get": "ii>i",
+    "environ_get": "ii>i",
+    "environ_sizes_get": "ii>i",
+    "clock_res_get": "ii>i",
+    "clock_time_get": "iji>i",
+    "random_get": "ii>i",
+    "sched_yield": ">i",
+    "proc_exit": "i>",
+    "proc_raise": "i>i",
+    "poll_oneoff": "iiii>i",
+    "fd_read": "iiii>i",
+    "fd_pread": "iiiji>i",
+    "fd_write": "iiii>i",
+    "fd_pwrite": "iiiji>i",
+    "fd_seek": "ijii>i",
+    "fd_tell": "ii>i",
+    "fd_advise": "ijji>i",
+    "fd_allocate": "ijj>i",
+    "fd_datasync": "i>i",
+    "fd_sync": "i>i",
+    "fd_close": "i>i",
+    "fd_renumber": "ii>i",
+    "fd_fdstat_get": "ii>i",
+    "fd_fdstat_set_flags": "ii>i",
+    "fd_fdstat_set_rights": "ijj>i",
+    "fd_filestat_get": "ii>i",
+    "fd_filestat_set_size": "ij>i",
+    "fd_filestat_set_times": "ijji>i",
+    "fd_prestat_get": "ii>i",
+    "fd_prestat_dir_name": "iii>i",
+    "fd_readdir": "iiiji>i",
+    "path_create_directory": "iii>i",
+    "path_filestat_get": "iiiii>i",
+    "path_filestat_set_times": "iiiijji>i",
+    "path_link": "iiiiiii>i",
+    "path_open": "iiiiijjii>i",
+    "path_readlink": "iiiiii>i",
+    "path_remove_directory": "iii>i",
+    "path_rename": "iiiiii>i",
+    "path_symlink": "iiiii>i",
+    "path_unlink_file": "iii>i",
+    "sock_accept": "iii>i",
+    "sock_recv": "iiiiii>i",
+    "sock_send": "iiiii>i",
+    "sock_shutdown": "ii>i",
+}
+# the first snapshot has the same calls but sock_accept
+_WASI_SIGNATURES = {
+    _WASI_PREVIEW1: _WASI_PREVIEW1_SIGNATURES,
+    _WASI_UNSTABLE: {n: sig for n, sig in _WASI_PREVIEW1_SIGNATURES.items() if n != "sock_accept"},
+}
+# the calls of the first snapshot that have a function of their own, wasi_unstable_<name> (the others use wasi_<name>)
+_WASI_UNSTABLE_OWN: frozenset[str] = frozenset({"fd_seek", "fd_filestat_get", "path_filestat_get", "poll_oneoff"})
+
+
+@dataclass
+class _Import:
+    module: str
+    field: str
+    func: FuncType
+    host: int  # index of the import module (the struct that holds its callables)
+    slot: int  # the place among the callables of that module
+    symbol: str
+
+
+@dataclass
+class _ImportMemory:
+    module: str
+    field: str
+    limits: Limits
+    host: int  # index of the import module (the struct that holds the pointer)
+    slot: int  # the place among the memories of that module
+    symbol: str
+
+
+@dataclass
+class _ImportTable:
+    module: str
+    field: str
+    limits: Limits
+    host: int  # index of the import module (the struct that holds the pointer)
+    slot: int  # the place among the tables of that module
+    symbol: str
+
+
+@dataclass
+class _ImportGlobal:
+    module: str
+    field: str
+    type: ValType
+    host: int  # index of the import module (the struct that holds the value)
+    slot: int  # the place among the globals of that module
+    symbol: str
+    mutable: bool = False
+
+
+def _emit_links(
+    hadd: Callable[[str], None],
+    last: str,
+    imports: list[_Import],
+    global_imports: list[_ImportGlobal],
+    memory_imports: list[_ImportMemory],
+    hosts: list[str],
+    table_imports: list[_ImportTable],
+) -> None:
+    """The C that links an import to an export of another instance (a `wasmext_export`, see wasmext_glue.h), for every host that has Python or has
+    not: it checks what the export is (kind, type, signature, size) and, if it fits, puts it where the module reads its import. 0 when linked;
+    1 with the message in `msg` otherwise. Keeping the other instance alive is the host's business."""
+    incompatible = "the export is from an incompatible version of wasmext"
+    for k, imp in enumerate(imports):
+        where = f"{imp.module}.{imp.field}"
+        hadd(f"/* the import {_cc(where)}: a function of another instance */")
+        hadd(
+            f"static inline int {last}_link_func{k}({last}_instance *core, const wasmext_export *e, char *msg, size_t cap) {{"
+        )
+        hadd(
+            f"    if (!wasmext_export_ok(e)) return wasmext_link_fail(msg, cap, {_c_string(f'import {where}: {incompatible}')});"
+        )
+        hadd(
+            f"    if (e->kind != WASMEXT_FUNC) return wasmext_link_fail(msg, cap, {_c_string(f'import {where} is a function: the export given is not')});"
+        )
+        hadd(f"    if (strcmp(e->signature, {_c_string(_signature_code(imp.func))}) != 0) {{")
+        hadd(
+            f'        snprintf(msg, cap, "import {where} is a function {_signature_code(imp.func)}: the export given is another one (%s)", e->signature);'
+        )
+        hadd("        return 1;")
+        hadd("    }")
+        hadd(f"    core->host{imp.host}.fn[{imp.slot}] = e->address;")
+        hadd(f"    core->host{imp.host}.user[{imp.slot}] = e->instance;")
+        hadd("    return 0;")
+        hadd("}")
+        hadd("")
+    for j, g in enumerate(global_imports):
+        where = f"{g.module}.{g.field}"
+        expected = f"{'mutable ' if g.mutable else ''}{g.type}"
+        hadd(f"/* the import {_cc(where)}: a global of another instance, or (an immutable one) a value */")
+        hadd(
+            f"static inline int {last}_link_global{j}({last}_instance *core, const wasmext_export *e, char *msg, size_t cap) {{"
+        )
+        hadd(
+            f"    if (!wasmext_export_ok(e)) return wasmext_link_fail(msg, cap, {_c_string(f'import {where}: {incompatible}')});"
+        )
+        hadd(
+            f"    if (e->kind != WASMEXT_GLOBAL) return wasmext_link_fail(msg, cap, {_c_string(f'import {where} is a global: the export given is not')});"
+        )
+        hadd(f"    if (e->type != {_TYPE_CODE[g.type]} || (e->flags & 1) != {int(g.mutable)})")
+        hadd(
+            f"        return wasmext_link_fail(msg, cap, {_c_string(f'import {where} is a {expected} global: the export given has another type or the other mutability')});"
+        )
+        hadd(f"    core->host{g.host}.gp{g.slot} = ({_CTYPE[g.type]} *)e->address;")
+        hadd("    return 0;")
+        hadd("}")
+        hadd("")
+        if not g.mutable:
+            hadd(f"static inline void {last}_set_global{j}({last}_instance *core, {_CTYPE[g.type]} value) {{")
+            hadd(f"    core->host{g.host}.g{g.slot} = value;")
+            hadd(f"    core->host{g.host}.gp{g.slot} = &core->host{g.host}.g{g.slot};")
+            hadd("}")
+            hadd("")
+    for j, tb in enumerate(table_imports):
+        where = f"{tb.module}.{tb.field}"
+        lim = tb.limits
+        hadd(f"/* the import {_cc(where)}: the table of another instance (a funcref table; see TABLES_PLAN.md) */")
+        hadd(
+            f"static inline int {last}_link_table{j}({last}_instance *core, const wasmext_export *e, char *msg, size_t cap) {{"
+        )
+        hadd(
+            f"    if (!wasmext_export_ok(e)) return wasmext_link_fail(msg, cap, {_c_string(f'import {where}: {incompatible}')});"
+        )
+        hadd(
+            f"    if (e->kind != WASMEXT_TABLE) return wasmext_link_fail(msg, cap, {_c_string(f'import {where} is a table: the export given is not')});"
+        )
+        hadd("    wasm_rt_funcref_table_t *tab = (wasm_rt_funcref_table_t *)e->address;")
+        hadd(
+            f"    if (e->type != sizeof(wasm_rt_funcref_table_t)) return wasmext_link_fail(msg, cap, {_c_string(f'import {where}: the table is from an incompatible runtime of wasm2c')});"
+        )
+        hadd(f"    if (tab->size < {lim.min}u) {{")
+        hadd(
+            f'        snprintf(msg, cap, "import {where}: the table has %lu elements, the module needs at least {lim.min}", (unsigned long)tab->size);'
+        )
+        hadd("        return 1;")
+        hadd("    }")
+        if lim.max is not None:
+            hadd(f"    if (tab->max_size > {lim.max}u) {{")
+            hadd(
+                f'        snprintf(msg, cap, "import {where}: the table may grow to %lu elements, the module allows {lim.max}", (unsigned long)tab->max_size);'
+            )
+            hadd("        return 1;")
+            hadd("    }")
+        hadd(f"    core->host{tb.host}.tp{tb.slot} = tab;")
+        hadd("    return 0;")
+        hadd("}")
+        hadd("")
+    if table_imports:
+        # An instance that put functions of its own in the table of another (an `elem` segment, `table.set`...) must not outlive them without that being known to
+        # the owner of the table (the owner keeps it alive); one whose instantiation failed has to take back what it wrote before it is freed.
+        hadd(
+            "/* take back from the tables this instance imports the functions it put there (a failed instantiation leaves some) */"
+        )
+        hadd(f"static inline void {last}_scrub_tables({last}_instance *core) {{")
+        for tb in table_imports:
+            hadd("    {")
+            hadd(f"        wasm_rt_funcref_table_t *tab = core->host{tb.host}.tp{tb.slot};")
+            hadd("        for (uint32_t i = 0; tab != NULL && i < tab->size; i++) {")
+            hadd("            const char *mi = (const char *)tab->data[i].module_instance;")
+            hadd(
+                "            if (mi >= (const char *)core && mi < (const char *)(core + 1)) memset(&tab->data[i], 0, sizeof tab->data[i]);"
+            )
+            hadd("        }")
+            hadd("    }")
+        hadd("}")
+        hadd("")
+    for j, m in enumerate(memory_imports):
+        where = f"{m.module}.{m.field}"
+        lim = m.limits
+        hadd(f"/* the import {_cc(where)}: the memory of another instance */")
+        hadd(
+            f"static inline int {last}_link_memory{j}({last}_instance *core, const wasmext_export *e, char *msg, size_t cap) {{"
+        )
+        hadd(
+            f"    if (!wasmext_export_ok(e)) return wasmext_link_fail(msg, cap, {_c_string(f'import {where}: {incompatible}')});"
+        )
+        hadd(
+            f"    if (e->kind != WASMEXT_MEMORY) return wasmext_link_fail(msg, cap, {_c_string(f'import {where} is a memory: the export given is not')});"
+        )
+        hadd("    wasm_rt_memory_t *mem = (wasm_rt_memory_t *)e->address;")
+        hadd(
+            f"    if (e->type != sizeof(wasm_rt_memory_t)) return wasmext_link_fail(msg, cap, {_c_string(f'import {where}: the memory is from an incompatible runtime of wasm2c')});"
+        )
+        hadd(
+            f"    if (((e->flags >> 1) & 1) != {int(lim.is64)}) return wasmext_link_fail(msg, cap, {_c_string(f'import {where} is a 64-bit memory the other way: memory64 differs')});"
+        )
+        hadd(
+            f"    if (((e->flags >> 2) & 1) != (WASM_RT_MEMCHECK_GUARD_PAGES ? 1 : 0)) return wasmext_link_fail(msg, cap, {_c_string(f'import {where}: one module is built with guard pages and the other without (--no-guard-pages)')});"
+        )
+        hadd(f"    if (mem->pages < {lim.min}ULL) {{")
+        hadd(
+            f'        snprintf(msg, cap, "import {where}: the memory has %llu pages, the module needs at least {lim.min}", (unsigned long long)mem->pages);'
+        )
+        hadd("        return 1;")
+        hadd("    }")
+        if lim.max is not None:
+            hadd(f"    if (mem->max_pages > {lim.max}ULL) {{")
+            hadd(
+                f'        snprintf(msg, cap, "import {where}: the memory may grow to %llu pages, the module allows {lim.max}", (unsigned long long)mem->max_pages);'
+            )
+            hadd("        return 1;")
+            hadd("    }")
+        hadd(f"    core->host{m.host}.mp{m.slot} = mem;")
+        hadd("    return 0;")
+        hadd("}")
+        hadd("")
+
+
+def generate(module: Module, name: str, *, version: str | None = None, share_tables: bool = False) -> Glue:
+    """The C source of the extension module `name` (dotted, as it is imported) for the parsed `module`. `version`, the version of
+    wasmext, goes into the header of the stub."""
+    last = _ident(name)
+    prefix = mangle(last, module=True)
+    skipped: list[str] = []
+
+    # imports: functions (every signature must be one the glue can convert) and immutable globals (a number is given)
+    hosts: list[str] = []
+    imports: list[_Import] = []
+    global_imports: list[_ImportGlobal] = []
+    slots: dict[str, int] = {}
+    global_slots: dict[str, int] = {}
+    memory_imports: list[_ImportMemory] = []
+    memory_slots: dict[str, int] = {}
+    table_imports: list[_ImportTable] = []
+    table_slots: dict[str, int] = {}
+    for imp in module.imports:
+        if "\0" in imp.module or "\0" in imp.name:  # a C string ends at the NUL: the name would be another one
+            raise GenError(f"import {imp.module!r}.{imp.name!r}: a null character in a name is not supported")
+        symbol = f"w2c_{mangle(imp.module, module=True)}_{mangle(imp.name)}"
+        if imp.kind == "func" and isinstance(imp.type, FuncType):
+            reason = _why_not(
+                imp.type, several_results=True
+            )  # a funcref in the signature of an import is not supported
+            if reason:
+                raise GenError(f"import {imp.module}.{imp.name} {reason}: not supported yet")
+            if imp.module in _WASI_HEADERS:
+                wanted = _WASI_SIGNATURES[imp.module].get(imp.name)
+                if wanted is None:
+                    raise GenError(f"import {imp.module}.{imp.name} is not a function of {imp.module}")
+                if _signature_code(imp.type) != wanted:
+                    raise GenError(
+                        f"import {imp.module}.{imp.name} is {_signature_code(imp.type)}, {imp.module} says {wanted}"
+                    )
+            same = next((i for i in imports if i.module == imp.module and i.field == imp.name), None)
+            if (
+                same is not None
+            ):  # the same function imported twice (AssemblyScript does): wasm2c names both alike, so one is made
+                if same.func != imp.type:
+                    raise GenError(f"import {imp.module}.{imp.name} is imported twice with different types")
+                continue
+            if imp.module not in hosts:
+                hosts.append(imp.module)
+            slot = slots.get(imp.module, 0)
+            slots[imp.module] = slot + 1
+            imports.append(_Import(imp.module, imp.name, imp.type, hosts.index(imp.module), slot, symbol))
+        elif imp.kind == "global" and isinstance(imp.type, GlobalType):
+            if imp.type.type not in _CTYPE or imp.type.type == "funcref":
+                raise GenError(f"import {imp.module}.{imp.name} uses {imp.type.type}: not supported yet")
+            if imp.module not in hosts:
+                hosts.append(imp.module)
+            slot = global_slots.get(imp.module, 0)
+            global_slots[imp.module] = slot + 1
+            global_imports.append(
+                _ImportGlobal(
+                    imp.module, imp.name, imp.type.type, hosts.index(imp.module), slot, symbol, imp.type.mutable
+                )
+            )
+        elif imp.kind == "memory" and isinstance(imp.type, Limits):
+            if imp.type.shared:
+                raise GenError(f"import {imp.module}.{imp.name}: an imported shared memory is not supported yet")
+            if imp.module not in hosts:
+                hosts.append(imp.module)
+            slot = memory_slots.get(imp.module, 0)
+            memory_slots[imp.module] = slot + 1
+            memory_imports.append(_ImportMemory(imp.module, imp.name, imp.type, hosts.index(imp.module), slot, symbol))
+        elif imp.kind == "table" and isinstance(imp.type, TableType):
+            if imp.type.elem != "funcref":
+                raise GenError(
+                    f"import {imp.module}.{imp.name}: an imported {imp.type.elem} table is not supported yet"
+                )
+            if imp.type.limits.is64 or imp.type.limits.shared:
+                raise GenError(
+                    f"import {imp.module}.{imp.name}: an imported {'64-bit' if imp.type.limits.is64 else 'shared'} table is not supported yet"
+                )
+            if imp.module not in hosts:
+                hosts.append(imp.module)
+            slot = table_slots.get(imp.module, 0)
+            table_slots[imp.module] = slot + 1
+            table_imports.append(
+                _ImportTable(imp.module, imp.name, imp.type.limits, hosts.index(imp.module), slot, symbol)
+            )
+        else:
+            raise GenError(f"import {imp.module}.{imp.name}: an imported {imp.kind} is not supported yet")
+
+    # exports: functions and memories; the rest is left out, and reported
+    funcs: list[tuple[str, FuncType]] = []
+    param_names: dict[str, tuple[str | None, ...]] = {}
+    memories: list[str] = []
+    memory_limits: list[Limits] = []
+    globals_: list[tuple[str, GlobalType]] = []
+    tables: list[str] = []  # the funcref tables the module defines and exports: other instances can import them
+    imported_tables = len(table_imports)
+    no_attribute: set[str] = set()
+    for exp in module.exports:
+        if "\0" in exp.name:  # a C string ends at the NUL: the export would be another one
+            skipped.append(f"{exp.kind} {exp.name!r} has a null character in its name")
+            continue
+        if _reserved(exp.name) and exp.kind in ("func", "memory", "global"):
+            # not an attribute (it would replace a special name of Instance), but instance.__exports__[name] reaches it
+            skipped.append(
+                f"{exp.kind} {exp.name!r} is not an attribute (it would hide a special name of Instance): instance.__exports__[{exp.name!r}]"
+            )
+            no_attribute.add(exp.name)
+        if exp.kind == "func":
+            func = module.all_functions[exp.index]
+            reason = _why_not(func, several_results=True, funcref=True)
+            if reason:
+                skipped.append(f"function {exp.name!r} {reason}")
+            else:
+                funcs.append((exp.name, func))
+                param_names[exp.name] = module.param_names(exp.index)
+        elif exp.kind == "memory":
+            memories.append(exp.name)  # a memory64 is the same buffer: only its address type differs
+            memory_limits.append(module.all_memories[exp.index])
+        elif exp.kind == "global":
+            glob = module.all_globals[exp.index]
+            if glob.type in _PLAIN:
+                globals_.append((exp.name, glob))
+            else:
+                skipped.append(f"global {exp.name!r} uses {glob.type}")
+        elif exp.kind == "table":
+            table = module.all_tables[exp.index]
+            if exp.index < imported_tables:
+                skipped.append(f"table {exp.name!r} is an imported table: exporting it again is not supported yet")
+            elif table.elem != "funcref" or table.limits.is64 or table.limits.shared:
+                what = (
+                    "a 64-bit table"
+                    if table.limits.is64
+                    else "a shared table"
+                    if table.limits.shared
+                    else "an externref table"
+                    if table.elem == "externref"
+                    else f"a {table.elem} table"
+                )
+                skipped.append(f"table {exp.name!r} is {what}")
+            else:
+                tables.append(exp.name)
+        else:
+            skipped.append(f"{exp.kind} {exp.name!r}")
+
+    uses_funcref = any(
+        "funcref" in (*f.params, *f.results) for _, f in funcs
+    )  # a Function comes out of (or goes into) a call: the module has the class
+    funcref_args = any(
+        "funcref" in f.params for _, f in funcs
+    )  # and a function that is given must outlive the call: the instance keeps what it was given
+    shares_tables = bool(
+        tables or table_imports or share_tables or uses_funcref
+    )  # a function of the module can be called by another instance (or the other way) with no step of the host between; `share_tables` asks for it
+    trap_handler = f"wasmext_trap_{prefix}" if shares_tables else ""
+    ref_types = (
+        _ref_types(module) if shares_tables else []
+    )  # the types of the elements of a table that a Function of this module can call
+    has_imports = bool(imports or global_imports or memory_imports or table_imports)
+    wasi_modules = sorted({imp.module for imp in imports if imp.module in _WASI_HEADERS})
+    uses_wasi = bool(wasi_modules)
+    # without other imports the caller need not give any: the module gets WASI by itself
+    needs_imports = any(imp.module not in _WASI_HEADERS for imp in imports) or bool(
+        global_imports or memory_imports or table_imports
+    )
+    if uses_wasi and "memory" not in memories:
+        raise GenError(f"the module imports {wasi_modules[0]} but does not export its memory as 'memory'")
+    w: list[str] = []  # the Python layer (<name>_py.c)
+    add = w.append
+    h: list[str] = []  # the glue of the module (<name>_glue.h): typed C, no Python.h
+    hadd = h.append
+    guard = f"WASMEXT_GLUE_{prefix.upper()}_H"
+    reentrant = "REENTRANT" if has_imports else "PLAIN"
+
+    hadd(
+        f"/* Generated by wasmext from the WebAssembly module of {last}: do not edit. The glue of the module: typed C functions, no Python.h. */"
+    )
+    hadd(f"#ifndef {guard}")
+    hadd(f"#define {guard}")
+    hadd(f'#include "{last}_w2c.h"')
+    hadd('#include "wasmext_glue.h"')
+    for module_name in wasi_modules:
+        hadd(f'#include "{_WASI_HEADERS[module_name]}"')
+    tags = module.tags
+    notes: list[str] = []
+    for tag_index, tag in enumerate(tags):
+        size = sum({"i32": 4, "f32": 4, "i64": 8, "f64": 8, "v128": 16}.get(str(t), 8) for t in tag.params)
+        if size > 256:
+            notes.append(
+                f"exception tag {tag_index} carries {size} bytes: the runtime keeps at most 256, "
+                "so its values are not decoded when it is not caught"
+            )
+    if tags:
+        hadd(
+            "/* The tags of the module: their identities (a table that wasmext adds to the C of wasm2c, in the order of the tags) and the"
+        )
+        hadd("   values of an exception that was thrown and not caught, decoded from what the runtime keeps of it. */")
+        hadd(f"extern const wasm_rt_tag_t wasmext_tags_{prefix}[{len(tags)}];")
+        hadd(f"#define {last.upper()}_TAG_COUNT {len(tags)}")
+        hadd(f"#define {last.upper()}_TAG_MAX_VALUES {max(1, max(len(t.params) for t in tags))}")
+        hadd("")
+    if shares_tables:
+        hadd(
+            "#ifdef WASMEXT_TRAP_HANDLER  /* the extension: the calls into this module share the stack of entries (wasmext_glue.h) */"
+        )
+        hadd("#define WASMEXT_ENTER(CODE, FAIL) WASMEXT_ENTER_SHARED(CODE, FAIL)")
+        hadd("#define WASMEXT_LEAVE() WASMEXT_LEAVE_SHARED()")
+        hadd("#else")
+    hadd(f"#define WASMEXT_ENTER(CODE, FAIL) WASMEXT_ENTER_{reentrant}(CODE, FAIL)")
+    hadd(f"#define WASMEXT_LEAVE() WASMEXT_LEAVE_{reentrant}()")
+    if shares_tables:
+        hadd("#endif")
+    hadd("")
+
+    add(
+        f"/* Generated by wasmext from the WebAssembly module of {last}: do not edit. The Python layer: it uses {last}_glue.h. */"
+    )
+    add("#define PY_SSIZE_T_CLEAN")
+    add("#include <Python.h>")
+    add("#include <structmember.h>")
+    add("#include <string.h>")
+    add(f'#include "{last}_glue.h"')
+    if wasi_modules:
+        add('#include "wasi_python.h"')  # the host of the core of WASI: after the glue, whose WASI headers it needs
+    add("")
+    if shares_tables:
+        add("#ifndef WASMEXT_TRAP_HANDLER")
+        add(
+            f'#error "wasmext: this module shares tables with other instances: build it with -DWASMEXT_TRAP_HANDLER={trap_handler} -DWASM_RT_TRAP_HANDLER={trap_handler} (natify does)"'
+        )
+        add("#endif")
+        add(
+            "/* the function that the runtime of this module calls for a trap instead of `longjmp` (wasmext_glue.h): it goes to the innermost call into WebAssembly code */"
+        )
+        add(f"void {trap_handler}(wasm_rt_trap_t code) {{ wasmext_traps_->trap(code); }}")
+        add("")
+        add(
+            "/* The stack of entries is shared by every module of the interpreter that shares tables: the first to be loaded publishes its own, the others take it. */"
+        )
+        add("static int attach_traps(void) {")
+        add("    PyObject *state = PyInterpreterState_GetDict(PyInterpreterState_Get());")
+        add("    if (state == NULL) return -1;")
+        add("    PyObject *found = PyDict_GetItemString(state, WASMEXT_TRAPS);")
+        add("    if (found != NULL) {")
+        add("        const wasmext_traps *shared = (const wasmext_traps *)PyCapsule_GetPointer(found, WASMEXT_TRAPS);")
+        add("        if (shared == NULL) return -1;")
+        add("        if (wasmext_traps_use(shared)) {")
+        add(
+            '            PyErr_SetString(PyExc_ImportError, "wasmext: another module that shares tables was built with another runtime of wasm2c, or too many are loaded");'
+        )
+        add("            return -1;")
+        add("        }")
+        add("        return 0;")
+        add("    }")
+        add("    PyErr_Clear();")
+        add("    PyObject *capsule = PyCapsule_New((void *)&wasmext_traps_own_, WASMEXT_TRAPS, NULL);")
+        add("    if (capsule == NULL) return -1;")
+        add(
+            "    int bad = wasmext_traps_use(&wasmext_traps_own_) || PyDict_SetItemString(state, WASMEXT_TRAPS, capsule) < 0;"
+        )
+        add("    Py_DECREF(capsule);")
+        add(
+            '    if (bad && !PyErr_Occurred()) PyErr_SetString(PyExc_ImportError, "wasmext: the runtime of wasm2c cannot join the stack of traps");'
+        )
+        add("    return bad ? -1 : 0;")
+        add("}")
+        add("")
+    add("static PyObject *TrapError;")
+    add("static PyObject *LinkError;")
+    if tags:
+        add("static PyObject *UncaughtExceptionError;")
+    if uses_wasi:
+        add("static PyObject *WasiExitError, *WasiSignalError, *WasiTerminatedError;")
+    add("static PyTypeObject *InstanceType;")
+    if memories:
+        add("static PyTypeObject *MemoryType;")
+    if shares_tables:
+        add("static PyTypeObject *TableType, *FunctionType;")
+    add("")
+    uses_v128 = any("v128" in (*imp.func.params, *imp.func.results) for imp in imports) or any(
+        "v128" in (*f.params, *f.results) for _, f in funcs
+    )
+    uses_v128 = uses_v128 or any(g.type == "v128" for g in global_imports) or any(g.type == "v128" for _, g in globals_)
+    if uses_v128:
+        # a v128 is 16 bytes, in the order of WebAssembly memory (little-endian), as bytes or any bytes-like object of 16 bytes
+        add("#if defined(__BYTE_ORDER__) && defined(__ORDER_BIG_ENDIAN__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__")
+        add('#error "wasmext: v128 in a signature is not supported on big-endian hosts"')
+        add("#endif")
+        add("static int wasmext_is_v128(PyObject *o) {")
+        add("    Py_buffer view;")
+        add("    if (PyObject_GetBuffer(o, &view, PyBUF_SIMPLE) != 0) { PyErr_Clear(); return 0; }")
+        add("    int ok = view.len == 16;")
+        add("    PyBuffer_Release(&view);")
+        add("    return ok;")
+        add("}")
+        add("static v128 wasmext_bytes_v128(PyObject *o) {")
+        add("    v128 out;")
+        add("    memset(&out, 0, sizeof out);")
+        add("    Py_buffer view;")
+        add("    if (PyObject_GetBuffer(o, &view, PyBUF_SIMPLE) != 0) return out;")
+        add("    if (view.len != 16) {")
+        add('        PyErr_Format(PyExc_ValueError, "a v128 is 16 bytes, got %zd", (Py_ssize_t)view.len);')
+        add("    } else {")
+        add("        memcpy(&out, view.buf, 16);")
+        add("    }")
+        add("    PyBuffer_Release(&view);")
+        add("    return out;")
+        add("}")
+        add("static PyObject *wasmext_v128_bytes(v128 v) {")
+        add("    return PyBytes_FromStringAndSize((const char *)&v, 16);")
+        add("}")
+        add("")
+    # ---- the glue of the module (no Python): what each import module holds, the instance, the imports as the module calls them ----
+    for i, host in enumerate(hosts):
+        hadd(f"/* the functions and the values of the imports of module {_c_string(host)} */")
+        # g: the value of a global the caller gave as a number; gp: where the runtime reads it (g, or the global of another instance)
+        values = "".join(
+            f" {_CTYPE[g.type]} g{g.slot}; {_CTYPE[g.type]} *gp{g.slot};"
+            for g in global_imports
+            if hosts[g.host] == host
+        )
+        n = max(slots.get(host, 0), 1)
+        memory_fields = "".join(f" wasm_rt_memory_t *mp{m.slot};" for m in memory_imports if hosts[m.host] == host)
+        memory_fields += "".join(
+            f" wasm_rt_funcref_table_t *tp{tb.slot};" for tb in table_imports if hosts[tb.host] == host
+        )
+        # fn, user: the function to call for an import, `result f(void *user, parameters..., int *trapped)`, and its first argument
+        hadd(f"struct w2c_{mangle(host, module=True)} {{ void *fn[{n}]; void *user[{n}];{values}{memory_fields} }};")
+    hadd("")
+    hadd("typedef struct {")
+    hadd(f"    w2c_{prefix} inst;")
+    hadd("    int instantiated;")
+    hadd("    int initialized;  /* the `_initialize` of a reactor has run */")
+    if uses_wasi:
+        hadd("    wasmext_wasi *wasi;")
+    for i, host in enumerate(hosts):
+        hadd(f"    struct w2c_{mangle(host, module=True)} host{i};")
+    hadd(
+        f"    wasm_rt_funcref_t exp_ref[{max(len(funcs), 1)}];  /* the exported functions as a table holds them: see {last}_glue_funcref */"
+    )
+    hadd(f"}} {last}_instance;")
+    hadd("")
+    _emit_funcrefs(hadd, last, prefix, funcs)
+    _emit_links(hadd, last, imports, global_imports, memory_imports, hosts, table_imports)
+    add("typedef struct {")
+    add("    PyObject_HEAD")
+    add(f"    {last}_instance core;")
+    add("    PyObject *weakreflist;")
+    if tables:
+        add(
+            "    PyObject *writers;  /* the instances that imported an exported table and may have put functions of their own in it: they live as long as this one */"
+        )
+    if funcref_args:
+        add(
+            "    PyObject *refs;  /* the owners of the functions this instance was given as parameters: the module may keep one (in a table, a global), so they live as long as this one */"
+        )
+    if memories:
+        add(
+            f"    long mem_pins[{len(memories)}];  /* the live buffers of each exported memory that can move (see Memory_getbuffer) */"
+        )
+        add(
+            f"    uint64_t mem_max_pages[{len(memories)}];  /* its own maximum, put back when the last buffer is gone */"
+        )
+    for i, host in enumerate(hosts):
+        # what the Python layer holds for the imports of a module: the callables, the owners of the exports of other instances
+        k = max(slots.get(host, 0), 1)
+        gos = "".join(f" PyObject *go{g.slot};" for g in global_imports if hosts[g.host] == host)
+        mos = "".join(f" PyObject *mo{m.slot};" for m in memory_imports if hosts[m.host] == host)
+        mos += "".join(f" PyObject *to{tb.slot};" for tb in table_imports if hosts[tb.host] == host)
+        add(f"    struct {{ PyObject *fn[{k}]; PyObject *lo[{k}];{gos}{mos} }} hold{i};")
+    add("} InstanceObject;")
+    add("")
+    if memories:
+        add("typedef struct {")
+        add("    PyObject_HEAD")
+        add("    InstanceObject *owner;")
+        add(f"    wasm_rt_memory_t *(*get)(w2c_{prefix} *);")
+        add("    int export_index;  /* its place in export_table: the reference to it is made from that */")
+        add("    size_t which;  /* which of the exported memories */")
+        add("} MemoryObject;")
+        add("")
+    if shares_tables:
+        add("typedef struct {")
+        add("    PyObject_HEAD")
+        add("    wasm_rt_funcref_table_t own;  /* the table of a Table that no module owns */")
+        add("    wasm_rt_funcref_table_t *table;  /* &own, or a table of the module of `owner` */")
+        add("    InstanceObject *owner;  /* the instance whose table this is; NULL for a table of its own */")
+        add("    int export_index;  /* a table of an instance: its place in export_table */")
+        add(
+            "    PyObject *writers;  /* a table of its own: the instances that imported it and may have put functions of their own in it: they live as long as it does */"
+        )
+        add("} TableObject;")
+        add("")
+    if tags:
+        add(
+            "/* an exception of WebAssembly that no `try` caught: UncaughtException, with .tag (its index in the module, or None for the tag of"
+        )
+        add(
+            "   another module) and .values (a tuple); what the runtime keeps of it is read now, before any other code of WebAssembly runs */"
+        )
+        add("static void raise_uncaught(void) {")
+        add(f"    wasmext_value v[{last.upper()}_TAG_MAX_VALUES];")
+        add(f"    int tag = {last}_tag_of(wasm_rt_exception_tag());")
+        add(f"    int n = tag >= 0 ? {last}_tag_values(tag, wasm_rt_exception(), wasm_rt_exception_size(), v) : -1;")
+        add("    PyObject *values = PyTuple_New(n > 0 ? n : 0);")
+        add("    for (int i = 0; values != NULL && i < n; i++) {")
+        add("        PyObject *item = NULL;")
+        add("        switch (v[i].type) {")
+        add("        case 0x7F: item = PyLong_FromLong((long)(int32_t)v[i].as.i); break;")
+        add("        case 0x7E: item = PyLong_FromLongLong((long long)(int64_t)v[i].as.j); break;")
+        add("        case 0x7D: item = PyFloat_FromDouble((double)v[i].as.f); break;")
+        add("        case 0x7C: item = PyFloat_FromDouble(v[i].as.d); break;")
+        add("        default: item = PyBytes_FromStringAndSize((const char *)v[i].as.o, 16); break;")
+        add("        }")
+        add("        if (item == NULL) { Py_CLEAR(values); break; }")
+        add("        if (PyTuple_SetItem(values, i, item) < 0) { Py_CLEAR(values); break; }")
+        add("    }")
+        add("    PyObject *index = NULL;")
+        add(
+            "    if (values != NULL) { if (tag >= 0) index = PyLong_FromLong(tag); else { Py_INCREF(Py_None); index = Py_None; } }"
+        )
+        add(
+            '    PyObject *exc = index != NULL ? PyObject_CallFunction(UncaughtExceptionError, "s", wasm_rt_strerror(WASM_RT_TRAP_UNCAUGHT_EXCEPTION)) : NULL;'
+        )
+        add(
+            '    if (exc != NULL && (PyObject_SetAttrString(exc, "tag", index) < 0 || PyObject_SetAttrString(exc, "values", values) < 0)) Py_CLEAR(exc);'
+        )
+        add("    if (exc != NULL) PyErr_SetObject(UncaughtExceptionError, exc);")
+        add("    Py_XDECREF(exc);")
+        add("    Py_XDECREF(index);")
+        add("    Py_XDECREF(values);")
+        add("}")
+        add("")
+    add(
+        "/* what a code of a trap becomes in Python (the code of a host function that failed means its exception is set already) */"
+    )
+    add("static void raise_trap_code(InstanceObject *self, int code) {")
+    add("    (void)self;")
+    add("    if (code == (int)WASMEXT_TRAP_HOST) {")
+    add("        if (PyErr_Occurred()) return;")
+    add(
+        "        /* a function of another instance that this one calls through a link failed in its own host function: if that instance keeps the exception"
+    )
+    add("           (the wrapper for ctypes does, in `_pending`), it is the one to raise */")
+    for i, host in enumerate(hosts):
+        add(f"        for (int k = 0; k < {max(slots.get(host, 0), 1)}; k++) {{")
+        add(f"            PyObject *owner = self->hold{i}.lo[k];")
+        add('            PyObject *kept = owner != NULL ? PyObject_GetAttrString(owner, "_pending") : NULL;')
+        add("            if (kept != NULL && kept != Py_None && PyExceptionInstance_Check(kept)) {")
+        add(
+            "                /* the attribute is cleared first and the exception is set last: a call of Python with an exception set may run a finalizer or the collector, and lose it */"
+        )
+        add('                if (PyObject_SetAttrString(owner, "_pending", Py_None) < 0) PyErr_Clear();')
+        add("                PyErr_SetObject((PyObject *)Py_TYPE(kept), kept);")
+        add("                Py_DECREF(kept);")
+        add("                return;")
+        add("            }")
+        add("            Py_XDECREF(kept);")
+        add("            PyErr_Clear();")
+        add("        }")
+    add('        PyErr_SetString(TrapError, "a host function of the WebAssembly module failed");')
+    add("        return;")
+    add("    }")
+    if uses_wasi:
+        add("    if (code == (int)WASMEXT_TRAP_ENDED) {")
+        add("        if (self->core.wasi != NULL && self->core.wasi->finished) wasmext_wasi_check(self->core.wasi);")
+        add('        else PyErr_SetString(TrapError, "the WebAssembly program of a linked instance has ended");')
+        add("        return;")
+        add("    }")
+    if tags:
+        add("    if (code == (int)WASM_RT_TRAP_UNCAUGHT_EXCEPTION) { raise_uncaught(); return; }")
+    add("    if (code == (int)WASMEXT_TRAP_NO_MEMORY) PyErr_NoMemory();")
+    add("    else PyErr_SetString(TrapError, wasm_rt_strerror((wasm_rt_trap_t)code));")
+    add("}")
+    add(
+        "/* a call that trapped always leaves an exception: a function that returns NULL without one is a SystemError, which says nothing of the trap */"
+    )
+    add("static void raise_trap(InstanceObject *self, int code) {")
+    add("    raise_trap_code(self, code);")
+    add('    if (!PyErr_Occurred()) PyErr_SetString(TrapError, "the WebAssembly call trapped and left no error");')
+    add("}")
+    add("")
+
+    # the globals the module imports: the runtime asks for a pointer to the value
+    for g in global_imports:
+        mod_struct = f"struct w2c_{mangle(g.module, module=True)}"
+        hadd(f"{_CTYPE[g.type]} *{g.symbol}({mod_struct} *h) {{ return h->gp{g.slot}; }}")
+    if global_imports:
+        hadd("")
+    for m in memory_imports:
+        mod_struct = f"struct w2c_{mangle(m.module, module=True)}"
+        hadd(f"wasm_rt_memory_t *{m.symbol}({mod_struct} *h) {{ return h->mp{m.slot}; }}")
+    if memory_imports:
+        hadd("")
+    for tb in table_imports:
+        mod_struct = f"struct w2c_{mangle(tb.module, module=True)}"
+        hadd(f"wasm_rt_funcref_table_t *{tb.symbol}({mod_struct} *h) {{ return h->tp{tb.slot}; }}")
+    if table_imports:
+        hadd("")
+
+    # the functions the module imports, over the functions of the host: a trap of the host (nonzero; it keeps the error) unwinds the frames of the module
+    for imp in imports:
+        func = imp.func
+        params = "".join(f", {_CTYPE[t]} a{i}" for i, t in enumerate(func.params))
+        several = len(func.results) > 1
+        codes = "".join(_MULTI_CODE[t] for t in func.results)
+        ret = f"struct wasm_multi_{codes}" if several else _CTYPE[func.results[0]] if func.results else "void"
+        mod_struct = f"struct w2c_{mangle(imp.module, module=True)}"
+        arg_types = "".join(f", {_CTYPE[t]}" for t in func.params)
+        arg_names = "".join(f", a{i}" for i in range(len(func.params)))
+        hadd(f"{ret} {imp.symbol}({mod_struct} *h{params}) {{")
+        hadd("    int trapped = 0;")
+        host_call = (
+            f"(({ret} (*)(void *{arg_types}, int *))h->fn[{imp.slot}])(h->user[{imp.slot}]{arg_names}, &trapped)"
+        )
+        if func.results:
+            hadd(f"    {ret} r_ = {host_call};")
+            hadd("    if (trapped) wasm_rt_trap(WASMEXT_TRAP_OF(trapped));")
+            hadd("    return r_;")
+        else:
+            hadd(f"    {host_call};")
+            hadd("    if (trapped) wasm_rt_trap(WASMEXT_TRAP_OF(trapped));")
+        hadd("}")
+        hadd("")
+
+    # the same functions in Python: a callable of the caller, as a function of the host (its `user` is the callable)
+    for k, imp in enumerate(imports):
+        func = imp.func
+        params = "".join(f", {_CTYPE[t]} a{i}" for i, t in enumerate(func.params))
+        several = len(func.results) > 1
+        codes = "".join(_MULTI_CODE[t] for t in func.results)
+        ret = f"struct wasm_multi_{codes}" if several else _CTYPE[func.results[0]] if func.results else "void"
+        fmt = "".join(_BUILD[t][0] for t in func.params)
+        casts = "".join(f", {_BUILD[t][1].format(f'a{i}')}" for i, t in enumerate(func.params))
+        give = "return zero_;" if func.results else "return;"
+        add(f"static {ret} py_import{k}(void *user{params}, int *trapped) {{")
+        if func.results:
+            add(f"    {ret} zero_;")
+            add("    memset(&zero_, 0, sizeof zero_);")
+        add(f'    PyObject *r = PyObject_CallFunction((PyObject *)user, "{fmt}"{casts});')
+        add(f"    if (r == NULL) {{ *trapped = (int)WASMEXT_TRAP_HOST; {give} }}")
+        if several:
+            n = len(func.results)
+            what = _c_string(f"{imp.module}.{imp.field}() must return a tuple of {n} values")
+            add(f"    {ret} v = {{0}};")
+            add(f"    if (!PyTuple_Check(r) || PyTuple_Size(r) != {n}) {{")
+            add("        Py_DECREF(r);")
+            add(f"        PyErr_SetString(PyExc_TypeError, {what});")
+            add("        *trapped = (int)WASMEXT_TRAP_HOST;")
+            add(f"        {give}")
+            add("    }")
+            for j, rt in enumerate(func.results):
+                add(f"    v.{_MULTI_CODE[rt]}{j} = {_TO_WASM[rt].format(f'PyTuple_GetItem(r, {j})')};")
+            add("    Py_DECREF(r);")
+            add(f"    if (PyErr_Occurred()) {{ *trapped = (int)WASMEXT_TRAP_HOST; {give} }}")
+            add("    return v;")
+        elif func.results:
+            rt = func.results[0]
+            add(f"    {ret} v = {_TO_WASM[rt].format('r')};")
+            add("    Py_DECREF(r);")
+            add(f"    if (PyErr_Occurred()) {{ *trapped = (int)WASMEXT_TRAP_HOST; {give} }}")
+            add("    return v;")
+        else:
+            add("    Py_DECREF(r);")
+        add("}")
+        add("")
+
+    # Instance: creation, destruction, the GC protocol
+    if has_imports:
+        add("static PyObject *lookup_import(PyObject *imports, const char *module, const char *field, int callable) {")
+        add("    PyObject *key = PyUnicode_FromString(module), *m, *f;")
+        add("    if (key == NULL) return NULL;")
+        add("    m = PyObject_GetItem(imports, key);")
+        add("    Py_DECREF(key);")
+        add("    if (m == NULL) {")
+        add("        PyErr_Clear();")
+        add("        PyErr_Format(LinkError, \"missing import module '%s'\", module);")
+        add("        return NULL;")
+        add("    }")
+        add(
+            "    {   /* a shelf that is an instance of a wasmext extension (anything with __exports__) gives its exports */"
+        )
+        add('        PyObject *exports = PyObject_GetAttrString(m, "__exports__");')
+        add("        if (exports != NULL) { Py_DECREF(m); m = exports; } else { PyErr_Clear(); }")
+        add("    }")
+        add("    key = PyUnicode_FromString(field);")
+        add("    if (key == NULL) { Py_DECREF(m); return NULL; }")
+        add("    f = PyObject_GetItem(m, key);")
+        add("    Py_DECREF(key);")
+        add("    Py_DECREF(m);")
+        add("    if (f == NULL) {")
+        add("        PyErr_Clear();")
+        add("        PyErr_Format(LinkError, \"missing import '%s.%s'\", module, field);")
+        add("        return NULL;")
+        add("    }")
+        add("    if (callable && !PyCallable_Check(f)) {")
+        add("        Py_DECREF(f);")
+        add("        PyErr_Format(LinkError, \"import '%s.%s' is not callable\", module, field);")
+        add("        return NULL;")
+        add("    }")
+        add("    return f;")
+        add("}")
+        add("")
+    add("static int Instance_traverse(InstanceObject *self, visitproc visit, void *arg) {")
+    add("    Py_VISIT(Py_TYPE((PyObject *)self));")
+    for i, host in enumerate(hosts):
+        add(f"    for (int k = 0; k < {slots.get(host, 0)}; k++) Py_VISIT(self->hold{i}.fn[k]);")
+        add(f"    for (int k = 0; k < {slots.get(host, 0)}; k++) Py_VISIT(self->hold{i}.lo[k]);")
+    if uses_wasi:
+        add("    if (self->core.wasi != NULL) wasmext_wasi_traverse(self->core.wasi, visit, arg);")
+    for g in global_imports:
+        add(f"    Py_VISIT(self->hold{g.host}.go{g.slot});")
+    for m in memory_imports:
+        add(f"    Py_VISIT(self->hold{m.host}.mo{m.slot});")
+    for tb in table_imports:
+        add(f"    Py_VISIT(self->hold{tb.host}.to{tb.slot});")
+    if tables:
+        add("    Py_VISIT(self->writers);")
+    if funcref_args:
+        add("    Py_VISIT(self->refs);")
+    add("    return 0;")
+    add("}")
+    add("")
+    add("static int Instance_clear(InstanceObject *self) {")
+    for i, host in enumerate(hosts):
+        add(f"    for (int k = 0; k < {slots.get(host, 0)}; k++) Py_CLEAR(self->hold{i}.fn[k]);")
+        add(f"    for (int k = 0; k < {slots.get(host, 0)}; k++) Py_CLEAR(self->hold{i}.lo[k]);")
+    if uses_wasi:
+        add("    if (self->core.wasi != NULL) wasmext_wasi_clear(self->core.wasi);")
+    for g in global_imports:
+        add(f"    Py_CLEAR(self->hold{g.host}.go{g.slot});")
+    for m in memory_imports:
+        add(f"    Py_CLEAR(self->hold{m.host}.mo{m.slot});")
+    for tb in table_imports:
+        add(f"    Py_CLEAR(self->hold{tb.host}.to{tb.slot});")
+    if tables:
+        add("    Py_CLEAR(self->writers);")
+    if funcref_args:
+        add("    Py_CLEAR(self->refs);")
+    add("    return 0;")
+    add("}")
+    add("")
+    add("static void Instance_dealloc(InstanceObject *self) {")
+    add("    PyTypeObject *tp = Py_TYPE((PyObject *)self);")
+    add("    PyObject_GC_UnTrack(self);")
+    add("    if (self->weakreflist != NULL) PyObject_ClearWeakRefs((PyObject *)self);")
+    add(f"    {last}_glue_free(&self->core);")
+    add("    Instance_clear(self);")
+    if uses_wasi:
+        add("    wasmext_wasi_free(self->core.wasi);")
+    add("    ((freefunc)PyType_GetSlot(tp, Py_tp_free))((PyObject *)self);")
+    add("    Py_DECREF(tp);")
+    add("}")
+    add("")
+    if has_imports or shares_tables:
+        add(
+            "/* The reference to an export of another instance that `v` stands for, as a capsule (a new reference), or NULL with no error: `v` is one, or has one as its"
+        )
+        add(
+            "   `__wasmext_ref__` (itself an object that has it, perhaps: the wrapper for ctypes gives objects, because a capsule of its would have a destructor that cannot run"
+        )
+        add("   while an exception is raised). */")
+        add("static PyObject *as_export_ref(PyObject *v) {")
+        add("    PyObject *cur = v;")
+        add("    Py_INCREF(cur);")
+        add("    for (int depth = 0; depth < 3; depth++) {")
+        add("        if (PyCapsule_IsValid(cur, WASMEXT_EXPORT)) return cur;")
+        add('        PyObject *next = PyObject_GetAttrString(cur, "__wasmext_ref__");')
+        add("        Py_DECREF(cur);")
+        add("        if (next == NULL) { PyErr_Clear(); return NULL; }")
+        add("        cur = next;")
+        add("    }")
+        add("    Py_DECREF(cur);")
+        add("    return NULL;")
+        add("}")
+        add("")
+        add(_FUNCTION_HOLDER)
+        if uses_funcref:
+            add(_funcref_values_c(funcref_args))
+    if table_imports:
+        add(
+            "/* the owner of a table keeps alive the instances that may have put functions in it: 1 if it does (it is the instance of any extension) */"
+        )
+        add("static int keep_alive(PyObject *owner, PyObject *writer) {")
+        add('    PyObject *r = PyObject_CallMethod(owner, "__wasmext_keep__", "O", writer);')
+        add("    if (r == NULL) return 0;")
+        add("    Py_DECREF(r);")
+        add("    return 1;")
+        add("}")
+        add("")
+    add("static PyObject *Instance_new(PyTypeObject *type, PyObject *args, PyObject *kwds) {")
+    if uses_wasi:
+        add('    static char *kwlist[] = {"imports", "wasi", NULL};')
+        add("    PyObject *imports = Py_None, *wasi = Py_None;")
+        add('    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|O$O:Instance", kwlist, &imports, &wasi)) return NULL;')
+    elif has_imports:
+        add('    static char *kwlist[] = {"imports", NULL};')
+        add("    PyObject *imports = Py_None;")
+        add('    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|O:Instance", kwlist, &imports)) return NULL;')
+    else:
+        add("    static char *kwlist[] = {NULL};")
+        add('    if (!PyArg_ParseTupleAndKeywords(args, kwds, ":Instance", kwlist)) return NULL;')
+    add("    InstanceObject *self = (InstanceObject *)PyType_GenericAlloc(type, 0);")
+    add("    if (self == NULL) return NULL;")
+    if tables:
+        add("    self->writers = PyList_New(0);")
+        add("    if (self->writers == NULL) { Py_DECREF(self); return NULL; }")
+    if funcref_args:
+        add("    self->refs = PyList_New(0);")
+        add("    if (self->refs == NULL) { Py_DECREF(self); return NULL; }")
+    if uses_wasi:
+        add(
+            f"    self->core.wasi = wasmext_wasi_new(wasi, WasiExitError, WasiSignalError, WasiTerminatedError, {_c_string(last)});"
+        )
+        add("    if (self->core.wasi == NULL) { Py_DECREF(self); return NULL; }")
+        add(f"    wasmext_wasi_bind(self->core.wasi, w2c_{prefix}_{mangle('memory')}(&self->core.inst));")
+    if has_imports:
+        if needs_imports:
+            add("    if (imports == Py_None) {")
+            add(
+                '        PyErr_SetString(LinkError, "the module has imports: pass imports={module: {name: callable or value}}");'
+            )
+            add("        Py_DECREF(self);")
+            add("        return NULL;")
+            add("    }")
+        for k, imp in enumerate(imports):
+            where = f"{imp.module}.{imp.field}"
+            host = f"self->core.host{imp.host}"
+            hold = f"self->hold{imp.host}"
+            signature = _signature_code(imp.func)
+            add("    {")
+            if imp.module in _WASI_HEADERS:
+                # what the caller gives wins; otherwise wasmext gives the call (a function of the WASI headers), called directly
+                add("        PyObject *v = NULL;")
+                add("        if (imports != Py_None) {")
+                add(f"            v = lookup_import(imports, {_c_string(imp.module)}, {_c_string(imp.field)}, 0);")
+                add(
+                    "            if (v == NULL && !PyErr_ExceptionMatches(LinkError)) { Py_DECREF(self); return NULL; }"
+                )
+                add("            if (v == NULL) PyErr_Clear();")
+                add("        }")
+                add("        if (v == NULL) {")
+                own = imp.module == _WASI_UNSTABLE and imp.field in _WASI_UNSTABLE_OWN
+                add(f"            {host}.fn[{imp.slot}] = (void *)wasi_{'unstable_' if own else ''}{imp.field};")
+                add(f"            {host}.user[{imp.slot}] = self->core.wasi;")
+                add("        } else {")
+            else:
+                add(
+                    f"        PyObject *v = lookup_import(imports, {_c_string(imp.module)}, {_c_string(imp.field)}, 0);"
+                )
+                add("        if (v == NULL) { Py_DECREF(self); return NULL; }")
+            add("        PyObject *ref = as_export_ref(v);  /* the reference to an export of another instance */")
+            add(
+                "        if (ref == NULL) {  /* a method of an instance of a wasmext extension stands for its export */"
+            )
+            add('            PyObject *owner = PyObject_GetAttrString(v, "__self__");')
+            add('            PyObject *name = owner != NULL ? PyObject_GetAttrString(v, "__name__") : NULL;')
+            add('            PyObject *exports = name != NULL ? PyObject_GetAttrString(owner, "__exports__") : NULL;')
+            add("            if (exports != NULL && PyDict_Check(exports)) {")
+            add("                ref = PyDict_GetItemWithError(exports, name);")
+            add("                Py_XINCREF(ref);")
+            add("            }")
+            add("            Py_XDECREF(exports);")
+            add("            Py_XDECREF(name);")
+            add("            Py_XDECREF(owner);")
+            add("            PyErr_Clear();")
+            add("        }")
+            add("        if (ref != NULL && PyCapsule_IsValid(ref, WASMEXT_EXPORT)) {")
+            add("            wasmext_export *e = (wasmext_export *)PyCapsule_GetPointer(ref, WASMEXT_EXPORT);")
+            add("            char message[512];")
+            add(f"            if ({last}_link_func{k}(&self->core, e, message, sizeof message)) {{")
+            add("                PyErr_SetString(LinkError, message);")
+            add("            } else {")
+            add("                Py_INCREF((PyObject *)e->owner);")
+            add(f"                {hold}.lo[{imp.slot}] = (PyObject *)e->owner;")
+            add("            }")
+            add("            Py_DECREF(ref);")
+            add("            Py_DECREF(v);")
+            add("            if (PyErr_Occurred()) { Py_DECREF(self); return NULL; }")
+            add("        } else if (PyCallable_Check(v)) {")
+            add("            Py_XDECREF(ref);")
+            add(f"            {host}.fn[{imp.slot}] = (void *)py_import{k};")
+            add(f"            {host}.user[{imp.slot}] = v;")
+            add(f"            {hold}.fn[{imp.slot}] = v;")
+            add("        } else {")
+            add("            Py_XDECREF(ref);")
+            add("            Py_DECREF(v);")
+            not_callable = f"import '{where}' is not callable"
+            add(f"            PyErr_SetString(LinkError, {_c_string(not_callable)});")
+            add("            Py_DECREF(self);")
+            add("            return NULL;")
+            add("        }")
+            if imp.module in _WASI_HEADERS:
+                add("        }")
+            add("    }")
+        for j, g in enumerate(global_imports):
+            if g.type == "v128":
+                number, what = "wasmext_is_v128(v)", "16 bytes"
+            else:
+                number = "PyLong_Check(v)" if g.type in ("i32", "i64") else "(PyLong_Check(v) || PyFloat_Check(v))"
+                what = "an int" if g.type in ("i32", "i64") else "a number"
+            where = f"{g.module}.{g.field}"
+            hold = f"self->hold{g.host}"
+            add("    {")
+            add(f"        PyObject *v = lookup_import(imports, {_c_string(g.module)}, {_c_string(g.field)}, 0);")
+            add("        if (v == NULL) { Py_DECREF(self); return NULL; }")
+            add("        PyObject *ref = as_export_ref(v);  /* an export of another instance */")
+            add("        if (ref != NULL) {")
+            add("            wasmext_export *e = (wasmext_export *)PyCapsule_GetPointer(ref, WASMEXT_EXPORT);")
+            add("            char message[512];")
+            add(f"            if ({last}_link_global{j}(&self->core, e, message, sizeof message)) {{")
+            add("                PyErr_SetString(LinkError, message);")
+            add("            } else {")
+            add("                Py_INCREF((PyObject *)e->owner);")
+            add(f"                {hold}.go{g.slot} = (PyObject *)e->owner;")
+            add("            }")
+            add("            Py_DECREF(ref);")
+            add("            Py_DECREF(v);")
+            add("            if (PyErr_Occurred()) { Py_DECREF(self); return NULL; }")
+            if g.mutable:
+                add("        } else {")
+                add("            Py_DECREF(v);")
+                add(
+                    f"            PyErr_SetString(LinkError, {_c_string(f'import {where} is a mutable global: pass an export of another instance: instance[{chr(39)}name{chr(39)}] (or the instance for the whole shelf)')});"
+                )
+                add("            Py_DECREF(self);")
+                add("            return NULL;")
+                add("        }")
+            else:
+                add(f"        }} else if (!{number}) {{")
+                add("            Py_DECREF(v);")
+                add(
+                    f"            PyErr_SetString(LinkError, {_c_string(f'import {where} is a global of type {g.type}: pass {what} or an export of another instance')});"
+                )
+                add("            Py_DECREF(self);")
+                add("            return NULL;")
+                add("        } else {")
+                add(f"            {last}_set_global{j}(&self->core, {_TO_WASM[g.type].format('v')});")
+                add("            Py_DECREF(v);")
+                add("        }")
+            add("    }")
+    for j, m in enumerate(memory_imports):
+        where = f"{m.module}.{m.field}"
+        hold = f"self->hold{m.host}"
+        add("    {")
+        add(f"        PyObject *v = lookup_import(imports, {_c_string(m.module)}, {_c_string(m.field)}, 0);")
+        add("        if (v == NULL) { Py_DECREF(self); return NULL; }")
+        add("        PyObject *ref = as_export_ref(v);  /* the reference to an export of another instance */")
+        add(
+            "        if (ref == NULL) {  /* the memoryview of a memory of an instance: the object behind it gives the reference */"
+        )
+        add('            PyObject *obj = PyObject_GetAttrString(v, "obj");')
+        add("            if (obj != NULL) ref = as_export_ref(obj);")
+        add("            Py_XDECREF(obj);")
+        add("            PyErr_Clear();")
+        add("        }")
+        add("        if (ref != NULL && PyCapsule_IsValid(ref, WASMEXT_EXPORT)) {")
+        add("            wasmext_export *e = (wasmext_export *)PyCapsule_GetPointer(ref, WASMEXT_EXPORT);")
+        add("            char message[512];")
+        add(f"            if ({last}_link_memory{j}(&self->core, e, message, sizeof message)) {{")
+        add("                PyErr_SetString(LinkError, message);")
+        add("            } else {")
+        add("                Py_INCREF((PyObject *)e->owner);")
+        add(f"                {hold}.mo{m.slot} = (PyObject *)e->owner;")
+        add("            }")
+        add("            Py_DECREF(ref);")
+        add("            Py_DECREF(v);")
+        add("            if (PyErr_Occurred()) { Py_DECREF(self); return NULL; }")
+        add("        } else {")
+        add("            Py_XDECREF(ref);")
+        add("            Py_DECREF(v);")
+        add(
+            f"            PyErr_SetString(LinkError, {_c_string(f'import {where} is a memory: pass the memory of another instance (instance.memory or instance[{chr(39)}memory{chr(39)}])')});"
+        )
+        add("            Py_DECREF(self);")
+        add("            return NULL;")
+        add("        }")
+        add("    }")
+    for j, tb in enumerate(table_imports):
+        where = f"{tb.module}.{tb.field}"
+        hold = f"self->hold{tb.host}"
+        add("    {")
+        add(f"        PyObject *v = lookup_import(imports, {_c_string(tb.module)}, {_c_string(tb.field)}, 0);")
+        add("        if (v == NULL) { Py_DECREF(self); return NULL; }")
+        add("        PyObject *ref = as_export_ref(v);  /* the reference to an export of another instance */")
+        add("        if (ref != NULL) {")
+        add("            wasmext_export *e = (wasmext_export *)PyCapsule_GetPointer(ref, WASMEXT_EXPORT);")
+        add("            char message[512];")
+        add(f"            if ({last}_link_table{j}(&self->core, e, message, sizeof message)) {{")
+        add("                PyErr_SetString(LinkError, message);")
+        add("            } else {")
+        add("                Py_INCREF((PyObject *)e->owner);")
+        add(f"                {hold}.to{tb.slot} = (PyObject *)e->owner;")
+        add("            }")
+        add("            Py_DECREF(ref);")
+        add("            Py_DECREF(v);")
+        add("            if (PyErr_Occurred()) { Py_DECREF(self); return NULL; }")
+        add("        } else {")
+        add("            Py_DECREF(v);")
+        add(
+            f"            PyErr_SetString(LinkError, {_c_string(f'import {where} is a table: pass a Table, or the table of another instance (instance[{chr(39)}name{chr(39)}])')});"
+        )
+        add("            Py_DECREF(self);")
+        add("            return NULL;")
+        add("        }")
+        add("    }")
+    add(f"    int trapped = {last}_glue_instantiate(&self->core);")
+    add(f"    if (!trapped) trapped = {last}_glue_initialize(&self->core);")
+    if table_imports:
+        # what the instantiation wrote into the tables of others dies with a failed instance; a good one is kept by each owner of a table it imports
+        add(f"    if (trapped) {last}_scrub_tables(&self->core);")
+    add("    if (trapped) { raise_trap(self, trapped); Py_DECREF(self); return NULL; }")
+    for tb in table_imports:
+        add(f"    if (!keep_alive(self->hold{tb.host}.to{tb.slot}, (PyObject *)self)) {{")
+        add(f"        {last}_scrub_tables(&self->core);")
+        add("        Py_DECREF(self);")
+        add("        return NULL;")
+        add("    }")
+    add("    return (PyObject *)self;")
+    add("}")
+    add("")
+
+    if tags:
+        hadd("/* the index of the tag of an exception in this module, or -1 (the tag of another module) */")
+        hadd(f"static inline int {last}_tag_of(wasm_rt_tag_t tag) {{")
+        hadd(f"    for (int i = 0; i < {last.upper()}_TAG_COUNT; i++)")
+        hadd(f"        if (wasmext_tags_{prefix}[i] == tag) return i;")
+        hadd("    return -1;")
+        hadd("}")
+        hadd("")
+        hadd(
+            "/* The values of an exception of the tag `tag`, from the bytes the runtime keeps (`size` of them): how many, or -1 when the bytes are not"
+        )
+        hadd("   the values of that tag, or -2 when a type of the tag has no decoding here (a reference). */")
+        hadd(f"static inline int {last}_tag_values(int tag, const void *payload, uint32_t size, wasmext_value *out) {{")
+        hadd("    switch (tag) {")
+        for k, tag in enumerate(tags):
+            types = tag.params
+            hadd(f"    case {k}: {{")
+            if any(t not in _PLAIN for t in types):
+                hadd("        (void)payload; (void)size; (void)out;")
+                hadd("        return -2;")
+            elif not types:
+                hadd("        (void)payload; (void)out;")
+                hadd("        return size == 0 ? 0 : -1;")
+            elif len(types) == 1:
+                t = types[0]
+                hadd(f"        {_CTYPE[t]} v;")
+                hadd("        if (size != sizeof v) return -1;")
+                hadd("        memcpy(&v, payload, sizeof v);")
+                hadd(f"        out[0].type = {_TYPE_CODE[t]};")
+                hadd(f"        {_VALUE_STORE[t].format(dst='out[0]', src='v')}")
+                hadd("        return 1;")
+            else:
+                # the values are a struct of them in the order of the tag, as wasm2c puts them (its `struct wasm_multi_<codes>` is not in the header)
+                members = " ".join(f"{_CTYPE[t]} m{j};" for j, t in enumerate(types))
+                hadd(f"        struct {{ {members} }} p;")
+                hadd("        if (size != sizeof p) return -1;")
+                hadd("        memcpy(&p, payload, sizeof p);")
+                for j, t in enumerate(types):
+                    hadd(f"        out[{j}].type = {_TYPE_CODE[t]};")
+                    hadd(f"        {_VALUE_STORE[t].format(dst=f'out[{j}]', src=f'p.m{j}')}")
+                hadd(f"        return {len(types)};")
+            hadd("    }")
+        hadd("    default: return -1;")
+        hadd("    }")
+        hadd("}")
+        hadd("")
+
+    # ---- the exports, as typed C functions of the glue (no Python): `result f(void *instance, parameters..., int *trapped)` ----
+    # A WASI program is over when it calls proc_exit or proc_raise; a command (it exports _start) is over after a trap too
+    is_command = any(exp_name == "_start" for exp_name, _ in funcs)
+    finish_on_trap = "wasmext_wasi_finish(self->wasi, WASI_END_TRAP, 0); " if uses_wasi and is_command else ""
+    hadd("/* instantiation: 0, or the code of the trap of the start function */")
+    hadd(f"static inline int {last}_glue_instantiate({last}_instance *self) {{")
+    # The runtime of wasm2c does not check the allocation of a table (1.0.42: a NULL that the first use trips over; later releases: abort()). The same
+    # allocation is tried first, here (through a volatile pointer: clang at -O2 drops an allocation that is only freed), so that a table that cannot be had is the error of memory it is, and no part of the runtime is patched for it.
+    for t in module.tables:
+        if t.limits.min > 0:
+            element = "wasm_rt_externref_t" if t.elem == "externref" else "wasm_rt_funcref_t"
+            hadd(
+                f"    {{ void *volatile probe_ = calloc((size_t){t.limits.min}ULL, sizeof({element})); if (probe_ == NULL) return (int)WASMEXT_TRAP_NO_MEMORY; free(probe_); }}"
+            )
+    # a trap while the instance is made (a start function that traps, a data segment out of range) leaves what was allocated: it is freed
+    # here. Not after NO_MEMORY: the memory that could not be had has size but no data, and the runtime frees it with munmap(NULL, size),
+    # which unmaps whatever lives at the bottom of the address space (the interpreter itself); only a further memory of the module leaks then.
+    hadd(
+        f"    WASMEXT_ENTER(trap_, {{ if (trap_ != WASMEXT_TRAP_NO_MEMORY) wasm2c_{prefix}_free(&self->inst); memset(&self->inst, 0, sizeof self->inst); return (int)trap_; }})"
+    )
+    # wasm2c orders the import modules by name in the parameters of its `instantiate`, whatever the order of the imports of the module is
+    by_name = sorted(range(len(hosts)), key=lambda i: hosts[i].encode("utf-8"))
+    host_args = "".join(f", &self->host{i}" for i in by_name)
+    hadd(f"    wasm2c_{prefix}_instantiate(&self->inst{host_args});")
+    hadd("    WASMEXT_LEAVE();")
+    hadd("    self->instantiated = 1;")
+    hadd("    return 0;")
+    hadd("}")
+    hadd("")
+    # what a host that is not Python needs to run a command: WASI by itself (the functions of the core for the imports of WASI) and `_start`
+    hadd(f"#define {last.upper()}_WASI {1 if uses_wasi else 0}")
+    hadd(f"#define {last.upper()}_ONLY_WASI {0 if needs_imports else 1}  /* every import is a function of WASI */")
+    start = next((i for i, (n_, f_) in enumerate(funcs) if n_ == "_start" and not f_.params and not f_.results), None)
+    if start is not None:
+        hadd(f"#define {last.upper()}_START {last}_call{start}")
+    if uses_wasi:
+        hadd("/* the imports of WASI over the functions of the core, with the state `self->wasi` (made first): 0 */")
+        hadd(f"static inline int {last}_wasi_bind({last}_instance *self) {{")
+        for imp in imports:
+            if imp.module in _WASI_HEADERS:
+                own = imp.module == _WASI_UNSTABLE and imp.field in _WASI_UNSTABLE_OWN
+                hadd(f"    self->host{imp.host}.fn[{imp.slot}] = (void *)wasi_{'unstable_' if own else ''}{imp.field};")
+                hadd(f"    self->host{imp.host}.user[{imp.slot}] = self->wasi;")
+        hadd("    return 0;")
+        hadd("}")
+        hadd("")
+    hadd(f"static inline void {last}_glue_free({last}_instance *self) {{")
+    hadd(f"    if (self->instantiated) wasm2c_{prefix}_free(&self->inst);")
+    hadd("    self->instantiated = 0;")
+    hadd("}")
+    hadd("")
+    reactor_init = next(
+        (i for i, (n_, f_) in enumerate(funcs) if n_ == "_initialize" and not f_.params and not f_.results), None
+    )
+    if any(n_ == "_start" for n_, _ in funcs):
+        reactor_init = None  # a command: nothing is run before the program starts
+    for i, (exp_name, func) in enumerate(funcs):
+        params = "".join(f", {_CTYPE[t]} a{j}" for j, t in enumerate(func.params))
+        several = len(func.results) > 1
+        codes = "".join(_MULTI_CODE[t] for t in func.results)
+        ret = f"struct wasm_multi_{codes}" if several else _CTYPE[func.results[0]] if func.results else "void"
+        names = "".join(f", a{j}" for j in range(len(func.params)))
+        give = "return zero;" if func.results else "return;"
+        hadd(f"/* {_cc(exp_name)}{_signature(func)} */")
+        hadd(f"static inline {ret} {last}_call{i}(void *inst{params}, int *trapped) {{")
+        if func.results:
+            hadd(f"    {ret} zero;")
+            hadd("    memset(&zero, 0, sizeof zero);")
+        hadd(f"    {last}_instance *self = ({last}_instance *)((char *)inst - offsetof({last}_instance, inst));")
+        if uses_wasi:
+            hadd(
+                f"    if (self->wasi != NULL && self->wasi->finished) {{ *trapped = (int)WASMEXT_TRAP_ENDED; {give} }}"
+            )
+        else:
+            hadd("    (void)self;")
+        hadd(f"    WASMEXT_ENTER(trap_, {{ {finish_on_trap}*trapped = (int)trap_; {give} }})")
+        call = f"w2c_{prefix}_{mangle(exp_name)}((w2c_{prefix} *)inst{names})"
+        if func.results:
+            hadd(f"    {ret} r = {call};")
+            hadd("    WASMEXT_LEAVE();")
+            hadd("    return r;")
+        else:
+            hadd(f"    {call};")
+            hadd("    WASMEXT_LEAVE();")
+        hadd("}")
+        hadd("")
+    if shares_tables:
+        _emit_refcalls(hadd, last, prefix, ref_types)
+    hadd("#endif")
+
+    # ---- the exported functions in Python: the arguments to C, the call, the result (or the trap) to Python ----
+    for i, (exp_name, func) in enumerate(funcs):
+        n = len(func.params)
+        add(f"/* {_cc(exp_name)}{_signature(func)} */")
+        add(f"static PyObject *Instance_f{i}(InstanceObject *self, PyObject *const *args, Py_ssize_t nargs) {{")
+        add(f"    if (nargs != {n}) {{")
+        add(
+            f'        PyErr_Format(PyExc_TypeError, "%s() takes exactly {n} argument{"" if n == 1 else "s"} (%zd given)", '
+            f"{_c_string(exp_name)}, nargs);"
+        )
+        add("        return NULL;")
+        add("    }")
+        for j, t in enumerate(func.params):
+            add(f"    {_CTYPE[t]} a{j} = {_TO_WASM[t].format(f'args[{j}]')};")
+        if n:
+            add("    if (PyErr_Occurred()) return NULL;")
+        if i == reactor_init:
+            add(
+                "    if (self->core.initialized) Py_RETURN_NONE;  /* the reactor was initialized when the instance was made */"
+            )
+        add("    int trapped = 0;")
+        call_args = "".join(f", a{j}" for j in range(n))
+        call = f"{last}_call{i}(&self->core.inst{call_args}, &trapped)"
+        if len(func.results) > 1:
+            codes = "".join(_MULTI_CODE[t] for t in func.results)
+            add(f"    struct wasm_multi_{codes} r = {call};")
+            add("    if (trapped) { raise_trap(self, trapped); return NULL; }")
+            fmt = "".join(_BUILD[t][0] for t in func.results)
+            members = "".join(f", {_BUILD[t][1].format(f'r.{_MULTI_CODE[t]}{k}')}" for k, t in enumerate(func.results))
+            add(f'    return Py_BuildValue("({fmt})"{members});')
+        elif func.results:
+            add(f"    {_CTYPE[func.results[0]]} r = {call};")
+            add("    if (trapped) { raise_trap(self, trapped); return NULL; }")
+            add(f"    return {_FROM_WASM[func.results[0]].format('r')};")
+        else:
+            add(f"    {call};")
+            add("    if (trapped) { raise_trap(self, trapped); return NULL; }")
+            add("    Py_RETURN_NONE;")
+        add("}")
+        add("")
+    # instance['name'] and instance.__exports__: the references to the exports (capsules that another extension reads)
+    # name, kind, type, flags, the getter of the address of a global, the function to call, its signature
+    mapped: list[tuple[str, int, int | str, int | str, str, str, str, int]] = []
+    for i, (exp_name, glob) in enumerate(globals_):
+        accessor = f"w2c_{prefix}_{mangle(exp_name)}"
+        add(f"static void *export_address{i}(InstanceObject *self) {{ return (void *){accessor}(&self->core.inst); }}")
+        mapped.append((exp_name, 3, _TYPE_CODE[glob.type], int(glob.mutable), f"export_address{i}", "NULL", "NULL", -1))
+    if globals_:
+        add("")
+    for i, (exp_name, func) in enumerate(funcs):
+        # what another Python extension calls: the typed function of the glue, and a trap becomes an exception of THIS extension (its
+        # Trap, its WASI program that is over) before it is answered through `trapped`, as the contract of the link says
+        params = "".join(f", {_CTYPE[t]} a{j}" for j, t in enumerate(func.params))
+        several = len(func.results) > 1
+        codes = "".join(_MULTI_CODE[t] for t in func.results)
+        ret = f"struct wasm_multi_{codes}" if several else _CTYPE[func.results[0]] if func.results else "void"
+        names = "".join(f", a{j}" for j in range(len(func.params)))
+        add(f"static {ret} py_link{i}(void *inst{params}, int *trapped) {{")
+        add("    InstanceObject *self = (InstanceObject *)((char *)inst - offsetof(InstanceObject, core.inst));")
+        if func.results:
+            add(f"    {ret} r = {last}_call{i}(inst{names}, trapped);")
+            add("    if (*trapped) { raise_trap(self, *trapped); *trapped = (int)WASMEXT_TRAP_HOST; }")
+            add("    return r;")
+        else:
+            add(f"    {last}_call{i}(inst{names}, trapped);")
+            add("    if (*trapped) { raise_trap(self, *trapped); *trapped = (int)WASMEXT_TRAP_HOST; }")
+        add("}")
+        add("")
+        mapped.append(
+            (
+                exp_name,
+                0,
+                0,
+                16 if shares_tables else 0,
+                "NULL",
+                f"(void *)py_link{i}",
+                _c_string(_signature_code(func)),
+                i,
+            )
+        )
+    # a reactor (`_initialize` and no `_start`) is initialized once, after it is instantiated and before any other export, as WASI says a host must; every front end
+    # does it through this, so that they agree, and an explicit call of `_initialize` afterwards does nothing (a second run of the constructors would break the module)
+    hadd(
+        "/* runs `_initialize` of a reactor once, after the instance is made: 0, or the code of a trap; nothing for any other module */"
+    )
+    hadd(f"static inline int {last}_glue_initialize({last}_instance *self) {{")
+    if reactor_init is None:
+        hadd("    (void)self;")
+        hadd("    return 0;")
+    else:
+        hadd("    if (self->initialized) return 0;")
+        hadd("    self->initialized = 1;")
+        hadd("    int trapped = 0;")
+        hadd(f"    {last}_call{reactor_init}(&self->inst, &trapped);")
+        hadd("    return trapped;")
+    hadd("}")
+    hadd("")
+    memory_base = len(mapped)
+    for i, (exp_name, lim) in enumerate(zip(memories, memory_limits, strict=True)):
+        accessor = f"w2c_{prefix}_{mangle(exp_name)}"
+        add(f"static void *export_memory{i}(InstanceObject *self) {{ return (void *){accessor}(&self->core.inst); }}")
+        flags = f"({2 * int(lim.is64)}u | (WASM_RT_MEMCHECK_GUARD_PAGES ? 4u : 0u))"
+        mapped.append(
+            (exp_name, 2, "(uint32_t)sizeof(wasm_rt_memory_t)", flags, f"export_memory{i}", "NULL", "NULL", -1)
+        )
+    if memories:
+        add("")
+    tables_base = len(mapped)
+    for i, exp_name in enumerate(tables):
+        accessor = f"w2c_{prefix}_{mangle(exp_name)}"
+        add(f"static void *export_table{i}(InstanceObject *self) {{ return (void *){accessor}(&self->core.inst); }}")
+        mapped.append(
+            (exp_name, 1, "(uint32_t)sizeof(wasm_rt_funcref_table_t)", 0, f"export_table{i}", "NULL", "NULL", -1)
+        )
+    if tables:
+        add("")
+        add(
+            "/* instance.__wasmext_keep__(other): `other` imported a table of this instance, so it may have put functions of its own in it: this instance keeps it alive */"
+        )
+        add("static PyObject *Instance_keep(PyObject *self, PyObject *other) {")
+        add("    InstanceObject *me = (InstanceObject *)self;")
+        add("    if (me->writers == NULL || PyList_Append(me->writers, other) < 0) return NULL;")
+        add("    Py_RETURN_NONE;")
+        add("}")
+        add("")
+    add(
+        "static const struct { const char *name; uint32_t kind, type, flags; void *(*address)(InstanceObject *); "
+        "void *function; const char *signature; int fn; } export_table[] = {"
+    )
+    for exp_name, kind, type_code, flags, address, function, signature, fn in mapped:
+        add(f"    {{{_c_string(exp_name)}, {kind}, {type_code}, {flags}, {address}, {function}, {signature}, {fn}}},")
+    add("    {NULL, 0, 0, 0, NULL, NULL, NULL, -1}")
+    add("};")
+    add("")
+    add("static void export_free(PyObject *capsule) {")
+    add("    wasmext_export *e = (wasmext_export *)PyCapsule_GetPointer(capsule, WASMEXT_EXPORT);")
+    add("    if (e != NULL) { Py_DECREF((PyObject *)e->owner); PyMem_Free(e); }")
+    add("}")
+    add("")
+    add("static PyObject *export_ref(PyObject *self, int k) {")
+    add("    wasmext_export *e = (wasmext_export *)PyMem_Malloc(sizeof(wasmext_export));")
+    add("    if (e == NULL) return PyErr_NoMemory();")
+    add("    e->size = sizeof(wasmext_export);")
+    add("    e->abi = WASMEXT_ABI;")
+    add("    e->kind = export_table[k].kind;")
+    add("    e->type = export_table[k].type;")
+    add("    e->flags = export_table[k].flags;")
+    add(
+        "    e->address = export_table[k].address != NULL ? export_table[k].address((InstanceObject *)self) : export_table[k].function;"
+    )
+    add("    e->instance = &((InstanceObject *)self)->core.inst;")
+    add("    e->signature = export_table[k].signature;")
+    add("    e->runtime = WASMEXT_RUNTIME;")
+    add(
+        f"    e->funcref = export_table[k].fn >= 0 ? (const void *){last}_glue_funcref(&((InstanceObject *)self)->core, export_table[k].fn) : NULL;"
+    )
+    add("    Py_INCREF(self);")
+    add("    e->owner = self;")
+    add("    wasmext_export_seal(e);")
+    add("    PyObject *capsule = PyCapsule_New(e, WASMEXT_EXPORT, export_free);")
+    add("    if (capsule == NULL) { Py_DECREF(self); PyMem_Free(e); }")
+    add("    return capsule;")
+    add("}")
+    add("")
+    if shares_tables:
+        add(_function_type_c(last, ref_types))
+        add(_table_type_c(prefix, tables, tables_base))
+    add("/* instance['name'] and instance.__exports__ give the reference to an export; a table is given as a Table */")
+    add("static PyObject *export_value(PyObject *self, int k) {")
+    if tables:
+        add("    if (export_table[k].kind == WASMEXT_TABLE) return Table_of(self, k);")
+    add("    return export_ref(self, k);")
+    add("}")
+    add("")
+    add("/* instance['name']: the reference to one export (KeyError if there is none) */")
+    add("static PyObject *Instance_subscript(PyObject *self, PyObject *key) {")
+    add("    const char *name = PyUnicode_Check(key) ? PyUnicode_AsUTF8AndSize(key, NULL) : NULL;")
+    add("    if (name == NULL) {")
+    add("        if (PyErr_Occurred() && !PyErr_ExceptionMatches(PyExc_TypeError)) return NULL;")
+    add("        PyErr_Clear();")
+    add("        PyErr_SetObject(PyExc_KeyError, key);")
+    add("        return NULL;")
+    add("    }")
+    add("    for (int k = 0; export_table[k].name != NULL; k++) {")
+    add("        if (strcmp(name, export_table[k].name) == 0) return export_value(self, k);")
+    add("    }")
+    add("    PyErr_SetObject(PyExc_KeyError, key);")
+    add("    return NULL;")
+    add("}")
+    add("")
+    add("/* instance.__exports__: {name: a reference to the export}, to be given as an import of another instance */")
+    add("static PyObject *Instance_exports(PyObject *self, void *closure) {")
+    add("    (void)closure;")
+    add("    PyObject *result = PyDict_New();")
+    add("    if (result == NULL) return NULL;")
+    add("    for (int k = 0; export_table[k].name != NULL; k++) {")
+    add("        PyObject *name = PyUnicode_FromString(export_table[k].name);")
+    add("        PyObject *ref = name != NULL ? export_value(self, k) : NULL;")
+    add("        int bad = ref == NULL || PyDict_SetItem(result, name, ref) != 0;")
+    add("        Py_XDECREF(name);")
+    add("        Py_XDECREF(ref);")
+    add("        if (bad) { Py_DECREF(result); return NULL; }")
+    add("    }")
+    add("    return result;")
+    add("}")
+    add("")
+    add("static PyMethodDef Instance_methods[] = {")
+    for i, (exp_name, func) in enumerate(funcs):
+        if exp_name in no_attribute:
+            continue
+        doc = f"{exp_name}{_signature(func)}"
+        add(
+            f"    {{{_c_string(exp_name)}, (PyCFunction)(void (*)(void))Instance_f{i}, METH_FASTCALL, {_c_string(doc)}}},"
+        )
+    if tables:
+        add(
+            '    {"__wasmext_keep__", (PyCFunction)Instance_keep, METH_O, "keep an instance that imported a table of this one alive (not for you to call)"},'
+        )
+    add("    {NULL, NULL, 0, NULL}")
+    add("};")
+    add("")
+
+    # the exported memories: an attribute that is a memoryview, held by an object that keeps the instance alive
+    if memories:
+        add(
+            "/* A memory that the runtime allocates with calloc (no guard pages, or memory64, or another page size) is moved by realloc when it grows, and a"
+        )
+        add(
+            "   buffer would then point to freed memory. While a buffer of such a memory is alive, `memory.grow` fails (-1, which WebAssembly allows at any time):"
+        )
+        add(
+            "   the maximum is made the present size, as bytearray refuses to be resized while it is exported. With guard pages the memory does not move. */"
+        )
+        add("static int memory_can_move(const wasm_rt_memory_t *mem) {")
+        add("#if WASM_RT_USE_MMAP")
+        add("    return mem->is64 || mem->page_size != WASM_DEFAULT_PAGE_SIZE;")
+        add("#else")
+        add("    (void)mem;")
+        add("    return 1;")
+        add("#endif")
+        add("}")
+        add("")
+        add("static int Memory_getbuffer(PyObject *self, Py_buffer *view, int flags) {")
+        add("    MemoryObject *m = (MemoryObject *)self;")
+        add("    wasm_rt_memory_t *mem = m->get(&m->owner->core.inst);")
+        add("    if (mem->size > (uint64_t)PY_SSIZE_T_MAX) {")
+        add('        PyErr_SetString(PyExc_MemoryError, "the memory is too big for a buffer");')
+        add("        return -1;")
+        add("    }")
+        add("    if (PyBuffer_FillInfo(view, self, mem->data, (Py_ssize_t)mem->size, 0, flags) < 0) return -1;")
+        add("    if (memory_can_move(mem)) {")
+        add("        if (m->owner->mem_pins[m->which]++ == 0) {")
+        add("            m->owner->mem_max_pages[m->which] = mem->max_pages;")
+        add("            mem->max_pages = mem->pages;")
+        add("        }")
+        add("        view->internal = (void *)1;  /* this buffer holds the memory still */")
+        add("    }")
+        add("    return 0;")
+        add("}")
+        add("")
+        add("static void Memory_releasebuffer(PyObject *self, Py_buffer *view) {")
+        add("    MemoryObject *m = (MemoryObject *)self;")
+        add("    if (view->internal == NULL) return;")
+        add(
+            "    if (--m->owner->mem_pins[m->which] == 0) m->get(&m->owner->core.inst)->max_pages = m->owner->mem_max_pages[m->which];"
+        )
+        add("}")
+        add("")
+        add(
+            "/* memory.__wasmext_ref__: the reference to this memory, for the instance that imports it (see Instance_new) */"
+        )
+        add("static PyObject *Memory_ref(PyObject *self, void *closure) {")
+        add("    (void)closure;")
+        add("    return export_ref((PyObject *)((MemoryObject *)self)->owner, ((MemoryObject *)self)->export_index);")
+        add("}")
+        add("")
+        add("static PyGetSetDef Memory_getset[] = {")
+        add(
+            '    {"__wasmext_ref__", (getter)Memory_ref, NULL, "the reference to the memory, to be given as an import", NULL},'
+        )
+        add("    {NULL, NULL, NULL, NULL, NULL}")
+        add("};")
+        add("")
+        add("static void Memory_dealloc(MemoryObject *self) {")
+        add("    PyTypeObject *tp = Py_TYPE((PyObject *)self);")
+        add("    Py_XDECREF((PyObject *)self->owner);")
+        add("    ((freefunc)PyType_GetSlot(tp, Py_tp_free))((PyObject *)self);")
+        add("    Py_DECREF(tp);")
+        add("}")
+        add("")
+        add(f"static wasm_rt_memory_t *(*const memory_getters[])(w2c_{prefix} *) = {{")
+        for exp_name in memories:
+            add(f"    w2c_{prefix}_{mangle(exp_name)},")
+        add("    NULL")
+        add("};")
+        add("")
+        add("static PyObject *Instance_memory(InstanceObject *self, void *closure) {")
+        add("#if WABT_BIG_ENDIAN")
+        add("    /* wasm2c keeps the memory reversed on a big-endian host: there is no plain buffer to give */")
+        add("    (void)self; (void)closure;")
+        add(
+            '    PyErr_SetString(PyExc_NotImplementedError, "the memory of a module is not available as a memoryview on a big-endian host");'
+        )
+        add("    return NULL;")
+        add("#else")
+        add("    MemoryObject *m = PyObject_New(MemoryObject, MemoryType);")
+        add("    PyObject *view;")
+        add("    if (m == NULL) return NULL;")
+        add("    Py_INCREF((PyObject *)self);")
+        add("    m->owner = self;")
+        add("    m->get = memory_getters[(size_t)closure];")
+        add("    m->which = (size_t)closure;")
+        add(f"    m->export_index = {memory_base} + (int)(size_t)closure;")
+        add("    view = PyMemoryView_FromObject((PyObject *)m);")
+        add("    Py_DECREF(m);")
+        add("    return view;")
+        add("#endif")
+        add("}")
+        add("")
+    # the exported globals: attributes of the instance (read-only if the global is immutable)
+    for i, (exp_name, glob) in enumerate(globals_):
+        accessor = f"w2c_{prefix}_{mangle(exp_name)}(&self->core.inst)"
+        add(f"static PyObject *Instance_global_get{i}(InstanceObject *self, void *closure) {{")
+        add("    (void)closure;")
+        add(f"    return {_FROM_WASM[glob.type].format(f'*{accessor}')};")
+        add("}")
+        if glob.mutable:
+            add(f"static int Instance_global_set{i}(InstanceObject *self, PyObject *value, void *closure) {{")
+            add("    (void)closure;")
+            add("    if (value == NULL) {")
+            add(
+                f"        PyErr_SetString(PyExc_AttributeError, {_c_string(f'cannot delete the global {exp_name!r}')});"
+            )
+            add("        return -1;")
+            add("    }")
+            add(f"    {_CTYPE[glob.type]} v = {_TO_WASM[glob.type].format('value')};")
+            add("    if (PyErr_Occurred()) return -1;")
+            add(f"    *{accessor} = v;")
+            add("    return 0;")
+            add("}")
+        add("")
+    add("static PyGetSetDef Instance_getset[] = {")
+    add(
+        '    {"__exports__", (getter)Instance_exports, NULL, "{name: a reference to the export}: what another instance can take as an import", NULL},'
+    )
+    for i, (exp_name, glob) in enumerate(globals_):
+        if exp_name in no_attribute:
+            continue
+        setter = f"(setter)Instance_global_set{i}" if glob.mutable else "NULL"
+        kind = "mutable" if glob.mutable else "immutable"
+        add(
+            f"    {{{_c_string(exp_name)}, (getter)Instance_global_get{i}, {setter}, "
+            f'"the {kind} global of type {glob.type}", NULL}},'
+        )
+    for i, exp_name in enumerate(memories):
+        if exp_name in no_attribute:
+            continue
+        add(
+            f"    {{{_c_string(exp_name)}, (getter)Instance_memory, NULL, "
+            f'"a memoryview of the linear memory (a new one after the memory grows)", (void *)(size_t){i}}},'
+        )
+    add("    {NULL, NULL, NULL, NULL, NULL}")
+    add("};")
+    add("")
+
+    add("static PyMemberDef Instance_members[] = {")
+    add('    {"__weaklistoffset__", T_PYSSIZET, offsetof(InstanceObject, weakreflist), READONLY, NULL},')
+    add("    {NULL, 0, 0, 0, NULL}")
+    add("};")
+    add("")
+    add("static PyType_Slot instance_slots[] = {")
+    add("    {Py_tp_new, Instance_new},")
+    add("    {Py_tp_dealloc, Instance_dealloc},")
+    add("    {Py_tp_traverse, Instance_traverse},")
+    add("    {Py_tp_clear, Instance_clear},")
+    add("    {Py_tp_methods, Instance_methods},")
+    add("    {Py_mp_subscript, Instance_subscript},")
+    add("    {Py_tp_getset, Instance_getset},")
+    add("    {Py_tp_members, Instance_members},")
+    add(f"    {{Py_tp_doc, (void *){_c_string('An instance of the WebAssembly module')}}},")
+    add("    {0, NULL}")
+    add("};")
+    add(
+        f"static PyType_Spec instance_spec = {{{_c_string(name + '.Instance')}, sizeof(InstanceObject), 0, "
+        "Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC | Py_TPFLAGS_BASETYPE, instance_slots};"
+    )
+    add("")
+    if memories:
+        add("static PyType_Slot memory_slots[] = {")
+        add("    {Py_bf_getbuffer, Memory_getbuffer},")
+        add("    {Py_bf_releasebuffer, Memory_releasebuffer},")
+        add("    {Py_tp_dealloc, Memory_dealloc},")
+        add("    {Py_tp_getset, Memory_getset},")
+        add("    {0, NULL}")
+        add("};")
+        add(
+            f"static PyType_Spec memory_spec = {{{_c_string(name + '.Memory')}, sizeof(MemoryObject), 0, "
+            "Py_TPFLAGS_DEFAULT, memory_slots};"
+        )
+        add("")
+    if shares_tables:
+        add(
+            f"static PyType_Spec function_spec = {{{_c_string(name + '.Function')}, sizeof(FunctionObject), 0, "
+            "Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC | Py_TPFLAGS_DISALLOW_INSTANTIATION, function_slots};"
+        )
+        add(
+            f"static PyType_Spec table_spec = {{{_c_string(name + '.Table')}, sizeof(TableObject), 0, "
+            "Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC, table_slots};"
+        )
+        add("")
+    add(
+        f"static struct PyModuleDef module_def = {{PyModuleDef_HEAD_INIT, {_c_string(name)}, "
+        f"{_c_string('A WebAssembly module as a native extension (wasmext, wasm2c)')}, -1, NULL}};"
+    )
+    add("")
+    add(f"PyMODINIT_FUNC PyInit_{last}(void) {{")
+    add("    PyObject *m;")
+    add("    wasm_rt_init();")
+    if shares_tables:
+        add("    if (attach_traps() < 0) return NULL;")
+    add("    m = PyModule_Create(&module_def);")
+    add("    if (m == NULL) return NULL;")
+    add(
+        f'    TrapError = PyErr_NewExceptionWithDoc({_c_string(name + ".Trap")}, "The WebAssembly code trapped", PyExc_RuntimeError, NULL);'
+    )
+    add(
+        f'    LinkError = PyErr_NewExceptionWithDoc({_c_string(name + ".LinkError")}, "An import is missing", PyExc_Exception, NULL);'
+    )
+    if uses_wasi:
+        add(
+            f'    WasiTerminatedError = PyErr_NewExceptionWithDoc({_c_string(name + ".WasiTerminated")}, "The WebAssembly program is over (proc_exit, proc_raise)", PyExc_Exception, NULL);'
+        )
+        add(
+            f'    WasiExitError = PyErr_NewExceptionWithDoc({_c_string(name + ".WasiExit")}, "The WebAssembly program called proc_exit (its code is .code)", WasiTerminatedError, NULL);'
+        )
+        add(
+            f'    WasiSignalError = PyErr_NewExceptionWithDoc({_c_string(name + ".WasiSignal")}, "The WebAssembly program called proc_raise (the number of the signal is .signal, its name .name)", WasiTerminatedError, NULL);'
+        )
+    if tags:
+        add(
+            f'    UncaughtExceptionError = PyErr_NewExceptionWithDoc({_c_string(name + ".UncaughtException")}, "An exception of WebAssembly that nothing caught (.tag, .values)", TrapError, NULL);'
+        )
+    add("    InstanceType = (PyTypeObject *)PyType_FromSpec(&instance_spec);")
+    if memories:
+        add("    MemoryType = (PyTypeObject *)PyType_FromSpec(&memory_spec);")
+    if shares_tables:
+        add("    TableType = (PyTypeObject *)PyType_FromSpec(&table_spec);")
+        add("    FunctionType = (PyTypeObject *)PyType_FromSpec(&function_spec);")
+    add(
+        "    if (!TrapError || !LinkError || !InstanceType"
+        + (" || !WasiTerminatedError || !WasiExitError || !WasiSignalError" if uses_wasi else "")
+        + (" || !MemoryType" if memories else "")
+        + (" || !TableType || !FunctionType" if shares_tables else "")
+        + (" || !UncaughtExceptionError" if tags else "")
+        + ") goto fail;"
+    )
+    if uses_wasi:
+        add('    if (PyModule_AddObjectRef(m, "WasiTerminated", WasiTerminatedError) < 0) goto fail;')
+        add('    if (PyModule_AddObjectRef(m, "WasiExit", WasiExitError) < 0) goto fail;')
+        add('    if (PyModule_AddObjectRef(m, "WasiSignal", WasiSignalError) < 0) goto fail;')
+    add('    if (PyModule_AddObjectRef(m, "Trap", TrapError) < 0) goto fail;')
+    if tags:
+        add('    if (PyModule_AddObjectRef(m, "UncaughtException", UncaughtExceptionError) < 0) goto fail;')
+    add('    if (PyModule_AddObjectRef(m, "LinkError", LinkError) < 0) goto fail;')
+    add('    if (PyModule_AddObjectRef(m, "Instance", (PyObject *)InstanceType) < 0) goto fail;')
+    if shares_tables:
+        add('    if (PyModule_AddObjectRef(m, "Table", (PyObject *)TableType) < 0) goto fail;')
+        add('    if (PyModule_AddObjectRef(m, "Function", (PyObject *)FunctionType) < 0) goto fail;')
+    add("    return m;")
+    add("fail:")
+    add("    Py_DECREF(m);")
+    add("    return NULL;")
+    add("}")
+    stub_imports = [imp for imp in module.imports if imp.module not in _WASI_HEADERS]
+    from ._shared import generate_shared, unsupported
+
+    reason = unsupported(
+        [(i.module, i.field, i.func) for i in imports],
+        global_imports=bool(global_imports),
+        memory_imports=bool(memory_imports),
+        table_imports=bool(table_imports),
+    )
+    api_header = shared = ""
+    api_model = None
+    if reason is None:
+        api_header, shared, api_model = generate_shared(
+            last,
+            prefix,
+            funcs,
+            memories,
+            [(i.module, i.field, i.func, i.module in _WASI_HEADERS, i.host, i.slot) for i in imports],
+            uses_wasi,
+            len(tags),
+            skipped,
+            globals_,
+            global_imports,
+            memory_imports,
+            memory_limits,
+            tables,
+            table_imports,
+            trap_handler,
+            ref_types,
+        )
+    return Glue(
+        "\n".join(w) + "\n",
+        skipped,
+        notes,
+        _stub(
+            last,
+            funcs,
+            memories,
+            globals_,
+            stub_imports,
+            uses_wasi,
+            version,
+            param_names,
+            bool(tags),
+            shares_tables,
+            tables,
+        ),
+        tuple(_WASI_HEADERS[m] for m in wasi_modules),
+        api_header=api_header,
+        shared=shared,
+        shared_unsupported=reason or "",
+        api_model=api_model,
+        header="\n".join(h) + "\n",
+        trap_handler=trap_handler,
+    )
+
+
+# the value types as the binary format of WebAssembly numbers them: what the link between two extensions says of a global
+_TYPE_CODE: dict[ValType, int] = {"i32": 0x7F, "i64": 0x7E, "f32": 0x7D, "f64": 0x7C, "v128": 0x7B}
+_PY_TYPE: dict[ValType, str] = {
+    "i32": "int",
+    "i64": "int",
+    "f32": "float",
+    "f64": "float",
+    "v128": "bytes",
+    "funcref": "Function | None",
+}
+# ... and what a parameter takes where that is more than what a result gives
+_PY_PARAM: dict[ValType, str] = {"funcref": "Function | Callable[..., object] | None"}
+# how a value of a type is put in a `wasmext_value` (the member of the union: i j f d, o for 16 bytes)
+_VALUE_STORE: dict[ValType, str] = {
+    "i32": "{dst}.as.i = {src};",
+    "i64": "{dst}.as.j = {src};",
+    "f32": "{dst}.as.f = {src};",
+    "f64": "{dst}.as.d = {src};",
+    "v128": "memcpy({dst}.as.o, &{src}, 16);",
+}
+# wasm2c returns several results in a `struct wasm_multi_<codes>` whose members are `<code><position>`.
+_MULTI_CODE: dict[ValType, str] = {"i32": "i", "i64": "j", "f32": "f", "f64": "d", "v128": "o", "funcref": "r"}
+
+
+def _ref_types(module: Module) -> list[FuncType]:
+    """The function types of the module that a `Function` can call: the distinct types of its type section whose values the glue can convert."""
+    seen: list[FuncType] = []
+    for t in module.types:
+        if _why_not(t, several_results=True, funcref=True) is None and "funcref" not in t.params and t not in seen:
+            seen.append(t)
+    return seen
+
+
+def _emit_refcalls(hadd: Callable[[str], None], last: str, prefix: str, ref_types: list[FuncType]) -> None:
+    """In the glue (no Python): the type of an element of a table among the types of this module (by the hash that `call_indirect` compares), and for each type
+    `<name>_callref<k>`, the call of an element of that type as the call of an export is made: through the stack of entries, with a trap answered in `*trapped`."""
+    hadd(
+        "/* the type k of this module that the element of a table has (-1: none): by the hash of the type, the pointer first, as call_indirect compares them */"
+    )
+    hadd(f"static inline int {last}_ref_type(const wasm_rt_funcref_t *f) {{")
+    hadd("    if (f == NULL || f->func == NULL || f->func_type == NULL) return -1;")
+    if ref_types:
+        hadd("    const char *t;")
+    for k, ft in enumerate(ref_types):
+        types = "".join(f", {_RT_TYPE[t]}" for t in (*ft.params, *ft.results))
+        hadd(f"    t = wasm2c_{prefix}_get_func_type({len(ft.params)}, {len(ft.results)}{types});")
+        hadd(f"    if (t != NULL && (t == f->func_type || memcmp(t, f->func_type, 32) == 0)) return {k};")
+    hadd("    return -1;")
+    hadd("}")
+    hadd("")
+    for k, ft in enumerate(ref_types):
+        params = "".join(f", {_CTYPE[t]} a{j}" for j, t in enumerate(ft.params))
+        several = len(ft.results) > 1
+        codes = "".join(_MULTI_CODE[t] for t in ft.results)
+        ret = f"struct wasm_multi_{codes}" if several else _CTYPE[ft.results[0]] if ft.results else "void"
+        arg_types = "".join(f", {_CTYPE[t]}" for t in ft.params)
+        names = "".join(f", a{j}" for j in range(len(ft.params)))
+        give = "return zero;" if ft.results else "return;"
+        hadd(f"/* an element of the type {k}, {_cc(_signature(ft))} */")
+        hadd(f"static inline {ret} {last}_callref{k}(const wasm_rt_funcref_t *f{params}, int *trapped) {{")
+        if ft.results:
+            hadd(f"    {ret} zero;")
+            hadd("    memset(&zero, 0, sizeof zero);")
+        hadd(f"    WASMEXT_ENTER(trap_, {{ *trapped = (int)trap_; {give} }})")
+        call = f"(({ret} (*)(void *{arg_types}))f->func)(f->module_instance{names})"
+        if ft.results:
+            hadd(f"    {ret} r = {call};")
+            hadd("    WASMEXT_LEAVE();")
+            hadd("    return r;")
+        else:
+            hadd(f"    {call};")
+            hadd("    WASMEXT_LEAVE();")
+        hadd("}")
+        hadd("")
+
+
+def _function_type_c(last: str, ref_types: list[FuncType]) -> str:
+    """The C of the type `Function` of an extension: a function in a slot of a table, which is called if its type is one of the types this module declares."""
+    out: list[str] = []
+    add = out.append
+    add(
+        "/* ---- Function: a function that a table holds (a copy of the element, and what keeps its instance alive) ---- */"
+    )
+    add("typedef struct {")
+    add("    PyObject_HEAD")
+    add("    wasm_rt_funcref_t ref;")
+    add("    int type;  /* the type of this module that the function has, or -1 */")
+    add("    PyObject *keeper;  /* what keeps the instance of the function alive: the table it was read from */")
+    add("    PyObject *name;  /* the name of the export it is, or None */")
+    add("} FunctionObject;")
+    add("")
+    add(
+        "/* a trap of a function of another module that was called from here: its exception is this module's Trap (the tags and the program of that module are not ours) */"
+    )
+    add("static void raise_foreign_trap(int code) {")
+    add("    if (code == (int)WASMEXT_TRAP_HOST) {")
+    add(
+        '        if (!PyErr_Occurred()) PyErr_SetString(TrapError, "a host function of the WebAssembly module failed");'
+    )
+    add("        return;")
+    add("    }")
+    add("    if (code == (int)WASMEXT_TRAP_NO_MEMORY) PyErr_NoMemory();")
+    add(
+        '    else if (code == (int)WASM_RT_TRAP_UNCAUGHT_EXCEPTION) PyErr_SetString(TrapError, "an exception of WebAssembly that nothing caught");'
+    )
+    add("    else PyErr_SetString(TrapError, wasm_rt_strerror((wasm_rt_trap_t)code));")
+    add("}")
+    add("")
+    add("static PyObject *Function_make(const wasm_rt_funcref_t *ref, PyObject *keeper) {")
+    add("    FunctionObject *f = (FunctionObject *)PyType_GenericAlloc(FunctionType, 0);")
+    add("    if (f == NULL) return NULL;")
+    add("    f->ref = *ref;")
+    add(f"    f->type = {last}_ref_type(ref);")
+    add("    Py_INCREF(keeper);")
+    add("    f->keeper = keeper;")
+    add("    Py_INCREF(Py_None);")
+    add("    f->name = Py_None;")
+    add("    return (PyObject *)f;")
+    add("}")
+    add("")
+    add("static int Function_traverse(FunctionObject *self, visitproc visit, void *arg) {")
+    add("    Py_VISIT(Py_TYPE((PyObject *)self));")
+    add("    Py_VISIT(self->keeper);")
+    add("    Py_VISIT(self->name);")
+    add("    return 0;")
+    add("}")
+    add("")
+    add("static int Function_clear(FunctionObject *self) {")
+    add("    Py_CLEAR(self->keeper);")
+    add("    Py_CLEAR(self->name);")
+    add("    return 0;")
+    add("}")
+    add("")
+    add("static void Function_dealloc(FunctionObject *self) {")
+    add("    PyTypeObject *tp = Py_TYPE((PyObject *)self);")
+    add("    PyObject_GC_UnTrack(self);")
+    add("    Function_clear(self);")
+    add("    ((freefunc)PyType_GetSlot(tp, Py_tp_free))((PyObject *)self);")
+    add("    Py_DECREF(tp);")
+    add("}")
+    add("")
+    add("static PyObject *Function_call(PyObject *self, PyObject *args, PyObject *kwds) {")
+    add("    FunctionObject *fn = (FunctionObject *)self;")
+    add("    if (kwds != NULL && PyDict_Size(kwds) > 0) {")
+    add('        PyErr_SetString(PyExc_TypeError, "a Function takes no keyword arguments");')
+    add("        return NULL;")
+    add("    }")
+    add("    if (fn->type < 0) {")
+    add(
+        '        PyErr_SetString(PyExc_TypeError, "this module does not declare the type of this function, so the function cannot be called from here");'
+    )
+    add("        return NULL;")
+    add("    }")
+    add("    Py_ssize_t nargs = PyTuple_Size(args);")
+    add("    switch (fn->type) {")
+    for k, ft in enumerate(ref_types):
+        n = len(ft.params)
+        add(f"    case {k}: {{")
+        add(f"        if (nargs != {n}) {{")
+        add(
+            f'            PyErr_Format(PyExc_TypeError, "the function takes exactly {n} argument{"" if n == 1 else "s"} (%zd given)", nargs);'
+        )
+        add("            return NULL;")
+        add("        }")
+        for j, t in enumerate(ft.params):
+            add(f"        {_CTYPE[t]} a{j} = {_TO_WASM[t].format(f'PyTuple_GetItem(args, {j})')};")
+        if n:
+            add("        if (PyErr_Occurred()) return NULL;")
+        add("        int trapped = 0;")
+        call_args = "".join(f", a{j}" for j in range(n))
+        call = f"{last}_callref{k}(&fn->ref{call_args}, &trapped)"
+        if len(ft.results) > 1:
+            codes = "".join(_MULTI_CODE[t] for t in ft.results)
+            add(f"        struct wasm_multi_{codes} r = {call};")
+            add("        if (trapped) { raise_foreign_trap(trapped); return NULL; }")
+            fmt = "".join(_BUILD[t][0] for t in ft.results)
+            members = "".join(f", {_BUILD[t][1].format(f'r.{_MULTI_CODE[t]}{i}')}" for i, t in enumerate(ft.results))
+            add(f'        return Py_BuildValue("({fmt})"{members});')
+        elif ft.results:
+            add(f"        {_CTYPE[ft.results[0]]} r = {call};")
+            add("        if (trapped) { raise_foreign_trap(trapped); return NULL; }")
+            add(f"        return {_FROM_WASM[ft.results[0]].format('r')};")
+        else:
+            add(f"        {call};")
+            add("        if (trapped) { raise_foreign_trap(trapped); return NULL; }")
+            add("        Py_RETURN_NONE;")
+        add("    }")
+    add("    default:")
+    add("        break;")
+    add("    }")
+    add('    PyErr_SetString(PyExc_TypeError, "this function cannot be called from here");')
+    add("    return NULL;")
+    add("}")
+    add("")
+    add("static PyObject *Function_signature(FunctionObject *self, void *closure) {")
+    add("    (void)closure;")
+    add("    switch (self->type) {")
+    for k, ft in enumerate(ref_types):
+        params = ", ".join(_c_string(t) for t in ft.params)
+        results = ", ".join(_c_string(t) for t in ft.results)
+        pf = "(" + "s" * len(ft.params) + ")"  # Py_BuildValue: parentheses make a tuple, also of one item
+        rf = "(" + "s" * len(ft.results) + ")"
+        sep = ", " if params and results else ""
+        add(
+            f'    case {k}: return Py_BuildValue("({pf}{rf})", {params}{sep}{results});'
+            if (params or results)
+            else f'    case {k}: return Py_BuildValue("((), ())");'
+        )
+    add("    default: Py_RETURN_NONE;")
+    add("    }")
+    add("}")
+    add("")
+    add("static PyObject *Function_name(FunctionObject *self, void *closure) {")
+    add("    (void)closure;")
+    add("    Py_INCREF(self->name);")
+    add("    return self->name;")
+    add("}")
+    add("")
+    add(
+        "/* function.__wasmext_ref__: the record of the function with its funcref, for Table.set (and the parameters of a funcref) */"
+    )
+    add("static PyObject *Function_ref(PyObject *self, void *closure) {")
+    add("    (void)closure;")
+    add("    wasmext_export *e = (wasmext_export *)PyMem_Malloc(sizeof(wasmext_export));")
+    add("    if (e == NULL) return PyErr_NoMemory();")
+    add("    wasmext_function_export(e, &((FunctionObject *)self)->ref, self);")
+    add("    Py_INCREF(self);")
+    add("    PyObject *capsule = PyCapsule_New(e, WASMEXT_EXPORT, export_free);")
+    add("    if (capsule == NULL) {")
+    add("        Py_DECREF(self);")
+    add("        PyMem_Free(e);")
+    add("    }")
+    add("    return capsule;")
+    add("}")
+    add("")
+    add("static PyObject *Function_richcompare(PyObject *a, PyObject *b, int op) {")
+    add("    if ((op != Py_EQ && op != Py_NE) || Py_TYPE(a) != Py_TYPE(b)) Py_RETURN_NOTIMPLEMENTED;")
+    add("    const wasm_rt_funcref_t *x = &((FunctionObject *)a)->ref, *y = &((FunctionObject *)b)->ref;")
+    add("    int same = x->func == y->func && x->module_instance == y->module_instance;")
+    add("    if (same == (op == Py_EQ)) Py_RETURN_TRUE;")
+    add("    Py_RETURN_FALSE;")
+    add("}")
+    add("")
+    add("static Py_hash_t Function_hash(PyObject *self) {")
+    add("    const wasm_rt_funcref_t *x = &((FunctionObject *)self)->ref;")
+    add("    Py_hash_t h = (Py_hash_t)((uintptr_t)x->func ^ ((uintptr_t)x->module_instance >> 4));")
+    add("    return h == -1 ? -2 : h;")
+    add("}")
+    add("")
+    add("static PyObject *Function_repr(PyObject *self) {")
+    add("    FunctionObject *f = (FunctionObject *)self;")
+    add("    PyObject *signature = Function_signature(f, NULL);")
+    add("    if (signature == NULL) return NULL;")
+    add('    PyObject *r = PyUnicode_FromFormat("<Function %S %S>", f->name, signature);')
+    add("    Py_DECREF(signature);")
+    add("    return r;")
+    add("}")
+    add("")
+    add("static PyGetSetDef Function_getset[] = {")
+    add(
+        '    {"signature", (getter)Function_signature, NULL, "(parameters, results) as the names of the types, or None if the type is not one of this module\'s", NULL},'
+    )
+    add('    {"name", (getter)Function_name, NULL, "the name of the export this function is, or None", NULL},')
+    add(
+        '    {"__wasmext_ref__", (getter)Function_ref, NULL, "the reference to the function, to put it in a table", NULL},'
+    )
+    add("    {NULL, NULL, NULL, NULL, NULL}")
+    add("};")
+    add("")
+    add("static PyType_Slot function_slots[] = {")
+    add("    {Py_tp_dealloc, Function_dealloc},")
+    add("    {Py_tp_traverse, Function_traverse},")
+    add("    {Py_tp_clear, Function_clear},")
+    add("    {Py_tp_call, Function_call},")
+    add("    {Py_tp_getset, Function_getset},")
+    add("    {Py_tp_richcompare, Function_richcompare},")
+    add("    {Py_tp_hash, Function_hash},")
+    add("    {Py_tp_repr, Function_repr},")
+    add('    {Py_tp_doc, (void *)"A function in a slot of a Table"},')
+    add("    {0, NULL}")
+    add("};")
+    add("")
+    return "\n".join(out) + "\n"
+
+
+_RT_TYPE: dict[ValType, str] = {
+    "i32": "WASM_RT_I32",
+    "i64": "WASM_RT_I64",
+    "f32": "WASM_RT_F32",
+    "f64": "WASM_RT_F64",
+    "v128": "WASM_RT_V128",
+    "funcref": "WASM_RT_FUNCREF",
+}
+
+
+def _emit_funcrefs(hadd: Callable[[str], None], last: str, prefix: str, funcs: list[tuple[str, FuncType]]) -> None:
+    """`<name>_glue_funcref(core, i)`: the exported function `i` as the element of a table holds it (its type, the function, the instance); what `Table.set` puts in a table."""
+    hadd(
+        "/* the exported function i as an element of a funcref table: its type (the one of this module, whose hash the elements of any module that has the type share), the function"
+    )
+    hadd(
+        "   itself (called as `result f(void *instance, parameters...)`) and the instance; no tail-call variant (a call that is a tail call goes through the plain one) */"
+    )
+    hadd(f"static inline const wasm_rt_funcref_t *{last}_glue_funcref({last}_instance *self, int i) {{")
+    hadd("    wasm_rt_funcref_t *r = &self->exp_ref[i];")
+    hadd("    memset(r, 0, sizeof *r);")
+    hadd("    r->module_instance = &self->inst;")
+    hadd("    switch (i) {")
+    for i, (exp_name, func) in enumerate(funcs):
+        types = "".join(f", {_RT_TYPE[t]}" for t in (*func.params, *func.results))
+        hadd(f"    case {i}:")
+        hadd(f"        r->func_type = wasm2c_{prefix}_get_func_type({len(func.params)}, {len(func.results)}{types});")
+        hadd(f"        r->func = (wasm_rt_function_ptr_t)(void (*)(void))w2c_{prefix}_{mangle(exp_name)};")
+        hadd("        break;")
+    hadd("    default:")
+    hadd("        break;")
+    hadd("    }")
+    hadd("    return r;")
+    hadd("}")
+    hadd("")
+
+
+_FUNCTION_HOLDER = r"""/* What stands for the export that `v` is (a new reference): `v` itself if it is one or gives one as its `__wasmext_ref__`, or, for a method of an instance of a wasmext
+   module, the reference that the instance gives for its export of that name; NULL with no error if there is none. The reference of a wrapper for ctypes is an object that
+   owns its record, so the caller keeps this until it is done with the capsule that as_export_ref makes of it. */
+static PyObject *function_holder(PyObject *v) {
+    PyObject *cap = as_export_ref(v);
+    if (cap != NULL) {
+        Py_DECREF(cap);
+        Py_INCREF(v);
+        return v;
+    }
+    PyObject *holder = NULL;
+    PyObject *owner = PyObject_GetAttrString(v, "__self__");
+    PyObject *name = owner != NULL ? PyObject_GetAttrString(v, "__name__") : NULL;
+    PyObject *exports = name != NULL ? PyObject_GetAttrString(owner, "__exports__") : NULL;
+    if (exports != NULL && PyDict_Check(exports)) {
+        holder = PyDict_GetItemWithError(exports, name);
+        Py_XINCREF(holder);
+    }
+    Py_XDECREF(exports);
+    Py_XDECREF(name);
+    Py_XDECREF(owner);
+    PyErr_Clear();
+    return holder;
+}
+"""
+
+
+_TABLE_SET_GET = r"""
+static int table_index(TableObject *t, PyObject *index_o, uint32_t *index) {
+    if (table_u32(index_o, "index", index) < 0) return -1;
+    if (*index >= t->table->size) {
+        PyErr_Format(PyExc_IndexError, "table index %u is out of range: the table has %u elements", (unsigned)*index, (unsigned)t->table->size);
+        return -1;
+    }
+    return 0;
+}
+
+static int writers_have(PyObject *writers, PyObject *who) {
+    Py_ssize_t n = writers != NULL ? PyList_Size(writers) : 0;
+    for (Py_ssize_t i = 0; i < n; i++)
+        if (PyList_GetItem(writers, i) == who) return 1;
+    return 0;
+}
+
+/* table.set(index, function): the function of an instance (instance.name, instance['name'], or None for an empty slot) goes into the slot; the table keeps the instance alive */
+static PyObject *Table_set(PyObject *self, PyObject *args) {
+    TableObject *t = (TableObject *)self;
+    PyObject *index_o, *function;
+    uint32_t index;
+    if (!PyArg_ParseTuple(args, "OO:set", &index_o, &function)) return NULL;
+    if (table_index(t, index_o, &index) < 0) return NULL;
+    if (function == Py_None) {
+        memset(&t->table->data[index], 0, sizeof(wasm_rt_funcref_t));
+        Py_RETURN_NONE;
+    }
+    PyObject *holder = function_holder(function);
+    PyObject *ref = holder != NULL ? as_export_ref(holder) : NULL;
+    if (ref == NULL) {
+        Py_XDECREF(holder);
+        PyErr_SetString(PyExc_TypeError, "set() takes a function of an instance of a wasmext module (instance.name or instance['name']) or None");
+        return NULL;
+    }
+    wasmext_export *e = (wasmext_export *)PyCapsule_GetPointer(ref, WASMEXT_EXPORT);
+    if (e == NULL || !wasmext_export_ok(e)) {
+        Py_DECREF(ref);
+        Py_DECREF(holder);
+        PyErr_SetString(LinkError, "the function is from an incompatible version of wasmext");
+        return NULL;
+    }
+    const wasm_rt_funcref_t *fr = (const wasm_rt_funcref_t *)e->funcref;
+    if (e->kind != WASMEXT_FUNC || fr == NULL || fr->func == NULL || fr->func_type == NULL) {
+        Py_DECREF(ref);
+        Py_DECREF(holder);
+        PyErr_SetString(PyExc_TypeError, "set() takes a function: this export is not one, or its module does not give it for a table");
+        return NULL;
+    }
+    if (!(e->flags & 16u)) {
+        Py_DECREF(ref);
+        Py_DECREF(holder);
+        PyErr_SetString(PyExc_TypeError, "the module of this function does not share tables, so a trap in it could not come back to the caller through a table: only a module that shares tables (has a funcref table, or is built with share_tables) can put functions in a table");
+        return NULL;
+    }
+    PyObject *keeper = (PyObject *)e->owner;
+    if (!writers_have(table_writers(t), keeper)) {
+        PyObject *r = Table_keep(self, keeper);
+        if (r == NULL) {
+            Py_DECREF(ref);
+            Py_DECREF(holder);
+            return NULL;
+        }
+        Py_DECREF(r);
+    }
+    t->table->data[index] = *fr;
+    Py_DECREF(ref);
+    Py_DECREF(holder);
+    Py_RETURN_NONE;
+}
+
+/* the export of the instance `x` that is the function of the element `elem` (a new reference to its method), or NULL with no error */
+static PyObject *table_find_function(PyObject *x, const wasm_rt_funcref_t *elem) {
+    PyObject *exports = PyObject_GetAttrString(x, "__exports__");
+    if (exports == NULL) {
+        PyErr_Clear();
+        return NULL;
+    }
+    PyObject *found = NULL, *key, *value;
+    Py_ssize_t pos = 0;
+    while (PyDict_Check(exports) && found == NULL && PyDict_Next(exports, &pos, &key, &value)) {
+        PyObject *ref = as_export_ref(value);
+        if (ref == NULL) continue;
+        const wasmext_export *e = (const wasmext_export *)PyCapsule_GetPointer(ref, WASMEXT_EXPORT);
+        const wasm_rt_funcref_t *fr = e != NULL ? (const wasm_rt_funcref_t *)e->funcref : NULL;
+        int same = fr != NULL && e->kind == WASMEXT_FUNC && fr->func == elem->func && fr->module_instance == elem->module_instance;
+        Py_DECREF(ref);
+        if (same) {
+            found = PyObject_GetAttr(x, key);
+            if (found == NULL) PyErr_Clear();
+        }
+    }
+    Py_DECREF(exports);
+    return found;
+}
+
+/* table.get(index): None for an empty slot, else a Function (callable if its type is one this module declares); its name is that of the export it is, if an instance that uses the table exports it */
+static PyObject *Table_get(PyObject *self, PyObject *index_o) {
+    TableObject *t = (TableObject *)self;
+    uint32_t index;
+    if (table_index(t, index_o, &index) < 0) return NULL;
+    const wasm_rt_funcref_t *elem = &t->table->data[index];
+    if (elem->func == NULL) Py_RETURN_NONE;
+    PyObject *function = Function_make(elem, self);
+    if (function == NULL) return NULL;
+    PyObject *writers = table_writers(t);
+    Py_ssize_t n = writers != NULL ? PyList_Size(writers) : 0;
+    for (Py_ssize_t c = t->owner != NULL ? -1 : 0; c < n; c++) {
+        PyObject *x = c < 0 ? (PyObject *)t->owner : PyList_GetItem(writers, c);
+        PyObject *found = table_find_function(x, elem);
+        if (found == NULL) continue;
+        PyObject *name = PyObject_GetAttrString(found, "__name__");
+        Py_DECREF(found);
+        if (name != NULL) {
+            Py_DECREF(((FunctionObject *)function)->name);
+            ((FunctionObject *)function)->name = name;
+        } else {
+            PyErr_Clear();
+        }
+        break;
+    }
+    return function;
+}
+
+"""
+
+
+def _funcref_values_c(with_refs: bool) -> str:
+    """The C that turns a Python value into a funcref (a parameter of an export) and a funcref into a Python value (a result): None is the null funcref, anything else is a Function."""
+    keep = ""
+    if with_refs:
+        keep = (
+            "        /* the module may keep the function (in a table, a global): its instance lives as long as this one */\n"
+            "        if (!PySequence_Contains(self->refs, owner) && PyList_Append(self->refs, owner) < 0) out = null_;\n"
+        )
+    head = r"""static PyObject *Function_make(const wasm_rt_funcref_t *ref, PyObject *keeper);
+
+/* a parameter of type funcref: None, a Function, or a function of an instance of a wasmext module (instance.name, instance['name']); the null funcref with an error set if it is none */
+static wasm_rt_funcref_t funcref_arg(InstanceObject *self, PyObject *v) {
+    wasm_rt_funcref_t null_;
+    memset(&null_, 0, sizeof null_);
+    (void)self;
+    if (v == Py_None) return null_;
+    PyObject *holder = function_holder(v);
+    PyObject *ref = holder != NULL ? as_export_ref(holder) : NULL;
+    if (ref == NULL) {
+        Py_XDECREF(holder);
+        PyErr_SetString(PyExc_TypeError, "a funcref is None, a Function, or a function of an instance of a wasmext module (instance.name or instance['name'])");
+        return null_;
+    }
+    const wasmext_export *e = (const wasmext_export *)PyCapsule_GetPointer(ref, WASMEXT_EXPORT);
+    const wasm_rt_funcref_t *fr = e != NULL ? (const wasm_rt_funcref_t *)e->funcref : NULL;
+    wasm_rt_funcref_t out = null_;
+    PyObject *owner = e != NULL ? (PyObject *)e->owner : NULL;
+    (void)owner;
+    if (e == NULL || !wasmext_export_ok(e)) {
+        PyErr_SetString(LinkError, "the function is from an incompatible version of wasmext");
+    } else if (e->kind != WASMEXT_FUNC || fr == NULL || fr->func == NULL || !(e->flags & 16u)) {
+        PyErr_SetString(PyExc_TypeError, "a funcref takes a function of a module that shares tables (it has a funcref table, or is built with share_tables)");
+    } else {
+        out = *fr;
+"""
+    tail = r"""    }
+    Py_DECREF(ref);
+    Py_DECREF(holder);
+    return PyErr_Occurred() ? null_ : out;
+}
+
+/* a result of type funcref: None for the null funcref, else a Function that keeps `keeper` (the instance that was called) alive */
+static PyObject *funcref_result(wasm_rt_funcref_t f, PyObject *keeper) {
+    if (f.func == NULL) Py_RETURN_NONE;
+    return Function_make(&f, keeper);
+}
+
+"""
+    return head + keep + tail
+
+
+def _table_type_c(prefix: str, tables: list[str], tables_base: int) -> str:
+    """The C of the type `Table` of an extension: a table of `funcref` that no module owns (`Table(initial, maximum=None)`), and the handle that `instance['name']`
+    gives for a table the module exports. Both are the same object to Python and to another module: they give the capsule of the record (`__wasmext_ref__`)."""
+    getters = "".join(f"    w2c_{prefix}_{mangle(n)},\n" for n in tables)
+    keep = (
+        "    if (t->owner != NULL) return Instance_keep((PyObject *)t->owner, other);  /* the instance keeps its importers */\n"
+        if tables
+        else ""
+    )
+    getters_c = (
+        f"static wasm_rt_funcref_table_t *(*const table_getters[])(w2c_{prefix} *) = {{\n{getters}    NULL\n}};\n\n"
+        "/* the handle of the table k of export_table, a table of the module of `self` */\n"
+        "static PyObject *Table_of(PyObject *self, int k) {\n"
+        "    TableObject *t = (TableObject *)PyType_GenericAlloc(TableType, 0);\n"
+        "    if (t == NULL) return NULL;\n"
+        "    Py_INCREF(self);\n"
+        "    t->owner = (InstanceObject *)self;\n"
+        f"    t->table = table_getters[k - {tables_base}](&t->owner->core.inst);\n"
+        "    t->export_index = k;\n"
+        "    return (PyObject *)t;\n"
+        "}\n\n"
+        if tables
+        else ""
+    )
+    return (
+        r"""/* ---- Table: a table of funcref that no module owns, or the handle of one that a module exports ---- */
+static int table_u32(PyObject *v, const char *what, uint32_t *out) {
+    if (!PyLong_Check(v)) {
+        PyErr_Format(PyExc_TypeError, "%s must be an int", what);
+        return -1;
+    }
+    unsigned long long n = PyLong_AsUnsignedLongLong(v);
+    if (n == (unsigned long long)-1 && PyErr_Occurred()) {
+        if (!PyErr_ExceptionMatches(PyExc_OverflowError)) return -1;
+        PyErr_Clear();
+        n = 0x100000000ull;
+    }
+    if (n > 0xFFFFFFFFull) {
+        PyErr_Format(PyExc_ValueError, "%s must be between 0 and 4294967295", what);
+        return -1;
+    }
+    *out = (uint32_t)n;
+    return 0;
+}
+
+static PyObject *Table_new(PyTypeObject *type, PyObject *args, PyObject *kwds) {
+    PyObject *initial_o, *maximum_o = Py_None;
+    if (kwds != NULL && PyDict_Size(kwds) > 0) {
+        PyErr_SetString(PyExc_TypeError, "Table() takes no keyword arguments");
+        return NULL;
+    }
+    if (!PyArg_ParseTuple(args, "O|O:Table", &initial_o, &maximum_o)) return NULL;
+    uint32_t initial, maximum = WASMEXT_TABLE_NO_MAXIMUM;
+    if (table_u32(initial_o, "initial", &initial) < 0) return NULL;
+    if (maximum_o != Py_None && table_u32(maximum_o, "maximum", &maximum) < 0) return NULL;
+    if (initial > maximum) {
+        PyErr_Format(PyExc_ValueError, "initial (%u) is more than maximum (%u)", (unsigned)initial, (unsigned)maximum);
+        return NULL;
+    }
+    TableObject *self = (TableObject *)PyType_GenericAlloc(type, 0);
+    if (self == NULL) return NULL;
+    self->table = &self->own;
+    if (wasmext_table_new(&self->own, initial, maximum)) {
+        Py_DECREF(self);
+        return PyErr_NoMemory();
+    }
+    self->writers = PyList_New(0);
+    if (self->writers == NULL) {
+        Py_DECREF(self);
+        return NULL;
+    }
+    return (PyObject *)self;
+}
+
+static int Table_traverse(TableObject *self, visitproc visit, void *arg) {
+    Py_VISIT(Py_TYPE((PyObject *)self));
+    Py_VISIT((PyObject *)self->owner);
+    Py_VISIT(self->writers);
+    return 0;
+}
+
+static int Table_clear(TableObject *self) {
+    Py_CLEAR(self->owner);
+    Py_CLEAR(self->writers);
+    return 0;
+}
+
+static void Table_dealloc(TableObject *self) {
+    PyTypeObject *tp = Py_TYPE((PyObject *)self);
+    PyObject_GC_UnTrack(self);
+    Table_clear(self);
+    if (self->table == &self->own) wasmext_table_free(&self->own);
+    ((freefunc)PyType_GetSlot(tp, Py_tp_free))((PyObject *)self);
+    Py_DECREF(tp);
+}
+
+static PyObject *Table_size(TableObject *self, void *closure) {
+    (void)closure;
+    return PyLong_FromUnsignedLong(self->table->size);
+}
+
+static PyObject *Table_maximum(TableObject *self, void *closure) {
+    (void)closure;
+    if (self->table->max_size == WASMEXT_TABLE_NO_MAXIMUM) Py_RETURN_NONE;
+    return PyLong_FromUnsignedLong(self->table->max_size);
+}
+
+static Py_ssize_t Table_length(PyObject *self) {
+    return (Py_ssize_t)((TableObject *)self)->table->size;
+}
+
+static PyObject *Table_grow(PyObject *self, PyObject *delta_o) {
+    wasm_rt_funcref_table_t *table = ((TableObject *)self)->table;
+    uint32_t delta;
+    if (table_u32(delta_o, "delta", &delta) < 0) return NULL;
+    int64_t before = wasmext_table_grow(table, delta);
+    if (before < 0) {
+        if (table->max_size == WASMEXT_TABLE_NO_MAXIMUM)
+            PyErr_Format(PyExc_ValueError, "the table cannot grow by %u elements (it has %u): out of memory", (unsigned)delta, (unsigned)table->size);
+        else
+            PyErr_Format(PyExc_ValueError, "the table cannot grow by %u elements (it has %u, and its maximum is %u)", (unsigned)delta, (unsigned)table->size, (unsigned)table->max_size);
+        return NULL;
+    }
+    return PyLong_FromLongLong(before);
+}
+
+/* table.__wasmext_ref__: the reference to this table, for the instance that imports it (see Instance_new) */
+static PyObject *Table_ref(PyObject *self, void *closure) {
+    (void)closure;
+    TableObject *t = (TableObject *)self;
+    if (t->owner != NULL) return export_ref((PyObject *)t->owner, t->export_index);
+    wasmext_export *e = (wasmext_export *)PyMem_Malloc(sizeof(wasmext_export));
+    if (e == NULL) return PyErr_NoMemory();
+    wasmext_table_export(e, t->table, self);
+    Py_INCREF(self);
+    PyObject *capsule = PyCapsule_New(e, WASMEXT_EXPORT, export_free);
+    if (capsule == NULL) {
+        Py_DECREF(self);
+        PyMem_Free(e);
+    }
+    return capsule;
+}
+
+/* table.__wasmext_keep__(other): `other` imported this table, so it may have put functions of its own in it: the table keeps it alive */
+static PyObject *Table_keep(PyObject *self, PyObject *other) {
+    TableObject *t = (TableObject *)self;
+"""
+        + keep
+        + r"""    if (t->writers == NULL || PyList_Append(t->writers, other) < 0) return NULL;
+    Py_RETURN_NONE;
+}
+"""
+        + (
+            "/* the list of the instances that may have put functions in this table: the owner of a table of a module keeps them, a table of its own does */\n"
+            "static PyObject *table_writers(TableObject *t) {\n"
+            + (
+                "    return t->owner != NULL ? t->owner->writers : t->writers;\n"
+                if tables
+                else "    return t->writers;\n"
+            )
+            + "}\n"
+        )
+        + _TABLE_SET_GET
+        + getters_c
+        + r"""static PyMethodDef Table_methods[] = {
+    {"get", (PyCFunction)Table_get, METH_O, "get(index): the Function in the slot, or None if it is empty"},
+    {"set", (PyCFunction)Table_set, METH_VARARGS, "set(index, function): put the function of an instance in the slot, or None to empty it"},
+    {"grow", (PyCFunction)Table_grow, METH_O, "grow(delta): add delta empty elements; the size before. ValueError if it cannot"},
+    {"__wasmext_keep__", (PyCFunction)Table_keep, METH_O, "keep an instance that imported this table alive (not for you to call)"},
+    {NULL, NULL, 0, NULL}
+};
+
+static PyGetSetDef Table_getset[] = {
+    {"size", (getter)Table_size, NULL, "the number of elements", NULL},
+    {"maximum", (getter)Table_maximum, NULL, "the most elements it can have, or None", NULL},
+    {"__wasmext_ref__", (getter)Table_ref, NULL, "the reference to the table, to be given as an import", NULL},
+    {NULL, NULL, NULL, NULL, NULL}
+};
+
+static PyType_Slot table_slots[] = {
+    {Py_tp_new, Table_new},
+    {Py_tp_dealloc, Table_dealloc},
+    {Py_tp_traverse, Table_traverse},
+    {Py_tp_clear, Table_clear},
+    {Py_tp_methods, Table_methods},
+    {Py_tp_getset, Table_getset},
+    {Py_sq_length, Table_length},
+    {Py_tp_doc, (void *)"Table(initial, maximum=None): a table of funcref that modules can import"},
+    {0, NULL}
+};
+
+"""
+    )
+
+
+def _result_type(func: FuncType) -> str:
+    """The annotation of what a function gives back in Python: None, a number, or a tuple of numbers."""
+    if not func.results:
+        return "None"
+    if len(func.results) == 1:
+        return _PY_TYPE[func.results[0]]
+    return f"tuple[{', '.join(_PY_TYPE[t] for t in func.results)}]"
+
+
+def _reserved(name: str) -> bool:
+    """A name of an export that cannot be an attribute of Instance: between double underscores it would replace a special
+    method or attribute of the object (`__class__`, `__init__`, `__exports__`). Such an export is still in `__exports__`."""
+    return name.startswith("__") and name.endswith("__")
+
+
+def _not_a_name(kind: str, name: str) -> str:
+    """The comment of the stub for an export that is not written as an attribute."""
+    if _reserved(name):
+        return f"    # {kind}{_py_string(name)} is not an attribute (a special name of Instance): instance.__exports__[{_py_string(name)}]"
+    return f"    # {kind}{_py_string(name)} is not an identifier: getattr(instance, {_py_string(name)})"
+
+
+def _usable(name: str) -> bool:
+    """A name that can be written as a method or an attribute in a stub."""
+    return name.isidentifier() and not keyword.iskeyword(name) and not _reserved(name)
+
+
+def _callable_type(func: FuncType) -> str:
+    params = ", ".join(_PY_TYPE[t] for t in func.params)
+    result = _result_type(func)
+    return f"Callable[[{params}], {result}]"
+
+
+# `wasi=` as the stub shows it: the same for every module that uses WASI. A key that is absent has its default (worked out by the
+# extension when it is used); None is nothing.
+_WASI_STUB = [
+    "class Wasi(TypedDict):",
+    "    args: NotRequired[Sequence[str] | None]",
+    '    """absent: [the name of the program]. None: no arguments."""',
+    "    env: NotRequired[Mapping[str, str] | None]",
+    '    """absent: empty. None: empty (os.environ only if you give it)."""',
+    "    stdin: NotRequired[SupportsRead[bytes] | bytes | None]",
+    '    """absent: sys.stdin, when the program reads. None: an empty input."""',
+    "    stdout: NotRequired[SupportsWrite[bytes] | Callable[[bytes], object] | None]",
+    '    """absent: sys.stdout, when the program writes (so that a capture sees it). None: thrown away."""',
+    "    stderr: NotRequired[SupportsWrite[bytes] | Callable[[bytes], object] | None]",
+    '    """absent: sys.stderr, when the program writes. None: thrown away."""',
+    "    preopens: NotRequired[Mapping[str, str | PathLike[str]] | None]",
+    '    """absent: no files. None: no files."""',
+    "    readonly: NotRequired[bool | str | Sequence[str]]",
+    '    """True, a name or a list of names of the preopens that cannot be changed."""',
+    "    clock: NotRequired[Callable[[int], int]]",
+    '    """absent: the clocks of the system. A function (id of the clock: 0 real time, 1 monotonic, 2 process, 3 thread) -> nanoseconds."""',
+    "    random: NotRequired[Callable[[int], bytes]]",
+    '    """absent: the random bytes of the system. A function (how many) -> that many bytes."""',
+    "",
+]
+
+
+# `Table`, as the stub shows it: the same in the extension and in the wrapper for ctypes (a module that imports or exports a funcref table has it)
+_TABLE_STUB = [
+    "class Function:",
+    '    """A function that a table holds. It is called if its type is one this module declares (signature is not None); equal to another of the same function and instance."""',
+    "    @property",
+    "    def name(self) -> str | None: ...",
+    "    @property",
+    "    def signature(self) -> tuple[tuple[str, ...], tuple[str, ...]] | None: ...",
+    "    def __call__(self, *args: int | float | bytes) -> object: ...",
+    "",
+    "class Table:",
+    '    """A table of funcref that modules import: Table(initial, maximum=None), or the table that instance[\'name\'] gives for one a module exports."""',
+    "    def __init__(self, initial: int, maximum: int | None = None, /) -> None: ...",
+    "    @property",
+    "    def size(self) -> int: ...",
+    "    @property",
+    "    def maximum(self) -> int | None: ...",
+    "    def __len__(self) -> int: ...",
+    "    def grow(self, delta: int, /) -> int: ...",
+    "    def get(self, index: int, /) -> Function | None: ...",
+    "    def set(self, index: int, function: Callable[..., object] | None, /) -> None: ...",
+    "",
+]
+
+
+def _stub(
+    last: str,
+    funcs: list[tuple[str, FuncType]],
+    memories: list[str],
+    globals_: list[tuple[str, GlobalType]],
+    imports: list[Import],
+    wasi: bool = False,
+    version: str | None = None,
+    param_names: dict[str, tuple[str | None, ...]] | None = None,
+    tags: bool = False,
+    table: bool = False,
+    tables: list[str] | None = None,
+) -> str:
+    """The `.pyi` for the extension module: what a type checker and an editor can know of an extension."""
+    # The formatter and the linter of the project the stub lands in leave a generated file alone (the second noqa is
+    # for a project that selects every rule, PGH004 among them: it objects to the first).
+    lines = [
+        f"# Generated by wasmext{f' {version}' if version else ''} from the WebAssembly module of {last}: do not edit.",
+        "# ruff: noqa",
+        "# ruff: noqa: PGH004",
+        "# fmt: off",
+    ]
+    if wasi:
+        lines += [
+            "from _typeshed import SupportsRead, SupportsWrite",
+            "from collections.abc import Callable, Mapping, Sequence",
+            "from os import PathLike",
+            "from typing import NotRequired, TypedDict",
+        ]
+    elif imports or table:
+        lines += ["from collections.abc import Callable"] + (["from typing import TypedDict"] if imports else [])
+    names = [t for t in (tables or ()) if _usable(t)]
+    if names:
+        lines.append("from typing import Literal, overload")
+    lines += ["", "class Trap(RuntimeError): ...", "class LinkError(Exception): ..."]
+    if tags:
+        lines += [
+            "class UncaughtException(Trap):",
+            "    tag: int | None  # the index of the tag in the module; None for the tag of another module",
+            "    values: tuple[int | float | bytes, ...]",
+        ]
+    if wasi:
+        lines += [
+            "class WasiTerminated(Exception): ...",
+            "class WasiExit(WasiTerminated):",
+            "    code: int",
+            "class WasiSignal(WasiTerminated):",
+            "    signal: int",
+            "    name: str",
+            "",
+        ]
+        lines += _WASI_STUB
+    lines.append("")
+    by_module: dict[str, list[Import]] = {}
+    for imp in imports:
+        by_module.setdefault(imp.module, []).append(imp)
+    for i, (_module, members) in enumerate(by_module.items()):
+        items = ", ".join(f"{_py_string(m.name)}: {_import_type(m.type)}" for m in members)
+        lines.append(f"_Imports{i} = TypedDict('_Imports{i}', {{{items}}})")
+    if by_module:
+        fields = ", ".join(f"{_py_string(m)}: _Imports{i}" for i, m in enumerate(by_module))
+        lines += [f"Imports = TypedDict('Imports', {{{fields}}})", ""]
+    if table:
+        lines += _TABLE_STUB
+    lines.append("class Instance:")
+    if wasi:
+        required = "imports: Imports, " if by_module else "imports: None = None, "
+        lines.append(f"    def __init__(self, {required}*, wasi: Wasi | None = None) -> None: ...")
+    else:
+        lines.append(
+            "    def __init__(self, imports: Imports) -> None: ..."
+            if by_module
+            else "    def __init__(self) -> None: ..."
+        )
+    lines += ["    @property", "    def __exports__(self) -> dict[str, object]: ..."]
+    if names:  # the table that instance['name'] gives is a Table
+        for n in names:
+            lines += ["    @overload", f"    def __getitem__(self, name: Literal[{_py_string(n)}], /) -> Table: ..."]
+        lines += ["    @overload", "    def __getitem__(self, name: str, /) -> object: ..."]
+    else:
+        lines.append("    def __getitem__(self, name: str, /) -> object: ...")
+    for name, func in funcs:
+        given = _param_names(func, (param_names or {}).get(name, ()))
+        params = "".join(f"{given[i]}: {_PY_PARAM.get(t, _PY_TYPE[t])}, " for i, t in enumerate(func.params))
+        params = f", {params}/" if func.params else ""
+        result = _result_type(func)
+        if _usable(name):
+            lines.append(f"    def {name}(self{params}) -> {result}: ...")
+        else:
+            lines.append(_not_a_name("", name))
+    for name, glob in globals_:
+        if not _usable(name):
+            lines.append(_not_a_name("global ", name))
+        elif glob.mutable:
+            lines.append(f"    {name}: {_PY_TYPE[glob.type]}")
+        else:
+            lines += ["    @property", f"    def {name}(self) -> {_PY_TYPE[glob.type]}: ..."]
+    for name in memories:
+        if _usable(name):
+            lines += ["    @property", f"    def {name}(self) -> memoryview: ..."]
+        else:
+            lines.append(_not_a_name("memory ", name))
+    return "\n".join(lines) + "\n"
+
+
+def _param_names(func: FuncType, wanted: tuple[str | None, ...]) -> list[str]:
+    """The names for the parameters of a method in the stub: those of the "name" section where each can be one (an identifier, not a
+    keyword, not `self`, not twice), else `argN` for all of them: a stub that names some and not others reads worse than either."""
+    fallback = [f"arg{i}" for i in range(len(func.params))]
+    if len(wanted) != len(fallback):
+        return fallback
+    seen: set[str] = set()
+    for n in wanted:
+        if (
+            n is None
+            or not n.isidentifier()
+            or not n.isascii()
+            or keyword.iskeyword(n)
+            or n == "self"
+            or n.startswith("__")
+            or n in seen
+        ):
+            return fallback
+        seen.add(n)
+    return [n for n in wanted if n is not None]
+
+
+def _import_type(thing: FuncType | GlobalType | Limits | TableType) -> str:
+    if isinstance(thing, FuncType):
+        return _callable_type(thing)
+    if isinstance(
+        thing, (Limits, TableType)
+    ):  # a memory or a table: the export of another instance (a table: a Table of any module)
+        return "object"
+    return _global_import_type(thing)
+
+
+def _global_import_type(glob: GlobalType) -> str:
+    """What the imports may hold for a global: its value, or (the only way for a mutable one) an export of another instance."""
+    return "object" if glob.mutable else f"{_PY_TYPE[glob.type]} | object"
+
+
+def _py_string(text: str) -> str:
+    return repr(text)

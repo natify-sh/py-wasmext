@@ -1,0 +1,81 @@
+# What wasm2c cannot do, and what can be done about it
+
+Status: **notes, nothing here is built.** Each section is one WebAssembly feature that `wasm2c` of WABT 1.0.42 does not translate (the table is in [FEATURES.md](FEATURES.md)), with what blocks it, which part of that can be got round and which cannot, and what it would cost. Two related items that are not blocked but have the same kind of way round (relaxed SIMD, compact imports) are at the end. The section before the last puts those features next to the ones that `wasm2c` reads only behind a flag, and next to what a runtime like zwasm has.
+
+What `wasm-opt` can do is read from the source of Binaryen (`version_133`, the list of passes in `src/passes/pass.cpp`, a sparse clone), **not run**: no `wasm-opt` binary was available here. A pass that is not in the list does not exist in that version.
+
+## Typed function references
+
+**What it is.** `call_ref`, `ref.func` with a typed result, references with a type of their own (`(ref $t)`, `(ref null $t)`), `br_on_null` and the like.
+
+**What blocks it.** `wat2wasm --enable-function-references` makes the binary, and `wasm2c` stops at `call_ref` (unexpected opcode 0x14). The README of WABT does not tick `wasm2c` for it (strict xfail `3.0 typed function references`).
+
+**What can be got round, and what not.**
+- *In the translator (upstream).* The natural place: `wasm2c` already has `wasm_rt_funcref_t` (`func_type`, `func`, `module_instance`) and `call_indirect` checks the type hash, so a `call_ref` is the same check on a value instead of a table element. This is a change in WABT, not in `wasmext`.
+- *By a rewrite of the module before `wasm2c`.* Possible only for function references with no GC: the typed references would have to be lowered to an untyped `funcref` plus a type check, or to indices into a synthetic table. Every `ref.func`, `ref.null`, `ref.is_null`, `br_on_null` and every local, global and parameter of a reference type is touched, so it is a rewrite of the types of the whole module, not of a few instructions. Large.
+- *With `wasm-opt`.* No pass in Binaryen's list lowers `call_ref`. `directize` turns indirect calls into direct ones (an optimization; not tested on `call_ref`). Not a way.
+
+**Who needs it.** Mostly the modules that also use GC (the languages that compile to WasmGC). Alone it is rare. So its value depends on the section below.
+
+**Verdict.** Wait for WABT. A rewrite is possible but not planned.
+
+## Garbage collection (WasmGC)
+
+**What it is.** `struct`, `array`, `i31`, `ref.cast`, `ref.test`, subtyping, and the allocation of objects that the engine collects.
+
+**What blocks it.** First the *tool*: WABT 1.0.42 does not read the instructions (`wat2wasm --enable-gc`: unexpected token `struct.get`), and `wasm2c --enable-gc` says it supports a limited set of features (strict xfail `3.0 garbage collection`). `wasmext` refuses the GC types in a module. Then the *runtime*: even with a translator there is nothing to translate to. `wasm2c` has no heap of objects, no type descriptors for `ref.cast`, no collector.
+
+**What a real implementation would need** (so that the size is clear): (1) a translator that reads and emits the GC instructions; (2) a heap with objects that carry a runtime type, and the subtyping checks of `ref.cast`/`ref.test`; (3) a collector that finds its roots in the wasm locals (which in the C of an ahead-of-time module are C locals, in registers or on the C stack: a precise collector needs stack maps, which `wasm2c` does not write; the other way is a *conservative* one, scanning the C stack, as the Boehm collector does), in the globals and in the tables; (4) the interplay with the host objects.
+
+**Does the collector of the context do it?** No. The lazy collector in [context_concept.md](context_concept.md) works on *members* (instances, tables) and finds their references in tables and globals. A WasmGC heap is objects *inside* a module, in their thousands, with roots in C locals. It is another level of problem; the context could at most own such a heap.
+
+**Does `wasm-opt` get round it?** No, with a small part that helps nothing in general. Binaryen has `heap2local` ("replace GC allocations with locals"), which removes the allocations that do not escape a function: an optimization on a module that still uses GC, not a lowering. It has `string-lowering` (stringref to imports from the host) and `strip-refining-casts`, `type-merging`, `type-refining` (optimizations). **No pass lowers structs and arrays to linear memory.** (J2CL-like lowering of that kind is done by the compilers, not by `wasm-opt`.)
+
+**Verdict.** Blocked on the tool first. Not planned; the cost is a project of its own.
+
+## Wide arithmetic
+
+**What it is.** `i64.add128`, `i64.sub128`, `i64.mul_wide_s`, `i64.mul_wide_u`: 128-bit operations as pairs of `i64`.
+
+**What blocks it.** `wasm2c --enable-wide-arithmetic` says it "currently only supports a limited set of features" (checked), as its README says.
+
+**What can be got round.**
+- The operations are definable with `i64` ones that `wasm2c` knows: `add128` is two additions and a carry (the carry is a comparison), `sub128` the same with a borrow, `mul_wide` is four 32-bit by 32-bit products and their sums. The rewrite is deterministic and gives the same result on every host. It must be made **before** `wasm2c`, because `wasm2c` stops at the opcode and the generated C has nothing to patch.
+- It needs a rewriter of the function bodies: the parser and the writer of the binary, the new locals, and the multi-value results of the operations (two `i64` out). That is a module-rewriting tool that `wasmext` does not have.
+- *With `wasm-opt`.* Binaryen reads and writes the opcodes (`WideArithmeticFeature`, `I64Add128` in `wasm-binary.h`) but has **no pass that lowers them** (no such name in the list), and its own `wasm2js` says "wide arithmetic is not supported". Not a way.
+
+**Verdict.** Possible, large, not planned until a module needs it (the compilers emit it rarely: big-integer and cryptographic code).
+
+## Related, not blocked in the same way
+
+**Relaxed SIMD.** `wasm2c` aborts on some of the operations (WABT #2886). The specification lets an engine give the result of a relaxed operation as that of the strict one, so a rewrite before `wasm2c` can replace `relaxed_swizzle` by `swizzle`, `relaxed_trunc` by `trunc_sat`, `relaxed_laneselect` by `bitselect`, `relaxed_madd` by a multiply and an add. Binaryen's `remove-relaxed-simd` pass is *not* this: it replaces the instructions with `unreachable`, so the module traps. Needs the same kind of body rewriter as wide arithmetic.
+
+**Compact imports.** Only a shorter encoding of the import section (the module name written once for many imports); `wasm2c` does not read it. Binaryen *reads* it (`readCompactImportsShared`, the feature `CompactImports`), so `wasm-opt --enable-compact-imports in.wasm -o out.wasm` should write the usual form, which `wasm2c` then reads. **Not tested** (no binary here), and it makes `wasm-opt` a tool of the build. A rewrite of only the import section by `wasmext` itself is the other way: the other sections are copied as they are and the section size is written again. Wanted only when a compiler starts to emit it.
+
+## Features that `wasm2c` has by default or behind a flag, and the ones a runtime like zwasm has
+
+The sections above are features that `wasm2c` cannot translate at all. There is another group: features that `wasm2c` of WABT 1.0.42 translates, some **by default** and some **when a flag is given**; they are not gaps of `wasm2c`, but a tool that does not pass a flag has a gap. (`wasm2c --help` of 1.0.42 has `--disable-*` for exceptions, tail call, memory64, multi-memory, extended const, relaxed SIMD and others, which are therefore on; it has `--enable-*` for threads, custom page sizes, function references, GC, wide arithmetic, compact imports and code metadata, which are off.) This section puts the two groups side by side, with what a runtime that has the other features (zwasm, from the report merged into [WASI_COMPONENTS.md](WASI_COMPONENTS.md), "zwasm") does, so that it is clear what a fallback backend would add. The status of `wasmext` is that of the tables in [FEATURES.md](FEATURES.md); the column of zwasm is taken from the `features.json` of the WebAssembly site as that report read it, and was **not checked here**.
+
+| Feature | `wasm2c` 1.0.42 | `wasmext` today | zwasm (by the report) |
+| --- | --- | --- | --- |
+| Exceptions (legacy `try`/`catch`, and `try_table`, `throw_ref`, `exnref`) | on by default | **done** (the flag is passed); an uncaught one is `UncaughtException`; not done: exported or imported tags, `exnref` in a signature | on by default |
+| memory64 (and 64-bit tables) | on by default | **done** inside the module, an exported memory64 is a `memoryview`; a 64-bit table is not exported yet | on by default |
+| Tail calls | on by default | **done**, with two repairs of the C that `wasm2c` 1.0.42 writes (a function with locals; a chain of `return_call_indirect`) | on by default |
+| Extended constants | on by default | **done** | on by default |
+| Multi-memory | on by default | **done** | **only in the interpreter**: a module fused by meld would be run slowly (the report) |
+| Custom page sizes | with `--enable-custom-page-sizes` | **not yet**: the flag is not passed, the `memoryview` assumes 64 KiB pages, a module with a custom page size is refused with `WasmError`; the way to tell the page size is decided, not built | on by default |
+| Threads, shared memory, atomics | with `--enable-threads` (translates; its README does not tick it) | **not yet**: the flag is not passed and the runtime is not built with its threads | yes, with a note: a single-threaded host, `wait` ends by timeout |
+| Relaxed SIMD | on by default, but **aborts** on some of the operations (WABT #2886) | **no**; a rewrite of the bodies before `wasm2c` is an idea (above) | yes, but SIMD only in the JIT: the interpreter traps on a vector instruction |
+| Typed function references | **no** (stops at `call_ref`) | **no** | yes |
+| Garbage collection | **no** (WABT does not read it) | **no**; the types are refused | yes |
+| Wide arithmetic | **limited** | **no** | yes |
+| WASI 0.2 components | no (it does not read a component) | the core module of a component after `unbundle`, with a host written by hand ([WASI_COMPONENTS.md](WASI_COMPONENTS.md)) | yes (its own host) |
+
+What this says:
+- The report lists exceptions, memory64, tail call, extended const and custom page sizes as "behind a flag in `wasm2c`, by default in zwasm". Checked here with `wasm2c --help` of 1.0.42, that is true only of **custom page sizes**; the other four are on by default in `wasm2c`, and `wasmext` has them without passing any flag (no `--enable-*` is given to `wasm2c` in the sources of `wasmext`). The two that are open for `wasmext` are custom page sizes and threads, and for both the flag is needed and the way is known and short (pass the flag and finish the part of the runtime that depends on it: the size of the page in the `memoryview`, `wasm_rt_init_thread` and the C11 atomics).
+- The features that **only a runtime like zwasm has** are those of the sections above (typed function references, garbage collection, wide arithmetic) and relaxed SIMD. For these, a fallback backend is the one way that needs no work on the translator, and its price is in the report: about 2.8 times lower speed (CoreMark: wasm2c about 23 000, zwasm AOT or JIT about 8 000), a runtime of 2 to 2.5 MB in the artifact, and a JIT or AOT only on x86_64 and arm64 (on 32-bit targets the interpreter is left, and multi-memory is there only in the interpreter).
+- So the order for a module that `wasm2c` does not take stays: wait for WABT or rewrite the module (sections above) before a second backend, and use a second backend only for what has no other way.
+
+## What `wasm-opt` is good for here, from the list of passes
+
+Lowerings that exist and that could be used to get *to* something `wasm2c` reads: `memory64-lowering` (and `table64-lowering`, an alias), `multi-memory-lowering`, `i64-to-i32-lowering`, `signext-lowering`, `llvm-nontrapping-fptoint-lowering`, `alignment-lowering`, `strip-eh`, `translate-to-exnref`, and `asyncify` (the pause and resume of the idea in FEATURES.md, "Fuel"). `wasm2c` reads most of the things these lower, so they are not needed now. `wasm-opt` is **not** in the wabt-package; using it means a second tool in the build.

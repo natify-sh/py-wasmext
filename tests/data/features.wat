@@ -1,0 +1,21 @@
+;; What the generated extension has to get right: every number type, imports, traps, memory, re-entry.
+;; features.wasm is `wat2wasm features.wat` (a test checks that they agree).
+(module
+  (import "env" "log" (func $log (param i32)))
+  (import "env" "twice" (func $twice (param f64) (result f64)))
+  (import "env" "cb" (func $cb))
+  (memory (export "mem") 1 3)
+  (data (i32.const 0) "hi")
+  (global (export "answer") i32 (i32.const 42))
+  (table (export "tbl") 1 funcref)
+  (func (export "add") (param i32 i32) (result i32) local.get 0 local.get 1 i32.add)
+  (func (export "mul64") (param i64 i64) (result i64) local.get 0 local.get 1 i64.mul)
+  (func (export "fadd") (param f32 f32) (result f32) local.get 0 local.get 1 f32.add)
+  (func (export "dbl") (param f64) (result f64) local.get 0 call $twice)
+  (func (export "say") (param i32) local.get 0 call $log)
+  (func (export "div") (param i32 i32) (result i32) local.get 0 local.get 1 i32.div_s)
+  (func (export "boom") unreachable)
+  (func (export "reenter") call $cb unreachable)
+  (func (export "grow") (param i32) (result i32) local.get 0 memory.grow)
+  (func (export "nop"))
+  (func (export "pair") (result i32 i32) i32.const 1 i32.const 2))

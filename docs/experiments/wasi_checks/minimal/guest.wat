@@ -1,0 +1,11 @@
+(module
+  (import "demo:text/host@0.1.0" "lookup" (func $lookup (param i32 i32) (result i32)))
+  (memory (export "memory") 1)
+  (global $bump (mut i32) (i32.const 1024))
+  (func (export "cabi_realloc") (param i32 i32 i32 i32) (result i32)
+    (local $p i32)
+    (local.set $p (global.get $bump))
+    (global.set $bump (i32.add (global.get $bump) (local.get 3)))
+    (local.get $p))
+  (func (export "demo:text/api@0.1.0#run") (param $ptr i32) (param $len i32) (result i32)
+    (i32.add (call $lookup (local.get $ptr) (local.get $len)) (i32.const 1))))

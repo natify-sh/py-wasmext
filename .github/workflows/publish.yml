@@ -1,0 +1,185 @@
+name: Release
+
+# wasmext is a pure Python package (py3-none-any): one sdist and one wheel, whatever the platform. The version is the tag, through
+# setuptools-scm (a tag v0.1.0a1 makes 0.1.0a1); nothing is written in pyproject.toml.
+#
+#   push of a tag v*       build, check, GitHub Release (a pre-release when the version has a/b/rc) and PyPI (trusted publishing,
+#                          the environment "pypi"); pip does not install an a/b/rc version unless it is asked to (--pre)
+#   pull_request           build and check only: nothing is published, no permission for it is used
+#   workflow_dispatch      the same build; with "testpypi", it publishes to TestPyPI
+
+on:
+  push:
+    tags:
+      - "v*"
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "LICENSE"
+  workflow_dispatch:
+    inputs:
+      testpypi:
+        description: "Publish to TestPyPI"
+        required: false
+        type: boolean
+        default: false
+      version:
+        description: "Override the version (e.g. 0.1.0a1): TestPyPI needs a clean version, not a dev one"
+        required: false
+        type: string
+        default: ""
+
+run-name: >
+  Release → ${{ github.event_name == 'push' && 'GitHub Release' ||
+      github.event_name == 'workflow_dispatch' && inputs.testpypi && 'TestPyPI' ||
+      'Build Only' }}
+
+concurrency:
+  group: release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build the sdist and the wheel
+    runs-on: ubuntu-latest
+    env:
+      SETUPTOOLS_SCM_PRETEND_VERSION: ${{ inputs.version }}
+      # PyPI and TestPyPI reject a local version (+g<hash>): it is dropped when this run publishes, and kept in a build-only one.
+      SETUPTOOLS_SCM_OVERRIDES: ${{ (github.event_name == 'push' || inputs.testpypi) && '{local_scheme = "no-local-version"}' || '' }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # setuptools-scm has to see the tags
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          python-version: "3.11"
+          github-token: ${{ github.token }}
+
+      - name: Build
+        run: uv build --out-dir dist
+        shell: bash
+
+      - name: The files are named by the tag
+        if: ${{ github.event_name == 'push' }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          ls dist
+          test -f "dist/wasmext-${VERSION}.tar.gz" && test -f "dist/wasmext-${VERSION}-py3-none-any.whl" || {
+            echo "the tag $GITHUB_REF_NAME and the version of the files differ"
+            exit 1
+          }
+        shell: bash
+
+      - name: Check the metadata
+        run: uvx twine check --strict dist/*
+        shell: bash
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: ./dist
+          retention-days: 14
+
+  smoke:
+    name: The wheel installs and runs on ${{ matrix.os }}
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Install uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          python-version: "3.11"
+          github-token: ${{ github.token }}
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: ./dist
+
+      - name: Install the wheel and run it
+        run: |
+          uv venv smoke
+          uv pip install --python smoke dist/*.whl
+          smoke/bin/python -m wasmext --help || smoke/Scripts/python -m wasmext --help
+          smoke/bin/python -c "import wasmext" || smoke/Scripts/python -c "import wasmext"
+        shell: bash
+
+  tested:
+    name: The tests passed on this commit
+    # A release is made from a commit that the test suite (workflow pre-commit.yml: pytest on Linux, macOS and Windows) has passed: a tag on a
+    # commit that was never tested, or that failed, is not published.
+    if: ${{ github.event_name == 'push' }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    steps:
+      - name: Find a successful run of pre-commit.yml for the commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ok=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/pre-commit.yml/runs?head_sha=$GITHUB_SHA&status=completed" \
+            --jq '[.workflow_runs[] | select(.conclusion == "success")] | length')
+          if [ "$ok" -lt 1 ]; then
+            echo "no successful run of the tests for $GITHUB_SHA: wait for them, or run them, then push the tag again"
+            exit 1
+          fi
+        shell: bash
+
+  deploy:
+    name: Publish
+    needs: [build, smoke, tested]
+    if: ${{ always() && !cancelled() && needs.build.result == 'success' && needs.smoke.result == 'success' && (github.event_name == 'push' && needs.tested.result == 'success' || github.event_name == 'workflow_dispatch' && inputs.testpypi) }}
+    runs-on: ubuntu-latest
+    environment: ${{ github.event_name == 'push' && 'pypi' || 'testpypi' }}
+    permissions:
+      contents: write # the GitHub Release
+      id-token: write # trusted publishing (PyPI)
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: ./dist
+
+      - name: Resolve the tag and the version
+        id: meta
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+          if [[ "$VERSION" =~ (a|b|rc|alpha|beta|pre)[0-9]*$ ]]; then PRERELEASE=true; else PRERELEASE=false; fi
+          echo "tag=$TAG"               >> "$GITHUB_OUTPUT"
+          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
+        shell: bash
+
+      - name: Create the GitHub Release
+        if: ${{ github.event_name == 'push' }}
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: ${{ steps.meta.outputs.tag }}
+          generate_release_notes: true
+          prerelease: ${{ steps.meta.outputs.prerelease }}
+          files: ./dist/*
+
+      - name: Publish to PyPI
+        if: ${{ github.event_name == 'push' }}
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          skip-existing: true
+
+      - name: Publish to TestPyPI
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.testpypi }}
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          skip-existing: true
+          repository-url: https://test.pypi.org/legacy/

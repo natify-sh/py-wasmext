@@ -1,0 +1,18 @@
+package demo:text@0.1.0;
+
+interface host {
+  lookup: func(key: string) -> u32;
+}
+
+interface api {
+  run: func(name: string) -> u32;
+}
+
+world provider {
+  export host;
+}
+
+world guest {
+  import host;
+  export api;
+}

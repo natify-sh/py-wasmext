@@ -1,0 +1,99 @@
+[build-system]
+requires = ["setuptools>=77", "setuptools-scm>=8"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wasmext"
+authors = [{ name = "o-murphy", email = "thehelixpg@gmail.com" }]
+description = "Turn WebAssembly modules into native CPython extensions (wasm2c), from setup.py or the command line"
+readme = "README.md"
+requires-python = ">=3.11"
+keywords = ["webassembly", "wasm", "wasm2c", "aot", "simd", "extension", "cibuildwheel"]
+license = "MIT"
+license-files = ["LICENSE", "NOTICE.md"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: C",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.15",
+    "Topic :: Software Development :: Build Tools",
+    "Topic :: Software Development :: Compilers",
+    "Typing :: Typed",
+]
+dependencies = [
+    "wabt-package>=1.0.42.0",
+    # natify(), the command and the import hook all build through setuptools and the distutils it provides (the compiler, the flags of
+    # the platform), whichever backend a project has; the lower bound is the version the suite runs with (uv.lock)
+    "setuptools>=84",
+]
+dynamic = ["version"]
+
+[project.urls]
+Homepage = "https://github.com/natify-sh/py-wasmext"
+Repository = "https://github.com/natify-sh/py-wasmext"
+Issues = "https://github.com/natify-sh/py-wasmext/issues"
+Features = "https://github.com/natify-sh/py-wasmext/blob/main/docs/FEATURES.md"
+
+[project.scripts]
+wasmext = "wasmext._cli:main"
+
+[project.entry-points."setuptools.finalize_distribution_options"]
+wasmext = "wasmext._setuptools:finalize_distribution_options"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+packages = ["wasmext"]
+py-modules = ["wasmimport"]
+
+[tool.setuptools.package-data]
+wasmext = ["py.typed", "c/*.h"]
+
+[tool.setuptools_scm]
+root = "."
+fallback_version = "0.0.0.dev0"
+
+[tool.coverage.run]
+source = ["wasmext"]
+branch = true
+
+[tool.coverage.report]
+exclude_also = ["if TYPE_CHECKING:", "raise NotImplementedError", "pragma: no cover"]
+
+[tool.pytest.ini_options]
+minversion = "9"
+addopts = "-rf"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+extend-exclude = ["build", "docs/experiments"]  # reference sources of reports, kept as they were written
+
+[tool.pyright]
+include = ["src", "tests"]
+pythonVersion = "3.11"
+typeCheckingMode = "strict"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-cov>=6",
+    "pyright>=1.1.400",
+    "ruff>=0.16.0",
+    "setuptools>=77",
+    "setuptools-scm>=8",
+]
+# only to make examples/coremark/src/coremark/_core.wasm again (build_wasm.py); not installed by `uv sync`/`uv run`
+wasm = [
+    "ziglang>=0.17.0",
+]

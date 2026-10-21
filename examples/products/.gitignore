@@ -1,0 +1,6 @@
+# built by wasmext into the package
+src/productsdemo/hello
+src/productsdemo/hello.exe
+src/productsdemo/*.dll
+src/productsdemo/*_ctypes.py
+src/productsdemo/*_ctypes.pyi

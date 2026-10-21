@@ -1,0 +1,8 @@
+[package]
+name = "envplan"
+version = "0.1.0"
+edition = "2021"
+[dependencies]
+wasmtime-environ = { version = "=50.0.0", features = ["component-model", "compile"] }
+wasmparser = "*"
+anyhow = "1"

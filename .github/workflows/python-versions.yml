@@ -1,0 +1,59 @@
+name: Python versions
+
+# The test suite on the newest CPython, the ordinary build and the free-threaded one (Pre-commit and Coverage run it on 3.11, the oldest wasmext supports).
+# The free-threaded build has no abi3 (3.15 has abi3t, which wasmext does not build: cibuildwheel does not tag it yet), so there the extension is native
+# and the tests of abi3 are skipped.
+
+on:
+  push:
+    paths:
+      - "pyproject.toml"
+      - "src/**"
+      - "tests/**"
+      - ".github/workflows/python-versions.yml"
+  pull_request:
+    paths:
+      - "pyproject.toml"
+      - "src/**"
+      - "tests/**"
+      - ".github/workflows/python-versions.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: python-versions-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    name: pytest on Python ${{ matrix.python }} (${{ matrix.os }})
+    # a branch of this repository is run by its push; a pull request is run only when it comes from a fork (a push to a fork is not seen here)
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python: ["3.15", "3.15t"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # setuptools-scm has to see the tags
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          python-version: ${{ matrix.python }}
+          enable-cache: true
+          github-token: ${{ github.token }}
+
+      - name: Install
+        run: uv sync --python ${{ matrix.python }}
+
+      - name: The interpreter
+        run: uv run --python ${{ matrix.python }} python -c "import sys, sysconfig, importlib.machinery as m; print(sys.version); print(m.EXTENSION_SUFFIXES); print(sysconfig.get_config_var('Py_GIL_DISABLED'))"
+
+      - name: Test
+        run: uv run --python ${{ matrix.python }} pytest -q

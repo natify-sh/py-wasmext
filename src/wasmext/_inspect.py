@@ -10,7 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from ._gen import GenError, _signature, _why_not, generate  # pyright: ignore[reportPrivateUsage]
-from ._wasm import FuncType, GlobalType, Limits, Module, TableType, WasmError, parse
+from ._wasm import WASI_HINTS, FuncType, GlobalType, Limits, Module, TableType, WasmError, parse, wasi_flavor
 
 __all__ = ["inspect"]
 
@@ -69,6 +69,8 @@ def inspect(data: bytes, label: str) -> tuple[str, bool]:
         return f"{label}: not a module wasmext can read: {exc}\n", False
 
     out = [f"{label} ({len(data)} bytes)"]
+    if (flavor := wasi_flavor(data)) != "none":
+        out.append(f"wasi: {flavor}" + (f": {hint}" if (hint := WASI_HINTS.get(flavor)) else ""))
     ok = True
     # the generator decides what is exposed: its list of what it leaves out wins over the rules above (a name with a NUL, a name that
     # would hide a special name of Instance, ...), so that the report cannot say "method of Instance" for what is not one

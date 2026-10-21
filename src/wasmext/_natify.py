@@ -32,7 +32,7 @@ from typing import TYPE_CHECKING, Any
 
 from ._gen import GenError, Glue, generate, module_prefix
 from ._toolchain import Toolchain, find_toolchain
-from ._wasm import WasmError, parse
+from ._wasm import WASI_HINTS, WasmError, parse, wasi_flavor
 
 if TYPE_CHECKING:
     from setuptools import Extension
@@ -527,6 +527,8 @@ def _prepare(
         glue = generate(parsed, name, version=_release_version(), share_tables=share_tables)
     except (WasmError, GenError) as exc:
         raise type(exc)(f"{wasm}: {exc}") from None
+    if not quiet and (hint := WASI_HINTS.get(wasi_flavor(data))):
+        print(f"wasmext: {wasm}: {hint}", file=sys.stderr)
     if (
         not quiet
         and (note := _parts_warning(wanted, len(data), len(parsed.functions)))

@@ -25,12 +25,15 @@ __all__ = [
     "Module",
     "TableType",
     "ValType",
+    "WasiFlavor",
     "WasmError",
     "parse",
+    "wasi_flavor",
 ]
 
 ValType = Literal["i32", "i64", "f32", "f64", "v128", "funcref", "externref"]
 ExternKind = Literal["func", "table", "memory", "global", "tag"]
+WasiFlavor = Literal["component", "fused", "core-0.1", "core-0.2", "core-0.3", "none", "unknown"]
 _T = TypeVar("_T")
 
 _VALTYPES: Final[dict[int, ValType]] = {
@@ -44,8 +47,16 @@ _VALTYPES: Final[dict[int, ValType]] = {
 }
 _KINDS: Final[tuple[ExternKind, ...]] = ("func", "table", "memory", "global", "tag")
 
+# What to tell about a flavor that wasmext does not run by itself (WASI 0.1 is built into the module; the others are not).
+WASI_HINTS: Final[dict[str, str]] = {
+    "core-0.2": "imports WASI 0.2 (wasi:*@0.2): it is built, but wasmext does not answer those calls; the host has to (docs/WASI_COMPONENTS.md)",
+    "core-0.3": "imports WASI 0.3 (wasi:*@0.3): it is built, but wasmext does not answer those calls; the host has to (docs/WASI_COMPONENTS.md)",
+    "fused": "made by `meld fuse` from components: it is built, but any WASI 0.2/0.3 calls it makes are for the host to answer (docs/WASI_COMPONENTS.md)",
+}
+
 _MAGIC: Final = b"\0asm"
 _VERSION: Final = b"\x01\x00\x00\x00"
+_COMPONENT_VERSION: Final = b"\x0d\x00\x01\x00"  # the version field of a component (a module has 1)
 
 # The order in which sections may appear (the id of the section -> its place); the tag section sits before the
 # globals, the data count before the code. Custom sections (0) may be anywhere.
@@ -131,6 +142,7 @@ class Module:
     start: int | None = None
     # From the "name" section, which is only a help for people: function index -> {local index -> name}; the parameters are the first locals.
     local_names: dict[int, dict[int, str]] = field(default_factory=dict[int, dict[int, str]])
+    custom: list[str] = field(default_factory=list[str])  # the names of the custom sections, in order
 
     def _imported(self, kind: ExternKind) -> list[FuncType | TableType | Limits | GlobalType]:
         return [i.type for i in self.imports if i.kind == kind]
@@ -329,6 +341,11 @@ def parse(data: bytes) -> Module:
     """Read the type, import, function, table, memory, global, tag, export and start sections of a binary module."""
     if data[:4] != _MAGIC:
         raise WasmError("not a WebAssembly binary: the magic number is missing")
+    if data[4:8] == _COMPONENT_VERSION:
+        raise WasmError(
+            "this is a WebAssembly component, not a core module; take the core modules out with `wasm-tools component unbundle`, "
+            "or fuse a composed component with `meld fuse` (see docs/WASI_COMPONENTS.md)"
+        )
     if data[4:8] != _VERSION:
         raise WasmError(f"unsupported WebAssembly binary version {data[4:8].hex() or '(none)'}")
     reader = _Reader(data, 8)
@@ -339,7 +356,9 @@ def parse(data: bytes) -> Module:
         section_id = reader.byte()
         body = reader.sub(reader.uleb())
         if section_id == 0:  # custom: the name and then anything
-            if body.name() == "name":
+            custom = body.name()
+            module.custom.append(custom)
+            if custom == "name":
                 module.local_names = _local_names(body)
             continue
         if section_id not in _ORDER:
@@ -355,6 +374,43 @@ def parse(data: bytes) -> Module:
         raise WasmError(f"{len(module.functions)} functions declared, {code_count} bodies in the code section")
     _check_indices(module)
     return module
+
+
+def wasi_flavor(data: bytes) -> WasiFlavor:
+    """What kind of WASI file `data` is, from its bytes alone.
+
+    `component`: a component (version field `0d 00 01 00`), which wasmext does not read. `fused`: a core module with a custom
+    section `meld.*`, made by `meld fuse` from components. `core-0.1`, `core-0.2`, `core-0.3`: a core module whose imports (or,
+    failing those, exports) are of `wasi_snapshot_preview1` / `wasi_unstable`, or of `wasi:*@0.2.x` / `wasi:*@0.3.x`; the newest wins.
+    `none`: a core module that uses no WASI. `unknown`: not a module wasmext can read.
+    """
+    if data[:4] == _MAGIC and data[4:8] == _COMPONENT_VERSION:
+        return "component"
+    try:
+        module = parse(data)
+    except WasmError:
+        return "unknown"
+    if any(name.startswith("meld.") for name in module.custom):
+        return "fused"
+    versions = {
+        _wasi_version(name) for name in [*(i.module for i in module.imports), *(e.name for e in module.exports)]
+    }
+    for flavor in ("core-0.3", "core-0.2", "core-0.1"):
+        if flavor in versions:
+            return flavor
+    return "none"
+
+
+def _wasi_version(name: str) -> str:
+    if name in ("wasi_snapshot_preview1", "wasi_unstable"):
+        return "core-0.1"
+    if name.startswith("wasi:"):
+        _, _, version = name.partition("@")
+        if version.startswith("0.2."):
+            return "core-0.2"
+        if version.startswith("0.3."):
+            return "core-0.3"
+    return ""
 
 
 def _local_names(r: _Reader) -> dict[int, dict[int, str]]:

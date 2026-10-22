@@ -30,6 +30,7 @@ Status: **a reading of sources; nothing was run or built.** Written on 2026-10-2
 - The reader knows the shared bit of `limits` (`Limits.shared`), and linking a shared memory is **refused** (FEATURES.md, "Imported memories").
 - `--enable-threads` is **not passed** to `wasm2c`; the runtime is built without its threads; `WASMEXT_LAYOUT` does not cover `wasm_rt_shared_memory_t`. FEATURES.md lists threads as open ("after tables").
 - The extension does not call `wasm_rt_init_thread` for a Python thread that enters it (`wasm_rt_init` is called once). **[read]**
+  **Changed on 2026-10-22:** every Python thread that calls a module now sets itself up at its first call (the limit of its stack with the default check; the alternate stack and a capsule that gives it back with `WASMEXT_STACK_CHECK=guard`): `tests/test_threads.py`; see "Design: signals and the stack" in [DESIGN.md](DESIGN.md).
 
 ## WASIX **[read]**
 

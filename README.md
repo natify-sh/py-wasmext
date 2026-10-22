@@ -218,6 +218,19 @@ guard-pages = { x86 = false, armv7l = false, default = true }   # or just true /
 interpreter that builds names them, which in a cross build (cibuildwheel for Windows x86 or ARM64) is the target. A memory that cannot be reserved is a `MemoryError`; wasmext does not
 switch the mode when it runs (that would need both versions of the code in the module).
 
+
+### Traps from the stack and from signals
+
+A fault in a module is the error of a call (`Trap`), not the end of the process that holds the module: an access past the memory, and the stack running out. Three things to know:
+
+- **The stack is checked in each function by default** (off Windows, Emscripten and WASI): the prologue compares the address of the frame with the lowest safe address of the thread. No handler of signals on an
+  alternate stack per thread is needed for it, and an overflow is called what it is in every thread. It costs about 9% on CoreMark against C (the guard page: about 2%). `WASMEXT_STACK_CHECK=guard` in the
+  environment of the build uses the guard page and the handler instead, and warns about what it gives up; any other value is an error. Windows keeps the counter of the depth of wasm2c (500 calls).
+  Measurements and the reasons: [experiments/stack_limit](docs/experiments/stack_limit/README.md). Alpha (`0.0.1a2`).
+- **Two modules in one process** each turn a fault into a trap of their own (a chain of handlers of SIGSEGV/SIGBUS; the runtime of wasm2c installs none of its own). A crash that is not in a call of a module stays a crash.
+  Known: a module called from inside a call of another module, through Python, is not told apart when a fault comes (the one first in the chain takes it).
+- Any thread may call a module; each sets itself up at its first call.
+
 ### Large modules
 
 The C that `wasm2c` writes is about 13 times the size of the module, and one file of millions of lines is a very long job for a

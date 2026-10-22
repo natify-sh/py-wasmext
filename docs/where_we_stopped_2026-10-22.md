@@ -82,3 +82,7 @@ Done and in `dev` (all on the CI of Linux; Windows and the Python versions were 
 - **Discussed, recorded as notes, nothing built:** who owns what between the context and the runtime ([context_concept.md](context_concept.md), end); an own translator against `wasm2c` and the slow upstream ([backend_alternatives.md](backend_alternatives.md), end); `.patch` files and a vendored WABT (**decided not now**).
 
 Decided afterwards (the owner): the check of the stack stays the default; **no mode with no check at all** ("as native"), because a module is someone else's code and a fault in it must be a `Trap` that the caller handles, not the end of the host. Waits for the owner: the issue about the signal handler is opened and **closed by the maintainers as not the intended use** (the built-in runtime is to be treated as usable and maintained; building a runtime that suits a setup is expected), nothing asked of WABT; whether to report the misclassified overflow; which pull request "of the author" was meant for adoption (#2782 is a preview-1 host with libuv and was not taken); the questions of section 5.
+
+## Added: symbol collisions between modules
+
+Static linking of several wasmext modules is not possible today (33 duplicate `wasm_rt_*` symbols; same module names also collide in the API). Description, what works and the options for later: "Known gaps" in [FEATURES.md](FEATURES.md). Not decided, not built.

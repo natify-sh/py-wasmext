@@ -106,8 +106,8 @@ The expectation was that CPython would be the harder one; **for the build it was
 
 ## Awaiting upstream
 
-- **meld** [#512](https://github.com/pulseengine/meld/issues/512) (closed by [#516](https://github.com/pulseengine/meld/pull/516), **not released yet**): the multi-component
-  results here (strings through adapters, the duplicated imports) were measured on meld 0.64.0. To repeat on the release that carries #516; see WASI_COMPONENTS.md.
+- **meld** [#512](https://github.com/pulseengine/meld/issues/512) (closed by [#516](https://github.com/pulseengine/meld/pull/516)) and [#513](https://github.com/pulseengine/meld/issues/513) (closed by [#518](https://github.com/pulseengine/meld/pull/518)), **not released yet**: the multi-component
+  results here (strings through adapters, the duplicated imports) were measured on meld 0.64.0. To repeat on the release that carries #516 and #518; see WASI_COMPONENTS.md.
 - **WABT** [#2896](https://github.com/WebAssembly/wabt/issues/2896) (imported function in an element segment; repaired in wasmext meanwhile) and
   [#2897](https://github.com/WebAssembly/wabt/issues/2897) (compact imports, encoding `0x7E`; wasmext normalizes before `wasm2c`): open.
 

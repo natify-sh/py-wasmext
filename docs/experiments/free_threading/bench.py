@@ -160,7 +160,12 @@ print(out[0] if out else 'no trap')
 def calls_inside():
     print("\n5. calls inside the module: fib(32), about 7 million calls (best of 5, ms)")
     inst = ft.Instance()
-    best = min((lambda t0: (inst.fib(32), time.perf_counter() - t0)[1])(time.perf_counter()) for _ in range(5))
+    times = []
+    for _ in range(5):
+        t0 = time.perf_counter()
+        inst.fib(32)
+        times.append(time.perf_counter() - t0)
+    best = min(times)
     print(f"   {best * 1000:.0f} ms, {7_049_155 / best / 1e6:.0f} million calls a second")
 
 

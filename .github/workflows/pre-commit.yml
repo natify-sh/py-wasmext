@@ -2,6 +2,7 @@ name: Pre-commit
 
 on:
   push:
+    branches: ["**"]  # not a tag
     paths-ignore: &non-code-paths
       - "**.md"
       - "docs/**"

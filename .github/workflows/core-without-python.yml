@@ -8,6 +8,7 @@ name: Core without Python
 
 on:
   push:
+    branches: ["**"]  # not a tag
     paths:
       - "src/wasmext/c/**"
       - "src/wasmext/_gen.py"

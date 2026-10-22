@@ -60,8 +60,7 @@ reproduction in the repository where one was kept. Where wasmext has a patch, it
 | [#2896](https://github.com/WebAssembly/wabt/issues/2896) | an imported function in an element segment gets the wrong module instance | `_repair_imported_elements` in `_natify.py` (needed by `meld fuse` output) | when fixed |
 | [#2897](https://github.com/WebAssembly/wabt/issues/2897) | compact imports: the encoding `0x7E` is decoded differently from the proposal and its spec tests | wasmext reads both forms itself and writes the ordinary form before `wasm2c` | when `wasm2c` follows the proposal |
 
-[#2884](https://github.com/WebAssembly/wabt/issues/2884) (`return_call` in a function with locals writes C that does not compile; patched by a regex in `_natify.py`) is referred to in FEATURES.md and is **not in that list of open issues**: whether it was closed or
-fixed was not checked. The patch stays until a released `wasm2c` is checked.
+[#2884](https://github.com/WebAssembly/wabt/issues/2884) (`return_call` in a function with locals writes C that does not compile) is **closed**: fixed by [PR #2887](https://github.com/WebAssembly/wabt/pull/2887), merged 2026-10-19 (`CWriter::WriteTailCallee` recorded `stack_vars_section` before `WriteLocals`). wasmext patches it with a regex in `_natify.py` (`_TAIL_CALL_LOCALS`); the patch stays until the minimum `wasm2c` has the fix, and `tests/test_patches_needed.py` fails the day the toolchain has it.
 
 ## Related, not blocked in the same way
 

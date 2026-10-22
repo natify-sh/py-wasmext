@@ -69,6 +69,27 @@ B, C and E are steps on the way to D, or smaller answers to the same wound. D is
 - **So the traps may need a smaller contract than the whole runtime** (a hypothesis, not tried): one handler of ours plus the stack of entries that every runtime already routes `wasm_rt_trap` to. The table of the whole runtime would then be for what else is shared (a registry of tags, one setup of a thread, one place for the state), not for traps.
 - Still open from the list: concurrent imports (who is the master), subinterpreters, macOS and Windows, other configurations, the limit of 64 runtimes for slaves that still join the stack, the lifetime of the master, how the fall-back is told to the user, a C host without a capsule, and what the layout fingerprint does not cover.
 
+## Conclusion of 2026-10-22: which concept is the most native with the autonomy kept (a judgement from what was tried)
+
+**The most promising, and the one the experiments point to as the common core: one handler of signals for the process, installed by the first module that loads (every copy of the runtime built with `WASM_RT_SKIP_SIGNAL_RECOVERY`), which turns the signal into `wasmext_traps->trap` of the stack of entries that every runtime already routes `wasm_rt_trap` to,
+plus the per-thread setup of the Python layer (done).** It is *not tried yet*; it is what the experiments make necessary, and it asks the least:
+- **autonomy:** every module keeps its own copy of the runtime and runs alone; the first module installs the handler, so one is enough, and modules of **other runtime versions coexist** (they do not install a handler that competes, which is what broke the master in the experiment);
+- **native:** it uses knobs that `wasm-rt` already has (`WASM_RT_SKIP_SIGNAL_RECOVERY`, `WASM_RT_TRAP_HANDLER`) and the stack of entries that `wasmext_traps` already is; no symbol tricks, no renaming, no table of the whole runtime;
+- **the contract** is small and versioned (the handler, the stack of entries), found through the same kind of capsule `wasmext_traps` already uses; a light `push`/`pop` for modules that share no tables is needed so that the cost does not grow with the number of modules (and the limit of 64 goes away for them).
+
+| Concept | Tried? | Verdict |
+| --- | --- | --- |
+| Thread setup by a capsule in the thread state (the fix) | **done**, tested | needed by every other choice; keep |
+| `--share-tables` (the full stack of entries) for all modules | **run** with two modules: works | the loop over all runtimes and the limit of 64 rule it out as it is |
+| **One handler of ours + `SKIP_SIGNAL_RECOVERY` + the (light) stack of entries** | **not tried** | **the best candidate; the next experiment** |
+| Master and slave, the whole runtime through a capsule (this page) | **run**: possible, same speed, both orders of import, pure slaves | heavier than the traps need; its fall-back **steals the handler** unless the handler is decided by one party, which is the candidate above; keep for what else is to be shared (one registry of tags) |
+| A record of the process | idea | the candidate above is its practical form |
+| `WASM_RT_STACK_DEPTH_COUNT` (no handler for the stack) | **run** | about 4 times slower on calls inside a module; a limit counted in frames: an option, not the default |
+| Weak symbols or symbol interposition instead of a capsule | read, not run | no on macOS and Windows, no check of compatibility before the binding, hijacks other packages' runtimes; no speed gain (the forwarders cost nothing measurable) |
+| The context (a registry, explicit, bound at creation) | idea; measured costs | orthogonal: it is about who may exchange references, not about the OS resources; stays as designed |
+
+What is **not** known: whether the candidate works on macOS and Windows (a vectored handler there), with a free-threaded build, with a C host that has no capsule, and with subinterpreters. It is a hypothesis until `tests/test_two_modules.py` (the `xfail(strict)` test) passes on it.
+
 ## How to choose
 
 If 1 and 2 show that the thread-local state can be reached cheaply (or can stay per copy with only the entry shared), D is possible and is likely the best answer to the whole class of problems (signals, stacks, threads, tags). If not, **B** (the light entry on the existing stack of traps, with a fall-back) is the smaller answer to the wound that hurts now, and D stays an idea. Either way

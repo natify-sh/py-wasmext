@@ -269,7 +269,7 @@ def test_abi3_is_the_default_where_the_interpreter_has_it(project: Path) -> None
 @needs_abi3
 def test_native_on_request(project: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     [native] = natify("pkg/*.wasm", quiet=True, limited_api=False)
-    assert not native.py_limited_api and not native.define_macros
+    assert not native.py_limited_api and all(m[0] != "Py_LIMITED_API" for m in native.define_macros)
     monkeypatch.setenv("WASMEXT_LIMITED_API", "0")
     [from_env] = natify("pkg/*.wasm", quiet=True)
     [code_wins] = natify("pkg/*.wasm", quiet=True, limited_api=True)
@@ -293,7 +293,7 @@ def test_where_there_is_no_stable_abi_the_extension_is_native(
     elif why != "free-threaded":
         monkeypatch.setattr(_natify.sysconfig, "get_platform", lambda: f"{why}_4_0_arm64")
     [ext] = natify("pkg/*.wasm", limited_api=True)  # asked for, but impossible: native, and it says why
-    assert not ext.py_limited_api and not ext.define_macros
+    assert not ext.py_limited_api and all(m[0] != "Py_LIMITED_API" for m in ext.define_macros)
     assert "building a native extension" in capsys.readouterr().err
     [default] = natify("pkg/*.wasm", quiet=True)  # the default does not insist
     assert not default.py_limited_api

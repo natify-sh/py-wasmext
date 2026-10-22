@@ -1,9 +1,9 @@
 """Two modules in one process, each with a runtime of wasm2c of its own: a trap that comes from a signal (a memory access past the guard pages, the stack running out).
 
-The signal handler is one for the process, and every runtime installs its own at `wasm_rt_init` without chaining to the one before it, so the handler is the one of
-the module that was imported last; it turns the signal into a trap of ITS runtime (`g_wasm_rt_jmp_buf` of its copy), which is not the entry of the call that is running
-in the other module, and the process aborts. A trap that is not a signal (`unreachable`) is not affected. Known, not fixed: see "Known gaps" in docs/FEATURES.md and
-docs/context_concept.md. The test is `xfail(strict=True)`: it fails the run when the problem is fixed, so that the mark is taken off.
+The handler of SIGSEGV/SIGBUS is one for the process. The runtime of wasm2c would install its own at `wasm_rt_init` without chaining to the one before it, so the handler
+would be the one of the module imported last, which turns the signal into a trap of ITS runtime and not of the call that is running in the other module. So off Windows
+the runtime installs none and every module installs a link of a chain (WASMEXT_PY_CHAIN, see _gen.py): a fault in a call of the module is its trap, any other is given
+to the handler that was before. Windows calls every vectored handler, so it needs nothing.
 """
 
 import subprocess
@@ -61,14 +61,23 @@ def test_a_trap_that_is_not_a_signal_works_in_the_module_imported_first(
     assert ran.returncode == 0 and "boom trap" in ran.stdout and "alive" in ran.stdout, ran.stderr[-300:]
 
 
-@pytest.mark.xfail(
-    sys.platform != "win32",  # Windows handles the faults by a vectored handler per runtime, and all of them are called
-    strict=True,
-    reason="the handler of the signals is the one of the module imported last; the other aborts the process (known gap)",
-)
-def test_a_signal_trap_works_in_the_module_imported_first(two_mods: tuple[ModuleType, ModuleType]) -> None:
-    ran = _run(two_mods)
-    assert ran.returncode == 0 and "oob trap" in ran.stdout and "alive" in ran.stdout, (
-        ran.returncode,
-        ran.stderr[-300:],
-    )
+def test_a_signal_trap_works_in_both_modules_whatever_the_order(two_mods: tuple[ModuleType, ModuleType]) -> None:
+    a, b = two_mods
+    for mods in (
+        (a, b),
+        (b, a),
+    ):  # the module that is called first is the one imported first, and then the one imported last
+        ran = _run(mods)
+        assert ran.returncode == 0 and "oob trap" in ran.stdout and "alive" in ran.stdout, (
+            ran.returncode,
+            ran.stderr[-300:],
+        )
+
+
+def test_a_real_crash_outside_a_call_is_still_a_crash(two_mods: tuple[ModuleType, ModuleType]) -> None:
+    """The handler is given the faults that are not of a call of its module: the process dies of SIGSEGV as it would without wasmext, not of a trap."""
+    a, b = two_mods
+    assert a.__file__ is not None
+    script = f"import sys, ctypes; sys.path.insert(0, {str(Path(a.__file__).parent)!r}); import {a.__name__}, {b.__name__}; ctypes.string_at(0)"
+    ran = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, check=False, timeout=120)
+    assert ran.returncode in (-11, 139, -7), (ran.returncode, ran.stderr[-300:])

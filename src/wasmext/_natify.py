@@ -374,7 +374,12 @@ _MSVC_X64_ONLY = rb"#elif defined(_MSC_VER) && defined(_M_X64)\1"
 # includes wasm-rt-mem-impl.c turns the abort() called from it into that trap.
 _RUNTIME_WRAPPERS = {
     # a module that shares tables is built as an extension with WASMEXT_TRAP_HANDLER (wasmext_glue.h): its traps do not `longjmp` by themselves
-    "impl": "#ifdef WASMEXT_TRAP_HANDLER\n#define WASM_RT_TRAP_HANDLER WASMEXT_TRAP_HANDLER\n#endif\n#include <wasm-rt-impl.c>\n",
+    "impl": "#ifdef WASMEXT_TRAP_HANDLER\n#define WASM_RT_TRAP_HANDLER WASMEXT_TRAP_HANDLER\n#endif\n"
+    # WASMEXT_PY_CHAIN: the runtime sets up the alternate stack of a thread, but installs no handler of signals (the Python layer installs a link of a chain, see _gen.py)
+    "#ifdef WASMEXT_PY_CHAIN\n#include <signal.h>\n"
+    "static inline int wasmext_noop_sigaction_(int sig, const void *act, void *old) { (void)sig; (void)act; (void)old; return 0; }\n"
+    "#define sigaction(a, b, c) wasmext_noop_sigaction_((a), (b), (c))\n#endif\n"
+    "#include <wasm-rt-impl.c>\n",
     "exceptions": "#include <wasm-rt-exceptions-impl.c>\n",
     "mem": """#include <stdlib.h>
 #include <string.h>
@@ -870,6 +875,14 @@ def _natify(
         ]  # the C dir stays last
         if not use_guard_pages:
             ext.define_macros = [*ext.define_macros, ("WASM_RT_USE_MMAP", "0")]
+        if (
+            os.name != "nt"
+        ):  # the runtimes of several modules would replace each other's handler of SIGSEGV/SIGBUS: see the Python layer. Windows calls every vectored handler
+            ext.define_macros = [*ext.define_macros, ("WASMEXT_PY_CHAIN", "1")]
+            if sys.platform.startswith(
+                "linux"
+            ):  # the handler reads thread-local data: with lazy binding the first access resolves `__tls_get_addr` inside the handler, which hangs
+                ext.extra_link_args = [*(ext.extra_link_args or []), "-Wl,-z,now"]
         if prepared.glue.trap_handler:  # the module shares tables with other instances
             ext.define_macros = [*ext.define_macros, ("WASMEXT_TRAP_HANDLER", prepared.glue.trap_handler)]
         if sys.byteorder == "big":  # the C of wasm2c reads this to lay the memory out reversed; nothing else sets it

@@ -22,6 +22,7 @@ import pytest
 from wasmext import generate, parse
 from wasmext._gen import module_prefix
 from wasmext._natify import (
+    _RUNTIME_WRAPPERS,  # pyright: ignore[reportPrivateUsage]
     _export_tags,  # pyright: ignore[reportPrivateUsage]
     _repair_imported_elements,  # pyright: ignore[reportPrivateUsage]
     _repair_tail_calls,  # pyright: ignore[reportPrivateUsage]
@@ -124,6 +125,17 @@ def build_extension(wabt: Path, tmp_path_factory: pytest.TempPathFactory) -> Cal
         extra = shlex.split(
             os.environ.get("WASMEXT_TEST_CFLAGS", "")
         )  # for a build with a sanitizer (.github/workflows/sanitizers.yml)
+        # as natify() does off Windows: the runtime installs no handler of signals and the Python layer installs a link of a chain (WASMEXT_PY_CHAIN, see _gen.py)
+        chain = os.name != "nt"
+        impl = runtime / "wasm-rt-impl.c"
+        if chain:
+            impl = out / f"{name}_rt_impl.c"
+            impl.write_text(
+                _RUNTIME_WRAPPERS["impl"].replace("#include <wasm-rt-impl.c>", '#include "wasm-rt-impl.c"'),
+                encoding="utf-8",
+            )
+            extra = [*extra, "-DWASMEXT_PY_CHAIN=1"]
+        link_extra = ["-Wl,-z,now"] if chain and sys.platform.startswith("linux") else []
         glue_object = out / f"{name}_py.o"
         # The glue is ours, so it is built strictly: GCC 14 makes these errors (older ones warn), and the manylinux and
         # user machines have it. The C of wasm2c and its runtime are not ours to police.
@@ -152,8 +164,8 @@ def build_extension(wabt: Path, tmp_path_factory: pytest.TempPathFactory) -> Cal
         )
         subprocess.run(
             [
-                cc, "-O1", "-w", "-shared", "-fPIC", *extra, *link_flags, *limited, *(f"-D{d}" for d in defines), *include,
-                glue_object, out / f"{name}_w2c.c", runtime / "wasm-rt-impl.c", runtime / "wasm-rt-mem-impl.c",
+                cc, "-O1", "-w", "-shared", "-fPIC", *extra, *link_extra, *link_flags, *limited, *(f"-D{d}" for d in defines), *include,
+                glue_object, out / f"{name}_w2c.c", impl, runtime / "wasm-rt-mem-impl.c",
                 runtime / "wasm-rt-exceptions-impl.c",
                 "-o", so,
             ],

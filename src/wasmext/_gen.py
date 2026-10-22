@@ -652,13 +652,30 @@ def generate(module: Module, name: str, *, version: str | None = None, share_tab
         hadd(
             "#ifdef WASMEXT_TRAP_HANDLER  /* the extension: the calls into this module share the stack of entries (wasmext_glue.h) */"
         )
-        hadd("#define WASMEXT_ENTER(CODE, FAIL) WASMEXT_THREAD_READY(); WASMEXT_ENTER_SHARED(CODE, FAIL)")
-        hadd("#define WASMEXT_LEAVE() WASMEXT_LEAVE_SHARED()")
+        hadd("#define WASMEXT_ENTER_INNER(CODE, FAIL) WASMEXT_ENTER_SHARED(CODE, FAIL)")
+        hadd("#define WASMEXT_LEAVE_INNER() WASMEXT_LEAVE_SHARED()")
         hadd("#else")
-    hadd(f"#define WASMEXT_ENTER(CODE, FAIL) WASMEXT_THREAD_READY(); WASMEXT_ENTER_{reentrant}(CODE, FAIL)")
-    hadd(f"#define WASMEXT_LEAVE() WASMEXT_LEAVE_{reentrant}()")
+    hadd(f"#define WASMEXT_ENTER_INNER(CODE, FAIL) WASMEXT_ENTER_{reentrant}(CODE, FAIL)")
+    hadd(f"#define WASMEXT_LEAVE_INNER() WASMEXT_LEAVE_{reentrant}()")
     if shares_tables:
         hadd("#endif")
+    hadd(
+        "/* WASMEXT_PY_CHAIN (the extension, not on Windows): the runtime of this module installs no handler of signals, the Python layer installs one that is a link of a chain"
+    )
+    hadd(
+        "   (see there); it needs to know that a call into THIS module is running in the thread, which the entry marks (the mark of an outer call is put back). */"
+    )
+    hadd("#ifdef WASMEXT_PY_CHAIN")
+    hadd("static WASM_RT_THREAD_LOCAL int wasmext_chain_active_;")
+    hadd(
+        "#define WASMEXT_ENTER(CODE, FAIL) WASMEXT_THREAD_READY(); int chain_saved_ = wasmext_chain_active_; wasmext_chain_active_ = 1; \\"
+    )
+    hadd("    WASMEXT_ENTER_INNER(CODE, { wasmext_chain_active_ = chain_saved_; FAIL; })")
+    hadd("#define WASMEXT_LEAVE() wasmext_chain_active_ = chain_saved_; WASMEXT_LEAVE_INNER()")
+    hadd("#else")
+    hadd("#define WASMEXT_ENTER(CODE, FAIL) WASMEXT_THREAD_READY(); WASMEXT_ENTER_INNER(CODE, FAIL)")
+    hadd("#define WASMEXT_LEAVE() WASMEXT_LEAVE_INNER()")
+    hadd("#endif")
     hadd("")
 
     add(
@@ -689,6 +706,60 @@ def generate(module: Module, name: str, *, version: str | None = None, share_tab
     add(
         "   in a debug build and leaves it, so a thread that runs several modules leaves a stack of each but one, as it did). */"
     )
+    add("#ifdef WASMEXT_PY_CHAIN")
+    add(
+        "/* One handler of SIGSEGV/SIGBUS is in force for the process, so the runtimes of several modules would each replace the one before it, and the signal of a fault in a"
+    )
+    add(
+        "   module would reach the runtime of the module imported last, which is not the one whose call is running. Here the runtime installs none (WASMEXT_PY_CHAIN turns its"
+    )
+    add(
+        "   `sigaction` into nothing, see _natify.py); this module installs one at its import and keeps the one that was there. A fault in a call of THIS module (the mark of"
+    )
+    add(
+        "   the entry, wasmext_chain_active_) is turned into a trap of its own runtime; any other fault is given to the handler that was before, so that a real crash of the process"
+    )
+    add(
+        "   (or of the code of some other module) is still a crash, with whatever handler (faulthandler) was meant for it. A fault in a call of another module that was made from"
+    )
+    add(
+        "   inside a call of this one is not told apart: the module imported first would take it (known gap, docs/shared_runtime_concept.md). */"
+    )
+    add("#include <signal.h>")
+    add("static struct sigaction wasmext_chain_old_segv_, wasmext_chain_old_bus_;")
+    add("static int wasmext_chain_installed_;")
+    add("static void wasmext_chain_handler_(int sig, siginfo_t *si, void *ctx) {")
+    add(
+        "    if (wasmext_chain_active_) wasm_rt_trap(si->si_code == SEGV_ACCERR ? WASM_RT_TRAP_OOB : WASM_RT_TRAP_EXHAUSTION);  /* does not return */"
+    )
+    add("    const struct sigaction *old = sig == SIGSEGV ? &wasmext_chain_old_segv_ : &wasmext_chain_old_bus_;")
+    add("    if (old->sa_flags & SA_SIGINFO) {")
+    add("        old->sa_sigaction(sig, si, ctx);")
+    add("    } else if (old->sa_handler == SIG_DFL || old->sa_handler == SIG_IGN) {")
+    add(
+        "        signal(sig, SIG_DFL);  /* the fault happens again when this returns, and the default action ends the process as if nobody had a handler */"
+    )
+    add("    } else {")
+    add("        old->sa_handler(sig);")
+    add("    }")
+    add("}")
+    add("static int wasmext_chain_install_(void) {")
+    add("    struct sigaction sa;")
+    add("    if (wasmext_chain_installed_) return 0;  /* the module initialised again: do not chain to itself */")
+    add("    memset(&sa, 0, sizeof sa);")
+    add("    sa.sa_flags = SA_SIGINFO | SA_ONSTACK;")
+    add("    sigemptyset(&sa.sa_mask);")
+    add("    sa.sa_sigaction = wasmext_chain_handler_;")
+    add(
+        "    if (sigaction(SIGSEGV, &sa, &wasmext_chain_old_segv_) != 0 || sigaction(SIGBUS, &sa, &wasmext_chain_old_bus_) != 0) {"
+    )
+    add('        PyErr_SetString(PyExc_ImportError, "wasmext: sigaction failed");')
+    add("        return -1;")
+    add("    }")
+    add("    wasmext_chain_installed_ = 1;")
+    add("    return 0;")
+    add("}")
+    add("#endif")
     add(f'#define WASMEXT_PY_THREAD_KEY "wasmext.{last}.thread"')
     add("static void wasmext_py_thread_end_(PyObject *capsule) {")
     add("    unsigned long *owner = (unsigned long *)PyCapsule_GetPointer(capsule, WASMEXT_PY_THREAD_KEY);")
@@ -1984,6 +2055,9 @@ def generate(module: Module, name: str, *, version: str | None = None, share_tab
         "    wasm_rt_init();  /* sets up this thread too; not given back, as before (see the comment above wasmext_py_thread_end_) */"
     )
     add("    wasmext_py_ready_ = 1;")
+    add("#ifdef WASMEXT_PY_CHAIN")
+    add("    if (wasmext_chain_install_() < 0) return NULL;")
+    add("#endif")
     if shares_tables:
         add("    if (attach_traps() < 0) return NULL;")
     add("    m = PyModule_Create(&module_def);")

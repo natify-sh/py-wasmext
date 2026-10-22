@@ -16,3 +16,6 @@ warning, so they follow the same policy. (No `.patch` files and no vendored copy
 6. **Tied to the version.** The patches are written for the WABT in `uv.lock`/the minimum in `pyproject.toml`; a new version of WABT is a reason to run the tests, and the table of
    the issues in [wasm2c_limits.md](wasm2c_limits.md) is where each one is followed.
 7. **Upstream when it can be.** A defect of WABT is reported with a small reproducer; a patch that WABT takes is removed here when the minimum version has it.
+
+`tests/test_patches_needed.py` is rule 4 in action: it gives the plain `wasm2c` a small module for each defect (#2884, #2885, #2893, #2896, and the aborts of #2886 and #2895) and says that the defect is still in
+its output. When a release of WABT fixes one, its test fails with what to take away. Not covered: the compact imports of #2897 (the module has to be written in the form the proposal and WABT disagree on).

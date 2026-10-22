@@ -134,7 +134,7 @@ stub, or ctypes wrapper) go to `build/lib.*`, the wheel, or in place. Nothing ge
 | --- | --- | --- |
 | `examples/coremark` | done | reference CoreMark of EEMBC, built with `zig cc` by `build_wasm.py` |
 | `examples/link` | done | two modules that use each other's memory, variable and function |
-| `examples/plugins` | done (locally; in the CI matrix since `1f812fb`, the result is not read yet) | a host and two plugins (`wat/`) that share one table: the plugins put functions in the table of the host, a trap in a plugin comes back to the caller, and a `Table` that no module owns with a function put in it by `Table.set`; 7 tests |
+| `examples/plugins` | done (locally, and in CI on the seven platforms of the desktop matrix: green at `ca35834`) | a host and two plugins (`wat/`) that share one table: the plugins put functions in the table of the host, a trap in a plugin comes back to the caller, and a `Table` that no module owns with a function put in it by `Table.set`; 7 tests |
 | `examples/lua` | done | `lua.wasm`, a WASI program, built in 8 files; tests on the wheel, and the wheels, in CI on seven platforms |
 | `examples/quickjs` | done | `qjs` of QuickJS-ng v0.17.0 (1.1 MB), a WASI program in 4 files, configured in `pyproject.toml` only; 9 tests on the wheel |
 | `examples/products` | done | one wheel (`py3-none-<platform>`) with a shared library (`product = "shared"`, used through its `engine_ctypes` wrapper) and a WASI program (`product = "exe"`), from two `.wat` files; 3 tests on the wheel; `auditwheel` repairs it with no change |
@@ -154,7 +154,7 @@ a call from Python and of a call back into Python was not measured.
 
 ### Where the suite ran
 
-The whole suite (`pytest`, 553 tests and 4 expected failures at the time of writing: Linux locally, and the three systems in CI), `ruff` and `pyright`:
+The whole suite (`pytest`: 772 passed, 10 skipped and 4 expected failures, Linux x86-64 locally on Python 3.11 at `ca35834` on 2026-10-22; and the three systems in CI), `ruff` and `pyright`:
 
 | Where | Python | C compiler | Evidence |
 | --- | --- | --- | --- |
@@ -165,13 +165,13 @@ The whole suite (`pytest`, 553 tests and 4 expected failures at the time of writ
 
 The official tests of WASI (`WASI test suite`, below) run in 8 jobs: three systems with native file access, Linux and Windows through Python, and three systems as native executables (ubuntu-latest, macOS and Windows), with `wasmext` on Python 3.11 and the runner of the suite on 3.12.
 
-CI at commit `e880ee8` (both workflows green on all of these, 22 checks; the first attempt of that run had no runners, the repository was private
-and the 2000 free minutes were used up, and it was run again after it became public). The suite is not run on Linux ARM64, Windows ARM64, macOS
-Intel or the free-threaded build; only the example is (below).
+CI at commit `ca35834` (branch `dev`, 2026-10-22): `Pre-commit`, `Coverage`, `Python versions`, `WASI test suite` and `Example wheels` (47 jobs) all succeeded, read from the runs
+of the workflows, not from their logs. The release tag `v0.0.1a1` (commit `17f83c2`) had the same workflows green, and `Core without Python` and the release workflow too. The suite is not run on Linux ARM64, Windows ARM64, macOS
+Intel or the free-threaded build; only the examples are (below).
 
 ### Platforms where a native extension was built and tested
 
-The examples (CoreMark, and Lua from commit `43324a2`) built by cibuildwheel and their tests run on the wheel (`Example wheels`, commit `e880ee8` for CoreMark, `2691854` for both, green on all seven):
+The examples (CoreMark, and Lua from commit `43324a2`) built by cibuildwheel and their tests run on the wheel (`Example wheels`, run #484 at `ca35834`, 47 of 47 jobs green: CoreMark, Lua, QuickJS, plugins and products on the desktop matrix, CoreMark also on Pyodide, Android and the other Linux architectures, and the abi3 wheel of CoreMark on Python 3.12 to 3.15; `link` and `wabt` are not in that workflow):
 
 | Platform | Evidence |
 | --- | --- |
@@ -299,7 +299,7 @@ Design and history of each item: [DESIGN.md](DESIGN.md).
 - **3.15t** (free-threaded): no abi3, so the extension is native (`cp315-cp315t`); the tests of abi3 are skipped (`needs_abi3`). The extension does not declare that it runs without the GIL, so importing it turns the GIL on. **To be declared** (for 3.14t and 3.15t) once the use of one instance from several threads is audited, and **after the context** ([context_concept.md](context_concept.md)) so that the audit is not done twice; not done.
 - **3.15** names an abi3 file with the platform (`add.abi3-x86_64-linux-gnu.so`); `abi3_possible()` and the tests accept `.abi3.` and `.abi3-<platform>.`, and not `.abi3t.so`.
 - **abi3t** (the stable ABI of 3.15t, PEP 803) is **not built**: cibuildwheel does not tag it yet, and the glue would have to lose `PyObject_HEAD`. On a free-threaded 3.15, `Py_LIMITED_API=0x030B0000` turns abi3t on by itself and the generated C does not compile, so the resolver keeps saying "native" there.
-- **Examples**: `build = "cp311-* cp314t-* cp315t-*"` in coremark, link, lua, quickjs, plugins and wabt (`products` is `py3-none`, so `cp311-*` only); all 40 jobs of `example-wheels.yml` passed on the commit that added `cp315t`.
+- **Examples**: `build = "cp311-* cp314t-* cp315t-*"` in coremark, link, lua, quickjs, plugins and wabt (`products` is `py3-none`, so `cp311-*` only); all 47 jobs of `example-wheels.yml` passed at `ca35834`.
 - **The abi3 wheel on newer Pythons**: the `cp311-abi3` wheel of coremark, built on 3.11, passes its tests on 3.12 to 3.15 (the job `abi3-wheel-on-newer-pythons`).
 
 ### How to choose the next features

@@ -44,3 +44,17 @@ Risks and what is not done:
 - Not run on a real extension: the Python layer, tail calls (`return_call` is a loop in wasm2c, no stack), exceptions, `--share-tables` are untouched here.
 
 `./build.sh BIN RT` builds all (needs `wabt-package`'s `bin/` and the `wasm2c/` runtime); `./so_*` are the shared-library variants.
+
+## CoreMark in the real extension, against native C
+
+**[run]** 2026-10-22, the same VM, `examples/coremark/src/coremark/_core.wasm` made into an extension by `wasmext natify -i -b` (default flags of the interpreter), once with `WASMEXT_STACK_CHECK=guard` and once with the default (`limit`); the native reference is the same CoreMark of EEMBC (`PORT_DIR=linux`, `-O3 -DPERFORMANCE_RUN=1 -DITERATIONS=0 -DTOTAL_DATA_SIZE=2000`), built with gcc 13.3. Iterations a second, the runs interleaved, 5 runs each (3 for the last row):
+
+| | iterations/s (runs) | mean | of native gcc |
+| --- | --- | ---: | ---: |
+| native C, gcc -O3 | 21957, 21139, 21733, 21935, 21758 | 21,704 | 100% |
+| native C, clang -O3 (the compiler of the wasm) | 17498, 18382 | 17,940 | 83% |
+| extension, **guard page** (`WASMEXT_STACK_CHECK=guard`) | 21346, 20287, 21281, 22400, 21499 | 21,363 | **98%** |
+| extension, **stack-pointer check**, default TLS (`limit`) | 20031, 19903, 20320, 18777, 19218 | 19,650 | **91%** (8% under the guard page) |
+| extension, stack-pointer check, `-mtls-dialect=gnu2`, `CFLAGS=-O2` | 20985, 21011, 19977 | 20,658 | 95% |
+
+The runs of one build differ by up to 5% (a cloud VM), so the 8% of the check is about the size of the noise to two sigma and not far outside it; the direction is the same in every pair. Read it as: **the check costs a few percent on a program that is not all calls (CoreMark), and the guard page keeps the "about 95% of native" of the README; the check with the default thread-local model is below that figure.** `gnu2` (TLS descriptors) brings it back to 95% but a `manylinux2014` (glibc 2.17) loader may not support them on x86-64, so it is not used. The decision of the default (guard page, or the check) is the author's.

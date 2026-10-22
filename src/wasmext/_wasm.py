@@ -6,12 +6,13 @@
 
 The signatures of the imports and exports, the memories, tables and globals; not the code (`wasm2c` translates that).
 The names of parameters come from the "name" section when there is one. Sections that carry code or data are skipped after a check of their framing. Raises `WasmError` for anything that is not
-a well-formed module of the core specification (with the multi-memory, memory64 and extended-const proposals) and for
+a well-formed module of the core specification (with the multi-memory, memory64, extended-const and compact-imports proposals) and for
 the value types it does not know (GC references, exceptions).
 """
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Final, Literal, TypeVar
@@ -25,12 +26,17 @@ __all__ = [
     "Module",
     "TableType",
     "ValType",
+    "WasiFlavor",
     "WasmError",
+    "expand_compact_imports",
     "parse",
+    "wasi_flavor",
+    "wasi_hint",
 ]
 
 ValType = Literal["i32", "i64", "f32", "f64", "v128", "funcref", "externref"]
 ExternKind = Literal["func", "table", "memory", "global", "tag"]
+WasiFlavor = Literal["component", "fused", "core-0.1", "core-0.2", "core-0.3", "none", "unknown"]
 _T = TypeVar("_T")
 
 _VALTYPES: Final[dict[int, ValType]] = {
@@ -44,8 +50,21 @@ _VALTYPES: Final[dict[int, ValType]] = {
 }
 _KINDS: Final[tuple[ExternKind, ...]] = ("func", "table", "memory", "global", "tag")
 
+# What to tell about a flavor that wasmext does not run by itself (WASI 0.1 is built into the module; the others are not).
+WASI_HINTS: Final[dict[str, str]] = {
+    "core-0.2": "imports WASI 0.2 (wasi:*@0.2): it is built, but wasmext does not answer those calls; the host has to (docs/WASI_COMPONENTS.md)",
+    "core-0.3": "imports WASI 0.3 (wasi:*@0.3): it is built, but wasmext does not answer those calls; the host has to (docs/WASI_COMPONENTS.md)",
+    "fused": "made by `meld fuse` from components; it imports WASI 0.2 or 0.3, and it is built, but those calls are for the host to answer (docs/WASI_COMPONENTS.md)",
+}
+
 _MAGIC: Final = b"\0asm"
 _VERSION: Final = b"\x01\x00\x00\x00"
+_ATTESTATION: Final = "wsc.transformation.attestation"  # what `meld fuse` writes about itself: JSON with the kind of the transformation and the tool
+_COMPACT_EACH: Final = 0x7F  # compact imports: after the module, a name and a type (with its kind) for each import
+_COMPACT_KIND: Final = (
+    0x7E  # compact imports: after the module, one type (with its kind) for the group, then a name for each import
+)
+_COMPONENT_VERSION: Final = b"\x0d\x00\x01\x00"  # the version field of a component (a module has 1)
 
 # The order in which sections may appear (the id of the section -> its place); the tag section sits before the
 # globals, the data count before the code. Custom sections (0) may be anywhere.
@@ -131,6 +150,13 @@ class Module:
     start: int | None = None
     # From the "name" section, which is only a help for people: function index -> {local index -> name}; the parameters are the first locals.
     local_names: dict[int, dict[int, str]] = field(default_factory=dict[int, dict[int, str]])
+    custom: list[str] = field(default_factory=list[str])  # the names of the custom sections, in order
+    # The tool that fused components into this module (`"meld"`), told by a custom section of its own (`meld.*`) or by its attestation; None for any other module.
+    fused_by: str | None = None
+    # Compact imports: where the import section is in the binary (from its id byte to its end), and, if some entry of it is compact, its body
+    # written with ordinary imports (see `expand_compact_imports`).
+    import_section: tuple[int, int] | None = None
+    plain_imports: bytes | None = None
 
     def _imported(self, kind: ExternKind) -> list[FuncType | TableType | Limits | GlobalType]:
         return [i.type for i in self.imports if i.kind == kind]
@@ -287,7 +313,7 @@ class _Reader:
         flags = self.byte()
         if flags & 0x08:
             raise WasmError(
-                f"a memory with a custom page size (the custom-page-sizes proposal) is not supported: wasm2c has no such memory (offset {self.pos - 1})"
+                f"a memory with a custom page size (the custom-page-sizes proposal) is not supported by wasmext yet; wasm2c can translate it with --enable-custom-page-sizes (offset {self.pos - 1})"
             )
         if flags & ~0x07:
             raise WasmError(f"unknown limits flags 0x{flags:02x} at offset {self.pos - 1}")
@@ -329,6 +355,11 @@ def parse(data: bytes) -> Module:
     """Read the type, import, function, table, memory, global, tag, export and start sections of a binary module."""
     if data[:4] != _MAGIC:
         raise WasmError("not a WebAssembly binary: the magic number is missing")
+    if data[4:8] == _COMPONENT_VERSION:
+        raise WasmError(
+            "this is a WebAssembly component, not a core module; take the core modules out with `wasm-tools component unbundle`, "
+            "or fuse a composed component with `meld fuse` (see docs/WASI_COMPONENTS.md)"
+        )
     if data[4:8] != _VERSION:
         raise WasmError(f"unsupported WebAssembly binary version {data[4:8].hex() or '(none)'}")
     reader = _Reader(data, 8)
@@ -336,17 +367,26 @@ def parse(data: bytes) -> Module:
     last = 0
     code_count = 0
     while not reader.at_end():
+        section_start = reader.pos
         section_id = reader.byte()
         body = reader.sub(reader.uleb())
         if section_id == 0:  # custom: the name and then anything
-            if body.name() == "name":
+            custom = body.name()
+            module.custom.append(custom)
+            if custom == "name":
                 module.local_names = _local_names(body)
+            elif custom.startswith("meld."):
+                module.fused_by = "meld"
+            elif custom == _ATTESTATION:
+                module.fused_by = _fusion_tool(bytes(body.data[body.pos : body.end])) or module.fused_by
             continue
         if section_id not in _ORDER:
             raise WasmError(f"unknown section id {section_id}")
         if _ORDER[section_id] <= last:
             raise WasmError(f"section {section_id} is out of order or repeated")
         last = _ORDER[section_id]
+        if section_id == _IMPORT:
+            module.import_section = (section_start, reader.pos)
         if section_id == _CODE:
             code_count = body.uleb()  # the bodies are for wasm2c
         else:
@@ -355,6 +395,71 @@ def parse(data: bytes) -> Module:
         raise WasmError(f"{len(module.functions)} functions declared, {code_count} bodies in the code section")
     _check_indices(module)
     return module
+
+
+def _fusion_tool(payload: bytes) -> str | None:
+    """The name of the tool in an attestation of a fusion (`{"transformation_type": "fusion", "tool": {"name": "meld"}}`), else None."""
+    try:
+        attestation = json.loads(payload)
+        tool = attestation["tool"]["name"]
+        kind = attestation["transformation_type"]
+    except (ValueError, KeyError, TypeError):
+        return None
+    return tool if kind == "fusion" and isinstance(tool, str) and tool == "meld" else None
+
+
+def wasi_flavor(data: bytes) -> WasiFlavor:
+    """What kind of WASI file `data` is, from its bytes alone.
+
+    `component`: a component (version field `0d 00 01 00`), which wasmext does not read. `fused`: a core module made by `meld fuse` from
+    components, told by a custom section `meld.*` (with `--emit-manifest`) or by the attestation that `meld` writes in every module (`wsc.transformation.attestation`,
+    a fusion by `meld`); it can still import WASI 0.2 or 0.3, which `wasi_hint` says. `core-0.1`, `core-0.2`, `core-0.3`: a core module whose imports (or,
+    failing those, exports) are of `wasi_snapshot_preview1` / `wasi_unstable`, or of `wasi:*@0.2.x` / `wasi:*@0.3.x`; the newest wins.
+    `none`: a core module that uses no WASI. `unknown`: not a module wasmext can read.
+    """
+    if data[:4] == _MAGIC and data[4:8] == _COMPONENT_VERSION:
+        return "component"
+    try:
+        module = parse(data)
+    except WasmError:
+        return "unknown"
+    if module.fused_by:
+        return "fused"
+    versions = _wasi_versions(module)
+    for flavor in ("core-0.3", "core-0.2", "core-0.1"):
+        if flavor in versions:
+            return flavor
+    return "none"
+
+
+def wasi_hint(data: bytes) -> str | None:
+    """What to tell about `data` because of its WASI flavor, or None when there is nothing to tell: WASI 0.1 is built into the module, and a module that was fused
+    by `meld` is told about only if it imports WASI 0.2 or 0.3 (a fused module that imports none of it needs nothing from the host)."""
+    flavor = wasi_flavor(data)
+    if flavor != "fused":
+        return WASI_HINTS.get(flavor)
+    try:
+        versions = _wasi_versions(parse(data))
+    except WasmError:
+        return None
+    return WASI_HINTS["fused"] if versions & {"core-0.2", "core-0.3"} else None
+
+
+def _wasi_versions(module: Module) -> set[str]:
+    names = [*(i.module for i in module.imports), *(e.name for e in module.exports)]
+    return {_wasi_version(name) for name in names}
+
+
+def _wasi_version(name: str) -> str:
+    if name in ("wasi_snapshot_preview1", "wasi_unstable"):
+        return "core-0.1"
+    if name.startswith("wasi:"):
+        _, _, version = name.partition("@")
+        if version.startswith("0.2."):
+            return "core-0.2"
+        if version.startswith("0.3."):
+            return "core-0.3"
+    return ""
 
 
 def _local_names(r: _Reader) -> dict[int, dict[int, str]]:
@@ -387,7 +492,7 @@ def _section(module: Module, section_id: int, body: _Reader) -> None:
     if section_id == _TYPE:
         module.types = body.vec(lambda: _functype(body))
     elif section_id == _IMPORT:
-        module.imports = body.vec(lambda: _import(body, module.types))
+        module.imports, module.plain_imports = _imports(body, module.types)
     elif section_id == _FUNCTION:
         module.functions = body.vec(lambda: _typeref(body, module.types))
     elif section_id == _TABLE:
@@ -454,24 +559,92 @@ def _globaltype(r: _Reader) -> GlobalType:
     return GlobalType(value, bool(flag))
 
 
-def _import(r: _Reader, types: list[FuncType]) -> Import:
+def _imports(r: _Reader, types: list[FuncType]) -> tuple[list[Import], bytes | None]:
+    """The import section: its imports, and, if any of its entries was a compact one, the body of the section written out with ordinary imports.
+
+    As the proposal reads it (`proposals/compact-import-section/Overview.md`, the decoder of its interpreter and `binary-compact-imports.wast`): the number in front counts the
+    entries (a group is one, and may hold no imports), not the imports."""
+    entries = r.vec(lambda: _import(r, types))
+    found = [item for group, _ in entries for item in group]
+    plain: bytes | None = None
+    if any(compact for _, compact in entries):
+        plain = _leb(len(found)) + b"".join(_name_bytes(imp.module) + _name_bytes(imp.name) + raw for imp, raw in found)
+    return [imp for imp, _ in found], plain
+
+
+def _import(r: _Reader, types: list[FuncType]) -> tuple[list[tuple[Import, bytes]], bool]:
+    """One entry of the import section: the imports it makes, each with the bytes of its type, and whether it is a compact one.
+
+    A module name and an empty name followed by 0x7F is a module with (name, type) for each import; followed by 0x7E, a module with one type and a
+    name for each import. The byte after the empty name is not LEB128, and the empty name may be written in more bytes than one."""
     module = r.name()
     name = r.name()
+    mark = r.data[r.pos] if r.pos < r.end else None
+    if name == "" and mark == _COMPACT_EACH:
+        r.byte()
+        return r.vec(lambda: _item(r, module, r.name(), types)), True
+    if name == "" and mark == _COMPACT_KIND:
+        r.byte()
+        kind, type_, raw = _externtype(r, types)
+        return r.vec(lambda: (Import(module, r.name(), kind, type_), raw)), True
+    return [_item(r, module, name, types)], False
+
+
+def _item(r: _Reader, module: str, name: str, types: list[FuncType]) -> tuple[Import, bytes]:
+    kind, type_, raw = _externtype(r, types)
+    return Import(module, name, kind, type_), raw
+
+
+def _externtype(
+    r: _Reader, types: list[FuncType]
+) -> tuple[ExternKind, FuncType | TableType | Limits | GlobalType, bytes]:
+    """The kind of an import and its type, and the bytes they were written in."""
+    start = r.pos
     code = r.byte()
     if code >= len(_KINDS):
         raise WasmError(f"unknown import kind {code} at offset {r.pos - 1}")
     kind = _KINDS[code]
     if kind == "func":
-        return Import(module, name, kind, _typeref(r, types))
-    if kind == "table":
-        return Import(module, name, kind, TableType(r.reftype(), r.limits()))
-    if kind == "memory":
-        return Import(module, name, kind, r.limits())
-    if kind == "global":
-        return Import(module, name, kind, _globaltype(r))
-    if r.byte() != 0x00:  # tag: an attribute byte, then the type of the exception
-        raise WasmError(f"unknown tag attribute at offset {r.pos - 1}")
-    return Import(module, name, kind, _typeref(r, types))
+        type_ = _typeref(r, types)
+    elif kind == "table":
+        type_ = TableType(r.reftype(), r.limits())
+    elif kind == "memory":
+        type_ = r.limits()
+    elif kind == "global":
+        type_ = _globaltype(r)
+    else:
+        if r.byte() != 0x00:  # tag: an attribute byte, then the type of the exception
+            raise WasmError(f"unknown tag attribute at offset {r.pos - 1}")
+        type_ = _typeref(r, types)
+    return kind, type_, r.data[start : r.pos]
+
+
+def _leb(value: int) -> bytes:
+    out = bytearray()
+    while True:
+        byte = value & 0x7F
+        value >>= 7
+        if value:
+            out.append(byte | 0x80)
+        else:
+            out.append(byte)
+            return bytes(out)
+
+
+def _name_bytes(text: str) -> bytes:
+    raw = text.encode("utf-8")
+    return _leb(len(raw)) + raw
+
+
+def expand_compact_imports(data: bytes, module: Module) -> bytes:
+    """`data`, which `module` was read from, with the import section written with ordinary imports. A module with none that are compact comes back as it is.
+
+    WABT 1.0.42 (and `main`) reads the form 0x7E differently from the proposal (reported: WABT #2897), and 1.0.42 the number in front of the section too, so what `wasm2c` is given
+    is the module with ordinary imports, whatever the version of WABT."""
+    if module.plain_imports is None or module.import_section is None:
+        return data
+    start, end = module.import_section
+    return data[:start] + bytes([_IMPORT]) + _leb(len(module.plain_imports)) + module.plain_imports + data[end:]
 
 
 def _tag(r: _Reader, types: list[FuncType]) -> FuncType:

@@ -1,0 +1,7 @@
+(module (table $t 4 externref) (table $f 2 funcref) (func $g)
+  (elem declare func $g)
+  (func (export "go") (param externref) (result i32)
+    (table.set $t (i32.const 0) (local.get 0))
+    (drop (table.grow $t (ref.null extern) (i32.const 1)))
+    (ref.is_null (table.get $t (i32.const 0))))
+  (func (export "fr") (result funcref) (ref.func $g)))

@@ -42,6 +42,15 @@ The closing is **hard**: after it every member (instances, tables, `Function`s) 
 
 A close must not free what a running call uses. The context counts its **active calls** (the entry that guards a reentrant call is the place); `close` from inside a call, or while another thread is in one, is refused (or waits: not settled). A call into a closed member is an error, never a crash.
 
+**The counter of active calls: how it is kept (a proposal from the measurements, not decided).** `close` must know whether a call is in flight. The measurements ([experiments/context_bench/](experiments/context_bench/)) say where the counter must *not* be: one counter per context, or one per instance that several threads call, is a cache line the cores fight over (about 300 ns per call on 4 threads against 25-35 ns). So:
+
+- the counter is **split by thread**: a few counters in the instance, each on a cache line of its own, a thread using the one its id selects; a call adds one to its line, then **reads a `closing` flag** (read by all, written only by `close`, so it stays shared and cheap); if the flag is up it takes the one back and fails with "closed";
+- `close` **raises the flag first, then adds up the counters of all members** (the registry has the list); if the sum is not zero a call is in flight and `close` refuses (the answer to open question 1, if refusing is chosen). The cost is on `close`, which is rare, and not on the calls, which are many;
+- the order matters and is the whole proof: a call does *add, then read the flag*, `close` does *raise the flag, then read the counters*, both with sequentially consistent operations (on x86 a `lock`ed add is a full barrier; on ARM an explicit barrier), so either the call sees the flag or `close` sees the call;
+- a `close` made **from inside a call** sees its own thread's count above zero and refuses, so it cannot wait for itself;
+- where there is one thread at a time (the GIL), a plain counter and a plain check are enough (1.5 ns); the atomic form is for builds without the GIL and for C hosts with threads, one macro as `WASMEXT_LOCK`;
+- not measured: the cost of the sum with many members, of choosing the line by thread id, and the barrier on ARM.
+
 **Several contexts and the order of closing.** Contexts can be connected only through the host (a callback, a queue): what passes is data (numbers, bytes, copies), never a `Function` or a `Table`. A Python object may be given as an `externref` to both contexts: it is a host object, each context keeps it. Nested `with` closes the inner first; the right order is to close first the context whose callbacks *call into* the other, so that is the one to nest inside. For callbacks both ways no order is right. So the order lowers the number of errors, and the safety is the hard close with the flag and the counter. `contextlib.ExitStack` serves a set of contexts that is not known in advance.
 
 ## The public interface, and what is inside
@@ -81,7 +90,11 @@ A target with no threads (a CPython built without them, some embedded ones) must
 
 The stack of entries for traps (`wasmext_traps`) is thread-local for a different reason and is not part of the context: a trap jumps to the innermost entry of the call chain **of this thread**, and each thread has its own C stack; wasm2c itself keeps its call depth and the active exception thread-local.
 
-## Overhead (not measured)
+## Overhead
+
+**Measured as a C micro-benchmark** (`docs/experiments/context_bench/`, one machine, two runs; the lines below are the estimates written before, kept for the record, and the results are in the README there): a lock costs 15-20 ns per lookup, one lock under 4 threads 300-950 ns; a plain counter + check 1.5 ns per call, an atomic counter 12-14 ns, and one atomic counter shared by 4 threads about 220 ns (a counter per member: 19-29 ns). **Around real calls into a module from a C host with threads (no Python; `real.c`)**: a call through the library costs about 23 ns itself, 4 host threads scale as one (the runtime has no lock on that path), a counter for each thread adds 4-12 ns, a counter per instance is as good only while one thread calls it (4 threads on one instance: 292 ns), and one counter per context or a lock per call turns a 25 ns call into 330-435 ns on 4 threads (10-25 % on a call of 650 ns, nothing at 100 us). So the counter of active calls is split by thread (striped lines in the instance) and `close` sums them after raising a `closing` flag (each call: add to its own line, then read the flag; `close`: set the flag, then sum): the cost lands on the rare `close`. The counter of active calls should not be one atomic per context on the hot path, and the registry can be read lock-free because members never leave.
+
+Estimates written before the measurement:
 
 - a call into wasm: none from the registry; the active-call counter and the "closed" check are new (a counter in the entry that exists, a predictable branch; to measure);
 - making or closing a context, adding a member: rare, microseconds;
@@ -98,6 +111,25 @@ A micro-benchmark in C (mutex plus hash lookup by pointer, one thread and severa
 - a place for the **tags**: a tag must be one identity shared by the instances that use it, so that an exception thrown in one is caught in another; one more kind of export with the same rules as a table (not designed);
 - no implicit sharing: what is shared is in the same `with`;
 - the keep-alive chains of today become one case of the context (a rewrite of part of steps 3b to 7 of TABLES_PLAN.md: not small).
+
+## A record of the process, next to the context (an idea, not decided)
+
+Some things the autonomous modules touch are **one for the process or one for the thread**, and a context cannot own them: the handler of the signals (one for the process), the alternate stack (one for each thread), the stack of entries for traps (thread-local).
+Each module has a copy of the runtime of wasm2c, and each copy acts as if it were alone. Found by experiment (2026-10-22, `tests/test_two_modules.py`): **two modules in one process, a trap by a signal (out of bounds past the guard pages, stack overflow) works only in the module imported last**; in the other the process aborts,
+because the one handler of the process raises the trap of the runtime that installed it last. (`unreachable`, which is no signal, is not affected, and neither are modules that share tables, which already share the stack of entries.) The same one-alternate-stack-for-a-thread limit is why
+a thread that runs several modules leaves a stack of each but one.
+
+The idea: a **small record of the process** (the handler of the signals, who owns the alternate stack of a thread, the thread's stack of entries), **kept in each module as code**, found at run time through a capsule with a version (as `wasmext_traps` is), created by the first module that loads and joined by the others.
+A module that finds none, or one it cannot read, works alone as today. It decides nothing about who may exchange references; that stays with the context, which is explicit. So the host installs nothing, and the autonomy of a module is kept; the price is one more record in the contract between wheels
+of different versions (small: the signals, the stacks), and a thread that runs several modules is set up once and not once per module.
+
+**Checked by experiment (2026-10-22):** with `--share-tables` on every module, all combinations of two modules trap correctly, so the stack of entries of `wasmext_traps` already does what the record needs for traps. But it cannot be turned on for all modules as it is: it keeps at most 64 runtimes
+(`WASMEXT_MAX_RUNTIMES`) and its `enter`/`leave` loop over all of them on every call. A **lighter variant for modules that share no tables** (push and pop of the entry with no loop, the unwind target set for the module's own runtime only, two functions added at the end of `wasmext_traps`) and a **fall-back to the
+autonomous behaviour instead of `ImportError`** when the capsule is not compatible would be needed. Not built; it touches the ABI of the record of traps. (The thread capsule of the Python layer is another thing, for another problem: setting up and giving back the alternate stack of each thread.)
+
+**A larger alternative, possibly better and not investigated: master and slave, the whole runtime through the capsule** (one module publishes its runtime, a module that finds a compatible one attaches to it, any other works on its own): [shared_runtime_concept.md](shared_runtime_concept.md), with what has to be found out before anything is built.
+
+Open: how modules built apart find the record in a C host with no Python (an explicit pointer, or none), subinterpreters (the handler is of the process, a capsule is of the interpreter), and Windows (vectored handlers: each module adds its own).
 
 ## Taken from, and not taken from, other runtimes
 
@@ -116,10 +148,10 @@ A micro-benchmark in C (mutex plus hash lookup by pointer, one thread and severa
 
 ## Open questions
 
-1. Whether `close` from inside a call, or in another thread's call, **refuses or waits**, and how a refusal is told (an exception in Python, a code in C and in the wrapper for ctypes).
+1. Whether `close` from inside a call, or in another thread's call, **refuses or waits**, and how a refusal is told (the counter above works for refusing; waiting needs a way to be woken, and from inside a call it can only refuse) (an exception in Python, a code in C and in the wrapper for ctypes).
 2. **The traps** (`wasmext_traps`, `share_tables`): outside the context as of now; whether making a member in a context checks that the module was built with the handler is not settled.
 3. **The tags**: not designed.
 4. The names of the functions and of the class; the signature (`context=` as a keyword only); whether a module-level default context exists (no, as of now).
 5. The API of a library (`<name>_api.h`) and of the executable for the context; `WASMEXT_ABI` and the fingerprint (`tests/test_abi.py`) for the header of the context.
 6. The lazy collector: when it runs, how Python objects and `externref`s are edges, the cost of scanning big tables.
-7. The cost of the active-call counter and of the "closed" check on every call (to measure).
+7. The cost of the active-call counter and of the "closed" check on every call: **measured in C** (see Overhead: 4-12 ns per thread on a 23 ns call) and **in Python** ([experiments/free_threading/](experiments/free_threading/), 2026-10-22): a call into wasm holds the GIL for its whole length (a short call in another thread waits for all of a 1 s call), a module that declares `Py_MOD_GIL_NOT_USED` (one line, by hand in a test build) gives 3.7-4.0x on 4 cores for calls that do work, also on one shared instance with no state, and costs nothing on one thread; and **a stack overflow in a thread other than the one that imported the extension crashes the process** on every build (the extension never calls `wasm_rt_init_thread`), which is a bug of today whatever the context becomes.

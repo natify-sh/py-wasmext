@@ -1,0 +1,24 @@
+python 3.14.6  free-threaded build: False  GIL enabled after import: True
+
+1. throughput: calls per second, all threads together (higher is better); speed-up over 1 thread in brackets
+call                 threads          own instance         same instance
+add(1, 2)                  1    20,758,393 ( 1.0x)    20,758,393 ( 1.0x)
+add(1, 2)                  2    20,860,457 ( 1.0x)    19,037,297 ( 0.9x)
+add(1, 2)                  4    20,465,268 ( 1.0x)    18,683,873 ( 0.9x)
+work(1000,)                1       460,366 ( 1.0x)       460,366 ( 1.0x)
+work(1000,)                2       434,359 ( 0.9x)       442,308 ( 1.0x)
+work(1000,)                4       437,259 ( 0.9x)       443,379 ( 1.0x)
+work(100000,)              1         4,607 ( 1.0x)         4,607 ( 1.0x)
+work(100000,)              2         4,584 ( 1.0x)         4,389 ( 1.0x)
+work(100000,)              4         4,358 ( 0.9x)         4,374 ( 0.9x)
+
+2. a short call (add, then a 1 ms sleep, in a loop) in one thread while another thread is inside a long call (work(500000000), about 0.5 s)
+   the long call took 1,050 ms; short calls completed while it ran: 1; the first one after 1,049 ms
+
+3. traps in worker threads (each in a subprocess: a crash is a result)
+   trap     in a thread other than the one that imported:  Trap: Unreachable instruction executed
+   trap     in the main thread:                            Trap: Unreachable instruction executed
+   oob      in a thread other than the one that imported:  Trap: Out-of-bounds access in linear memory or a table
+   oob      in the main thread:                            Trap: Out-of-bounds access in linear memory or a table
+   recurse  in a thread other than the one that imported:  CRASH, exit code -11
+   recurse  in the main thread:                            Trap: Call stack exhausted

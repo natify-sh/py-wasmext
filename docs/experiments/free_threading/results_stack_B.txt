@@ -1,0 +1,31 @@
+python 3.14.6  free-threaded build: False  GIL enabled after import: True
+
+1. throughput: calls per second, all threads together (higher is better); speed-up over 1 thread in brackets
+call                 threads          own instance         same instance
+add(1, 2)                  1    12,524,879 ( 1.0x)    12,524,879 ( 1.0x)
+add(1, 2)                  2    10,338,282 ( 0.8x)    15,196,636 ( 1.2x)
+add(1, 2)                  4    12,750,801 ( 1.0x)    15,219,913 ( 1.2x)
+work(1000,)                1       478,725 ( 1.0x)       478,725 ( 1.0x)
+work(1000,)                2       463,006 ( 1.0x)       462,484 ( 1.0x)
+work(1000,)                4       449,111 ( 0.9x)       441,175 ( 0.9x)
+work(100000,)              1         5,276 ( 1.0x)         5,276 ( 1.0x)
+work(100000,)              2         4,866 ( 0.9x)         4,671 ( 0.9x)
+work(100000,)              4         4,652 ( 0.9x)         4,937 ( 0.9x)
+
+2. a short call (add, then a 1 ms sleep, in a loop) in one thread while another thread is inside a long call (work(500000000), about 0.5 s)
+   the long call took 988 ms; short calls completed while it ran: 1; the first one after 988 ms
+
+3. traps in worker threads (each in a subprocess: a crash is a result)
+   trap     in a thread other than the one that imported:  Trap: Unreachable instruction executed
+   trap     in the main thread:                            Trap: Unreachable instruction executed
+   oob      in a thread other than the one that imported:  Trap: Out-of-bounds access in linear memory or a table
+   oob      in the main thread:                            Trap: Out-of-bounds access in linear memory or a table
+   recurse  in a thread other than the one that imported:  Trap: Out-of-bounds access in linear memory or a table
+   recurse  in the main thread:                            Trap: Call stack exhausted
+
+4. how deep the recursion goes before the trap, and a thread with a small stack
+   depth reached before the trap (main thread): 261,699  (Call stack exhausted)
+   thread with a   32 KiB stack: CRASH, exit code 1
+   thread with a   64 KiB stack: 1847
+   thread with a  256 KiB stack: 7991
+   thread with a 1024 KiB stack: 32567

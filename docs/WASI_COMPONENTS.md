@@ -9,6 +9,9 @@ a neighbouring session on the component model (experiments A to D, "the first re
 report"). Their data is kept; what was repeated and what changed is told in "Corrections" at the end. **The code of the experiments** is in [experiments/](experiments/): `component_model/`
 (first report), `jco_zwasm/` (second report), `wasi_checks/` (the checks of 2026-10-21).
 
+A later study, with the same program built for WASI 0.1 and 0.2 and used in three ways (a 0.1 module, `unbundle`, `meld fuse`), with the numbers of imports that a host has to give and the shims that the build
+needed, is in [wasi_p1_vs_p2_host_requirements.md](wasi_p1_vs_p2_host_requirements.md).
+
 ## How to read the marks
 
 Every finding says how it is known, because the results depend on the tools and the machine:
@@ -27,7 +30,7 @@ The paths in "Ways" are **possible paths, not decisions**; a decision is written
 
 | Question | Answer | How known |
 | --- | --- | --- |
-| Does `wasm2c` read a component? | No: `error: wasm components are not yet supported in this tool` (`wasm-validate` says the same); `wasmext inspect` says `unsupported WebAssembly binary version 0d000100` | [again] |
+| Does `wasm2c` read a component? | No: `error: wasm components are not yet supported in this tool` (`wasm-validate` says the same); `wasmext inspect` said `unsupported WebAssembly binary version 0d000100`; since `wasi_flavor` it says this is a component and to use `wasm-tools component unbundle` or `meld fuse` | [again] |
 | How to get core modules out of a component? | `wasm-tools component unbundle` (modules **above `--threshold`, 10240 bytes by default**, are taken out; `--threshold 0` takes all) | [again] |
 | Does the core module of a WASI 0.2 command run as a wasmext extension? | **Yes**, with a host of about 40 lines of Python (hello) or 156 (a TCP client with real sockets); `examples/wasi2_unbundled` | [run], its tests pass [again] |
 | Does a WASI 0.3 C program run? | **Yes**, through `wasm2c` with a host of 94 lines of C (`printf`, `usleep`, stdin, stderr, clocks), about 100 KB stripped | [reported], [again] |
@@ -77,9 +80,9 @@ How to tell the WASI of a file before anything is generated:
 A core module taken out of a WASI 0.2 component is not recognised as WASI by wasmext (it looks for the 0.1 names only), so its imports are shown as "the host has
 to provide" and can be given as Python callables: `Instance({"wasi:io/streams@0.2.12": {"[method]output-stream.write": f, …}})`.
 
-What wasmext says today of a component **[again]**: `not a module wasmext can read: unsupported WebAssembly binary version 0d000100` (a `WasmError` raised in `src/wasmext/_wasm.py`). The recognition
-described above (`wasi_flavor`) does not exist yet. A module fused by meld carries custom sections of its own, among them `meld.signature-manifest` (when built with `--emit-manifest`),
-`wsc.transformation.attestation`, `component-provenance` and `producers` **[again]**; the check "this module is already fused" could rest on `meld.*`, but those are names of a young tool (0.64).
+What wasmext said of a component **[again]**: `not a module wasmext can read: unsupported WebAssembly binary version 0d000100` (a `WasmError` raised in `src/wasmext/_wasm.py`). The recognition
+described above is built as `wasmext.wasi_flavor` (`component`, `fused`, `core-0.1`, `core-0.2`, `core-0.3`, `none`, `unknown`): `parse()` refuses a component with what to do, `inspect` prints a `wasi:` line, `natify` warns (only) about 0.2, 0.3 and fused modules; `tests/test_wasi_flavor.py`. A module fused by meld carries custom sections of its own, among them `meld.signature-manifest` (when built with `--emit-manifest`),
+`wsc.transformation.attestation`, `component-provenance` and `producers` **[again]**; the check "this module is already fused" could rest on `meld.*`, but those are names of a young tool, and they come only with `--emit-manifest`; **built** (2026-10-22) on the attestation that meld 0.64 writes in every module instead (`wsc.transformation.attestation`: `transformation_type` `fusion`, `tool.name` `meld`), so `wasi_flavor` says `fused` for the output of `meld fuse` as it is (0.64).
 
 ## What the tools do with a component
 
@@ -584,6 +587,19 @@ gives `[red,big]`: **the bug is reproduced** and is in meld. The fused module ca
 [#513](https://github.com/pulseengine/meld/issues/513) (their texts were not read here, so it is not said which finding each covers: the bug with `list<string>` in a returned `option<record>`, the import map that does
 not say which memory a WASI import belongs to, or both).
 
+**Awaiting upstream; the release is on its way.** Issue [#512](https://github.com/pulseengine/meld/issues/512) is closed by pull request [#516](https://github.com/pulseengine/meld/pull/516), and issue
+[#513](https://github.com/pulseengine/meld/issues/513) by [#518](https://github.com/pulseengine/meld/pull/518). Pull request [#521](https://github.com/pulseengine/meld/pull/521) is the release **v0.65.0**; its
+`CHANGELOG.md` (read from the branch of the pull request, 2026-10-22) says; **the pull request was open (22 checks) when the owner of this repository pasted its description, and was then merged into `main` upstream (told by the owner, 2026-10-22); a release is not published yet**:
+- **#512 fixed:** "nested lists and strings inside option, result and variant values are deep-copied across memories": a `list<string>` behind an option, result or variant had its pointer array copied to the other component but not the strings it
+  points to, so the receiver read its own memory at the other component's addresses (empty or garbage strings, or a trap, at exit 0), under `--memory multi`. That is the `get=apple,3,[,]` above.
+- **#513 fixed:** `--emit-import-map` now states, for each function import, **the memory its pointer arguments refer to, the allocator for list and string results, the string encoding and the owning component** (the map gets `"version": 2`;
+  `null` = the lower has no such option, `{"unknown": ...}` = it could not be traced); resource intrinsics name their resource and `[dtor]` export. That is what the paragraph above missed ("which memory a WASI import belongs to").
+- also in 0.65.0: a re-exported adapted import reaches the adapter from every importer (#504, SR-103).
+- the description of the pull request says: the import map of 57 maps compared before and after the change differs in no index, kind, module or name; the clean-room review of #513 left gaps filed as [#520](https://github.com/pulseengine/meld/issues/520) (a `dtor` that can be determined is reported as `null`; a misleading reason `unknown` under `--memory shared`), none a wrong answer; [#515](https://github.com/pulseengine/meld/issues/515) is in review and will ship as **v0.65.1**.
+
+So everything above and the multi-component findings in [wasi_p1_vs_p2_host_requirements.md](wasi_p1_vs_p2_host_requirements.md) were measured on meld 0.64.0, and **the experiment is to be repeated on 0.65.0** once it is published (the checks to repeat: the complex
+component with `list<string>`, the import map, and a WASI import used by two components).
+
 meld was built from source: `cargo build --release -p meld-cli` (1 min 52 s here, 1 min 49 s in the report; a binary of 5 MB). Its earlier version 0.63.0 produced **no adapter** on a hand-made provider and consumer
 (`adapters_generated: 0`; the call stayed an import) in the first page; 0.64.0 does generate `memory-copy` adapters, on the real composed components of the second report and on the minimal pair **[again]**. So the
 earlier statement is out of date and is kept here only as this line.
@@ -1085,7 +1101,7 @@ component model, if it comes, is a replacement and not a precondition.
 3. **WASI 0.3:** all of the above and a runtime of the async model (waitable sets, subtasks, streams and futures, the task hook).
 4. **Components made of components:** the semantics of the component model itself (the instance graph, `canon lift` and `canon lower` between memories, resources across components);
    `unbundle` is not enough. That is what Wasmtime and `jco` do; wasmext would rather leave it to an engine that does (py-wasmhost with wasmtime).
-5. The cheaper start: a function that tells the kind of a file (`wasi_flavor`: 0.1, 0.2, 0.3, component) from the bytes above, so that `natify` and `inspect` say what the file is and what to do (take the core
+5. **Built.** The cheaper start: a function that tells the kind of a file (`wasi_flavor`: 0.1, 0.2, 0.3, component) from the bytes above, so that `natify` and `inspect` say what the file is and what to do (take the core
    module with `wasm-tools component unbundle`) instead of "not a module".
 
 Details for the host of a WASI 0.2 command (from the analysis of the first report, **[read]** with the run above as the base):
@@ -1107,7 +1123,7 @@ Details for the host of a WASI 0.2 command (from the analysis of the first repor
 
 #### Stages of extending wasmext (one at a time, in any order after the first)
 
-1. **`wasi_flavor`** in `inspect` and `natify`: recognise core 0.1, core 0.2, core 0.3 or a component and suggest what to do (`wasm-tools component unbundle`). The cheapest step, and it removes the unclear "not a module".
+1. **`wasi_flavor`** in `inspect` and `natify` (**built**): recognise core 0.1, core 0.2, core 0.3 or a component and suggest what to do (`wasm-tools component unbundle`). The cheapest step, and it removes the unclear "not a module".
 2. **A typed WIT layer (a generator in Python, without Rust).** Take the types from `wasm-tools component wit --json`, port lift and lower from `design/mvp/canonical-abi/definitions.py`, and use `run_tests.py` as the oracle. The output is C code in the extension (a call of an export: lower → call → lift → `cabi_post_*`; an import: the other way) and a typed `.pyi`. Begin with `string`, `list`, `record`, `option`, `result`, `variant`, `enum`, `flags`; add resources (`own`/`borrow`, `[dtor]`) as a separate step.
 3. **A generator of adapters between modules (WAT).** The same as `adapter.wat`, but generated from the WIT for each function. Do the copying between memories either by the multi-memory `memory.copy` (works in WABT and wasmext) or by a built-in function `transcode` in C, as in FACT. Resolve the cycle "the adapter needs the guest's memory" at the level of the instance graph: either a memory taken out into a separate module, or a deferred binding.
 4. **A WASI 0.2 host** ("What wasmext would have to do"). The key of an import without the patch version, unknown imports return an error and not a trap. There are three ways, and none is a drop-in ("Ready native layers"):
@@ -1212,8 +1228,8 @@ wasm-tools is already on PyPI (`wasm-tools-package`), and meld is not. If conven
 
 **There is one risk:** the user built without `--emit-manifest`, and there will be no typed layer. Then wasmext has to work as it does now (raw core functions), and only warn that the types are unavailable and how to get them.
 
-Facts checked about this on 2026-10-21 **[again]**: `wasmext inspect` / `natify` today say `unsupported WebAssembly binary version 0d000100` on a component (a `WasmError` from `src/wasmext/_wasm.py`), the
-recognition does not exist; `wasm-tools-package` is on PyPI **only as a pre-release** (`1.262.0.0b1`), the same state in which `wabt-package` was before 1.0.42.0; a package named `meld` on PyPI is MELD of the
+Facts checked about this on 2026-10-21 **[again]**: `wasmext inspect` / `natify` said `unsupported WebAssembly binary version 0d000100` on a component (a `WasmError` from `src/wasmext/_wasm.py`); the
+recognition has since been built (`wasi_flavor`); `wasm-tools-package` is on PyPI **only as a pre-release** (`1.262.0.0b1`), the same state in which `wabt-package` was before 1.0.42.0; a package named `meld` on PyPI is MELD of the
 Krishnaswamy Lab and the crate `meld` on crates.io is a project of Merkle trees, neither is this tool, so meld has to be installed from source; the names `meld.*` are those of a young tool (0.64). The proposal agrees with
 the rule of the project that a built module needs nothing of `wasmext` when it runs. Nothing in the repository was changed because of these messages.
 

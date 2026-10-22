@@ -1,0 +1,20 @@
+[build-system]
+# wasmext turns the .wasm file into an extension (see setup.py); it brings wasm2c with it (wabt-package).
+requires = ["setuptools>=77", "wasmext"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wasmext-example-wasi2-python"
+version = "0.1.0"
+description = "CPython 3.15 built for WASI 0.2 (with OpenSSL), a native CPython extension made by wasmext, on a host in Python with filesystem, name lookup and TCP; pip installs over HTTPS"
+requires-python = ">=3.11"
+dependencies = ["wasmext-example-wasi2-unbundled"]
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+packages = ["wasi2python"]
+include-package-data = false
+
+[tool.uv.sources]
+wasmext = { path = "../..", editable = false }
+wasmext-example-wasi2-unbundled = { path = "../wasi2_unbundled", editable = false }

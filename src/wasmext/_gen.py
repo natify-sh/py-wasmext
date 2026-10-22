@@ -635,14 +635,27 @@ def generate(module: Module, name: str, *, version: str | None = None, share_tab
         hadd(f"#define {last.upper()}_TAG_COUNT {len(tags)}")
         hadd(f"#define {last.upper()}_TAG_MAX_VALUES {max(1, max(len(t.params) for t in tags))}")
         hadd("")
+    hadd(
+        "/* The extension (WASMEXT_PY_THREADS, defined by the Python layer before it includes this file) sets the runtime of wasm2c up for any thread that"
+    )
+    hadd(
+        "   calls into WebAssembly code (see the Python layer); the library does it in its API functions and the program has one thread. */"
+    )
+    hadd("#ifdef WASMEXT_PY_THREADS")
+    hadd("static WASM_RT_THREAD_LOCAL int wasmext_py_ready_;")
+    hadd("static void wasmext_py_thread_setup_(void);")
+    hadd("#define WASMEXT_THREAD_READY() ((void)(wasmext_py_ready_ ? 0 : (wasmext_py_thread_setup_(), 0)))")
+    hadd("#else")
+    hadd("#define WASMEXT_THREAD_READY() ((void)0)")
+    hadd("#endif")
     if shares_tables:
         hadd(
             "#ifdef WASMEXT_TRAP_HANDLER  /* the extension: the calls into this module share the stack of entries (wasmext_glue.h) */"
         )
-        hadd("#define WASMEXT_ENTER(CODE, FAIL) WASMEXT_ENTER_SHARED(CODE, FAIL)")
+        hadd("#define WASMEXT_ENTER(CODE, FAIL) WASMEXT_THREAD_READY(); WASMEXT_ENTER_SHARED(CODE, FAIL)")
         hadd("#define WASMEXT_LEAVE() WASMEXT_LEAVE_SHARED()")
         hadd("#else")
-    hadd(f"#define WASMEXT_ENTER(CODE, FAIL) WASMEXT_ENTER_{reentrant}(CODE, FAIL)")
+    hadd(f"#define WASMEXT_ENTER(CODE, FAIL) WASMEXT_THREAD_READY(); WASMEXT_ENTER_{reentrant}(CODE, FAIL)")
     hadd(f"#define WASMEXT_LEAVE() WASMEXT_LEAVE_{reentrant}()")
     if shares_tables:
         hadd("#endif")
@@ -655,7 +668,64 @@ def generate(module: Module, name: str, *, version: str | None = None, share_tab
     add("#include <Python.h>")
     add("#include <structmember.h>")
     add("#include <string.h>")
+    add("#define WASMEXT_PY_THREADS 1")
     add(f'#include "{last}_glue.h"')
+    add("")
+    add(
+        "/* Every thread that runs WebAssembly code needs the runtime set up for it: the alternate stack for the handler of the signals, which turns a stack overflow"
+    )
+    add(
+        "   into a trap (without it the process is killed by SIGSEGV). wasm_rt_init() did it for the thread that imported the module; any other thread does it at its"
+    )
+    add(
+        "   first call (WASMEXT_THREAD_READY in the entry of a call) and gives it back when it ends: Python lets go of the capsule kept in the dict of the thread"
+    )
+    add(
+        "   state when that is cleared, which happens in the thread that is ending. The thread that imports the module is not registered: at the end of the process"
+    )
+    add(
+        '   the runtime of each module would free the one alternate stack of the thread, and only the last one\'s is in place (the runtime says "modified unexpectedly"'
+    )
+    add(
+        "   in a debug build and leaves it, so a thread that runs several modules leaves a stack of each but one, as it did). */"
+    )
+    add(f'#define WASMEXT_PY_THREAD_KEY "wasmext.{last}.thread"')
+    add("static void wasmext_py_thread_end_(PyObject *capsule) {")
+    add("    unsigned long *owner = (unsigned long *)PyCapsule_GetPointer(capsule, WASMEXT_PY_THREAD_KEY);")
+    add("    if (owner == NULL) {")
+    add("        PyErr_Clear();")
+    add("        return;")
+    add("    }")
+    add(
+        "    if (*owner == PyThread_get_thread_ident()) {  /* not when the interpreter clears the state of another thread as it finalizes: the stack is that thread's */"
+    )
+    add("        wasm_rt_free_thread();")
+    add("        wasmext_py_ready_ = 0;")
+    add("    }")
+    add("    free(owner);")
+    add("}")
+    add("static void wasmext_py_thread_setup_(void) {")
+    add("    PyObject *dict = PyThreadState_GetDict();")
+    add("    unsigned long *owner = (unsigned long *)malloc(sizeof *owner);")
+    add("    PyObject *capsule;")
+    add("    wasm_rt_init_thread();")
+    add("    wasmext_py_ready_ = 1;")
+    add(
+        "    if (dict == NULL || owner == NULL) {  /* nowhere to keep it: the stack of this thread is not given back (as it was not before) */"
+    )
+    add("        free(owner);")
+    add("        return;")
+    add("    }")
+    add("    *owner = PyThread_get_thread_ident();")
+    add("    capsule = PyCapsule_New(owner, WASMEXT_PY_THREAD_KEY, wasmext_py_thread_end_);")
+    add("    if (capsule == NULL) {")
+    add("        free(owner);")
+    add("        PyErr_Clear();")
+    add("        return;")
+    add("    }")
+    add("    if (PyDict_SetItemString(dict, WASMEXT_PY_THREAD_KEY, capsule) < 0) PyErr_Clear();")
+    add("    Py_DECREF(capsule);")
+    add("}")
     if wasi_modules:
         add('#include "wasi_python.h"')  # the host of the core of WASI: after the glue, whose WASI headers it needs
     add("")
@@ -1910,7 +1980,10 @@ def generate(module: Module, name: str, *, version: str | None = None, share_tab
     add("")
     add(f"PyMODINIT_FUNC PyInit_{last}(void) {{")
     add("    PyObject *m;")
-    add("    wasm_rt_init();")
+    add(
+        "    wasm_rt_init();  /* sets up this thread too; not given back, as before (see the comment above wasmext_py_thread_end_) */"
+    )
+    add("    wasmext_py_ready_ = 1;")
     if shares_tables:
         add("    if (attach_traps() < 0) return NULL;")
     add("    m = PyModule_Create(&module_def);")

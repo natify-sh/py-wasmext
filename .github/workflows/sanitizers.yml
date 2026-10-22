@@ -1,0 +1,66 @@
+name: Sanitizers
+
+# The test suite on extensions built with AddressSanitizer and UndefinedBehaviorSanitizer. The extensions hold raw pointers between Python objects
+# and the memory of the runtime of wasm2c (instances, tables, exported memories, the stacks of threads), and an access to freed memory or a stack
+# that is given back too early shows up in an ordinary run only by luck. Here the first bad access ends the process with the stacks that allocated
+# and freed it: the job fails loudly, and does not print and go on (-fno-sanitize-recover=all; ASan stops at the first report anyway).
+# The idea and the shape of the job are those of the AddressSanitizer job of o-murphy/rp2040py.
+#
+# How: the tests build their extensions with `cc` (tests/conftest.py), and WASMEXT_TEST_CFLAGS adds the sanitizer flags to that build; the
+# interpreter is not instrumented, so the runtime of ASan is loaded first (LD_PRELOAD). The tests run through the python of the environment, not `uv run`,
+# which would sync the project again. tests/test_sanitizers.py (a canary) fails the job if the sanitizer is not really in effect.
+
+on:
+  push:
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "pyproject.toml"
+      - ".github/workflows/sanitizers.yml"
+  pull_request:
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "pyproject.toml"
+      - ".github/workflows/sanitizers.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: sanitizers-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  asan-ubsan:
+    name: pytest on an ASan + UBSan build
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    # a branch of this repository is run by its push; a pull request is run only when it comes from a fork
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    env:
+      WASMEXT_TEST_CFLAGS: -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer -g
+      # leaks off: Python does not free everything at exit. A test that asks for an allocation that cannot be made (a memory too big) must get NULL
+      # and not an abort. halt_on_error: the first report ends the process.
+      ASAN_OPTIONS: detect_leaks=0:allocator_may_return_null=1:halt_on_error=1
+      UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # setuptools-scm has to see the tags
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          python-version: "3.11"
+          enable-cache: true
+          github-token: ${{ github.token }}
+
+      - name: Install
+        run: uv sync
+
+      - name: Run the test suite under the sanitizers
+        run: |
+          export LD_PRELOAD="$(gcc -print-file-name=libasan.so)"
+          .venv/bin/python -m pytest tests -q -p no:cacheprovider

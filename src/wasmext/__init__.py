@@ -3,7 +3,20 @@
 from ._gen import GenError, Glue, generate, mangle
 from ._natify import _version, natify  # pyright: ignore[reportPrivateUsage]
 from ._toolchain import Toolchain, find_toolchain
-from ._wasm import Export, FuncType, GlobalType, Import, Limits, Module, TableType, ValType, WasmError, parse
+from ._wasm import (
+    Export,
+    FuncType,
+    GlobalType,
+    Import,
+    Limits,
+    Module,
+    TableType,
+    ValType,
+    WasiFlavor,
+    WasmError,
+    parse,
+    wasi_flavor,
+)
 
 __version__ = _version()
 
@@ -19,6 +32,7 @@ __all__ = [
     "TableType",
     "Toolchain",
     "ValType",
+    "WasiFlavor",
     "WasmError",
     "__version__",
     "find_toolchain",
@@ -26,4 +40,5 @@ __all__ = [
     "mangle",
     "natify",
     "parse",
+    "wasi_flavor",
 ]

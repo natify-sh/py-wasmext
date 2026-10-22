@@ -1,0 +1,27 @@
+
+add (a few ns of work): ns per call
+                           1 thread   4 threads, own inst.  4 threads, same inst.
+bare call                      26.4                   31.1                   26.4
+plain counter+check            28.4   not safe (the GIL's)   not safe (the GIL's)
+atomic per thread              31.2                   34.7                   35.4
+atomic per context             35.0                  337.0                  329.6
+mutex+lookup per call          36.4                  423.0                  437.7
+atomic per instance            34.2                   34.0                  291.9
+
+work(1000) (about 1 us): ns per call
+                           1 thread   4 threads, own inst.  4 threads, same inst.
+bare call                     607.3                  845.0                  886.1
+plain counter+check           659.3   not safe (the GIL's)   not safe (the GIL's)
+atomic per thread             642.9                  839.5                  892.3
+atomic per context            614.7                  797.7                  769.7
+mutex+lookup per call         615.8                  856.9                  874.8
+atomic per instance           608.6                  651.0                  801.5
+
+work(100000) (about 100 us): ns per call
+                           1 thread   4 threads, own inst.  4 threads, same inst.
+bare call                   61619.2                64877.2                62084.3
+plain counter+check         64779.7   not safe (the GIL's)   not safe (the GIL's)
+atomic per thread           57828.0                65084.2                63503.1
+atomic per context          56019.3                77321.0                61654.1
+mutex+lookup per call       61759.7                60254.5                61783.5
+atomic per instance         58573.8                62388.9                62857.6

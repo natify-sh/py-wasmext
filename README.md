@@ -293,7 +293,7 @@ What is supported, what is not yet, and the plan are in [FEATURES.md](docs/FEATU
 **Alpha.** The core works and is tested: in CI the test suite passes on Linux, macOS and Windows, the examples build into wheels on
 seven platforms, and the WASI programs of the official test suite run on all three systems. But the interface can still change
 (the format of the link between instances is `v1` and has not been in a release), and the rest of this section is what to expect.
-The package is **not published on PyPI yet**; until it is, build the wheel from a checkout (`uv build`) and install it with
+The package is on PyPI as a pre-release (`0.0.1a1`): `pip install --pre wasmext`. To try the code of a branch, build the wheel from a checkout (`uv build`) and install it with
 `pip install --find-links <the folder of the wheel> wasmext`, as the examples do in CI.
 
 ### Public interface

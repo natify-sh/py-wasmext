@@ -17,7 +17,7 @@ What `wasm-opt` can do is read from the source of Binaryen (`version_133`, the l
 
 **Who needs it.** Mostly the modules that also use GC (the languages that compile to WasmGC). Alone it is rare. So its value depends on the section below.
 
-**Verdict.** Wait for WABT. A rewrite is possible but not planned.
+**Verdict.** Wait for WABT. A rewrite is possible but not planned. The ways in full, with what was found in the session of 2026-10-22 (`wasmext inspect` says "can be wrapped" for a module that `natify` then cannot build), are in [typed_function_references_concept.md](typed_function_references_concept.md).
 
 ## Garbage collection (WasmGC)
 
@@ -45,6 +45,23 @@ What `wasm-opt` can do is read from the source of Binaryen (`version_133`, the l
 - *With `wasm-opt`.* Binaryen reads and writes the opcodes (`WideArithmeticFeature`, `I64Add128` in `wasm-binary.h`) but has **no pass that lowers them** (no such name in the list), and its own `wasm2js` says "wide arithmetic is not supported". Not a way.
 
 **Verdict.** Possible, large, not planned until a module needs it (the compilers emit it rarely: big-integer and cryptographic code).
+
+## WABT issues opened from this project
+
+Opened by the owner of this repository against `WebAssembly/wabt` (status read from the list "Open, created by me" on 2026-10-22; **all six are open**, none answered as far as this page knows). Each has a draft or a
+reproduction in the repository where one was kept. Where wasmext has a patch, it matches only the broken shape, so a fixed `wasm2c` passes through and the patch can be removed.
+
+| WABT | What | How wasmext lives with it | When the patch can go |
+| --- | --- | --- | --- |
+| [#2885](https://github.com/WebAssembly/wabt/issues/2885) | `_addcarry_u64` in the C for 64-bit memories does not build with MSVC on ARM64 (it exists only on x64) | regex in `_natify.py`, also on the shared `_w2c-impl.h` of a module in several files | when a `wasm2c` release has the fix |
+| [#2886](https://github.com/WebAssembly/wabt/issues/2886) | `wasm2c` aborts (SIGABRT, no message) on relaxed SIMD instructions | not translatable; the feature is "no (wasm2c)" in FEATURES.md | when `wasm2c` translates or reports an error |
+| [#2893](https://github.com/WebAssembly/wabt/issues/2893) | the result of a `return_call_indirect` chain is lost when the callee has no tail-callable form (wrong value) | patch to the label that returns the result (`goto var_Bfunc`) | when fixed |
+| [#2895](https://github.com/WebAssembly/wabt/issues/2895) | `wasm2c` aborts (SIGABRT) on relaxed SIMD **and wide arithmetic** instead of reporting an error | none; both features are "no (wasm2c)"; a message from `natify` could replace the abort | when fixed |
+| [#2896](https://github.com/WebAssembly/wabt/issues/2896) | an imported function in an element segment gets the wrong module instance | `_repair_imported_elements` in `_natify.py` (needed by `meld fuse` output) | when fixed |
+| [#2897](https://github.com/WebAssembly/wabt/issues/2897) | compact imports: the encoding `0x7E` is decoded differently from the proposal and its spec tests | wasmext reads both forms itself and writes the ordinary form before `wasm2c` | when `wasm2c` follows the proposal |
+
+[#2884](https://github.com/WebAssembly/wabt/issues/2884) (`return_call` in a function with locals writes C that does not compile; patched by a regex in `_natify.py`) is referred to in FEATURES.md and is **not in that list of open issues**: whether it was closed or
+fixed was not checked. The patch stays until a released `wasm2c` is checked.
 
 ## Related, not blocked in the same way
 

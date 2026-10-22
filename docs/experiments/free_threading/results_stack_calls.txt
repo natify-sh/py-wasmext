@@ -1,0 +1,3 @@
+fib(32) through the table, best of 5, three runs each (ms; million calls a second)
+B (default: alternate stack + signal handler): 16 (449), 15 (463), 16 (450)
+C (WASM_RT_STACK_DEPTH_COUNT=1, limit 500):    62 (114), 60 (118), 62 (115)

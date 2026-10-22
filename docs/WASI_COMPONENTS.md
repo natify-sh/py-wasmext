@@ -688,6 +688,10 @@ Runtimes that already have the component model were looked at to see whether one
 | **WAMR** | in progress: the full CM + WASI 0.2 in the Airbus fork (`dev/cm_wasip2_complete`, stable specs as of August 2025, no async and no wasi:http); upstream is merging it through the branch `dev/cm_wasip2` (PR #4872, the parser in #4889); not yet in main | LLVM (`wamrc`), cross-compilation, 32-bit targets exist | the nearest candidate for the future |
 | Wasmtime | full | Cranelift, 64-bit targets only; 32-bit only through Pulley (an interpreter) | checked, see below |
 | Wasmi, wasm3, wazero, Wasmer | not found | | |
+| WasmEdge | its documentation says it is committed to the component model; **no status, release note or matrix found** (searched 2026-10-22) | | not looked at before |
+| WACS (.NET), `wasm_bridge_wasi` (Rust), `wasd` (Dart) | a host of the canonical ABI and the packages of 0.2 (WACS: all seven packages, 0.2.3), each in its own language and tied to its own engine | | seen in a search 2026-10-22; **none is a standalone library in C** |
+
+*Searched again on 2026-10-22 (the web, for "a WASI 0.2 host in C, standalone, for `wasm2c`"): nothing found. The branch `dev/cm_wasip2` of WAMR got a merge of `main` (PR #4872, 2026-03-17: 107 commits of CI, fixes and bumps, no component-model work in the page); its status in `main` was not found.*
 | w2c2 | no | compiles to C (C89) | an alternative to wasm2c, see "Decompiling WASM into C" |
 
 ### A cut-down Wasmtime as a PyO3 extension (experiment D of the first report) **[reported]**

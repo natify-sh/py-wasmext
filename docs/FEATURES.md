@@ -277,6 +277,8 @@ finishing**: not practical as it is. `lua.wasm` (329 KB) takes 44 seconds. For a
 
 ## What is open
 
+The state at the end of the working session of 2026-10-22 (what is done, what is not, the ideas, and what waits for a decision): [where_we_stopped_2026-10-22.md](where_we_stopped_2026-10-22.md).
+
 One table for the whole plan. **done** = built and tested; **partly** = built, with what is left named; **open** = not built.
 Design and history of each item: [DESIGN.md](DESIGN.md).
 

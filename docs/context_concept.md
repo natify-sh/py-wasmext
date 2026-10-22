@@ -123,6 +123,10 @@ The idea: a **small record of the process** (the handler of the signals, who own
 A module that finds none, or one it cannot read, works alone as today. It decides nothing about who may exchange references; that stays with the context, which is explicit. So the host installs nothing, and the autonomy of a module is kept; the price is one more record in the contract between wheels
 of different versions (small: the signals, the stacks), and a thread that runs several modules is set up once and not once per module.
 
+**Checked by experiment (2026-10-22):** with `--share-tables` on every module, all combinations of two modules trap correctly, so the stack of entries of `wasmext_traps` already does what the record needs for traps. But it cannot be turned on for all modules as it is: it keeps at most 64 runtimes
+(`WASMEXT_MAX_RUNTIMES`) and its `enter`/`leave` loop over all of them on every call. A **lighter variant for modules that share no tables** (push and pop of the entry with no loop, the unwind target set for the module's own runtime only, two functions added at the end of `wasmext_traps`) and a **fall-back to the
+autonomous behaviour instead of `ImportError`** when the capsule is not compatible would be needed. Not built; it touches the ABI of the record of traps. (The thread capsule of the Python layer is another thing, for another problem: setting up and giving back the alternate stack of each thread.)
+
 Open: how modules built apart find the record in a C host with no Python (an explicit pointer, or none), subinterpreters (the handler is of the process, a capsule is of the interpreter), and Windows (vectored handlers: each module adds its own).
 
 ## Taken from, and not taken from, other runtimes

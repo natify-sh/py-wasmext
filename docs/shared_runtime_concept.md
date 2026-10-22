@@ -88,6 +88,9 @@ plus the per-thread setup of the Python layer (done).** It is *not tried yet*; i
 | Weak symbols or symbol interposition instead of a capsule | read, not run | no on macOS and Windows, no check of compatibility before the binding, hijacks other packages' runtimes; no speed gain (the forwarders cost nothing measurable) |
 | The context (a registry, explicit, bound at creation) | idea; measured costs | orthogonal: it is about who may exchange references, not about the OS resources; stays as designed |
 
+**Update (same day): the candidate was tried** ([experiments/shared_runtime/](experiments/shared_runtime/), section 3): it **works for every module that takes part**, whichever runtime version (two modules in both orders; a module of another runtime that cannot join does not take the handler; a module with a handler of its own that goes to the same stack is harmless), and **a default module of today, which does not take part, breaks it in both orders**. And the stock knobs of
+`wasm-rt` **cannot express it** (the alternate stack of a thread needs the runtime's own handler; `SKIP_SIGNAL_RECOVERY` falls back to depth counting): the experiment redirected `sigaction` in the files of the runtime to a no-op; a small change in WABT would make it a flag.
+
 What is **not** known: whether the candidate works on macOS and Windows (a vectored handler there), with a free-threaded build, with a C host that has no capsule, and with subinterpreters. It is a hypothesis until `tests/test_two_modules.py` (the `xfail(strict)` test) passes on it.
 
 ## Opting out: a module with the same runtime that does not join (a requirement, not yet met by anything tried)

@@ -13,6 +13,14 @@ if role == "master":
     old = "    wasmext_py_ready_ = 1;\n"
     assert old in s[at:]
     s = s[:at] + s[at:].replace(old, old + "    if (rt_master_publish() < 0) return NULL;\n", 1)
+elif role == "one":  # a module that takes part in the one handler of the process
+    s = s.replace("PyMODINIT_FUNC PyInit_", '#include "one_handler.h"\nPyMODINIT_FUNC PyInit_', 1)
+    at = s.index("PyMODINIT_FUNC PyInit_")
+    old = "    if (attach_traps() < 0) return NULL;"
+    assert old in s[at:]
+    s = s[:at] + s[at:].replace(old, old + "\n    if (one_handler_install() < 0) return NULL;", 1)
+elif role == "plain":  # untouched: a module with the default runtime, which installs a handler of its own
+    pass
 elif role == "dual":
     s = s.replace("PyMODINIT_FUNC PyInit_", '#define RT_DUAL 1\n#include "shared_rt.h"\nPyMODINIT_FUNC PyInit_', 1)
     at = s.index("PyMODINIT_FUNC PyInit_")

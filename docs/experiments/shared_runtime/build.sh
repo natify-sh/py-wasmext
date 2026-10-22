@@ -14,11 +14,14 @@ build_one() {  # name role wasm
   c="$name/build/wasmext/$name"
   python3 "$HERE/patch.py" "$role" "$c/${name}_py.c"
   flags="-O2 -fPIC -shared -w -DWASMEXT_TRAP_HANDLER=wasmext_trap_$name -I$c -I$HERE -I$WABT/wasm2c -I$INC_PY"
-  if [ "$role" = dual ]; then   # a runtime of its own (its functions renamed own_*), and the forwarders that choose
+  if [ "$role" = one ]; then   # the whole runtime inside, its call of sigaction made a no-op; the first module installs the one handler (one_handler.h)
+    for r in impl mem exceptions; do gcc $flags -include "$HERE/no_sigaction.h" ${EXTRA_FLAGS:-} -c "$c/${name}_rt_$r.c" -o "$name.$r.o"; done
+    gcc $flags ${EXTRA_FLAGS:-} "$c/${name}_py.c" "$c/${name}_w2c.c" "$name.impl.o" "$name.mem.o" "$name.exceptions.o" -o "$name$SUFFIX"
+  elif [ "$role" = dual ]; then   # a runtime of its own (its functions renamed own_*), and the forwarders that choose
     ren=""; for n in init is_initialized init_thread free_thread trap strerror allocate_memory grow_memory free_memory allocate_funcref_table grow_funcref_table free_funcref_table allocate_externref_table grow_externref_table free_externref_table set_unwind_target get_unwind_target load_exception throw exception_tag exception_size exception; do ren="$ren -Dwasm_rt_$n=own_wasm_rt_$n"; done
     for r in impl mem exceptions; do gcc $flags $ren -c "$c/${name}_rt_$r.c" -o "$name.$r.o"; done
     gcc $flags ${EXTRA_FLAGS:-} "$c/${name}_py.c" "$c/${name}_w2c.c" "$HERE/dual_shim.c" "$name.impl.o" "$name.mem.o" "$name.exceptions.o" -o "$name$SUFFIX"
-  elif [ "$role" = master ]; then
+  elif [ "$role" = master ] || [ "$role" = plain ]; then
     gcc $flags "$c/${name}_py.c" "$c/${name}_w2c.c" "$c/${name}_rt_impl.c" "$c/${name}_rt_mem.c" "$c/${name}_rt_exceptions.c" -o "$name$SUFFIX"
   else   # a slave: the C of the module and the glue, and the shim; no file of the runtime
     gcc $flags "$c/${name}_py.c" "$c/${name}_w2c.c" "$HERE/slave_shim.c" -o "$name$SUFFIX"
@@ -27,6 +30,10 @@ build_one() {  # name role wasm
 build_one ft master "${FT_WASM:?}"
 build_one ft2 slave "${FT_WASM}"
 build_one ex slave "${EX_WASM:?}"
+build_one e1 one "${FT_WASM}"
+build_one e2 one "${FT_WASM}"
+EXTRA_FLAGS="-DWASMEXT_RUNTIME=12345u" build_one e3 one "${FT_WASM}"   # another runtime: it cannot join the stack of entries
+build_one e4 plain "${FT_WASM}"   # a module that follows no convention: the default runtime, a handler of its own
 build_one d1 dual "${FT_WASM}"
 build_one d2 dual "${FT_WASM}"
 EXTRA_FLAGS="-DWASMEXT_RUNTIME=12345u" build_one d3 dual "${FT_WASM}"   # another runtime (another layout fingerprint): it must not attach

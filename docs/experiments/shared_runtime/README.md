@@ -56,3 +56,24 @@ goes to the shared stack of entries), or handlers are chained.
    the table would only be needed for what else is to be shared (one registry of tags, one setup of a thread).
 5. **Not covered here:** other configurations (depth counting, segue, memory64, shared memory, custom page sizes add functions and some variables), macOS and Windows (a vectored handler for each module), free-threaded builds and concurrent imports (who is the master), subinterpreters, a C host without a capsule, the limit of 64 runtimes (the slaves here still `join` the stack of entries, so they count; a real slave would not),
    the survival of the master (here the slave keeps no reference to it: the capsule has no destructor and the module is never unloaded), and the layout fingerprint (`WASMEXT_RUNTIME`) as the only check of "the same runtime".
+
+## 3. One handler of signals for the process (`e1` .. `e5`; `one_handler.h`, `no_sigaction.h`)
+
+The candidate that the conclusion of [../../shared_runtime_concept.md](../../shared_runtime_concept.md) names: **no runtime installs a handler; the first module installs one for the process, which turns the signal into a trap on the stack of entries of `wasmext_traps`**
+(the modules are in the mode `--share-tables`, so that every runtime sends `wasm_rt_trap` to that stack).
+
+**A finding on the way: the stock knobs of `wasm-rt` cannot express it.** `WASM_RT_STACK_EXHAUSTION_HANDLER` (the alternate stack of a thread, which a stack overflow needs) is an `#error` without `WASM_RT_INSTALL_SIGNAL_HANDLER`, and `WASM_RT_SKIP_SIGNAL_RECOVERY` turns that off, so a runtime that "does not install its handler" falls back to **counting the depth** (about 4 times slower on calls inside a module).
+Here the call of `sigaction` in the files of the runtime goes to a function that does nothing (`no_sigaction.h`, force-included into those files only), and the one handler is installed by the module in its own file. **A small change in WABT (allow the alternate stack without the installation of the handler, or a hook for it) would make this a flag** and is what a proposal upstream would be.
+
+Results ([run]; `run_dual.py e1 e2` and so on, each in a process of its own):
+
+| Case | Result |
+| --- | --- |
+| `e1 e2` and `e2 e1` (two modules in the mode, both orders) | **both trap correctly** (out of bounds, stack overflow), also in a worker thread: **the bug of two modules is gone** |
+| `e1 e3` (`e3` is built for another runtime and cannot join the stack of entries) | the import of `e3` fails (the message wasmext already gives), **and `e1` still traps correctly afterwards**: no handler was taken (`d3` of section 2, which had its own, broke the master) |
+| `e1 e4`, `e4 e1` (`e4`: a module in the shared-stack mode with the default runtime, whose own handler replaces ours) | **works in both orders**: its handler too sends the trap to the shared stack, so it is harmless |
+| `e1 e5`, `e5 e1` (`e5`: **a default module of today, not on the shared stack**, with a handler of its own) | **the process aborts in both orders** ("WebAssembly code trapped outside any call into a module") |
+
+So the one handler **works for every module that takes part, whichever runtime version it has** (as long as it can join the stack of entries and installs no handler that goes elsewhere), and it **cannot protect against a module that does not take part**:
+wheels built before this change, or other wasm2c-based packages, break the arrangement exactly as two default modules break each other today (no regression, no repair). Also seen: a thread that runs several modules prints "alternate stack was modified unexpectedly" at its end in a debug build (one `sigaltstack` for a thread, one allocation per runtime copy), as before.
+Not measured here: the cost per call of the full stack of entries with many modules (the loop over runtimes, and the limit of 64, are those of `--share-tables`: the light `push`/`pop` is still to be built).

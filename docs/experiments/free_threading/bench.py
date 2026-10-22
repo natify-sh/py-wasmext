@@ -6,6 +6,7 @@
 README.md has the three builds it was run on (GIL; free-threaded, with the GIL turned back on by the import; free-threaded, with Py_MOD_GIL_NOT_USED).
 """
 
+import itertools
 import os
 import subprocess
 import sys

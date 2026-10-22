@@ -578,7 +578,7 @@ warnings of the compiler for the C of wasm2c too; the release workflow does not 
   (all of them build the extension with MSVC). Turning `build_extension` into a build by the compiler of setuptools is the way to close this, and needs CI rounds on Windows.
 - abi3 is tested by the suite with Python 3.11 and 3.15 (the wheels are tagged `cp311-abi3`); 3.12 to 3.14 run the wheel of coremark in the job `abi3-wheel-on-newer-pythons` (passed locally and in CI); a free-threaded build has none.
 - The patches of the copy of the C that wasm2c writes are four: `_memory_error_not_abort` (the allocation of a memory traps, it does not `abort()`), `_export_tags` (the table of tags), `_tail_call_locals` (fixed in WABT master by `6c7af19`, not in a release),
-  `_portable_on_arm64` (`_addcarry_u64`, WABT #2885). Nothing in the runtime or the sources of wabt-package is changed; when WABT has a release with the fixes the patches go.
+  `_portable_off_x64` (`_addcarry_u64`, WABT #2885). Nothing in the runtime or the sources of wabt-package is changed; when WABT has a release with the fixes the patches go.
 - **Fixed:** an exported `memoryview` of a memory that the runtime moves when it grows (no guard pages, memory64) used to be able to outlive the buffer. Now `memory.grow` answers -1 while such a view is alive (the maximum is made the present size; `Py_bf_releasebuffer` puts it back), in the extension and in the ctypes wrapper (`<name>_memory_*_pin` of the C API, a finalizer of the view); `test_a_memory_that_can_move_does_not_grow_while_a_memoryview_of_it_is_alive`.
 
 ## Decisions

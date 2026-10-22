@@ -247,8 +247,8 @@ def test_a_pattern_without_files_is_reported(project: Path, capsys: pytest.Captu
     assert "does not match any files" in capsys.readouterr().err
 
 
-def test_the_msvc_only_intrinsic_is_kept_off_arm64(project: Path) -> None:
-    """wasm2c's `_addcarry_u64` branch is for x64 MSVC only (the ARM64 build of the example did not link)."""
+def test_the_msvc_only_intrinsic_is_kept_to_x64(project: Path) -> None:
+    """wasm2c's `_addcarry_u64` branch is for x64 MSVC only: ARM64 and Win32 (x86) build the C but do not link (WABT #2885)."""
     natify("pkg/*.wasm", quiet=True)
     c = (project / "build" / "wasmext" / "pkg.add" / "add_w2c.c").read_text(encoding="utf-8")
     assert "#elif defined(_MSC_VER) && defined(_M_X64)" in c

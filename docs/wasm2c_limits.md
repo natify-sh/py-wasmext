@@ -53,7 +53,7 @@ reproduction in the repository where one was kept. Where wasmext has a patch, it
 
 | WABT | What | How wasmext lives with it | When the patch can go |
 | --- | --- | --- | --- |
-| [#2885](https://github.com/WebAssembly/wabt/issues/2885) | `_addcarry_u64` in the C for 64-bit memories does not build with MSVC on ARM64 (it exists only on x64) | regex in `_natify.py`, also on the shared `_w2c-impl.h` of a module in several files | when a `wasm2c` release has the fix |
+| [#2885](https://github.com/WebAssembly/wabt/issues/2885) | `_addcarry_u64` in the C for 64-bit memories does not link with MSVC on ARM64 and on x86/Win32 (LNK2019: the intrinsic exists only on x64; upstream confirmed both, the fix is a restriction of the branch to `_M_X64`, which is what the regex here does) | regex in `_natify.py`, also on the shared `_w2c-impl.h` of a module in several files | when a `wasm2c` release has the fix |
 | [#2886](https://github.com/WebAssembly/wabt/issues/2886) | `wasm2c` aborts (SIGABRT, no message) on relaxed SIMD instructions | not translatable; the feature is "no (wasm2c)" in FEATURES.md | when `wasm2c` translates or reports an error |
 | [#2893](https://github.com/WebAssembly/wabt/issues/2893) | the result of a `return_call_indirect` chain is lost when the callee has no tail-callable form (wrong value) | patch to the label that returns the result (`goto var_Bfunc`) | when fixed |
 | [#2895](https://github.com/WebAssembly/wabt/issues/2895) | `wasm2c` aborts (SIGABRT) on relaxed SIMD **and wide arithmetic** instead of reporting an error | none; both features are "no (wasm2c)"; a message from `natify` could replace the abort | when fixed |

@@ -363,7 +363,8 @@ def _made_by_this_wasmext(path: Path, digest: str, name: str, share_tables: bool
 
 
 # wasm2c 1.0.42 checks the sum of 64-bit addresses with `_addcarry_u64` whenever the compiler is MSVC, an intrinsic that only
-# the x64 targets have: on ARM64 the C does not link. The `#else` branch it falls back to for other compilers is portable.
+# the x64 targets have: on ARM64 and on x86 (Win32) the C compiles but does not link (LNK2019, unresolved `_addcarry_u64`; WABT #2885). The `#else` branch it
+# falls back to for other compilers is portable. Like the fix proposed upstream, the branch is kept to `_M_X64`.
 _MSVC_ADDCARRY = re.compile(rb"#elif defined\(_MSC_VER\)(\s+if \(_addcarry_u64\()")
 _MSVC_X64_ONLY = rb"#elif defined(_MSC_VER) && defined(_M_X64)\1"
 # The runtime calls abort() when the first allocation of a memory fails (it cannot be allocated, or the process has not the
@@ -406,7 +407,7 @@ _TAIL_CALL_LOCALS = re.compile(
 _TAIL_CALL_LOCALS_FIXED = rb"\2  \1 \3"
 
 
-def _portable_on_arm64(c_source: bytes) -> bytes:
+def _portable_off_x64(c_source: bytes) -> bytes:
     return _MSVC_ADDCARRY.sub(_MSVC_X64_ONLY, c_source)
 
 
@@ -635,10 +636,10 @@ def _prepare(
         _write_atomic(
             part,
             _marker(toolchain.version, wanted, digest, name, share_tables).encode()
-            + _export_tags(_repair_tail_calls(_portable_on_arm64(repaired[part])), module_prefix(name)),
+            + _export_tags(_repair_tail_calls(_portable_off_x64(repaired[part])), module_prefix(name)),
         )
     if shared.is_file():
-        _write_atomic(shared, _portable_on_arm64(repaired[shared]))
+        _write_atomic(shared, _portable_off_x64(repaired[shared]))
     _write_if_changed(
         glue_c, (_marker(toolchain.version, wanted, digest, name, share_tables) + glue.source).encode("utf-8")
     )

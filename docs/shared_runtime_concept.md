@@ -90,6 +90,21 @@ plus the per-thread setup of the Python layer (done).** It is *not tried yet*; i
 
 What is **not** known: whether the candidate works on macOS and Windows (a vectored handler there), with a free-threaded build, with a C host that has no capsule, and with subinterpreters. It is a hypothesis until `tests/test_two_modules.py` (the `xfail(strict)` test) passes on it.
 
+## Opting out: a module with the same runtime that does not join (a requirement, not yet met by anything tried)
+
+A module whose runtime is the same as the master's can still be wanted **alone**: for isolation (a module that must not share anything), for debugging, or because it is built another way. What each concept gives (a judgement; none of this opt-out was tried):
+
+| Concept | Can a module with the same runtime stay out? |
+| --- | --- |
+| Master and slave, dual module (run) | **yes, as a choice at the attach** (a setting of the build, of the import or of the context: "own runtime"), the pointer simply stays empty. **But** the runtime of such a module installs its own handler of signals and, as the experiment showed, **takes it from the others** |
+| One handler of ours + the (light) stack of entries (the candidate, not tried) | the handler is **one for the process by nature**, so "out" can only mean "not on the shared stack of entries"; its signals would then have no entry to go to (a trap outside any call: abort) unless it keeps a handler that **chains** |
+| The context | **orthogonal**: it keeps references apart, not the handler of signals or the stacks of the OS; two contexts share one process handler |
+| `WASM_RT_STACK_DEPTH_COUNT` (run) | **yes, naturally**: a module built so (and with its memory checked by bounds, not guard pages) needs **no handler at all**, so it cannot take one and does not need the shared ones; the price is the speed on calls inside it (about 4 times, measured) |
+| Weak symbols | **no**: the binding is made at load for the whole process |
+
+So an opt-out that does not harm the others needs one of two things: **a handler that chains** (each runtime saves the previous handler and gives it the signal when the fault is not in its own code, which needs a way to say "this thread is now inside my module": a thread-local mark set by the entry of the module; and, for memory, the addresses of its own memories),
+or **a mode with no handler** (depth counting, bounds checks). Chaining is also what a proposal to WABT would be about. **A requirement for the design:** an explicit, documented setting "this module runs on its own runtime", whose behaviour toward the others is stated (it must not take the handler).
+
 ## How to choose
 
 If 1 and 2 show that the thread-local state can be reached cheaply (or can stay per copy with only the entry shared), D is possible and is likely the best answer to the whole class of problems (signals, stacks, threads, tags). If not, **B** (the light entry on the existing stack of traps, with a fall-back) is the smaller answer to the wound that hurts now, and D stays an idea. Either way

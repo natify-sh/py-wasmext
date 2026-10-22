@@ -101,7 +101,7 @@ The expectation was that CPython would be the harder one; **for the build it was
 - The answer to the question does not change: **WASI 0.1 through wasmext asks nothing of the host** (the whole of a Python that runs `json`, `hashlib`, `zlib`, `decimal` is a module and a few settings), and WASI 0.2 asks for 115 imports, of which the filesystem is what `python -c` needs first.
 
 - **pip and the network.** With OpenSSL built for `wasm32-wasip2` (static, `no-threads`, `no-quic`) CPython gets `_ssl` and `_hashlib` and the host's imports stay the same (25 interfaces), so TLS
-  can be in the module and WASI 0.2 needs no TLS interface; one workaround (`OPENSSL_THREADS` defined by hand) and nothing run yet (no host with sockets and files). Details in
+  can be in the module and WASI 0.2 needs no TLS interface; one workaround (`OPENSSL_THREADS` defined by hand). **Run** with a host in Python that adds the filesystem, name lookup and TCP to the example host ([examples/wasi2_python](../examples/wasi2_python/)): `print`, `ssl`, an HTTPS request with the certificate checked in the module, and `pip install` from a local HTTPS index. Details in
   [experiments/wasi_p1_p2_cpython/README.md](experiments/wasi_p1_p2_cpython/README.md). WASI 0.1 has no sockets: only a bridge to the host (as py-wasmhost does) gives it a network.
 
 ## Awaiting upstream
@@ -113,5 +113,5 @@ The expectation was that CPython would be the harder one; **for the build it was
 
 ## Not done
 
-- The filesystem of WASI 0.2 in a host (22 to 28 methods); the sockets run; HTTPS; the standard library for the p2 run of CPython.
+- PyPI itself (no outbound TCP in the session); threads; UDP and IPv6 in the host. The filesystem, the sockets, HTTPS and the standard library for p2 are done in the example `examples/wasi2_python` (not a part of wasmext).
 - Measurements of speed; one machine, one compiler.

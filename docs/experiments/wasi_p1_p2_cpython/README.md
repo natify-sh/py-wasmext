@@ -71,8 +71,10 @@ was 32.7 MB). **The imports of the host did not change**: the same 25 interfaces
 **One workaround:** CPython refuses OpenSSL without `OPENSSL_THREADS`, and this OpenSSL is built `no-threads`; the macro is defined by hand in the installed `configuration.h`. WASI has no threads, so nothing runs in two threads,
 but it is a workaround, not a clean fix (a clean one would be a CPython option for a single-threaded OpenSSL, or `pthread_exit` in wasi-libc).
 
-**Not run:** no WASI 0.2 runtime with sockets and the filesystem is here (no `wasmtime`), so `import ssl`, a handshake and `pip install` over HTTPS are **not tried**; the build only shows that TLS can live inside the module and that the host
-then needs the same `wasi:sockets` and the filesystem as before, and no TLS interface. Also open: CA certificates (a bundle file on the filesystem of the host) and the clock.
+**Run [run]:** with a host in Python that has the filesystem (over `os`), name lookup and a TCP client, now in [examples/wasi2_python](../../../examples/wasi2_python/) (the host of `examples/wasi2_unbundled` plus `fshost.py` and `nethost.py`),
+the unbundled module runs through wasmext: `print(1 + 1)`, `import ssl` (`OpenSSL 3.5.0`), `getaddrinfo`, an `https://localhost` request with the certificate checked **inside the module**, and
+**`pip install` of a wheel from a local HTTPS index** (48 imports called). The host gave no TLS interface. Found on the way: `ensurepip` needs a child process (not on WASI; pip is run in the same process instead); pip needs `os.getuid`, `os.umask` and `mmap`
+(shimmed in the guest); the host must report a large `check-write` for files, or writes through `os.write` are cut to 4096 bytes. **Not tried:** PyPI itself (no outbound TCP in the session), a CA bundle other than pip's own, UDP, IPv6, a sandbox.
 
 ## Not done
 

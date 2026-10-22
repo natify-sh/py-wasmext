@@ -100,6 +100,10 @@ The expectation was that CPython would be the harder one; **for the build it was
 - `unbundle` and `meld` give the same set of imports for CPython, as for git; with the repair of the C of `wasm2c` (WABT #2896) the meld module runs as the unbundled one.
 - The answer to the question does not change: **WASI 0.1 through wasmext asks nothing of the host** (the whole of a Python that runs `json`, `hashlib`, `zlib`, `decimal` is a module and a few settings), and WASI 0.2 asks for 115 imports, of which the filesystem is what `python -c` needs first.
 
+- **pip and the network.** With OpenSSL built for `wasm32-wasip2` (static, `no-threads`, `no-quic`) CPython gets `_ssl` and `_hashlib` and the host's imports stay the same (25 interfaces), so TLS
+  can be in the module and WASI 0.2 needs no TLS interface; one workaround (`OPENSSL_THREADS` defined by hand) and nothing run yet (no host with sockets and files). Details in
+  [experiments/wasi_p1_p2_cpython/README.md](experiments/wasi_p1_p2_cpython/README.md). WASI 0.1 has no sockets: only a bridge to the host (as py-wasmhost does) gives it a network.
+
 ## Awaiting upstream
 
 - **meld** [#512](https://github.com/pulseengine/meld/issues/512) (closed by [#516](https://github.com/pulseengine/meld/pull/516), **not released yet**): the multi-component

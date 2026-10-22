@@ -60,6 +60,20 @@ and terminals 8), `random` 1. It is the set of `git.git` on p2 with the sockets 
 
 The unbundle, meld and natify commands are those of [../wasi_p1_p2_git/commands.sh](../wasi_p1_p2_git/commands.sh).
 
+## pip and the network: TLS (`_ssl`) on WASI 0.2
+
+Why: py-wasmhost wanted a working network for `pip`. WASI 0.1 has no sockets (`Errno 58`); WASI 0.2 has `wasi:sockets` but no TLS, and the build above had no `_ssl` ("Could not build the ssl module").
+
+**[run]** OpenSSL 3.5.0 builds for `wasm32-wasip2` with wasi-sdk 34 (`opensslbuild.sh`: `libcrypto.a` 6.2 MB, `libssl.a` 0.9 MB). Needed on the way: `no-quic` (`socketpair`), `-DOPENSSL_NO_UNIX_SOCK` (no `sun_path`),
+`no-threads` (`pthread_exit` is missing; with `threads` the build fails). CPython 3.15 with `--with-openssl=...` then builds **`_ssl` and `_hashlib`** (modules: 81 built-in, was 79; missing 7, was 9; `python.wasm` 36.4 MB,
+was 32.7 MB). **The imports of the host did not change**: the same 25 interfaces (`wasi:sockets` is there already; OpenSSL asks nothing new of WASI).
+
+**One workaround:** CPython refuses OpenSSL without `OPENSSL_THREADS`, and this OpenSSL is built `no-threads`; the macro is defined by hand in the installed `configuration.h`. WASI has no threads, so nothing runs in two threads,
+but it is a workaround, not a clean fix (a clean one would be a CPython option for a single-threaded OpenSSL, or `pthread_exit` in wasi-libc).
+
+**Not run:** no WASI 0.2 runtime with sockets and the filesystem is here (no `wasmtime`), so `import ssl`, a handshake and `pip install` over HTTPS are **not tried**; the build only shows that TLS can live inside the module and that the host
+then needs the same `wasi:sockets` and the filesystem as before, and no TLS interface. Also open: CA certificates (a bundle file on the filesystem of the host) and the clock.
+
 ## Not done
 
 - The standard library for the p2 run: the filesystem of WASI 0.2 in a host (22 to 28 methods) is the first thing `python -c` needs.

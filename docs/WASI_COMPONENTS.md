@@ -79,7 +79,7 @@ to provide" and can be given as Python callables: `Instance({"wasi:io/streams@0.
 
 What wasmext said of a component **[again]**: `not a module wasmext can read: unsupported WebAssembly binary version 0d000100` (a `WasmError` raised in `src/wasmext/_wasm.py`). The recognition
 described above is built as `wasmext.wasi_flavor` (`component`, `fused`, `core-0.1`, `core-0.2`, `core-0.3`, `none`, `unknown`): `parse()` refuses a component with what to do, `inspect` prints a `wasi:` line, `natify` warns (only) about 0.2, 0.3 and fused modules; `tests/test_wasi_flavor.py`. A module fused by meld carries custom sections of its own, among them `meld.signature-manifest` (when built with `--emit-manifest`),
-`wsc.transformation.attestation`, `component-provenance` and `producers` **[again]**; the check "this module is already fused" could rest on `meld.*`, but those are names of a young tool (0.64).
+`wsc.transformation.attestation`, `component-provenance` and `producers` **[again]**; the check "this module is already fused" could rest on `meld.*`, but those are names of a young tool, and they come only with `--emit-manifest`; **built** (2026-10-22) on the attestation that meld 0.64 writes in every module instead (`wsc.transformation.attestation`: `transformation_type` `fusion`, `tool.name` `meld`), so `wasi_flavor` says `fused` for the output of `meld fuse` as it is (0.64).
 
 ## What the tools do with a component
 

@@ -12,6 +12,7 @@ the value types it does not know (GC references, exceptions).
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Final, Literal, TypeVar
@@ -30,6 +31,7 @@ __all__ = [
     "expand_compact_imports",
     "parse",
     "wasi_flavor",
+    "wasi_hint",
 ]
 
 ValType = Literal["i32", "i64", "f32", "f64", "v128", "funcref", "externref"]
@@ -52,11 +54,12 @@ _KINDS: Final[tuple[ExternKind, ...]] = ("func", "table", "memory", "global", "t
 WASI_HINTS: Final[dict[str, str]] = {
     "core-0.2": "imports WASI 0.2 (wasi:*@0.2): it is built, but wasmext does not answer those calls; the host has to (docs/WASI_COMPONENTS.md)",
     "core-0.3": "imports WASI 0.3 (wasi:*@0.3): it is built, but wasmext does not answer those calls; the host has to (docs/WASI_COMPONENTS.md)",
-    "fused": "made by `meld fuse` from components: it is built, but any WASI 0.2/0.3 calls it makes are for the host to answer (docs/WASI_COMPONENTS.md)",
+    "fused": "made by `meld fuse` from components; it imports WASI 0.2 or 0.3, and it is built, but those calls are for the host to answer (docs/WASI_COMPONENTS.md)",
 }
 
 _MAGIC: Final = b"\0asm"
 _VERSION: Final = b"\x01\x00\x00\x00"
+_ATTESTATION: Final = "wsc.transformation.attestation"  # what `meld fuse` writes about itself: JSON with the kind of the transformation and the tool
 _COMPACT_EACH: Final = 0x7F  # compact imports: after the module, a name and a type (with its kind) for each import
 _COMPACT_KIND: Final = (
     0x7E  # compact imports: after the module, one type (with its kind) for the group, then a name for each import
@@ -148,6 +151,8 @@ class Module:
     # From the "name" section, which is only a help for people: function index -> {local index -> name}; the parameters are the first locals.
     local_names: dict[int, dict[int, str]] = field(default_factory=dict[int, dict[int, str]])
     custom: list[str] = field(default_factory=list[str])  # the names of the custom sections, in order
+    # The tool that fused components into this module (`"meld"`), told by a custom section of its own (`meld.*`) or by its attestation; None for any other module.
+    fused_by: str | None = None
     # Compact imports: where the import section is in the binary (from its id byte to its end), and, if some entry of it is compact, its body
     # written with ordinary imports (see `expand_compact_imports`).
     import_section: tuple[int, int] | None = None
@@ -370,6 +375,10 @@ def parse(data: bytes) -> Module:
             module.custom.append(custom)
             if custom == "name":
                 module.local_names = _local_names(body)
+            elif custom.startswith("meld."):
+                module.fused_by = "meld"
+            elif custom == _ATTESTATION:
+                module.fused_by = _fusion_tool(bytes(body.data[body.pos : body.end])) or module.fused_by
             continue
         if section_id not in _ORDER:
             raise WasmError(f"unknown section id {section_id}")
@@ -388,11 +397,23 @@ def parse(data: bytes) -> Module:
     return module
 
 
+def _fusion_tool(payload: bytes) -> str | None:
+    """The name of the tool in an attestation of a fusion (`{"transformation_type": "fusion", "tool": {"name": "meld"}}`), else None."""
+    try:
+        attestation = json.loads(payload)
+        tool = attestation["tool"]["name"]
+        kind = attestation["transformation_type"]
+    except (ValueError, KeyError, TypeError):
+        return None
+    return tool if kind == "fusion" and isinstance(tool, str) and tool == "meld" else None
+
+
 def wasi_flavor(data: bytes) -> WasiFlavor:
     """What kind of WASI file `data` is, from its bytes alone.
 
-    `component`: a component (version field `0d 00 01 00`), which wasmext does not read. `fused`: a core module with a custom
-    section `meld.*`, made by `meld fuse` from components. `core-0.1`, `core-0.2`, `core-0.3`: a core module whose imports (or,
+    `component`: a component (version field `0d 00 01 00`), which wasmext does not read. `fused`: a core module made by `meld fuse` from
+    components, told by a custom section `meld.*` (with `--emit-manifest`) or by the attestation that `meld` writes in every module (`wsc.transformation.attestation`,
+    a fusion by `meld`); it can still import WASI 0.2 or 0.3, which `wasi_hint` says. `core-0.1`, `core-0.2`, `core-0.3`: a core module whose imports (or,
     failing those, exports) are of `wasi_snapshot_preview1` / `wasi_unstable`, or of `wasi:*@0.2.x` / `wasi:*@0.3.x`; the newest wins.
     `none`: a core module that uses no WASI. `unknown`: not a module wasmext can read.
     """
@@ -402,15 +423,31 @@ def wasi_flavor(data: bytes) -> WasiFlavor:
         module = parse(data)
     except WasmError:
         return "unknown"
-    if any(name.startswith("meld.") for name in module.custom):
+    if module.fused_by:
         return "fused"
-    versions = {
-        _wasi_version(name) for name in [*(i.module for i in module.imports), *(e.name for e in module.exports)]
-    }
+    versions = _wasi_versions(module)
     for flavor in ("core-0.3", "core-0.2", "core-0.1"):
         if flavor in versions:
             return flavor
     return "none"
+
+
+def wasi_hint(data: bytes) -> str | None:
+    """What to tell about `data` because of its WASI flavor, or None when there is nothing to tell: WASI 0.1 is built into the module, and a module that was fused
+    by `meld` is told about only if it imports WASI 0.2 or 0.3 (a fused module that imports none of it needs nothing from the host)."""
+    flavor = wasi_flavor(data)
+    if flavor != "fused":
+        return WASI_HINTS.get(flavor)
+    try:
+        versions = _wasi_versions(parse(data))
+    except WasmError:
+        return None
+    return WASI_HINTS["fused"] if versions & {"core-0.2", "core-0.3"} else None
+
+
+def _wasi_versions(module: Module) -> set[str]:
+    names = [*(i.module for i in module.imports), *(e.name for e in module.exports)]
+    return {_wasi_version(name) for name in names}
 
 
 def _wasi_version(name: str) -> str:

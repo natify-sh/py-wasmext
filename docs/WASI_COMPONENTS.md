@@ -589,7 +589,7 @@ not say which memory a WASI import belongs to, or both).
 
 **Awaiting upstream; the release is on its way.** Issue [#512](https://github.com/pulseengine/meld/issues/512) is closed by pull request [#516](https://github.com/pulseengine/meld/pull/516), and issue
 [#513](https://github.com/pulseengine/meld/issues/513) by [#518](https://github.com/pulseengine/meld/pull/518). Pull request [#521](https://github.com/pulseengine/meld/pull/521) is the release **v0.65.0**; its
-`CHANGELOG.md` (read from the branch of the pull request, 2026-10-22) says; **the pull request was open, not merged, with 22 checks, when the owner of this repository pasted its description (the same day), so 0.65.0 is not published yet**:
+`CHANGELOG.md` (read from the branch of the pull request, 2026-10-22) says; **the pull request was open (22 checks) when the owner of this repository pasted its description, and was then merged into `main` upstream (told by the owner, 2026-10-22); a release is not published yet**:
 - **#512 fixed:** "nested lists and strings inside option, result and variant values are deep-copied across memories": a `list<string>` behind an option, result or variant had its pointer array copied to the other component but not the strings it
   points to, so the receiver read its own memory at the other component's addresses (empty or garbage strings, or a trap, at exit 0), under `--memory multi`. That is the `get=apple,3,[,]` above.
 - **#513 fixed:** `--emit-import-map` now states, for each function import, **the memory its pointer arguments refer to, the allocator for list and string results, the string encoding and the owning component** (the map gets `"version": 2`;

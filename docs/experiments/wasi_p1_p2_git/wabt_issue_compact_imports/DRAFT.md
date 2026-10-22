@@ -1,6 +1,6 @@
 # Compact imports: the encoding 0x7E is decoded differently from the proposal and its spec tests
 
-**Draft of an issue for WebAssembly/wabt (not posted).** Reproduced on 2026-10-22 with `wasm-validate` and `wasm2c` 1.0.42 (`wabt-package` 1.0.42.0, Linux x86-64). The code of `main`
+**Draft of an issue for WebAssembly/wabt; posted as [WebAssembly/wabt#2897](https://github.com/WebAssembly/wabt/issues/2897).** Reproduced on 2026-10-22 with `wasm-validate` and `wasm2c` 1.0.42 (`wabt-package` 1.0.42.0, Linux x86-64). The code of `main`
 (`src/binary-reader.cc`, `ReadImportSection`, read on 2026-10-22) reads the encoding in the same way.
 
 ## What the proposal says

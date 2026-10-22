@@ -407,6 +407,17 @@ _TAIL_CALL_LOCALS = re.compile(
 _TAIL_CALL_LOCALS_FIXED = rb"\2  \1 \3"
 
 
+def chain_build_flags() -> tuple[list[tuple[str, str]], list[str]]:
+    """The macros and link arguments of a build that has the chain of handlers of signals (`WASMEXT_CHAIN`, see wasmext_glue.h and docs/patch_policy.md): the runtime of wasm2c
+    installs no handler of SIGSEGV/SIGBUS of its own, because the runtimes of several modules would replace each other's. Not on Windows (it calls every vectored handler) and not where
+    there are no such signals (Emscripten, WASI). The handler reads thread-local data, so on Linux the library is linked with `-z now`: with lazy binding the first access resolves
+    `__tls_get_addr` inside the handler, which hangs. The target is read from `sysconfig.get_platform()`, which a cross build sets to the target and not the host."""
+    platform = sysconfig.get_platform().lower()
+    if os.name == "nt" or platform.startswith("win") or any(t in platform for t in ("emscripten", "wasi")):
+        return [], []
+    return [("WASMEXT_CHAIN", "1")], (["-Wl,-z,now"] if platform.startswith("linux") else [])
+
+
 def _portable_off_x64(c_source: bytes) -> bytes:
     return _MSVC_ADDCARRY.sub(_MSVC_X64_ONLY, c_source)
 
@@ -876,14 +887,10 @@ def _natify(
         ]  # the C dir stays last
         if not use_guard_pages:
             ext.define_macros = [*ext.define_macros, ("WASM_RT_USE_MMAP", "0")]
-        if (
-            os.name != "nt"
-        ):  # the runtimes of several modules would replace each other's handler of SIGSEGV/SIGBUS: see the Python layer. Windows calls every vectored handler
-            ext.define_macros = [*ext.define_macros, ("WASMEXT_CHAIN", "1")]
-            if sys.platform.startswith(
-                "linux"
-            ):  # the handler reads thread-local data: with lazy binding the first access resolves `__tls_get_addr` inside the handler, which hangs
-                ext.extra_link_args = [*(ext.extra_link_args or []), "-Wl,-z,now"]
+        chain_macros, chain_link = chain_build_flags()
+        ext.define_macros = [*ext.define_macros, *chain_macros]
+        if chain_link:
+            ext.extra_link_args = [*(ext.extra_link_args or []), *chain_link]
         if prepared.glue.trap_handler:  # the module shares tables with other instances
             ext.define_macros = [*ext.define_macros, ("WASMEXT_TRAP_HANDLER", prepared.glue.trap_handler)]
         if sys.byteorder == "big":  # the C of wasm2c reads this to lay the memory out reversed; nothing else sets it

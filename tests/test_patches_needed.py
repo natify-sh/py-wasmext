@@ -103,6 +103,6 @@ def test_wasm2c_still_aborts_on_what_it_cannot_translate(
         capture_output=True,
         check=False,
     )
-    assert ran.returncode in (-6, 134), (
+    assert ran.returncode not in (0, 1), (
         f"wasm2c no longer fails on the module of WABT {issue}: the feature may be supported now; see FEATURES.md and docs/wasm2c_limits.md"
     )

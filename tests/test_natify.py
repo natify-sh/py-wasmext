@@ -714,3 +714,27 @@ def test_a_wasm2c_that_writes_the_element_segments_another_way_is_left_alone() -
         _ELEM_ENTRIES,
     ]  # no such template: the entries are not rewritten either
     assert _repair_imported_elements([b"int main(void) { return 0; }\n"]) == [b"int main(void) { return 0; }\n"]
+
+
+@pytest.mark.parametrize(
+    ("platform", "macros", "link"),
+    [
+        ("linux-x86_64", [("WASMEXT_CHAIN", "1")], ["-Wl,-z,now"]),
+        ("macosx-14.0-arm64", [("WASMEXT_CHAIN", "1")], []),
+        ("win-amd64", [], []),
+        ("win-arm64", [], []),
+        ("emscripten-4.0.9-wasm32", [], []),  # wasm-ld does not know `-z now`, and there are no such signals
+    ],
+)
+def test_the_chain_of_signal_handlers_is_for_the_target_that_has_signals(
+    platform: str, macros: list[tuple[str, str]], link: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import sysconfig
+
+    from wasmext._natify import chain_build_flags
+
+    monkeypatch.setattr(sysconfig, "get_platform", lambda: platform)
+    if os.name == "nt":  # a Windows host never has it, whatever it builds for
+        assert chain_build_flags() == ([], [])
+    else:
+        assert chain_build_flags() == (macros, link)

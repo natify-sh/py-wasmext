@@ -350,6 +350,20 @@ def generate_shared(
         C("    }")
     C("    if (!api_ready) {")
     C("        wasm_rt_init();")
+    C("#ifdef WASMEXT_STACK_LIMIT")
+    C("        wasmext_stack_limit_init_();  /* this thread's limit of the stack (wasmext_glue.h) */")
+    C("#endif")
+    C(
+        "#ifdef WASMEXT_CHAIN  /* the runtime installs no handler of signals; this library installs a link of a chain (wasmext_glue.h), once */"
+    )
+    C("        {")
+    C("            static pthread_once_t chain_once = PTHREAD_ONCE_INIT;")
+    C("            pthread_once(&chain_once, wasmext_chain_install_once_);")
+    C("        }")
+    C(
+        "        (void)*(volatile int *)&wasmext_chain_active_;  /* the thread-local block of this thread is made before any fault */"
+    )
+    C("#endif")
     C("        api_ready = 1;")
     C("    }")
     C("}")

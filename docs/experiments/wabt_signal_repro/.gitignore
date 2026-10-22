@@ -1,0 +1,9 @@
+a.c
+a.h
+b.c
+b.h
+lib_a.c
+lib_b.c
+lib*.so
+m.wasm
+host

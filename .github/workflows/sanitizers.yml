@@ -12,6 +12,7 @@ name: Sanitizers
 
 on:
   push:
+    branches: ["**"]  # not a tag
     paths:
       - "src/**"
       - "tests/**"

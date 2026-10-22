@@ -55,4 +55,4 @@ def abi_fingerprint(directory: Path = C_DIR) -> str:
 # reads (a field moved, removed or changed in meaning, a trap code, the name of the capsule), raise WASMEXT_ABI in wasmext_glue.h; if the change
 # only adds (a field at the end of the record) or does not touch the ABI at all (a fix in WASI, a comment, formatting), leave the number. Then put the new
 # fingerprint here.
-ABI_FINGERPRINT = "dceddeefdf035e9ca315dffc4dc62131afe2e666db8042cac503ce482581e8b5"
+ABI_FINGERPRINT = "b8ee1f52b1b45a021f0809930948293bf9001b7bcfb21c742931fb9987437cca"

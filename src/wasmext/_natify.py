@@ -26,6 +26,7 @@ import subprocess
 import sys
 import sysconfig
 import tempfile
+import warnings
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -363,7 +364,8 @@ def _made_by_this_wasmext(path: Path, digest: str, name: str, share_tables: bool
 
 
 # wasm2c 1.0.42 checks the sum of 64-bit addresses with `_addcarry_u64` whenever the compiler is MSVC, an intrinsic that only
-# the x64 targets have: on ARM64 the C does not link. The `#else` branch it falls back to for other compilers is portable.
+# the x64 targets have: on ARM64 and on x86 (Win32) the C compiles but does not link (LNK2019, unresolved `_addcarry_u64`; WABT #2885). The `#else` branch it
+# falls back to for other compilers is portable. Like the fix proposed upstream, the branch is kept to `_M_X64`.
 _MSVC_ADDCARRY = re.compile(rb"#elif defined\(_MSC_VER\)(\s+if \(_addcarry_u64\()")
 _MSVC_X64_ONLY = rb"#elif defined(_MSC_VER) && defined(_M_X64)\1"
 # The runtime calls abort() when the first allocation of a memory fails (it cannot be allocated, or the process has not the
@@ -374,7 +376,14 @@ _MSVC_X64_ONLY = rb"#elif defined(_MSC_VER) && defined(_M_X64)\1"
 # includes wasm-rt-mem-impl.c turns the abort() called from it into that trap.
 _RUNTIME_WRAPPERS = {
     # a module that shares tables is built as an extension with WASMEXT_TRAP_HANDLER (wasmext_glue.h): its traps do not `longjmp` by themselves
-    "impl": "#ifdef WASMEXT_TRAP_HANDLER\n#define WASM_RT_TRAP_HANDLER WASMEXT_TRAP_HANDLER\n#endif\n#include <wasm-rt-impl.c>\n",
+    "impl": "#ifdef WASMEXT_TRAP_HANDLER\n#define WASM_RT_TRAP_HANDLER WASMEXT_TRAP_HANDLER\n#endif\n"
+    # WASMEXT_CHAIN: the runtime sets up the alternate stack of a thread, but installs no handler of signals (the Python layer installs a link of a chain, see _gen.py)
+    "#ifdef WASMEXT_CHAIN\n#include <signal.h>\n"
+    "static inline int wasmext_noop_sigaction_(int sig, const void *act, void *old) { (void)sig; (void)act; (void)old; return 0; }\n"
+    "#define sigaction(a, b, c) wasmext_noop_sigaction_((a), (b), (c))\n#endif\n"
+    "#ifdef WASMEXT_STACK_LIMIT\n#include <stdint.h>\n"
+    '__thread uintptr_t wasmext_stack_limit __attribute__((visibility("hidden")));\n#endif\n'
+    "#include <wasm-rt-impl.c>\n",
     "exceptions": "#include <wasm-rt-exceptions-impl.c>\n",
     "mem": """#include <stdlib.h>
 #include <string.h>
@@ -401,8 +410,61 @@ _TAIL_CALL_LOCALS = re.compile(
 _TAIL_CALL_LOCALS_FIXED = rb"\2  \1 \3"
 
 
-def _portable_on_arm64(c_source: bytes) -> bytes:
+def signal_build_flags() -> tuple[list[tuple[str, str]], list[str]]:
+    """The macros and link arguments of a build that does without a handler of signals of the runtime of wasm2c for the stack and shares the one for the memory (docs/patch_policy.md).
+    `WASMEXT_CHAIN`: the runtime installs no handler of SIGSEGV/SIGBUS of its own, because the runtimes of several modules would replace each other's (see wasmext_glue.h).
+    `WASMEXT_STACK_LIMIT`: the stack running out is seen by a comparison in each function (`_stack_limit_prologue`), so the runtime takes neither the counter of the depth nor the
+    handler on an alternate stack. Not on Windows (it calls every vectored handler; the stack is the counter there) and not where there are no such signals or no thread stack to
+    measure (Emscripten, WASI). The limit is a thread-local variable and the handler reads thread-local data, so on Linux the library is linked with `-z now`: with lazy binding the first
+    access resolves `__tls_get_addr` inside the handler, which hangs. `WASMEXT_STACK_CHECK=guard` in the environment of the build keeps the chain but sees the stack by the guard page (the handler on an alternate stack), which is faster (CoreMark 98% of native against 91%) and is warned about when asked for (see docs/experiments/stack_limit/). The target is read from `sysconfig.get_platform()`, which a cross build sets to the target and not the host."""
+    platform = sysconfig.get_platform().lower()
+    if os.name == "nt" or platform.startswith("win") or any(t in platform for t in ("emscripten", "wasi")):
+        return [], []
+    macros = [("WASMEXT_CHAIN", "1")]
+    choice = os.environ.get("WASMEXT_STACK_CHECK", "limit").lower()
+    if choice not in ("limit", "guard"):
+        raise ValueError(f"WASMEXT_STACK_CHECK is {choice!r}: it is 'limit' (the default) or 'guard'")
+    if choice == "guard":
+        warnings.warn(
+            "WASMEXT_STACK_CHECK=guard: the stack running out is seen by the guard page and a handler of SIGSEGV on an alternate stack kept for every thread "
+            "(about 8% faster than the default on CoreMark, up to 1.8 times on a program that is all calls). A stack overflow in a thread other than "
+            "the main one is reported as an out-of-bounds access, and a thread that ends gives its stack back through the Python layer only. "
+            "See docs/experiments/stack_limit/README.md",
+            stacklevel=2,
+        )
+    else:
+        macros += [("WASMEXT_STACK_LIMIT", "1"), ("WASM_RT_NONCONFORMING_UNCHECKED_STACK_EXHAUSTION", "1")]
+    return macros, (["-Wl,-z,now"] if platform.startswith("linux") else [])
+
+
+def _portable_off_x64(c_source: bytes) -> bytes:
     return _MSVC_ADDCARRY.sub(_MSVC_X64_ONLY, c_source)
+
+
+def _portable(c_source: bytes) -> bytes:
+    """The repairs that every file of the C of a module gets, the code and the declarations they share (see above)."""
+    return _stack_limit_prologue(_portable_off_x64(c_source))
+
+
+# wasm2c 1.0.42 knows two ways to see that the native stack runs out: a counter of the depth (`WASM_RT_STACK_DEPTH_COUNT`: `++depth`/`--depth` in each function, a limit of 500
+# calls) and a handler of the signal of the guard page (`WASM_RT_STACK_EXHAUSTION_HANDLER`: a handler on an alternate stack in every thread). The third, a comparison of the
+# address of the frame with the lowest address that is still safe, kept per thread, is one load and one compare in the prologue and nothing in the epilogue (measured at 1.06 of
+# the guard page, against 2 to 3.4 of the counter: docs/experiments/stack_limit/). Where neither option is chosen the runtime defines the prologue empty; this puts the check there,
+# for a build that defines WASMEXT_STACK_LIMIT (see `signal_build_flags`, and wasmext_glue.h for the limit of the thread). Any other build keeps the empty prologue.
+# The pattern matches only the text of 1.0.42, so a wasm2c that has the branch written otherwise passes through (and the build has no limit: test_patches_needed.py).
+_STACK_LIMIT_BRANCH = re.compile(rb"#else\n#define FUNC_PROLOGUE\n\n#define FUNC_EPILOGUE\n#endif")
+_STACK_LIMIT_CHECKED = (
+    b"#elif defined(WASMEXT_STACK_LIMIT)\n"
+    b'extern __thread uintptr_t wasmext_stack_limit __attribute__((visibility("hidden")));\n'
+    b"#define FUNC_PROLOGUE \\\n"
+    b"  if (__builtin_expect((uintptr_t)__builtin_frame_address(0) < wasmext_stack_limit, 0)) TRAP(EXHAUSTION);\n\n"
+    b"#define FUNC_EPILOGUE\n"
+    b"#else\n#define FUNC_PROLOGUE\n\n#define FUNC_EPILOGUE\n#endif"
+)
+
+
+def _stack_limit_prologue(c_source: bytes) -> bytes:
+    return _STACK_LIMIT_BRANCH.sub(lambda _m: _STACK_LIMIT_CHECKED, c_source)
 
 
 def _tail_call_locals(c_source: bytes) -> bytes:
@@ -630,10 +692,10 @@ def _prepare(
         _write_atomic(
             part,
             _marker(toolchain.version, wanted, digest, name, share_tables).encode()
-            + _export_tags(_repair_tail_calls(_portable_on_arm64(repaired[part])), module_prefix(name)),
+            + _export_tags(_repair_tail_calls(_portable(repaired[part])), module_prefix(name)),
         )
     if shared.is_file():
-        _write_atomic(shared, _portable_on_arm64(repaired[shared]))
+        _write_atomic(shared, _portable(repaired[shared]))
     _write_if_changed(
         glue_c, (_marker(toolchain.version, wanted, digest, name, share_tables) + glue.source).encode("utf-8")
     )
@@ -870,6 +932,10 @@ def _natify(
         ]  # the C dir stays last
         if not use_guard_pages:
             ext.define_macros = [*ext.define_macros, ("WASM_RT_USE_MMAP", "0")]
+        chain_macros, chain_link = signal_build_flags()
+        ext.define_macros = [*ext.define_macros, *chain_macros]
+        if chain_link:
+            ext.extra_link_args = [*(ext.extra_link_args or []), *chain_link]
         if prepared.glue.trap_handler:  # the module shares tables with other instances
             ext.define_macros = [*ext.define_macros, ("WASMEXT_TRAP_HANDLER", prepared.glue.trap_handler)]
         if sys.byteorder == "big":  # the C of wasm2c reads this to lay the memory out reversed; nothing else sets it

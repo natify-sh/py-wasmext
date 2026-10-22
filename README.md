@@ -14,8 +14,11 @@ extension is built, not interpreted or compiled by a JIT while the program runs.
 C with little overhead of its own: what remains is what WebAssembly itself requires (every memory access is checked, by
 guard pages by default; traps) and the cost of crossing between Python and the module (converting arguments and results
 on a call, and a call into Python for each import the module uses). The code of the module should not be called in a
-loop from Python for tiny pieces of work; give it the work in larger pieces. On CoreMark the extension was on a par with the
-same benchmark compiled as C directly (within the noise of the measurement, on one machine: see [FEATURES.md](docs/FEATURES.md)).
+loop from Python for tiny pieces of work; give it the work in larger pieces. On CoreMark (one machine, gcc) the extension made with the
+default check of the stack reaches about 91% of the same benchmark compiled as C directly, and about 98% with the guard page for the stack
+(`WASMEXT_STACK_CHECK=guard`, which is warned about; the earlier build, with the guard page only, was within the noise of native). The 9% buys a stack check
+that needs no handler of signals on an alternate stack per thread and names an overflow right in every thread: see
+[experiments/stack_limit](docs/experiments/stack_limit/README.md) and [FEATURES.md](docs/FEATURES.md).
 The price of AOT is that the `.wasm` is fixed when the extension is built: a module cannot be loaded at run time (that is what
 an engine, or `wasmimport` as a development tool, is for), and building needs a C compiler.
 
@@ -214,6 +217,19 @@ guard-pages = { x86 = false, armv7l = false, default = true }   # or just true /
 `WASMEXT_GUARD_PAGES=x86=off,default=on` (or `0`/`1`) say the same; the names of the architectures are `x86_64`, `x86`, `arm64`, `armv7l`, `ppc64le`, ... as the platform of the
 interpreter that builds names them, which in a cross build (cibuildwheel for Windows x86 or ARM64) is the target. A memory that cannot be reserved is a `MemoryError`; wasmext does not
 switch the mode when it runs (that would need both versions of the code in the module).
+
+
+### Traps from the stack and from signals
+
+A fault in a module is the error of a call (`Trap`), not the end of the process that holds the module: an access past the memory, and the stack running out. Three things to know:
+
+- **The stack is checked in each function by default** (off Windows, Emscripten and WASI): the prologue compares the address of the frame with the lowest safe address of the thread. No handler of signals on an
+  alternate stack per thread is needed for it, and an overflow is called what it is in every thread. It costs about 9% on CoreMark against C (the guard page: about 2%). `WASMEXT_STACK_CHECK=guard` in the
+  environment of the build uses the guard page and the handler instead, and warns about what it gives up; any other value is an error. Windows keeps the counter of the depth of wasm2c (500 calls).
+  Measurements and the reasons: [experiments/stack_limit](docs/experiments/stack_limit/README.md). Alpha (`0.0.1a2`).
+- **Two modules in one process** each turn a fault into a trap of their own (a chain of handlers of SIGSEGV/SIGBUS; the runtime of wasm2c installs none of its own). A crash that is not in a call of a module stays a crash.
+  Known: a module called from inside a call of another module, through Python, is not told apart when a fault comes (the one first in the chain takes it).
+- Any thread may call a module; each sets itself up at its first call.
 
 ### Large modules
 

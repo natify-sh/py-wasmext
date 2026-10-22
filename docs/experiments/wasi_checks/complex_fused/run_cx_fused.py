@@ -1,6 +1,6 @@
 """Run the complex component fused by meld (500 KB core module, two memories) from Python. See docs/WASI_COMPONENTS.md.
 
-Expected by construction: get=apple,3,[red,big]. meld 0.64.0 gives get=apple,3,[,] (checked 2026-10-21; jco in Node gives [red,big])."""
+Expected by construction: get=apple,3,[red,big]. meld 0.64.0 gave get=apple,3,[,] (checked 2026-10-21; jco in Node gives [red,big]); meld 0.65.0 fixes it (checked 2026-10-22 on wasmtime: docs/experiments/meld_065/; this script itself was not run again)."""
 
 import json
 import struct

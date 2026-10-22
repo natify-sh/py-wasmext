@@ -116,3 +116,7 @@ or **a mode with no handler** (depth counting, bounds checks). Chaining is also 
 
 If 1 and 2 show that the thread-local state can be reached cheaply (or can stay per copy with only the entry shared), D is possible and is likely the best answer to the whole class of problems (signals, stacks, threads, tags). If not, **B** (the light entry on the existing stack of traps, with a fall-back) is the smaller answer to the wound that hurts now, and D stays an idea. Either way
 the thread capsule of the Python layer stays: it sets up and gives back the alternate stack of a thread, which any of these needs.
+
+## Update 3 (later on 2026-10-22): what was built
+
+The chain of handlers (section "Update 2") is built for the extension and the shared library; the shared runtime (master and slave) is **not** built and is not needed for the signals. The thread capsule of the Python layer, which "any of these needs" above, is needed only with `WASMEXT_STACK_CHECK=guard` now: by default the stack is checked in the prologue of each function (a thread sets a limit at its first call, no alternate stack to give back). Details and what is left: "Design: signals and the stack" in [DESIGN.md](DESIGN.md), [experiments/stack_limit/](experiments/stack_limit/README.md). The reasons to come back to a shared runtime are the nested call of a module from a call of another one and a mode where one party owns the traps of a whole group; neither has a consumer yet.

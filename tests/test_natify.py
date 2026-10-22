@@ -247,8 +247,8 @@ def test_a_pattern_without_files_is_reported(project: Path, capsys: pytest.Captu
     assert "does not match any files" in capsys.readouterr().err
 
 
-def test_the_msvc_only_intrinsic_is_kept_off_arm64(project: Path) -> None:
-    """wasm2c's `_addcarry_u64` branch is for x64 MSVC only (the ARM64 build of the example did not link)."""
+def test_the_msvc_only_intrinsic_is_kept_to_x64(project: Path) -> None:
+    """wasm2c's `_addcarry_u64` branch is for x64 MSVC only: ARM64 and Win32 (x86) build the C but do not link (WABT #2885)."""
     natify("pkg/*.wasm", quiet=True)
     c = (project / "build" / "wasmext" / "pkg.add" / "add_w2c.c").read_text(encoding="utf-8")
     assert "#elif defined(_MSC_VER) && defined(_M_X64)" in c
@@ -269,7 +269,7 @@ def test_abi3_is_the_default_where_the_interpreter_has_it(project: Path) -> None
 @needs_abi3
 def test_native_on_request(project: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     [native] = natify("pkg/*.wasm", quiet=True, limited_api=False)
-    assert not native.py_limited_api and not native.define_macros
+    assert not native.py_limited_api and all(m[0] != "Py_LIMITED_API" for m in native.define_macros)
     monkeypatch.setenv("WASMEXT_LIMITED_API", "0")
     [from_env] = natify("pkg/*.wasm", quiet=True)
     [code_wins] = natify("pkg/*.wasm", quiet=True, limited_api=True)
@@ -293,7 +293,7 @@ def test_where_there_is_no_stable_abi_the_extension_is_native(
     elif why != "free-threaded":
         monkeypatch.setattr(_natify.sysconfig, "get_platform", lambda: f"{why}_4_0_arm64")
     [ext] = natify("pkg/*.wasm", limited_api=True)  # asked for, but impossible: native, and it says why
-    assert not ext.py_limited_api and not ext.define_macros
+    assert not ext.py_limited_api and all(m[0] != "Py_LIMITED_API" for m in ext.define_macros)
     assert "building a native extension" in capsys.readouterr().err
     [default] = natify("pkg/*.wasm", quiet=True)  # the default does not insist
     assert not default.py_limited_api
@@ -714,3 +714,53 @@ def test_a_wasm2c_that_writes_the_element_segments_another_way_is_left_alone() -
         _ELEM_ENTRIES,
     ]  # no such template: the entries are not rewritten either
     assert _repair_imported_elements([b"int main(void) { return 0; }\n"]) == [b"int main(void) { return 0; }\n"]
+
+
+_SIGNAL_MACROS = [
+    ("WASMEXT_CHAIN", "1"),
+    ("WASMEXT_STACK_LIMIT", "1"),
+    ("WASM_RT_NONCONFORMING_UNCHECKED_STACK_EXHAUSTION", "1"),
+]
+
+
+@pytest.mark.parametrize(
+    ("platform", "macros", "link"),
+    [
+        ("linux-x86_64", _SIGNAL_MACROS, ["-Wl,-z,now"]),
+        ("macosx-14.0-arm64", _SIGNAL_MACROS, []),
+        ("win-amd64", [], []),
+        ("win-arm64", [], []),
+        ("emscripten-4.0.9-wasm32", [], []),  # wasm-ld does not know `-z now`, and there are no such signals
+    ],
+)
+def test_the_chain_of_signal_handlers_is_for_the_target_that_has_signals(
+    platform: str, macros: list[tuple[str, str]], link: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import sysconfig
+
+    from wasmext._natify import signal_build_flags
+
+    monkeypatch.setattr(sysconfig, "get_platform", lambda: platform)
+    if os.name == "nt":  # a Windows host never has it, whatever it builds for
+        assert signal_build_flags() == ([], [])
+    else:
+        assert signal_build_flags() == (macros, link)
+
+
+def test_the_guard_page_can_be_asked_for_instead_of_the_check_of_the_stack_and_is_warned_about(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import sysconfig
+
+    from wasmext._natify import signal_build_flags
+
+    if os.name == "nt":
+        pytest.skip("Windows has neither")
+    monkeypatch.setattr(sysconfig, "get_platform", lambda: "linux-x86_64")
+    monkeypatch.setenv("WASMEXT_STACK_CHECK", "guard")
+    with pytest.warns(UserWarning, match="WASMEXT_STACK_CHECK=guard"):
+        macros, link = signal_build_flags()
+    assert macros == [("WASMEXT_CHAIN", "1")] and link == ["-Wl,-z,now"]
+    monkeypatch.setenv("WASMEXT_STACK_CHECK", "fast")
+    with pytest.raises(ValueError, match="WASMEXT_STACK_CHECK"):
+        signal_build_flags()

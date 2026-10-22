@@ -652,13 +652,134 @@ def generate(module: Module, name: str, *, version: str | None = None, share_tab
         hadd(
             "#ifdef WASMEXT_TRAP_HANDLER  /* the extension: the calls into this module share the stack of entries (wasmext_glue.h) */"
         )
-        hadd("#define WASMEXT_ENTER(CODE, FAIL) WASMEXT_THREAD_READY(); WASMEXT_ENTER_SHARED(CODE, FAIL)")
-        hadd("#define WASMEXT_LEAVE() WASMEXT_LEAVE_SHARED()")
+        hadd("#define WASMEXT_ENTER_INNER(CODE, FAIL) WASMEXT_ENTER_SHARED(CODE, FAIL)")
+        hadd("#define WASMEXT_LEAVE_INNER() WASMEXT_LEAVE_SHARED()")
         hadd("#else")
-    hadd(f"#define WASMEXT_ENTER(CODE, FAIL) WASMEXT_THREAD_READY(); WASMEXT_ENTER_{reentrant}(CODE, FAIL)")
-    hadd(f"#define WASMEXT_LEAVE() WASMEXT_LEAVE_{reentrant}()")
+    hadd(f"#define WASMEXT_ENTER_INNER(CODE, FAIL) WASMEXT_ENTER_{reentrant}(CODE, FAIL)")
+    hadd(f"#define WASMEXT_LEAVE_INNER() WASMEXT_LEAVE_{reentrant}()")
     if shares_tables:
         hadd("#endif")
+    hadd(
+        "/* WASMEXT_CHAIN (the extension, not on Windows): the runtime of this module installs no handler of signals, the Python layer installs one that is a link of a chain"
+    )
+    hadd(
+        "   (see there); it needs to know that a call into THIS module is running in the thread, which the entry marks (the mark of an outer call is put back). */"
+    )
+    hadd("#ifdef WASMEXT_CHAIN")
+    hadd("static WASM_RT_THREAD_LOCAL int wasmext_chain_active_;")
+    hadd(
+        "#define WASMEXT_ENTER(CODE, FAIL) WASMEXT_THREAD_READY(); int chain_saved_ = wasmext_chain_active_; wasmext_chain_active_ = 1; \\"
+    )
+    hadd("    WASMEXT_ENTER_INNER(CODE, { wasmext_chain_active_ = chain_saved_; FAIL; })")
+    hadd("#define WASMEXT_LEAVE() wasmext_chain_active_ = chain_saved_; WASMEXT_LEAVE_INNER()")
+    hadd(
+        "/* One handler of SIGSEGV/SIGBUS is in force for the process, so the runtimes of several modules would each replace the one before it, and the signal of a fault in a"
+    )
+    hadd(
+        "   module would reach the runtime of the module imported last, which is not the one whose call is running. Here the runtime installs none (WASMEXT_CHAIN turns its"
+    )
+    hadd(
+        "   `sigaction` into nothing, see _natify.py); this module installs one at its import and keeps the one that was there. A fault in a call of THIS module (the mark of"
+    )
+    hadd(
+        "   the entry, wasmext_chain_active_) is turned into a trap of its own runtime; any other fault is given to the handler that was before, so that a real crash of the process"
+    )
+    hadd(
+        "   (or of the code of some other module) is still a crash, with whatever handler (faulthandler) was meant for it. A fault in a call of another module that was made from"
+    )
+    hadd(
+        "   inside a call of this one is not told apart: the module imported first would take it (known gap, docs/shared_runtime_concept.md). */"
+    )
+    hadd("#include <signal.h>")
+    hadd("static struct sigaction wasmext_chain_old_segv_, wasmext_chain_old_bus_;")
+    hadd("static int wasmext_chain_installed_;")
+    hadd("static void wasmext_chain_handler_(int sig, siginfo_t *si, void *ctx) {")
+    hadd(
+        "#ifdef WASMEXT_STACK_LIMIT  /* the stack is checked in the prologue, so a fault in a call is the memory (macOS gives the guard page another si_code than ACCERR) */"
+    )
+    hadd("    if (wasmext_chain_active_) wasm_rt_trap(WASM_RT_TRAP_OOB);  /* does not return */")
+    hadd("#else")
+    hadd(
+        "    if (wasmext_chain_active_) wasm_rt_trap(si->si_code == SEGV_ACCERR ? WASM_RT_TRAP_OOB : WASM_RT_TRAP_EXHAUSTION);  /* does not return */"
+    )
+    hadd("#endif")
+    hadd("    const struct sigaction *old = sig == SIGSEGV ? &wasmext_chain_old_segv_ : &wasmext_chain_old_bus_;")
+    hadd("    if (old->sa_flags & SA_SIGINFO) {")
+    hadd("        old->sa_sigaction(sig, si, ctx);")
+    hadd("    } else if (old->sa_handler == SIG_DFL || old->sa_handler == SIG_IGN) {")
+    hadd(
+        "        signal(sig, SIG_DFL);  /* the fault happens again when this returns, and the default action ends the process as if nobody had a handler */"
+    )
+    hadd("    } else {")
+    hadd("        old->sa_handler(sig);")
+    hadd("    }")
+    hadd("}")
+    hadd("static int wasmext_chain_install_(void) {")
+    hadd("    struct sigaction sa;")
+    hadd("    if (wasmext_chain_installed_) return 0;  /* the module initialised again: do not chain to itself */")
+    hadd("    memset(&sa, 0, sizeof sa);")
+    hadd("    sa.sa_flags = SA_SIGINFO | SA_ONSTACK;")
+    hadd("    sigemptyset(&sa.sa_mask);")
+    hadd("    sa.sa_sigaction = wasmext_chain_handler_;")
+    hadd(
+        "    if (sigaction(SIGSEGV, &sa, &wasmext_chain_old_segv_) != 0 || sigaction(SIGBUS, &sa, &wasmext_chain_old_bus_) != 0) {"
+    )
+    hadd("        return -1;")
+    hadd("    }")
+    hadd(
+        "    (void)*(volatile int *)&wasmext_chain_active_;  /* the thread-local block is made now: the first access may allocate (macOS, lazy TLS), which a handler must not do */"
+    )
+    hadd("    wasmext_chain_installed_ = 1;")
+    hadd("    return 0;")
+    hadd("}")
+    hadd("#include <pthread.h>")
+    hadd("static void wasmext_chain_install_once_(void) { (void)wasmext_chain_install_(); }")
+    hadd("#ifdef WASMEXT_STACK_LIMIT")
+    hadd(
+        "/* The stack running out is seen by the prologue of each function (a patch of the C of wasm2c, _natify.py): the address of the frame against the lowest address of the stack of the thread"
+    )
+    hadd(
+        "   that is still safe. A thread sets its limit once, at its first call (the capsule and the alternate stack of the thread are not needed). The margin is what a function of the host"
+    )
+    hadd(
+        "   (an import that calls Python) can use when the limit is reached: a quarter of the stack, between 32 and 256 KiB. A thread whose stack cannot be measured gets 128 KiB below here. */"
+    )
+    hadd("#include <pthread.h>")
+    hadd("#include <stdint.h>")
+    hadd('extern __thread uintptr_t wasmext_stack_limit __attribute__((visibility("hidden")));')
+    hadd("static void wasmext_stack_limit_init_(void) {")
+    hadd("    uintptr_t low = 0, size = 0, margin;")
+    hadd("#if defined(__APPLE__)")
+    hadd("    pthread_t self = pthread_self();")
+    hadd("    size = (uintptr_t)pthread_get_stacksize_np(self);")
+    hadd("    low = (uintptr_t)pthread_get_stackaddr_np(self) - size;  /* the address it gives is the top */")
+    hadd("#else")
+    hadd("    extern int pthread_getattr_np(pthread_t, pthread_attr_t *);")
+    hadd("    pthread_attr_t attr;")
+    hadd("    if (pthread_getattr_np(pthread_self(), &attr) == 0) {")
+    hadd("        void *addr = NULL;")
+    hadd("        size_t length = 0;")
+    hadd("        if (pthread_attr_getstack(&attr, &addr, &length) == 0) {")
+    hadd("            low = (uintptr_t)addr;")
+    hadd("            size = (uintptr_t)length;")
+    hadd("        }")
+    hadd("        pthread_attr_destroy(&attr);")
+    hadd("    }")
+    hadd("#endif")
+    hadd("    if (size == 0) {")
+    hadd("        wasmext_stack_limit = (uintptr_t)__builtin_frame_address(0) - 128 * 1024;")
+    hadd("        return;")
+    hadd("    }")
+    hadd("    margin = size / 4;")
+    hadd("    if (margin < 32 * 1024) margin = 32 * 1024;")
+    hadd("    if (margin > 256 * 1024) margin = 256 * 1024;")
+    hadd("    wasmext_stack_limit = low + margin;")
+    hadd("}")
+    hadd("#endif")
+    hadd("#else")
+    hadd("#define WASMEXT_ENTER(CODE, FAIL) WASMEXT_THREAD_READY(); WASMEXT_ENTER_INNER(CODE, FAIL)")
+    hadd("#define WASMEXT_LEAVE() WASMEXT_LEAVE_INNER()")
+    hadd("#endif")
     hadd("")
 
     add(
@@ -705,11 +826,19 @@ def generate(module: Module, name: str, *, version: str | None = None, share_tab
     add("    free(owner);")
     add("}")
     add("static void wasmext_py_thread_setup_(void) {")
+    add("#ifdef WASMEXT_STACK_LIMIT")
+    add("    wasmext_stack_limit_init_();  /* nothing is given back at the end of the thread: no alternate stack */")
+    add("    wasmext_py_ready_ = 1;")
+    add("    return;")
+    add("#endif")
     add("    PyObject *dict = PyThreadState_GetDict();")
     add("    unsigned long *owner = (unsigned long *)malloc(sizeof *owner);")
     add("    PyObject *capsule;")
     add("    wasm_rt_init_thread();")
     add("    wasmext_py_ready_ = 1;")
+    add("#ifdef WASMEXT_CHAIN")
+    add("    (void)*(volatile int *)&wasmext_chain_active_;  /* see wasmext_chain_install_ */")
+    add("#endif")
     add(
         "    if (dict == NULL || owner == NULL) {  /* nowhere to keep it: the stack of this thread is not given back (as it was not before) */"
     )
@@ -1984,6 +2113,14 @@ def generate(module: Module, name: str, *, version: str | None = None, share_tab
         "    wasm_rt_init();  /* sets up this thread too; not given back, as before (see the comment above wasmext_py_thread_end_) */"
     )
     add("    wasmext_py_ready_ = 1;")
+    add("#ifdef WASMEXT_STACK_LIMIT")
+    add("    wasmext_stack_limit_init_();")
+    add("#endif")
+    add("#ifdef WASMEXT_CHAIN")
+    add(
+        '    if (wasmext_chain_install_() < 0) { PyErr_SetString(PyExc_ImportError, "wasmext: sigaction failed"); return NULL; }'
+    )
+    add("#endif")
     if shares_tables:
         add("    if (attach_traps() < 0) return NULL;")
     add("    m = PyModule_Create(&module_def);")

@@ -5,11 +5,16 @@ name: Example wheels
 
 on:
   push:
+    branches: ["**"]  # not a tag
     paths-ignore:
       - "**.md"
+      - "docs/**"
+      - "LICENSE"
   pull_request:
     paths-ignore:
       - "**.md"
+      - "docs/**"
+      - "LICENSE"
   workflow_dispatch:
 
 concurrency:

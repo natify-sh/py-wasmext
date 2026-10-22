@@ -308,7 +308,7 @@ class _Reader:
         flags = self.byte()
         if flags & 0x08:
             raise WasmError(
-                f"a memory with a custom page size (the custom-page-sizes proposal) is not supported: wasm2c has no such memory (offset {self.pos - 1})"
+                f"a memory with a custom page size (the custom-page-sizes proposal) is not supported by wasmext yet; wasm2c can translate it with --enable-custom-page-sizes (offset {self.pos - 1})"
             )
         if flags & ~0x07:
             raise WasmError(f"unknown limits flags 0x{flags:02x} at offset {self.pos - 1}")

@@ -34,8 +34,8 @@ WABT 1.0.42 reads the compact import forms differently from the proposal.
 
 ## What wasmext does today
 
-- The reader refuses it (`_wasm.py`, `limits`: bit `0x08`) with the message *"… wasm2c has no such memory"*. **That message is wrong now**: `wasm2c` has it, behind a flag; it is wasmext that does not
-  **[read]**.
+- The reader refuses it (`_wasm.py`, `limits`: bit `0x08`). The message used to say *"… wasm2c has no such memory"*, which was false (`wasm2c` has it, behind a flag; it is wasmext that
+  does not); it now says that wasmext does not support it yet and that `wasm2c` can translate it with `--enable-custom-page-sizes` (way C, done) **[read]**.
 - `Limits` has no page size; its comment says "pages (64 KiB)". The exported `memoryview` is made from the size **in bytes** (`mem->size`), so it is right for any page size already; the code
   that keeps a buffer alive while a memory could move already treats another page size as a memory that can move (`memory_can_move`, which tests `page_size != WASM_DEFAULT_PAGE_SIZE`)
   **[read]**.
@@ -71,10 +71,10 @@ A, and the constant for Python (the extension, the wrapper for ctypes, the `.pyi
 that [abi_policy.md](abi_policy.md) and `abi/current.json` / `tests/test_abi_declaration.py` have to follow (a new constant is an addition, not a break; the exact bump to be read there).
 More files change and the tests of the four front ends are needed, but it is the whole of what was designed.
 
-### C. Only make the refusal true
+### C. Only make the refusal true (done)
 
-Change the message so that it says *"the module has a custom page size: `wasm2c` can translate it with a flag, wasmext does not support it yet"*, and build nothing. Cost: a line. It
-removes the false statement whatever else is chosen.
+The message says that the module has a custom page size, that `wasm2c` can translate it with a flag and that wasmext does not support it yet. Cost: a line. It removed a false statement
+whatever else is chosen.
 
 ### D. Rewrite to 64 KiB pages
 
@@ -82,7 +82,7 @@ Not possible: `memory.size` and `memory.grow` return page counts, and a 1-byte p
 
 ## What I would choose (a recommendation, not a decision)
 
-C immediately (it corrects a false message), then A when a module needs it, and B only if somebody has to read the page size from Python or from C. The reason: Python already gets the bytes
+C was the first step (it corrected a false message and is done); then A when a module needs it, and B only if somebody has to read the page size from Python or from C. The reason: Python already gets the bytes
 it wants, and the page size is only needed to read the `memory.size` that a function of the module returns.
 
 ## Tests when it is built

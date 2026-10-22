@@ -1,6 +1,6 @@
 # WASI 0.1 or WASI 0.2: what the build lacks and what the host has to give (a study of git)
 
-Status: **a study, done on 2026-10-22; CPython is the next target and is not in it yet.** The tables, the scripts and the sources are in
+Status: **a study, done on 2026-10-22: git first, then CPython 3.15 (the section at the end).** The tables, the scripts and the sources are in
 [experiments/wasi_p1_p2_git/](experiments/wasi_p1_p2_git/) (its `README.md` has the full tables); this page is the reading of them. How a fact is known: **[run]** run in a session of
 this repository, **[read]** read in source code or a header, **[estimate]** a judgement.
 
@@ -80,8 +80,27 @@ The second guess, **git itself on 0.2**, is right: `git.git` 2.56.0 builds for `
 3. **Unbundled** is the simpler way for one component; **meld** is for composed ones, and it needs the repair above and has the open questions about the memory of each import and about strings.
 4. Done in the code because of this study: `wasi_flavor` tells the output of `meld fuse` as `fused` (it was told `none` or `core-0.2`) and warns only when such a module imports WASI 0.2 or 0.3; and the repair of the C of `wasm2c` for imported functions in element segments.
 
+## CPython 3.15
+
+The same method (`experiments/wasi_p1_p2_cpython/`; its `README.md` has the tables): commit `1c6794e` of python/cpython, the build that CPython ships (`Platforms/WASI`), wasi-sdk 34, the standard library of py-wasmhost to run it.
+The expectation was that CPython would be the harder one; **for the build it was the easier one**.
+
+| | git (`git.git`) | CPython |
+| --- | --- | --- |
+| Changes to the sources | 2 patches | **0** |
+| Shims for headers | 6 on both targets, + `netdb.h` on p1 | **0** |
+| What the target asks for | stubs of `wasi_compat.c` (113 lines), some removable on p2 | **the compiler**: for p2, `CC`, `CPP` and `CXX` with `--target=wasm32-wasip2` have to be given, or the script builds **a wasip1 module under the name of wasip2** (`--host-triple` changes only the triple of `configure`) |
+| Host, p1 through wasmext | **0** imports | **0** imports (42 for another host) |
+| Host, p2 | 54 (109 with the sockets) | **115**: git with the sockets + 6 (`monotonic-clock.resolution`, `wall-clock.resolution`, four filesystem methods) |
+| Runs | p1 yes; p2: `--version` with 12 imports | p1 yes (`json`, `hashlib`, `zlib`, `decimal`; `socket` fails: `Errno 58`); p2: `--version` with 8 imports, `-c` stops at the standard library |
+
+- **CPython asks for the sockets on p2 whether the program uses them or not** (55 of the 115 imports): `_socket` is built, and the sockets of wasi-libc are one object. A host of 0.2 for CPython has to have, or
+  refuse in an orderly way, the whole of `wasi:sockets` (tcp 28, udp 20, name lookup 4) and 28 methods of the filesystem. WASI 0.1 cannot do sockets at all (`socket.socket()`: `Errno 58`; `getaddrinfo` is not in `_socket`).
+- CPython itself marks the wasip2 target as `PY_SUPPORT_TIER 0` (not supported); the build passes all the same, and `configure` finds 20 more functions of the network.
+- `unbundle` and `meld` give the same set of imports for CPython, as for git; with the repair of the C of `wasm2c` (WABT #2896) the meld module runs as the unbundled one.
+- The answer to the question does not change: **WASI 0.1 through wasmext asks nothing of the host** (the whole of a Python that runs `json`, `hashlib`, `zlib`, `decimal` is a module and a few settings), and WASI 0.2 asks for 115 imports, of which the filesystem is what `python -c` needs first.
+
 ## Not done
 
-- **CPython** for WASI 0.1 and 0.2 (the next target; py-wasmhost builds it with the build that CPython ships, `Platforms/WASI`, for `wasm32-wasip1` only).
-- The filesystem of WASI 0.2 in a host; the sockets run; HTTPS.
+- The filesystem of WASI 0.2 in a host (22 to 28 methods); the sockets run; HTTPS; the standard library for the p2 run of CPython.
 - Measurements of speed; one machine, one compiler.

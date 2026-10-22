@@ -1,0 +1,24 @@
+
+add (a few ns of work): ns per call
+                           1 thread   4 threads, own inst.  4 threads, same inst.
+bare call                      23.3                   29.3                   30.2
+plain counter+check            21.8                  126.1                  115.7
+atomic per instance            34.7                   34.9                   33.8
+atomic per context             31.3                  331.9                  329.1
+mutex+lookup per call          33.9                  427.2                  415.0
+
+work(1000) (about 1 us): ns per call
+                           1 thread   4 threads, own inst.  4 threads, same inst.
+bare call                     653.5                  673.6                  662.1
+plain counter+check           639.8                  745.4                  758.4
+atomic per instance           626.2                  691.4                  660.5
+atomic per context            589.8                  832.3                  821.5
+mutex+lookup per call         696.6                  900.9                  857.0
+
+work(100000) (about 100 us): ns per call
+                           1 thread   4 threads, own inst.  4 threads, same inst.
+bare call                   64670.5                65626.6                85404.4
+plain counter+check         67038.8                64910.1                65287.5
+atomic per instance         58416.7                72149.3                76952.6
+atomic per context          62835.3                91344.7                64339.2
+mutex+lookup per call       58318.1                65400.8                62754.4

@@ -47,4 +47,29 @@ Open addressing, a lookup by `module_instance`, random keys.
 2. **The active-call counter should not be one per context** (or atomic on the hot path where there is a GIL): per member (a line of its own), or plain under the GIL with an atomic only in a build that has no GIL (a macro, as `WASMEXT_LOCK`).
    Or no counter at all: `close` refuses while any call is in flight, which a counter per thread (or the "closing" flag plus a wait for the threads to leave) can tell without touching a shared line on every call.
 3. None of this changes the answer for the common case (one thread, the GIL): about 1.5 ns for a plain counter and a check, and 15-20 ns for a lock when a lookup is made.
-4. **Not measured:** the cost inside a real call into a module (the glue, the trap entry); a registry with a writer; many contexts; macOS/Windows/ARM.
+4. **Not measured:** a registry with a writer; many contexts; macOS/Windows/ARM; Python (see 3 below for the C side of a real call, and the open work on free-threaded builds).
+
+## 3. The same, around real calls into a module (no Python): `real.c`
+
+The guard of section 2 and a registry lookup, put around real calls through the C API of a wasmext **shared library** (`wasmext natify --shared`, the module `bm.wat`: `add` and a loop `work(n)`), called from `pthread`s of a C host.
+Build: `wasmext natify --shared -b --build-dir DIR bm.wasm`, then the line at the top of `real.c`. Two runs (`real_results_run1.txt` has the plain counter shared by the threads, an invalid row; `real_results_run2.txt` is the second run
+with that row left out); one machine as above; the runs of 100 us differ by 10-20 % from each other, read them as "no difference".
+
+ns per call, per thread, run 2:
+
+| Around the call | `add`, 1 thread | `add`, 4 threads, own instances | `add`, 4 threads, one instance | `work(1000)` (about 650 ns), 4 threads, one instance |
+| --- | ---: | ---: | ---: | ---: |
+| nothing (a call through the library) | 23 | 27 | 25 | 710 |
+| plain counter + check (one thread only) | 21 | - | - | - |
+| atomic counter, **one per instance** | 27-35 | 30-35 | 32-34 | 670-760 |
+| atomic counter, **one per context** | 30-31 | **330** | **334** | 740-820 |
+| mutex + registry lookup **on every call** | 34-36 | **435** | **423** | 860-890 |
+
+- **A call through the library costs about 23 ns for a function that does nothing** (the entry that sets up the trap guard and the lookup of the thread's state), not the 3 ns of a bare indirect call. A guard that adds 4-12 ns is 20-50 % of *that*; at about 650 ns of work it is
+  invisible on one thread (the differences are inside the noise), and at 100 us nothing is visible.
+- **Threads of the host scale**: 4 threads on their own instances, or all on one instance (a function with no state), take the same time per call as one thread (23, 27, 25 ns): **the runtime has no lock of its own on this path.**
+- **Contention is the cost, as in section 2:** a counter per context (one cache line for all threads) or a lock per call makes a `add` 13-18 times slower on 4 threads (330-435 ns) and adds 10-25 % to a call of about 650 ns. A counter on a line of its own for each instance is
+  as cheap as with one thread (30-35 ns).
+- The registry lookup is needed only to turn a bare `funcref` into its owner, **not on every call**; the row "on every call" is the worst case, to show what a lock costs if it were.
+
+So for the design: **the counter of active calls goes in the instance (its own cache line), never one per context on the path of a call**; the lock of the registry only where a `funcref` is turned into a `Function`; the plain counter is for a single thread under the GIL.

@@ -756,6 +756,9 @@ def generate(module: Module, name: str, *, version: str | None = None, share_tab
     add('        PyErr_SetString(PyExc_ImportError, "wasmext: sigaction failed");')
     add("        return -1;")
     add("    }")
+    add(
+        "    (void)*(volatile int *)&wasmext_chain_active_;  /* the thread-local block is made now: the first access may allocate (macOS, lazy TLS), which a handler must not do */"
+    )
     add("    wasmext_chain_installed_ = 1;")
     add("    return 0;")
     add("}")
@@ -781,6 +784,9 @@ def generate(module: Module, name: str, *, version: str | None = None, share_tab
     add("    PyObject *capsule;")
     add("    wasm_rt_init_thread();")
     add("    wasmext_py_ready_ = 1;")
+    add("#ifdef WASMEXT_PY_CHAIN")
+    add("    (void)*(volatile int *)&wasmext_chain_active_;  /* see wasmext_chain_install_ */")
+    add("#endif")
     add(
         "    if (dict == NULL || owner == NULL) {  /* nowhere to keep it: the stack of this thread is not given back (as it was not before) */"
     )

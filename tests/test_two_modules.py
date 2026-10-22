@@ -14,6 +14,8 @@ from types import ModuleType
 
 import pytest
 
+from .conftest import SANITIZED
+
 _WAT = """(module
   (memory (export "memory") 1)
   (func (export "oob") (result i32) (i32.load (i32.const 0x7ffffff0)))
@@ -74,10 +76,14 @@ def test_a_signal_trap_works_in_both_modules_whatever_the_order(two_mods: tuple[
         )
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="ctypes turns the access violation into an OSError, and Windows has no chain"
+)
+@pytest.mark.skipif(SANITIZED, reason="the handler of ASan ends the process by itself, with another status")
 def test_a_real_crash_outside_a_call_is_still_a_crash(two_mods: tuple[ModuleType, ModuleType]) -> None:
     """The handler is given the faults that are not of a call of its module: the process dies of SIGSEGV as it would without wasmext, not of a trap."""
     a, b = two_mods
     assert a.__file__ is not None
     script = f"import sys, ctypes; sys.path.insert(0, {str(Path(a.__file__).parent)!r}); import {a.__name__}, {b.__name__}; ctypes.string_at(0)"
-    ran = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, check=False, timeout=120)
+    ran = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, check=False, timeout=30)
     assert ran.returncode in (-11, 139, -7), (ran.returncode, ran.stderr[-300:])

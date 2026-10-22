@@ -76,3 +76,27 @@ and `wasm_rt_init_thread()` when it is not set (and `wasm_rt_free_thread()` when
    [../context_bench/](../context_bench/).
 4. **Two things to fix whatever is decided about the context:** the thread setup above (a crash on a stack overflow in a worker thread, with the GIL too), and, when threads matter, the declaration.
 5. Not measured: macOS/Windows/ARM, 3.15t, a module that keeps state or calls Python from wasm, many instances.
+
+## 4. A flag of the runtime instead of the fix: counting the depth of the stack (`WASM_RT_STACK_DEPTH_COUNT`)
+
+Question: is the fix of section 3 (set the alternate stack up for each thread) better than a flag of `wasm-rt`? `wasm-rt.h` lets the embedder replace the detection of stack overflow by the signal handler with a **count of the depth of the calls**
+(`WASM_RT_STACK_DEPTH_COUNT=1`, with the guard pages for memory kept): no alternate stack is needed for any thread. Same module, GIL build of 3.14, `-O2` (set with `CFLAGS`: **without `-O2` the extension was built without optimisation and ten times slower; a first run with that
+mistake was thrown away**), one machine, three builds: **B** the default with the fix of this repository, **C** `-DWASM_RT_STACK_DEPTH_COUNT=1` (the limit of the runtime, 500), **C2** the same with `-DWASM_RT_MAX_CALL_STACK_DEPTH=100000`.
+Results: `results_stack_B.txt`, `results_stack_C.txt`, `results_stack_C2.txt`, `results_stack_calls.txt`.
+
+| | **B** alternate stack (the fix) | **C** depth count, limit 500 | **C2** depth count, limit 100,000 |
+| --- | --- | --- | --- |
+| `add`, `work(1000)`, `work(100000)` on one thread (calls per second) | 12.5M, 479k, 5.3k | 13.1M, 461k, 4.8k | 15.4M, 473k, 4.7k |
+| **calls inside the module** (7 million, through a table) | **450 million a second** | **115 million a second (about 4 times slower)** | not run |
+| infinite recursion, main thread | `Call stack exhausted`, depth **261,699** (the real stack, 8 MB) | `Call stack exhausted`, depth **499** | `Call stack exhausted`, depth 99,999 |
+| infinite recursion, a worker thread | `Trap` (`Out-of-bounds access`) | `Trap: Call stack exhausted` | **crash (SIGSEGV)** |
+| thread with a 64 KiB / 256 KiB / 1 MiB stack, depth before the trap | 1,847 / 7,991 / 32,567 (what the stack holds) | 499 / 499 / 499 | **crash** / **crash** / **crash** |
+
+- **Depth count fixes the thread problem completely and in the same way everywhere** (it is what Windows already uses): no alternate stack, no setup per thread, no conflict between modules that each have a runtime of their own, the same message in every thread.
+- **It costs speed where calls are many:** about 4 times on calls inside the module (the counter is updated in the entry and the exit of each function; in an extension it is also a thread-local variable of a shared object, which may be part of it and was not separated). It costs nothing measurable on code with few calls.
+- **And it counts frames, not bytes:** the default limit (500) is far below what a real program needs (a CPython or a parser in WebAssembly recurses deeper); a limit that is high enough (C2) is above what a thread with a small stack can hold, and then the thread dies of the real overflow with no handler: **a limit is a guess about the stack of every thread the host will make**. The signal handler has no such guess.
+- (A thread with a 32 KiB stack ended with exit code 1 in all builds: that is Python, not the module.)
+
+**So neither is better for everything.** The fix keeps the full speed and the real limit of each stack, and costs more code (a flag per thread, a capsule that gives the stack back, one alternate stack per thread that several modules share). The depth count costs speed and a limit that has to be chosen,
+and has nothing to set up. The fix is right as the default; the depth count is an option for a host that cannot have a handler on the stacks of its threads (it owns the signals, or runs on a platform where the stack of a thread cannot be replaced) and knows its stack sizes. It is **not offered by wasmext as a setting yet**:
+today only by `CFLAGS` of the build, and the layout check of the runtime (`WASMEXT_LAYOUT`) was not looked at for it.

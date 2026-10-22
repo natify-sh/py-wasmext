@@ -127,5 +127,46 @@ if ONLY in ("", "1"):
     throughput()
 if ONLY in ("", "2"):
     latency()
+
+
+def depth_and_small_stack():
+    print("\n4. how deep the recursion goes before the trap, and a thread with a small stack")
+    inst = ft.Instance()
+    try:
+        inst.recurse_count(0)
+    except ft.Trap as e:
+        print(
+            f"   depth reached before the trap (main thread): {int.from_bytes(bytes(inst.memory[:4]), 'little'):,}  ({e})"
+        )
+    for kb in (32, 64, 256, 1024):
+        code = f"""
+import threading, ft
+threading.stack_size({kb} * 1024)
+out = []
+def go():
+    i = ft.Instance()
+    try:
+        i.recurse_count(0)
+    except ft.Trap as e:
+        out.append(int.from_bytes(bytes(i.memory[:4]), 'little'))
+t = threading.Thread(target=go); t.start(); t.join()
+print(out[0] if out else 'no trap')
+"""
+        p = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=60, check=False)
+        out = p.stdout.strip() or (f"CRASH, exit code {p.returncode}" if p.returncode else "no output")
+        print(f"   thread with a {kb:>4} KiB stack: {out}")
+
+
+def calls_inside():
+    print("\n5. calls inside the module: fib(32), about 7 million calls (best of 5, ms)")
+    inst = ft.Instance()
+    best = min((lambda t0: (inst.fib(32), time.perf_counter() - t0)[1])(time.perf_counter()) for _ in range(5))
+    print(f"   {best * 1000:.0f} ms, {7_049_155 / best / 1e6:.0f} million calls a second")
+
+
 if ONLY in ("", "3"):
     traps()
+if ONLY in ("", "4"):
+    depth_and_small_stack()
+if ONLY in ("", "5"):
+    calls_inside()

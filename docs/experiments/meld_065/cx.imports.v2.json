@@ -1,0 +1,737 @@
+{
+  "imports": [
+    {
+      "component": 0,
+      "encoding": null,
+      "index": 0,
+      "kind": "resource",
+      "memory": null,
+      "module": "demo:cx/store@0.1.0",
+      "name": "[resource-drop]counter",
+      "realloc": null,
+      "resource": {
+        "definer": false,
+        "dtor_candidates": [],
+        "dtor_export": "demo:cx/store@0.1.0#[dtor]counter",
+        "interface": "demo:cx/store@0.1.0",
+        "operation": "drop",
+        "resource": "counter"
+      }
+    },
+    {
+      "component": 0,
+      "encoding": null,
+      "index": 1,
+      "kind": "resource",
+      "memory": null,
+      "module": "wasi:io/error@0.2.12",
+      "name": "[resource-drop]error",
+      "realloc": null,
+      "resource": {
+        "definer": false,
+        "dtor_candidates": [],
+        "dtor_export": null,
+        "interface": "wasi:io/error@0.2.12",
+        "operation": "drop",
+        "resource": "error"
+      }
+    },
+    {
+      "component": 0,
+      "encoding": null,
+      "index": 2,
+      "kind": "resource",
+      "memory": null,
+      "module": "wasi:io/poll@0.2.12",
+      "name": "[resource-drop]pollable",
+      "realloc": null,
+      "resource": {
+        "definer": false,
+        "dtor_candidates": [],
+        "dtor_export": null,
+        "interface": "wasi:io/poll@0.2.12",
+        "operation": "drop",
+        "resource": "pollable"
+      }
+    },
+    {
+      "component": 0,
+      "encoding": null,
+      "index": 3,
+      "kind": "resource",
+      "memory": null,
+      "module": "wasi:io/streams@0.2.12",
+      "name": "[resource-drop]input-stream",
+      "realloc": null,
+      "resource": {
+        "definer": false,
+        "dtor_candidates": [],
+        "dtor_export": null,
+        "interface": "wasi:io/streams@0.2.12",
+        "operation": "drop",
+        "resource": "input-stream"
+      }
+    },
+    {
+      "component": 0,
+      "encoding": null,
+      "index": 4,
+      "kind": "resource",
+      "memory": null,
+      "module": "wasi:io/streams@0.2.12",
+      "name": "[resource-drop]output-stream",
+      "realloc": null,
+      "resource": {
+        "definer": false,
+        "dtor_candidates": [],
+        "dtor_export": null,
+        "interface": "wasi:io/streams@0.2.12",
+        "operation": "drop",
+        "resource": "output-stream"
+      }
+    },
+    {
+      "component": 0,
+      "encoding": null,
+      "index": 5,
+      "kind": "resource",
+      "memory": null,
+      "module": "wasi:cli/terminal-input@0.2.12",
+      "name": "[resource-drop]terminal-input",
+      "realloc": null,
+      "resource": {
+        "definer": false,
+        "dtor_candidates": [],
+        "dtor_export": null,
+        "interface": "wasi:cli/terminal-input@0.2.12",
+        "operation": "drop",
+        "resource": "terminal-input"
+      }
+    },
+    {
+      "component": 0,
+      "encoding": null,
+      "index": 6,
+      "kind": "resource",
+      "memory": null,
+      "module": "wasi:cli/terminal-output@0.2.12",
+      "name": "[resource-drop]terminal-output",
+      "realloc": null,
+      "resource": {
+        "definer": false,
+        "dtor_candidates": [],
+        "dtor_export": null,
+        "interface": "wasi:cli/terminal-output@0.2.12",
+        "operation": "drop",
+        "resource": "terminal-output"
+      }
+    },
+    {
+      "component": 0,
+      "encoding": "utf8",
+      "index": 7,
+      "kind": "wasi",
+      "memory": null,
+      "module": "wasi:cli/exit@0.2.12",
+      "name": "exit",
+      "realloc": null
+    },
+    {
+      "component": 0,
+      "encoding": "utf8",
+      "index": 8,
+      "kind": "wasi",
+      "memory": null,
+      "module": "wasi:cli/exit@0.2.12",
+      "name": "exit-with-code",
+      "realloc": null
+    },
+    {
+      "component": 0,
+      "encoding": "utf8",
+      "index": 9,
+      "kind": "wasi",
+      "memory": null,
+      "module": "wasi:io/poll@0.2.12",
+      "name": "[method]pollable.block",
+      "realloc": null
+    },
+    {
+      "component": 0,
+      "encoding": "utf8",
+      "index": 10,
+      "kind": "wasi",
+      "memory": null,
+      "module": "wasi:io/streams@0.2.12",
+      "name": "[method]output-stream.subscribe",
+      "realloc": null
+    },
+    {
+      "component": 0,
+      "encoding": "utf8",
+      "index": 11,
+      "kind": "wasi",
+      "memory": null,
+      "module": "wasi:cli/stdin@0.2.12",
+      "name": "get-stdin",
+      "realloc": null
+    },
+    {
+      "component": 0,
+      "encoding": "utf8",
+      "index": 12,
+      "kind": "wasi",
+      "memory": null,
+      "module": "wasi:cli/stdout@0.2.12",
+      "name": "get-stdout",
+      "realloc": null
+    },
+    {
+      "component": 0,
+      "encoding": "utf8",
+      "index": 13,
+      "kind": "wasi",
+      "memory": null,
+      "module": "wasi:cli/stderr@0.2.12",
+      "name": "get-stderr",
+      "realloc": null
+    },
+    {
+      "component": 0,
+      "encoding": "utf8",
+      "index": 14,
+      "kind": "wasi",
+      "memory": null,
+      "module": "wasi:clocks/monotonic-clock@0.2.12",
+      "name": "now",
+      "realloc": null
+    },
+    {
+      "component": 0,
+      "encoding": "utf8",
+      "index": 15,
+      "kind": "wasi",
+      "memory": null,
+      "module": "wasi:clocks/monotonic-clock@0.2.12",
+      "name": "subscribe-duration",
+      "realloc": null
+    },
+    {
+      "component": 0,
+      "encoding": "utf8",
+      "index": 16,
+      "kind": "wasi",
+      "memory": {
+        "export": "memory$0",
+        "index": 1
+      },
+      "module": "wasi:io/poll@0.2.12",
+      "name": "poll",
+      "realloc": {
+        "export": "cabi_realloc$1",
+        "func": 218
+      }
+    },
+    {
+      "component": 0,
+      "encoding": "utf8",
+      "index": 17,
+      "kind": "wasi",
+      "memory": {
+        "export": "memory$0",
+        "index": 1
+      },
+      "module": "wasi:io/streams@0.2.12",
+      "name": "[method]output-stream.check-write",
+      "realloc": null
+    },
+    {
+      "component": 0,
+      "encoding": "utf8",
+      "index": 18,
+      "kind": "wasi",
+      "memory": {
+        "export": "memory$0",
+        "index": 1
+      },
+      "module": "wasi:io/streams@0.2.12",
+      "name": "[method]output-stream.write",
+      "realloc": null
+    },
+    {
+      "component": 0,
+      "encoding": "utf8",
+      "index": 19,
+      "kind": "wasi",
+      "memory": {
+        "export": "memory$0",
+        "index": 1
+      },
+      "module": "wasi:io/streams@0.2.12",
+      "name": "[method]output-stream.blocking-flush",
+      "realloc": null
+    },
+    {
+      "component": 0,
+      "encoding": "utf8",
+      "index": 20,
+      "kind": "wasi",
+      "memory": {
+        "export": "memory$0",
+        "index": 1
+      },
+      "module": "wasi:cli/environment@0.2.12",
+      "name": "get-arguments",
+      "realloc": {
+        "export": "cabi_realloc$1",
+        "func": 218
+      }
+    },
+    {
+      "component": 0,
+      "encoding": "utf8",
+      "index": 21,
+      "kind": "wasi",
+      "memory": {
+        "export": "memory$0",
+        "index": 1
+      },
+      "module": "wasi:cli/terminal-stdin@0.2.12",
+      "name": "get-terminal-stdin",
+      "realloc": null
+    },
+    {
+      "component": 0,
+      "encoding": "utf8",
+      "index": 22,
+      "kind": "wasi",
+      "memory": {
+        "export": "memory$0",
+        "index": 1
+      },
+      "module": "wasi:cli/terminal-stdout@0.2.12",
+      "name": "get-terminal-stdout",
+      "realloc": null
+    },
+    {
+      "component": 0,
+      "encoding": "utf8",
+      "index": 23,
+      "kind": "wasi",
+      "memory": {
+        "export": "memory$0",
+        "index": 1
+      },
+      "module": "wasi:cli/terminal-stderr@0.2.12",
+      "name": "get-terminal-stderr",
+      "realloc": null
+    },
+    {
+      "component": 0,
+      "encoding": "utf8",
+      "index": 24,
+      "kind": "wasi",
+      "memory": {
+        "export": "memory$0",
+        "index": 1
+      },
+      "module": "wasi:clocks/wall-clock@0.2.12",
+      "name": "now",
+      "realloc": null
+    },
+    {
+      "component": 3,
+      "encoding": null,
+      "index": 25,
+      "kind": "resource",
+      "memory": null,
+      "module": "[export]demo:cx/store@0.1.0",
+      "name": "[resource-new]counter",
+      "realloc": null,
+      "resource": {
+        "definer": true,
+        "dtor_candidates": [],
+        "dtor_export": "demo:cx/store@0.1.0#[dtor]counter",
+        "interface": "demo:cx/store@0.1.0",
+        "operation": "new",
+        "resource": "counter"
+      }
+    },
+    {
+      "component": 3,
+      "encoding": null,
+      "index": 26,
+      "kind": "resource",
+      "memory": null,
+      "module": "wasi:io/error@0.2.12",
+      "name": "[resource-drop]error$3",
+      "realloc": null,
+      "resource": {
+        "definer": false,
+        "dtor_candidates": [],
+        "dtor_export": null,
+        "interface": "wasi:io/error@0.2.12",
+        "operation": "drop",
+        "resource": "error"
+      }
+    },
+    {
+      "component": 3,
+      "encoding": null,
+      "index": 27,
+      "kind": "resource",
+      "memory": null,
+      "module": "wasi:io/poll@0.2.12",
+      "name": "[resource-drop]pollable$3",
+      "realloc": null,
+      "resource": {
+        "definer": false,
+        "dtor_candidates": [],
+        "dtor_export": null,
+        "interface": "wasi:io/poll@0.2.12",
+        "operation": "drop",
+        "resource": "pollable"
+      }
+    },
+    {
+      "component": 3,
+      "encoding": null,
+      "index": 28,
+      "kind": "resource",
+      "memory": null,
+      "module": "wasi:io/streams@0.2.12",
+      "name": "[resource-drop]input-stream$3",
+      "realloc": null,
+      "resource": {
+        "definer": false,
+        "dtor_candidates": [],
+        "dtor_export": null,
+        "interface": "wasi:io/streams@0.2.12",
+        "operation": "drop",
+        "resource": "input-stream"
+      }
+    },
+    {
+      "component": 3,
+      "encoding": null,
+      "index": 29,
+      "kind": "resource",
+      "memory": null,
+      "module": "wasi:io/streams@0.2.12",
+      "name": "[resource-drop]output-stream$3",
+      "realloc": null,
+      "resource": {
+        "definer": false,
+        "dtor_candidates": [],
+        "dtor_export": null,
+        "interface": "wasi:io/streams@0.2.12",
+        "operation": "drop",
+        "resource": "output-stream"
+      }
+    },
+    {
+      "component": 3,
+      "encoding": null,
+      "index": 30,
+      "kind": "resource",
+      "memory": null,
+      "module": "wasi:cli/terminal-input@0.2.12",
+      "name": "[resource-drop]terminal-input$3",
+      "realloc": null,
+      "resource": {
+        "definer": false,
+        "dtor_candidates": [],
+        "dtor_export": null,
+        "interface": "wasi:cli/terminal-input@0.2.12",
+        "operation": "drop",
+        "resource": "terminal-input"
+      }
+    },
+    {
+      "component": 3,
+      "encoding": null,
+      "index": 31,
+      "kind": "resource",
+      "memory": null,
+      "module": "wasi:cli/terminal-output@0.2.12",
+      "name": "[resource-drop]terminal-output$3",
+      "realloc": null,
+      "resource": {
+        "definer": false,
+        "dtor_candidates": [],
+        "dtor_export": null,
+        "interface": "wasi:cli/terminal-output@0.2.12",
+        "operation": "drop",
+        "resource": "terminal-output"
+      }
+    },
+    {
+      "component": 3,
+      "encoding": "utf8",
+      "index": 32,
+      "kind": "wasi",
+      "memory": null,
+      "module": "wasi:cli/exit@0.2.12",
+      "name": "exit$3",
+      "realloc": null
+    },
+    {
+      "component": 3,
+      "encoding": "utf8",
+      "index": 33,
+      "kind": "wasi",
+      "memory": null,
+      "module": "wasi:cli/exit@0.2.12",
+      "name": "exit-with-code$3",
+      "realloc": null
+    },
+    {
+      "component": 3,
+      "encoding": "utf8",
+      "index": 34,
+      "kind": "wasi",
+      "memory": null,
+      "module": "wasi:io/poll@0.2.12",
+      "name": "[method]pollable.block$3",
+      "realloc": null
+    },
+    {
+      "component": 3,
+      "encoding": "utf8",
+      "index": 35,
+      "kind": "wasi",
+      "memory": null,
+      "module": "wasi:io/streams@0.2.12",
+      "name": "[method]output-stream.subscribe$3",
+      "realloc": null
+    },
+    {
+      "component": 3,
+      "encoding": "utf8",
+      "index": 36,
+      "kind": "wasi",
+      "memory": null,
+      "module": "wasi:cli/stdin@0.2.12",
+      "name": "get-stdin$3",
+      "realloc": null
+    },
+    {
+      "component": 3,
+      "encoding": "utf8",
+      "index": 37,
+      "kind": "wasi",
+      "memory": null,
+      "module": "wasi:cli/stdout@0.2.12",
+      "name": "get-stdout$3",
+      "realloc": null
+    },
+    {
+      "component": 3,
+      "encoding": "utf8",
+      "index": 38,
+      "kind": "wasi",
+      "memory": null,
+      "module": "wasi:cli/stderr@0.2.12",
+      "name": "get-stderr$3",
+      "realloc": null
+    },
+    {
+      "component": 3,
+      "encoding": "utf8",
+      "index": 39,
+      "kind": "wasi",
+      "memory": null,
+      "module": "wasi:clocks/monotonic-clock@0.2.12",
+      "name": "now$3",
+      "realloc": null
+    },
+    {
+      "component": 3,
+      "encoding": "utf8",
+      "index": 40,
+      "kind": "wasi",
+      "memory": null,
+      "module": "wasi:clocks/monotonic-clock@0.2.12",
+      "name": "subscribe-duration$3",
+      "realloc": null
+    },
+    {
+      "component": 3,
+      "encoding": "utf8",
+      "index": 41,
+      "kind": "wasi",
+      "memory": {
+        "export": "memory",
+        "index": 0
+      },
+      "module": "wasi:io/poll@0.2.12",
+      "name": "poll$3",
+      "realloc": {
+        "export": "cabi_realloc",
+        "func": 81
+      }
+    },
+    {
+      "component": 3,
+      "encoding": "utf8",
+      "index": 42,
+      "kind": "wasi",
+      "memory": {
+        "export": "memory",
+        "index": 0
+      },
+      "module": "wasi:io/streams@0.2.12",
+      "name": "[method]output-stream.check-write$3",
+      "realloc": null
+    },
+    {
+      "component": 3,
+      "encoding": "utf8",
+      "index": 43,
+      "kind": "wasi",
+      "memory": {
+        "export": "memory",
+        "index": 0
+      },
+      "module": "wasi:io/streams@0.2.12",
+      "name": "[method]output-stream.write$3",
+      "realloc": null
+    },
+    {
+      "component": 3,
+      "encoding": "utf8",
+      "index": 44,
+      "kind": "wasi",
+      "memory": {
+        "export": "memory",
+        "index": 0
+      },
+      "module": "wasi:io/streams@0.2.12",
+      "name": "[method]output-stream.blocking-flush$3",
+      "realloc": null
+    },
+    {
+      "component": 3,
+      "encoding": "utf8",
+      "index": 45,
+      "kind": "wasi",
+      "memory": {
+        "export": "memory",
+        "index": 0
+      },
+      "module": "wasi:cli/environment@0.2.12",
+      "name": "get-arguments$3",
+      "realloc": {
+        "export": "cabi_realloc",
+        "func": 81
+      }
+    },
+    {
+      "component": 3,
+      "encoding": "utf8",
+      "index": 46,
+      "kind": "wasi",
+      "memory": {
+        "export": "memory",
+        "index": 0
+      },
+      "module": "wasi:cli/terminal-stdin@0.2.12",
+      "name": "get-terminal-stdin$3",
+      "realloc": null
+    },
+    {
+      "component": 3,
+      "encoding": "utf8",
+      "index": 47,
+      "kind": "wasi",
+      "memory": {
+        "export": "memory",
+        "index": 0
+      },
+      "module": "wasi:cli/terminal-stdout@0.2.12",
+      "name": "get-terminal-stdout$3",
+      "realloc": null
+    },
+    {
+      "component": 3,
+      "encoding": "utf8",
+      "index": 48,
+      "kind": "wasi",
+      "memory": {
+        "export": "memory",
+        "index": 0
+      },
+      "module": "wasi:cli/terminal-stderr@0.2.12",
+      "name": "get-terminal-stderr$3",
+      "realloc": null
+    },
+    {
+      "component": 3,
+      "encoding": "utf8",
+      "index": 49,
+      "kind": "wasi",
+      "memory": {
+        "export": "memory",
+        "index": 0
+      },
+      "module": "wasi:clocks/wall-clock@0.2.12",
+      "name": "now$3",
+      "realloc": null
+    },
+    {
+      "component": 3,
+      "encoding": null,
+      "index": 50,
+      "kind": "resource",
+      "memory": null,
+      "module": "[export]demo:cx/store@0.1.0",
+      "name": "[resource-rep]counter",
+      "realloc": null,
+      "resource": {
+        "definer": true,
+        "dtor_candidates": [],
+        "dtor_export": "demo:cx/store@0.1.0#[dtor]counter",
+        "interface": "demo:cx/store@0.1.0",
+        "operation": "rep",
+        "resource": "counter"
+      }
+    },
+    {
+      "component": 0,
+      "encoding": null,
+      "index": 51,
+      "kind": "resource",
+      "memory": null,
+      "module": "[export]demo:cx/store@0.1.0",
+      "name": "[resource-rep]counter$0",
+      "realloc": null,
+      "resource": {
+        "definer": true,
+        "dtor_candidates": [],
+        "dtor_export": "demo:cx/store@0.1.0#[dtor]counter",
+        "interface": "demo:cx/store@0.1.0",
+        "operation": "rep",
+        "resource": "counter"
+      }
+    },
+    {
+      "component": 0,
+      "encoding": null,
+      "index": 52,
+      "kind": "resource",
+      "memory": null,
+      "module": "[export]demo:cx/store@0.1.0",
+      "name": "[resource-new]counter$0",
+      "realloc": null,
+      "resource": {
+        "definer": true,
+        "dtor_candidates": [],
+        "dtor_export": "demo:cx/store@0.1.0#[dtor]counter",
+        "interface": "demo:cx/store@0.1.0",
+        "operation": "new",
+        "resource": "counter"
+      }
+    }
+  ],
+  "version": 2
+}

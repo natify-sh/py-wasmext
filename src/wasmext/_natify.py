@@ -566,7 +566,14 @@ def _prepare(
     out_dir.mkdir(parents=True, exist_ok=True)
     for old in (out_dir / f"{last}_w2c.c", *out_dir.glob(f"{last}_w2c_*.c"), out_dir / f"{last}_w2c-impl.h"):
         old.unlink(missing_ok=True)  # what a run with another number of files left
-    command = [str(toolchain.wasm2c), str(wasm), "-o", str(out_dir / f"{last}_w2c.c"), f"--module-name={last}"]
+    command = [
+        str(toolchain.wasm2c),
+        str(wasm),
+        "-o",
+        str(out_dir / f"{last}_w2c.c"),
+        f"--module-name={last}",
+        "--enable-compact-imports",
+    ]
     if wanted > 1:
         command.append(f"--num-outputs={wanted}")
     result = subprocess.run(command, capture_output=True, text=True, check=False)

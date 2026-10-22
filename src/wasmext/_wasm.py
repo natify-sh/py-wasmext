@@ -6,7 +6,7 @@
 
 The signatures of the imports and exports, the memories, tables and globals; not the code (`wasm2c` translates that).
 The names of parameters come from the "name" section when there is one. Sections that carry code or data are skipped after a check of their framing. Raises `WasmError` for anything that is not
-a well-formed module of the core specification (with the multi-memory, memory64 and extended-const proposals) and for
+a well-formed module of the core specification (with the multi-memory, memory64, extended-const and compact-imports proposals) and for
 the value types it does not know (GC references, exceptions).
 """
 
@@ -56,6 +56,8 @@ WASI_HINTS: Final[dict[str, str]] = {
 
 _MAGIC: Final = b"\0asm"
 _VERSION: Final = b"\x01\x00\x00\x00"
+_COMPACT_EACH: Final = 0x7F  # compact imports: the name, the kind and the type of each import follow the module
+_COMPACT_KIND: Final = 0x7E  # compact imports: one kind for the group, then the name and the type of each
 _COMPONENT_VERSION: Final = b"\x0d\x00\x01\x00"  # the version field of a component (a module has 1)
 
 # The order in which sections may appear (the id of the section -> its place); the tag section sits before the
@@ -443,7 +445,7 @@ def _section(module: Module, section_id: int, body: _Reader) -> None:
     if section_id == _TYPE:
         module.types = body.vec(lambda: _functype(body))
     elif section_id == _IMPORT:
-        module.imports = body.vec(lambda: _import(body, module.types))
+        module.imports = _imports(body, module.types)
     elif section_id == _FUNCTION:
         module.functions = body.vec(lambda: _typeref(body, module.types))
     elif section_id == _TABLE:
@@ -510,13 +512,49 @@ def _globaltype(r: _Reader) -> GlobalType:
     return GlobalType(value, bool(flag))
 
 
-def _import(r: _Reader, types: list[FuncType]) -> Import:
+def _imports(r: _Reader, types: list[FuncType]) -> list[Import]:
+    """The import section: ordinary imports and the compact forms, one after the other until the section ends.
+
+    The number in front is checked against what was read, as the number of entries (a compact group is one) or of imports: WABT counts
+    imports (`ReadImportSection` stops when it has read that many), the proposal counts entries, and the two agree for every module
+    that has a single group."""
+    count = r.uleb()
+    imports: list[Import] = []
+    entries = 0
+    while not r.at_end():
+        imports += _import(r, types)
+        entries += 1
+    if count not in (entries, len(imports)):
+        raise WasmError(
+            f"the import section announces {count} imports and holds {entries} entries ({len(imports)} imports)"
+        )
+    return imports
+
+
+def _import(r: _Reader, types: list[FuncType]) -> list[Import]:
     module = r.name()
     name = r.name()
     code = r.byte()
+    if name == "" and code == _COMPACT_EACH:  # a module, then for each import its name, kind and type
+        return r.vec(lambda: _described(r, module, r.name(), _kind(r), types))
+    if name == "" and code == _COMPACT_KIND:  # a module and a kind, then for each import its name and type
+        kind = _kind(r)
+        return r.vec(lambda: _described(r, module, r.name(), kind, types))
+    return [_described(r, module, name, _kind_of(r, code), types)]
+
+
+def _kind_of(r: _Reader, code: int) -> ExternKind:
     if code >= len(_KINDS):
         raise WasmError(f"unknown import kind {code} at offset {r.pos - 1}")
-    kind = _KINDS[code]
+    return _KINDS[code]
+
+
+def _kind(r: _Reader) -> ExternKind:
+    return _kind_of(r, r.byte())
+
+
+def _described(r: _Reader, module: str, name: str, kind: ExternKind, types: list[FuncType]) -> Import:
+    """The import of the given kind, whose type is what follows in `r`."""
     if kind == "func":
         return Import(module, name, kind, _typeref(r, types))
     if kind == "table":

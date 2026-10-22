@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from .conftest import SANITIZED
 from .test_cli import wasmext
 
 
@@ -365,6 +366,7 @@ def _limited_run(tmp_path: Path, code: str, limit_mib: int) -> subprocess.Comple
 
 
 @pytest.mark.skipif(platform.system() != "Linux", reason="RLIMIT_AS and the 8 GiB reservation of the runtime")
+@pytest.mark.skipif(SANITIZED, reason="ASan reserves terabytes of shadow memory, which RLIMIT_AS forbids")
 @pytest.mark.parametrize("guard_pages", [True, False], ids=["guard pages", "no guard pages"])
 def test_a_limit_on_address_space(guard_pages: bool, tmp_path: Path, wabt: Path) -> None:
     """With guard pages each memory reserves 8 GiB of address space, so in a process limited to 2 GiB the instance is a

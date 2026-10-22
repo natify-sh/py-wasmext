@@ -30,6 +30,11 @@ from wasmext._natify import (
 # the free-threaded build has no abi3 (3.15 has abi3t, which wasmext does not build: cibuildwheel does not tag it yet): there the extension is native
 
 
+# Under a sanitizer (.github/workflows/sanitizers.yml) the tests that depend on signals or on the address space of the process cannot run: ASan takes the
+# signals and reserves terabytes of shadow memory.
+SANITIZED = any(f.startswith("-fsanitize") for f in shlex.split(os.environ.get("WASMEXT_TEST_CFLAGS", "")))
+
+
 def is_abi3_file(name: str) -> bool:
     """Whether a file name is that of an abi3 extension: `.abi3.so`, or `.abi3-<platform>.so` as the newest interpreters name it (not `.abi3t.so`)."""
     return re.search(r"\.abi3[.-]", name) is not None

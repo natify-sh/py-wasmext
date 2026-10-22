@@ -62,6 +62,7 @@ def test_a_trap_that_is_not_a_signal_works_in_the_module_imported_first(
 
 
 @pytest.mark.xfail(
+    sys.platform != "win32",  # Windows handles the faults by a vectored handler per runtime, and all of them are called
     strict=True,
     reason="the handler of the signals is the one of the module imported last; the other aborts the process (known gap)",
 )

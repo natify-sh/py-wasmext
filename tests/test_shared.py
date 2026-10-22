@@ -15,7 +15,7 @@ import pytest
 
 from wasmext._exe import BuildFlags, build_shared  # pyright: ignore[reportPrivateUsage]
 
-from .conftest import DATA
+from .conftest import DATA, SANITIZED
 
 
 def test_a_host_in_c_uses_the_library_and_a_failing_host_function_is_a_trap_of_the_call(
@@ -136,6 +136,7 @@ int main(void) {
 """
 
 
+@pytest.mark.skipif(SANITIZED, reason="ASan takes the signals of the process")
 def test_an_out_of_bounds_access_is_a_trap_of_the_call_not_a_crash_of_the_host(wabt: Path, tmp_path: Path) -> None:
     """The runtime of wasm2c is set up by the library itself (the extension and the executable do it in their own ways): without it the host dies of SIGSEGV."""
     ran = _library_and_host(wabt, tmp_path, _OOB_WAT, _OOB_HOST, libs=("-lpthread",))

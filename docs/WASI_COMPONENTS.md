@@ -589,12 +589,13 @@ not say which memory a WASI import belongs to, or both).
 
 **Awaiting upstream; the release is on its way.** Issue [#512](https://github.com/pulseengine/meld/issues/512) is closed by pull request [#516](https://github.com/pulseengine/meld/pull/516), and issue
 [#513](https://github.com/pulseengine/meld/issues/513) by [#518](https://github.com/pulseengine/meld/pull/518). Pull request [#521](https://github.com/pulseengine/meld/pull/521) is the release **v0.65.0**; its
-`CHANGELOG.md` (read from the branch of the pull request, 2026-10-22; whether it is merged and published was not checked) says:
+`CHANGELOG.md` (read from the branch of the pull request, 2026-10-22) says; **the pull request was open, not merged, with 22 checks, when the owner of this repository pasted its description (the same day), so 0.65.0 is not published yet**:
 - **#512 fixed:** "nested lists and strings inside option, result and variant values are deep-copied across memories": a `list<string>` behind an option, result or variant had its pointer array copied to the other component but not the strings it
   points to, so the receiver read its own memory at the other component's addresses (empty or garbage strings, or a trap, at exit 0), under `--memory multi`. That is the `get=apple,3,[,]` above.
 - **#513 fixed:** `--emit-import-map` now states, for each function import, **the memory its pointer arguments refer to, the allocator for list and string results, the string encoding and the owning component** (the map gets `"version": 2`;
   `null` = the lower has no such option, `{"unknown": ...}` = it could not be traced); resource intrinsics name their resource and `[dtor]` export. That is what the paragraph above missed ("which memory a WASI import belongs to").
 - also in 0.65.0: a re-exported adapted import reaches the adapter from every importer (#504, SR-103).
+- the description of the pull request says: the import map of 57 maps compared before and after the change differs in no index, kind, module or name; the clean-room review of #513 left gaps filed as [#520](https://github.com/pulseengine/meld/issues/520) (a `dtor` that can be determined is reported as `null`; a misleading reason `unknown` under `--memory shared`), none a wrong answer; [#515](https://github.com/pulseengine/meld/issues/515) is in review and will ship as **v0.65.1**.
 
 So everything above and the multi-component findings in [wasi_p1_vs_p2_host_requirements.md](wasi_p1_vs_p2_host_requirements.md) were measured on meld 0.64.0, and **the experiment is to be repeated on 0.65.0** once it is published (the checks to repeat: the complex
 component with `list<string>`, the import map, and a WASI import used by two components).

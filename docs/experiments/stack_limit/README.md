@@ -8,6 +8,17 @@ How a wasm2c module learns that the native stack is about to run out. Three ways
 | **depth** (`WASM_RT_STACK_DEPTH_COUNT`) | `++depth` in each prologue, `--depth` in each epilogue, a limit of **500 calls** | nothing else; a thread-local counter |
 | **sp** (this experiment) | the prologue compares the address of the frame with a limit kept per thread (`wasmext_stack_limit`, the lowest address still safe); no epilogue | the limit set once per thread (from `pthread_getattr_np`) |
 
+## Why the stack is checked at all, and why native code does not pay for it
+
+Native programs have no software check of the stack. The OS puts a guard page past the end of the stack; touching it is a hardware fault, the kernel sends `SIGSEGV`, and the process dies. Nothing runs in the functions, so nothing costs. (Rust does the same with a handler on an alternate stack that prints "stack overflow" and aborts, which is our `guard` way; Go checks the stack pointer in the prologue of every function, because it grows the stacks of its goroutines, which is our check. This comparison is from general knowledge, not measured in this repository.) A C program that writes past the end of an array is not checked at all: it is undefined behaviour, a quiet corruption or a crash by luck, unless a tool such as ASan is turned on and paid for.
+
+A WebAssembly module in an extension is not a program, it runs **inside the process of the host** (Python, a server, other threads, other modules). The specification asks that exhausting the stack, or an access outside the memory of the module, is a **trap**: the call ends with an error and the host goes on. Dying, as native code does, would take the host and everything it holds with it. So wasmext has to turn the fault into a trap, in one of two ways:
+
+- **the guard page and a signal** (`WASMEXT_STACK_CHECK=guard`): nothing in the functions (98% of native on CoreMark), but a handler of `SIGSEGV` on an alternate stack kept for every thread, a `longjmp` out of the handler, and a decision there of whose fault it is;
+- **a check of the stack pointer in each function** (the default): about 9% on CoreMark against native (8% against the guard page), and no signal for the stack at all, in any thread.
+
+The memory of the module is checked by guard pages in both (no cost; explicit checks of every access, `--no-guard-pages`, would be about twice slower on a loop that does only memory). So the cost of the default is the price of the stack not depending on a handler of signals, and the purpose in both ways is the same: a fault in a module is the error of a call and not the end of the host. The trap does not make the module safe to go on with: the call is abandoned where it stood, and the state of the instance (its memory, its globals) is as it was at that moment.
+
 `sp` is a patch of the generated C, of the kind in [../../patch_policy.md](../../patch_policy.md): `build.sh` replaces the empty `FUNC_PROLOGUE` of the branch where neither option is on with `if ((uintptr_t)__builtin_frame_address(0) < wasmext_stack_limit) TRAP(EXHAUSTION);`, and builds the runtime with `WASM_RT_NONCONFORMING_UNCHECKED_STACK_EXHAUSTION=1` (the runtime accepts that no option is chosen). Nothing in WABT is changed.
 
 **[run]** 2026-10-22, one cloud VM, gcc 13.3 `-O2`, `fib(32)`, best of 7 calls, 5 runs of each, the range of the 5:

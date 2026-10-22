@@ -25,6 +25,7 @@ import re
 import subprocess
 import sys
 import sysconfig
+import tempfile
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -32,7 +33,7 @@ from typing import TYPE_CHECKING, Any
 
 from ._gen import GenError, Glue, generate, module_prefix
 from ._toolchain import Toolchain, find_toolchain
-from ._wasm import WASI_HINTS, WasmError, parse, wasi_flavor
+from ._wasm import WASI_HINTS, WasmError, expand_compact_imports, parse, wasi_flavor
 
 if TYPE_CHECKING:
     from setuptools import Extension
@@ -566,17 +567,16 @@ def _prepare(
     out_dir.mkdir(parents=True, exist_ok=True)
     for old in (out_dir / f"{last}_w2c.c", *out_dir.glob(f"{last}_w2c_*.c"), out_dir / f"{last}_w2c-impl.h"):
         old.unlink(missing_ok=True)  # what a run with another number of files left
-    command = [
-        str(toolchain.wasm2c),
-        str(wasm),
-        "-o",
-        str(out_dir / f"{last}_w2c.c"),
-        f"--module-name={last}",
-        "--enable-compact-imports",
-    ]
-    if wanted > 1:
-        command.append(f"--num-outputs={wanted}")
-    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    # wasm2c is given the module with ordinary imports where it has compact ones: WABT reads them differently from the proposal (see expand_compact_imports)
+    with tempfile.TemporaryDirectory() as scratch:
+        source = wasm
+        if (plain := expand_compact_imports(data, parsed)) is not data:
+            source = Path(scratch) / wasm.name
+            source.write_bytes(plain)
+        command = [str(toolchain.wasm2c), str(source), "-o", str(out_dir / f"{last}_w2c.c"), f"--module-name={last}"]
+        if wanted > 1:
+            command.append(f"--num-outputs={wanted}")
+        result = subprocess.run(command, capture_output=True, text=True, check=False)
     if result.returncode:
         raise RuntimeError(f"wasm2c failed on {wasm}:\n{result.stderr.strip()}")
     for part in _w2c_files(out_dir, last, wanted):

@@ -27,6 +27,7 @@ __all__ = [
     "ValType",
     "WasiFlavor",
     "WasmError",
+    "expand_compact_imports",
     "parse",
     "wasi_flavor",
 ]
@@ -56,8 +57,10 @@ WASI_HINTS: Final[dict[str, str]] = {
 
 _MAGIC: Final = b"\0asm"
 _VERSION: Final = b"\x01\x00\x00\x00"
-_COMPACT_EACH: Final = 0x7F  # compact imports: the name, the kind and the type of each import follow the module
-_COMPACT_KIND: Final = 0x7E  # compact imports: one kind for the group, then the name and the type of each
+_COMPACT_EACH: Final = 0x7F  # compact imports: after the module, a name and a type (with its kind) for each import
+_COMPACT_KIND: Final = (
+    0x7E  # compact imports: after the module, one type (with its kind) for the group, then a name for each import
+)
 _COMPONENT_VERSION: Final = b"\x0d\x00\x01\x00"  # the version field of a component (a module has 1)
 
 # The order in which sections may appear (the id of the section -> its place); the tag section sits before the
@@ -145,6 +148,10 @@ class Module:
     # From the "name" section, which is only a help for people: function index -> {local index -> name}; the parameters are the first locals.
     local_names: dict[int, dict[int, str]] = field(default_factory=dict[int, dict[int, str]])
     custom: list[str] = field(default_factory=list[str])  # the names of the custom sections, in order
+    # Compact imports: where the import section is in the binary (from its id byte to its end), and, if some entry of it is compact, its body
+    # written with ordinary imports (see `expand_compact_imports`).
+    import_section: tuple[int, int] | None = None
+    plain_imports: bytes | None = None
 
     def _imported(self, kind: ExternKind) -> list[FuncType | TableType | Limits | GlobalType]:
         return [i.type for i in self.imports if i.kind == kind]
@@ -355,6 +362,7 @@ def parse(data: bytes) -> Module:
     last = 0
     code_count = 0
     while not reader.at_end():
+        section_start = reader.pos
         section_id = reader.byte()
         body = reader.sub(reader.uleb())
         if section_id == 0:  # custom: the name and then anything
@@ -368,6 +376,8 @@ def parse(data: bytes) -> Module:
         if _ORDER[section_id] <= last:
             raise WasmError(f"section {section_id} is out of order or repeated")
         last = _ORDER[section_id]
+        if section_id == _IMPORT:
+            module.import_section = (section_start, reader.pos)
         if section_id == _CODE:
             code_count = body.uleb()  # the bodies are for wasm2c
         else:
@@ -445,7 +455,7 @@ def _section(module: Module, section_id: int, body: _Reader) -> None:
     if section_id == _TYPE:
         module.types = body.vec(lambda: _functype(body))
     elif section_id == _IMPORT:
-        module.imports = _imports(body, module.types)
+        module.imports, module.plain_imports = _imports(body, module.types)
     elif section_id == _FUNCTION:
         module.functions = body.vec(lambda: _typeref(body, module.types))
     elif section_id == _TABLE:
@@ -512,60 +522,92 @@ def _globaltype(r: _Reader) -> GlobalType:
     return GlobalType(value, bool(flag))
 
 
-def _imports(r: _Reader, types: list[FuncType]) -> list[Import]:
-    """The import section: ordinary imports and the compact forms, one after the other until the section ends.
+def _imports(r: _Reader, types: list[FuncType]) -> tuple[list[Import], bytes | None]:
+    """The import section: its imports, and, if any of its entries was a compact one, the body of the section written out with ordinary imports.
 
-    The number in front is checked against what was read, as the number of entries (a compact group is one) or of imports: WABT counts
-    imports (`ReadImportSection` stops when it has read that many), the proposal counts entries, and the two agree for every module
-    that has a single group."""
-    count = r.uleb()
-    imports: list[Import] = []
-    entries = 0
-    while not r.at_end():
-        imports += _import(r, types)
-        entries += 1
-    if count not in (entries, len(imports)):
-        raise WasmError(
-            f"the import section announces {count} imports and holds {entries} entries ({len(imports)} imports)"
-        )
-    return imports
+    As the proposal reads it (`proposals/compact-import-section/Overview.md`, the decoder of its interpreter and `binary-compact-imports.wast`): the number in front counts the
+    entries (a group is one, and may hold no imports), not the imports."""
+    entries = r.vec(lambda: _import(r, types))
+    found = [item for group, _ in entries for item in group]
+    plain: bytes | None = None
+    if any(compact for _, compact in entries):
+        plain = _leb(len(found)) + b"".join(_name_bytes(imp.module) + _name_bytes(imp.name) + raw for imp, raw in found)
+    return [imp for imp, _ in found], plain
 
 
-def _import(r: _Reader, types: list[FuncType]) -> list[Import]:
+def _import(r: _Reader, types: list[FuncType]) -> tuple[list[tuple[Import, bytes]], bool]:
+    """One entry of the import section: the imports it makes, each with the bytes of its type, and whether it is a compact one.
+
+    A module name and an empty name followed by 0x7F is a module with (name, type) for each import; followed by 0x7E, a module with one type and a
+    name for each import. The byte after the empty name is not LEB128, and the empty name may be written in more bytes than one."""
     module = r.name()
     name = r.name()
+    mark = r.data[r.pos] if r.pos < r.end else None
+    if name == "" and mark == _COMPACT_EACH:
+        r.byte()
+        return r.vec(lambda: _item(r, module, r.name(), types)), True
+    if name == "" and mark == _COMPACT_KIND:
+        r.byte()
+        kind, type_, raw = _externtype(r, types)
+        return r.vec(lambda: (Import(module, r.name(), kind, type_), raw)), True
+    return [_item(r, module, name, types)], False
+
+
+def _item(r: _Reader, module: str, name: str, types: list[FuncType]) -> tuple[Import, bytes]:
+    kind, type_, raw = _externtype(r, types)
+    return Import(module, name, kind, type_), raw
+
+
+def _externtype(
+    r: _Reader, types: list[FuncType]
+) -> tuple[ExternKind, FuncType | TableType | Limits | GlobalType, bytes]:
+    """The kind of an import and its type, and the bytes they were written in."""
+    start = r.pos
     code = r.byte()
-    if name == "" and code == _COMPACT_EACH:  # a module, then for each import its name, kind and type
-        return r.vec(lambda: _described(r, module, r.name(), _kind(r), types))
-    if name == "" and code == _COMPACT_KIND:  # a module and a kind, then for each import its name and type
-        kind = _kind(r)
-        return r.vec(lambda: _described(r, module, r.name(), kind, types))
-    return [_described(r, module, name, _kind_of(r, code), types)]
-
-
-def _kind_of(r: _Reader, code: int) -> ExternKind:
     if code >= len(_KINDS):
         raise WasmError(f"unknown import kind {code} at offset {r.pos - 1}")
-    return _KINDS[code]
-
-
-def _kind(r: _Reader) -> ExternKind:
-    return _kind_of(r, r.byte())
-
-
-def _described(r: _Reader, module: str, name: str, kind: ExternKind, types: list[FuncType]) -> Import:
-    """The import of the given kind, whose type is what follows in `r`."""
+    kind = _KINDS[code]
     if kind == "func":
-        return Import(module, name, kind, _typeref(r, types))
-    if kind == "table":
-        return Import(module, name, kind, TableType(r.reftype(), r.limits()))
-    if kind == "memory":
-        return Import(module, name, kind, r.limits())
-    if kind == "global":
-        return Import(module, name, kind, _globaltype(r))
-    if r.byte() != 0x00:  # tag: an attribute byte, then the type of the exception
-        raise WasmError(f"unknown tag attribute at offset {r.pos - 1}")
-    return Import(module, name, kind, _typeref(r, types))
+        type_ = _typeref(r, types)
+    elif kind == "table":
+        type_ = TableType(r.reftype(), r.limits())
+    elif kind == "memory":
+        type_ = r.limits()
+    elif kind == "global":
+        type_ = _globaltype(r)
+    else:
+        if r.byte() != 0x00:  # tag: an attribute byte, then the type of the exception
+            raise WasmError(f"unknown tag attribute at offset {r.pos - 1}")
+        type_ = _typeref(r, types)
+    return kind, type_, r.data[start : r.pos]
+
+
+def _leb(value: int) -> bytes:
+    out = bytearray()
+    while True:
+        byte = value & 0x7F
+        value >>= 7
+        if value:
+            out.append(byte | 0x80)
+        else:
+            out.append(byte)
+            return bytes(out)
+
+
+def _name_bytes(text: str) -> bytes:
+    raw = text.encode("utf-8")
+    return _leb(len(raw)) + raw
+
+
+def expand_compact_imports(data: bytes, module: Module) -> bytes:
+    """`data`, which `module` was read from, with the import section written with ordinary imports. A module with none that are compact comes back as it is.
+
+    WABT 1.0.42 (and `main`) reads the form 0x7E and the number in front of the section differently from the proposal, so what `wasm2c` is given
+    is the module with ordinary imports, whatever the version of WABT."""
+    if module.plain_imports is None or module.import_section is None:
+        return data
+    start, end = module.import_section
+    return data[:start] + bytes([_IMPORT]) + _leb(len(module.plain_imports)) + module.plain_imports + data[end:]
 
 
 def _tag(r: _Reader, types: list[FuncType]) -> FuncType:

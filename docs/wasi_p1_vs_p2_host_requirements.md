@@ -100,6 +100,13 @@ The expectation was that CPython would be the harder one; **for the build it was
 - `unbundle` and `meld` give the same set of imports for CPython, as for git; with the repair of the C of `wasm2c` (WABT #2896) the meld module runs as the unbundled one.
 - The answer to the question does not change: **WASI 0.1 through wasmext asks nothing of the host** (the whole of a Python that runs `json`, `hashlib`, `zlib`, `decimal` is a module and a few settings), and WASI 0.2 asks for 115 imports, of which the filesystem is what `python -c` needs first.
 
+## Awaiting upstream
+
+- **meld** [#512](https://github.com/pulseengine/meld/issues/512) (closed by [#516](https://github.com/pulseengine/meld/pull/516), **not released yet**): the multi-component
+  results here (strings through adapters, the duplicated imports) were measured on meld 0.64.0. To repeat on the release that carries #516; see WASI_COMPONENTS.md.
+- **WABT** [#2896](https://github.com/WebAssembly/wabt/issues/2896) (imported function in an element segment; repaired in wasmext meanwhile) and
+  [#2897](https://github.com/WebAssembly/wabt/issues/2897) (compact imports, encoding `0x7E`; wasmext normalizes before `wasm2c`): open.
+
 ## Not done
 
 - The filesystem of WASI 0.2 in a host (22 to 28 methods); the sockets run; HTTPS; the standard library for the p2 run of CPython.

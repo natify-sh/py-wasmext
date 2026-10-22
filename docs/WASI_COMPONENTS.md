@@ -587,6 +587,12 @@ gives `[red,big]`: **the bug is reproduced** and is in meld. The fused module ca
 [#513](https://github.com/pulseengine/meld/issues/513) (their texts were not read here, so it is not said which finding each covers: the bug with `list<string>` in a returned `option<record>`, the import map that does
 not say which memory a WASI import belongs to, or both).
 
+**Awaiting upstream.** Issue [#512](https://github.com/pulseengine/meld/issues/512) is closed upstream by pull request
+[#516](https://github.com/pulseengine/meld/pull/516) (told by the owner on 2026-10-22; the text of the pull request was not read here, so the exact fix is not described). It is **not
+in a published release yet**, so everything above was measured on meld 0.64.0 and the string/`list<string>` results are expected to change. Until a release carries it: the
+"Is meld right?" row and the multi-component findings in
+[wasi_p1_vs_p2_host_requirements.md](wasi_p1_vs_p2_host_requirements.md) stand as measured on 0.64.0, and the experiment is to be repeated on the release that has #516.
+
 meld was built from source: `cargo build --release -p meld-cli` (1 min 52 s here, 1 min 49 s in the report; a binary of 5 MB). Its earlier version 0.63.0 produced **no adapter** on a hand-made provider and consumer
 (`adapters_generated: 0`; the call stayed an import) in the first page; 0.64.0 does generate `memory-copy` adapters, on the real composed components of the second report and on the minimal pair **[again]**. So the
 earlier statement is out of date and is kept here only as this line.

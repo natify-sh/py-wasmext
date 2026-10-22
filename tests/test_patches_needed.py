@@ -83,7 +83,7 @@ def test_an_imported_function_in_an_element_segment_still_has_the_wrong_offset(p
         (
             "#2895",
             "i64.const 1 i64.const 2 i64.const 3 i64.const 4 i64.add128 drop drop",
-            ("--enable-wide-arithmetic",),
+            (),
         ),
     ],
 )

@@ -80,3 +80,7 @@ The question was whether to give up `wasm2c` as the middle step and translate We
 - A middle way if the repairs of the translator grow: patch `c-writer.cc` in a build of WABT that the `wabt-package` publishes. **Not done, and `.patch` files and a vendored copy of WABT are a decision not to do now** (the owner, 2026-10-22).
 - Other roads were looked at above: LLVM (`llc`), Wasmer, `w2c2`, Cranelift/wasmtime (`.cwasm`): none keeps the autonomy and the features at once.
 - **Reasons to go back to the question:** upstream stops following the proposals that matter, the patches to `c-writer.cc` grow to dozens, or a model of the code is wanted that a patch cannot give (a register of the base of the memory per instance, a different model of the traps). A small spike (a generator for a subset of the opcodes, tested against `wasm2c` and wasmtime on the same modules) would put numbers on the cost; not done.
+
+## The interpreter of WABT (a note, 2026-10-22)
+
+`wasm-interp` is in `wabt-package`. **Measured: about 0.6% of native on CoreMark (131 iterations a second against 21,700), 160 times slower than the extension that wasmext makes**, and 40 to 70 times slower on a loop of calls; it is a reference interpreter, not an engine ([experiments/wabt_interp/](experiments/wabt_interp/README.md), with what is not clean in the measurement).

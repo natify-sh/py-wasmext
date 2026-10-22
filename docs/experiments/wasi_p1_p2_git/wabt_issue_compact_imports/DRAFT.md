@@ -37,19 +37,44 @@ proposal allows) is read as having a count where the type is, and a group with s
 
 ## Reproduction
 
-The second module of the spec test `test/core/compact-import-section/binary-compact-imports.wast` of the proposal (attached: `spec_0x7e.wasm`, 61 bytes; imports module `a` with two functions `b` and `c` of type 0 in a group of the encoding 2, after
-an empty group for module `x`):
+The second module of the spec test `test/core/compact-import-section/binary-compact-imports.wast` of the proposal, 61 bytes. It has two entries in the import section: an empty group of the encoding 2 for the module
+`x`, and a group of the encoding 2 for the module `a` with two functions, `b` and `c`, of type 0 (the same module is attached as `spec_0x7e.wasm`).
 
 ```
-00 61 73 6d 01 00 00 00 01 05 01 60 00 01 7f 02 13 02 01 78 00 7e 00 00 00 01 61 00 7e 00 00 02 01 62 01 63 03 02 01 00 07 08 01 04 74 65 73 74 00 02 0a 09 01 07 00 10 00 10 01 6a 0b
+0061736d010000000105016000017f0213020178007e0000000161007e0000020162016303020100070801047465737400020a09010700100010016a0b
+```
+
+taken apart:
+
+```
+00 61 73 6d 01 00 00 00             ;; magic, version
+01 05 01 60 00 01 7f                ;; type section: (type (func (result i32)))
+02 13                               ;; import section, 0x13 bytes
+   02                               ;;   2 entries
+   01 78  00  7e                    ;;     "x", "" (the empty name), 0x7E: the encoding 2
+   00 00                            ;;       the externtype: kind 0 (func), type 0
+   00                               ;;       0 names
+   01 61  00  7e                    ;;     "a", "", 0x7E
+   00 00                            ;;       the externtype: (func (type 0))
+   02  01 62  01 63                 ;;       2 names: "b", "c"
+03 02 01 00                         ;; function section: one function, of type 0
+07 08 01 04 74 65 73 74 00 02       ;; export "test" (func 2)
+0a 09 01 07 00 10 00 10 01 6a 0b    ;; code: call 0, call 1, i32.add
+```
+
+In the text format of the proposal that is `(import "a" (item "b" (func (type 0))) ...)` for the encoding 1 and `(import "a" (item "b") (item "c") ...)` for the encoding 2; WABT does not read that text yet, so the binary is
+the thing to use. To make the file:
+
+```sh
+python3 -c "import sys; sys.stdout.buffer.write(bytes.fromhex('0061736d010000000105016000017f0213020178007e0000000161007e0000020162016303020100070801047465737400020a09010700100010016a0b'))" > spec_0x7e.wasm
+wasm-validate --enable-compact-imports spec_0x7e.wasm
 ```
 
 ```
-$ wasm-validate --enable-compact-imports spec_0x7e.wasm
 0000023: error: unfinished section (expected end: 0x24)
 ```
 
-(`wasm2c --enable-compact-imports` gives the same.) The first module of that file, in the encoding 0x7F (`spec_0x7f.wasm`), is read correctly.
+(`wasm2c --enable-compact-imports spec_0x7e.wasm` gives the same.) The first module of that file, in the encoding 0x7F, is read correctly.
 
 ## Expected
 

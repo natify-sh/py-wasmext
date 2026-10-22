@@ -42,6 +42,15 @@ The closing is **hard**: after it every member (instances, tables, `Function`s) 
 
 A close must not free what a running call uses. The context counts its **active calls** (the entry that guards a reentrant call is the place); `close` from inside a call, or while another thread is in one, is refused (or waits: not settled). A call into a closed member is an error, never a crash.
 
+**The counter of active calls: how it is kept (a proposal from the measurements, not decided).** `close` must know whether a call is in flight. The measurements ([experiments/context_bench/](experiments/context_bench/)) say where the counter must *not* be: one counter per context, or one per instance that several threads call, is a cache line the cores fight over (about 300 ns per call on 4 threads against 25-35 ns). So:
+
+- the counter is **split by thread**: a few counters in the instance, each on a cache line of its own, a thread using the one its id selects; a call adds one to its line, then **reads a `closing` flag** (read by all, written only by `close`, so it stays shared and cheap); if the flag is up it takes the one back and fails with "closed";
+- `close` **raises the flag first, then adds up the counters of all members** (the registry has the list); if the sum is not zero a call is in flight and `close` refuses (the answer to open question 1, if refusing is chosen). The cost is on `close`, which is rare, and not on the calls, which are many;
+- the order matters and is the whole proof: a call does *add, then read the flag*, `close` does *raise the flag, then read the counters*, both with sequentially consistent operations (on x86 a `lock`ed add is a full barrier; on ARM an explicit barrier), so either the call sees the flag or `close` sees the call;
+- a `close` made **from inside a call** sees its own thread's count above zero and refuses, so it cannot wait for itself;
+- where there is one thread at a time (the GIL), a plain counter and a plain check are enough (1.5 ns); the atomic form is for builds without the GIL and for C hosts with threads, one macro as `WASMEXT_LOCK`;
+- not measured: the cost of the sum with many members, of choosing the line by thread id, and the barrier on ARM.
+
 **Several contexts and the order of closing.** Contexts can be connected only through the host (a callback, a queue): what passes is data (numbers, bytes, copies), never a `Function` or a `Table`. A Python object may be given as an `externref` to both contexts: it is a host object, each context keeps it. Nested `with` closes the inner first; the right order is to close first the context whose callbacks *call into* the other, so that is the one to nest inside. For callbacks both ways no order is right. So the order lowers the number of errors, and the safety is the hard close with the flag and the counter. `contextlib.ExitStack` serves a set of contexts that is not known in advance.
 
 ## The public interface, and what is inside
@@ -120,10 +129,10 @@ A micro-benchmark in C (mutex plus hash lookup by pointer, one thread and severa
 
 ## Open questions
 
-1. Whether `close` from inside a call, or in another thread's call, **refuses or waits**, and how a refusal is told (an exception in Python, a code in C and in the wrapper for ctypes).
+1. Whether `close` from inside a call, or in another thread's call, **refuses or waits**, and how a refusal is told (the counter above works for refusing; waiting needs a way to be woken, and from inside a call it can only refuse) (an exception in Python, a code in C and in the wrapper for ctypes).
 2. **The traps** (`wasmext_traps`, `share_tables`): outside the context as of now; whether making a member in a context checks that the module was built with the handler is not settled.
 3. **The tags**: not designed.
 4. The names of the functions and of the class; the signature (`context=` as a keyword only); whether a module-level default context exists (no, as of now).
 5. The API of a library (`<name>_api.h`) and of the executable for the context; `WASMEXT_ABI` and the fingerprint (`tests/test_abi.py`) for the header of the context.
 6. The lazy collector: when it runs, how Python objects and `externref`s are edges, the cost of scanning big tables.
-7. The cost of the active-call counter and of the "closed" check on every call (to measure).
+7. The cost of the active-call counter and of the "closed" check on every call: **measured in C** (see Overhead: 4-12 ns per thread on a 23 ns call); **not measured with Python** (the GIL, the switch interval of threads, a free-threaded build with `Py_MOD_GIL_NOT_USED`, which wasmext does not declare yet and so has never run without the GIL).

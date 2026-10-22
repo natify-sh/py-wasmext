@@ -53,3 +53,26 @@ covered by the host of `wasi2_python` except UDP and the server side of TCP**; t
 wasmext's WASI 0.1 (`wasi_core.h`, 1990 lines in C inside the module) answers `wasi_snapshot_preview1` in C (the study counted 42 of the 46 calls the programs made) and asks the host for none; WASI 0.2 asks the host for **137 imports for a command** (200 with `http`).
 Same programs, same results ([wasi_p1_vs_p2_host_requirements.md](wasi_p1_vs_p2_host_requirements.md)). A host of 0.2 inside the module would be a work of the size of `wasi_core.h` plus the canonical ABI
 (strings, lists, results through memory, resources as handles).
+
+## The layout of a host of WASI 0.2 in C (a plan, 2026-10-22; nothing of it is built)
+
+Decided in the discussion (the owner's constraint stays: a host of 0.2 is an example, not a part of wasmext, until it is decided otherwise):
+
+- **Like `wasi_core.h` of 0.1, one file per package, header-only, every function `static`**, so that the compiler drops what a module does not use. `wasi_core.h` is 1990 lines for the 46 calls of 0.1 on three systems; 137 imports of the command world are estimated at **4 to 6 thousand lines** of C (an estimate from the sizes of the Python hosts in `examples/`, 293 + 442 + 121 lines for 69 imports; not measured).
+- **No `#define` for the choice of a function or a package.** The defines stay what they are in 0.1: the system and the backend of files (`_WIN32`, `WASMEXT_WASI_PYTHON_FS`). **The choice is made by the generator, from the names of the imports of the module** (`wasi:cli/stdout@0.2.12` and so on), as for 0.1 it is made from `wasi_snapshot_preview1` / `wasi_unstable`; it includes the files of the packages that appear and the ones they need. A version `@0.2.x` is matched by its prefix, so that a host works with `0.2.6` and with `0.2.12`.
+- **The files** (prefix `wasi_p2_`, so that no name meets `wasi_core.h`; each includes what it needs and has a guard):
+
+| File | What | Includes |
+| --- | --- | --- |
+| `wasi_p2_core.h` | the state of the host, the **one table of resources** (streams are used by cli, filesystem and sockets), the helpers of the canonical ABI (strings, lists, records, variants, option, result, flags, resources) | |
+| `wasi_p2_io.h` | streams, poll, error | core |
+| `wasi_p2_clocks.h`, `wasi_p2_random.h` | clocks, random | core |
+| `wasi_p2_cli.h` | stdin, stdout, stderr, environment, exit, terminals | io |
+| `wasi_p2_filesystem.h` | filesystem | io, clocks |
+| `wasi_p2_sockets.h` | sockets (Winsock on Windows: `-lws2_32`), the part that is not implemented answers "not implemented: name" | io, clocks |
+
+- **`http` is not in the first round** (63 imports of the world `wasi:http/proxy`, not of `command`; none of the four programs asked for one): a file `wasi_p2_http.h`, included only when the module imports `wasi:http/...`, if a component of Rust or JavaScript has to be run.
+- **Names** carry the interface (`wasi_cli_stdout_get_stdout`): `get-stdout` and similar names repeat in the interfaces, which in 0.1 they did not.
+- **What the module asks for is the check:** an import that the host has no function for becomes a function that traps with "not implemented: <name>", and the build says it; the list of the requirements of a module (21 imports for the simple pair, 42 for the complex one) is the test.
+- **Several memories** (a module fused by meld has one for each component): the call of an import takes the memory and the `cabi_realloc` of its component, which the import map of meld 0.65 states (`"version": 2`); the host of 0.1 is bound to one memory.
+- **The types of WIT** are not in the fused core module (it has flat `i32`); they come from `wasm-tools component wit --json` of the source component. A generator of the glue from the official WIT (a script in the repository, its result committed) was suggested for the repetitive lifting and lowering, **once, not for each module**; the bodies (what `path_open` does) are written by hand and some of them can use the backend of 0.1.

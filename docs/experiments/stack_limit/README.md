@@ -14,12 +14,15 @@ How a wasm2c module learns that the native stack is about to run out. Three ways
 
 | Build | executable (ms) | shared library (ms), as an extension is |
 | --- | ---: | ---: |
-| guard | 14.2-20.0 | 15.6-20.9 |
-| depth | 28.6-30.8 (**2x**) | 52.5-65.2 (**3.4x**) |
-| sp | 18.5-21.2 (1.3x) | 29.3-34.7 with the default TLS model (1.9x) |
-| sp, `-ftls-model=initial-exec` | | **16.5-21.2 (1.06x)** |
+| guard | 14.2-20.0 | 15.6-20.9 (16.0-16.7 in the later run) |
+| depth | 28.6-30.8 (**2x**) | 52.2-65.2 (**3.3x**) |
+| sp | 18.5-21.2 (1.3x) | 29.3-34.7 with the default TLS model, `global-dynamic` (**1.8x**) |
+| sp, `-mtls-dialect=gnu2` (TLS descriptors) | | 22.6-23.7 (1.4x); glibc and aarch64 only, not every libc loads it |
+| sp, `-ftls-model=initial-exec` | | 15.9-18.8 (**1.0x**), **but it cannot be used, see below** |
 
 The thread-local limit is the cost: in a shared library the default model reaches it through `__tls_get_addr` (a call) in each function. With `initial-exec` it is one load from the thread pointer. The counter of `depth` pays the same for its variable, and pays the epilogue besides.
+
+**`initial-exec` does not survive the real thing.** A shared library with one `initial-exec` access needs the *whole thread-local block of the module* in the static TLS of the process (the limit, `g_wasm_rt_jmp_buf` and the rest, a few hundred bytes), and glibc keeps a surplus of about 1.6 KiB for libraries opened by `dlopen`. In the suite of wasmext, which loads hundreds of modules in one process, the first dozens loaded and the next ones failed with `ImportError: cannot allocate memory in static TLS block`. A few plugins would work, many would not, and the failure is at the import. So the integrated build uses the default model and pays the 1.8x on a program that is all calls; the other costs of the three ways are in the table above.
 
 Behaviour (`./guard`, `./depth`, `./sp`; recursion until the stack runs out, in the main thread and in a thread with a 512 KiB stack):
 

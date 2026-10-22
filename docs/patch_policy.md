@@ -2,7 +2,7 @@
 
 wasmext does not carry a copy of WABT. It takes `wasm2c` and its runtime from the `wabt-package` and changes what it needs on the way, in three ways: a **wrapper** of a runtime file
 (`_RUNTIME_WRAPPERS` in `src/wasmext/_natify.py`: a macro, an `#include` around the original), a **repair of the generated C** (a regular expression, as `_TAIL_CALL_LOCALS` and
-`_MSVC_ADDCARRY`), and **macros and flags on the command line** (`WASMEXT_CHAIN`, `WASM_RT_USE_MMAP`, `-z now`). All of them are patches, and WABT moves slowly and without
+`_MSVC_ADDCARRY`), and **macros and flags on the command line** (`WASMEXT_CHAIN`, `WASMEXT_STACK_LIMIT`, `WASM_RT_USE_MMAP`, `-z now`). All of them are patches, and WABT moves slowly and without
 warning, so they follow the same policy. (No `.patch` files and no vendored copy of WABT for now: that is a decision, not an omission.)
 
 1. **Small and exact.** One patch, one cause. It changes the least that the cause needs, and nothing for "while we are here".
@@ -19,3 +19,5 @@ warning, so they follow the same policy. (No `.patch` files and no vendored copy
 
 `tests/test_patches_needed.py` is rule 4 in action: it gives the plain `wasm2c` a small module for each defect (#2884, #2885, #2893, #2896, and the aborts of #2886 and #2895) and says that the defect is still in
 its output. When a release of WABT fixes one, its test fails with what to take away. Not covered: the compact imports of #2897 (the module has to be written in the form the proposal and WABT disagree on).
+
+The patches of the signals and of the stack (`WASMEXT_CHAIN`, `WASMEXT_STACK_LIMIT`, `_stack_limit_prologue`) are in `0.0.1a2` and are alpha: they are patches by this policy, and not a promise of a stable interface until there is a stable version.

@@ -716,11 +716,18 @@ def test_a_wasm2c_that_writes_the_element_segments_another_way_is_left_alone() -
     assert _repair_imported_elements([b"int main(void) { return 0; }\n"]) == [b"int main(void) { return 0; }\n"]
 
 
+_SIGNAL_MACROS = [
+    ("WASMEXT_CHAIN", "1"),
+    ("WASMEXT_STACK_LIMIT", "1"),
+    ("WASM_RT_NONCONFORMING_UNCHECKED_STACK_EXHAUSTION", "1"),
+]
+
+
 @pytest.mark.parametrize(
     ("platform", "macros", "link"),
     [
-        ("linux-x86_64", [("WASMEXT_CHAIN", "1")], ["-Wl,-z,now"]),
-        ("macosx-14.0-arm64", [("WASMEXT_CHAIN", "1")], []),
+        ("linux-x86_64", _SIGNAL_MACROS, ["-Wl,-z,now"]),
+        ("macosx-14.0-arm64", _SIGNAL_MACROS, []),
         ("win-amd64", [], []),
         ("win-arm64", [], []),
         ("emscripten-4.0.9-wasm32", [], []),  # wasm-ld does not know `-z now`, and there are no such signals
@@ -731,10 +738,23 @@ def test_the_chain_of_signal_handlers_is_for_the_target_that_has_signals(
 ) -> None:
     import sysconfig
 
-    from wasmext._natify import chain_build_flags
+    from wasmext._natify import signal_build_flags
 
     monkeypatch.setattr(sysconfig, "get_platform", lambda: platform)
     if os.name == "nt":  # a Windows host never has it, whatever it builds for
-        assert chain_build_flags() == ([], [])
+        assert signal_build_flags() == ([], [])
     else:
-        assert chain_build_flags() == (macros, link)
+        assert signal_build_flags() == (macros, link)
+
+
+def test_the_guard_page_can_be_asked_for_instead_of_the_check_of_the_stack(monkeypatch: pytest.MonkeyPatch) -> None:
+    import sysconfig
+
+    from wasmext._natify import signal_build_flags
+
+    if os.name == "nt":
+        pytest.skip("Windows has neither")
+    monkeypatch.setattr(sysconfig, "get_platform", lambda: "linux-x86_64")
+    monkeypatch.setenv("WASMEXT_STACK_CHECK", "guard")
+    macros, link = signal_build_flags()
+    assert macros == [("WASMEXT_CHAIN", "1")] and link == ["-Wl,-z,now"]

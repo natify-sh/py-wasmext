@@ -109,3 +109,41 @@ def test_a_stack_overflow_in_the_thread_that_imported_the_module_is_a_trap(threa
         "the importing thread",
     )
     assert "importing thread: True" in out, out
+
+
+_SMALL_STACK = """
+import sys, threading
+sys.path.insert(0, {path!r})
+import {mod}
+threading.stack_size(512 * 1024)
+out = []
+
+def go():
+    inst = {mod}.Instance()
+    try:
+        inst.rec()
+    except {mod}.Trap as exc:
+        out.append(str(exc))
+
+t = threading.Thread(target=go)
+t.start()
+t.join()
+main = {mod}.Instance()
+try:
+    main.rec()
+except {mod}.Trap as exc:
+    out.append(str(exc))
+print("messages:", out)
+"""
+
+
+def test_a_stack_overflow_is_called_so_in_a_thread_with_a_small_stack_and_in_the_main_thread(
+    threads_mod: ModuleType,
+) -> None:
+    """The handler of the guard page would call an overflow in a thread other than the main one an out-of-bounds access; the check of the stack pointer says what it is."""
+    assert threads_mod.__file__ is not None
+    out = _run(
+        _SMALL_STACK.format(path=str(Path(threads_mod.__file__).parent), mod=threads_mod.__name__), "small stack"
+    )
+    line = next(row for row in out.splitlines() if row.startswith("messages:"))
+    assert line.lower().count("stack") == 2 and "out-of-bounds" not in line.lower(), line

@@ -26,6 +26,7 @@ from wasmext._natify import (
     _export_tags,  # pyright: ignore[reportPrivateUsage]
     _repair_imported_elements,  # pyright: ignore[reportPrivateUsage]
     _repair_tail_calls,  # pyright: ignore[reportPrivateUsage]
+    _stack_limit_prologue,  # pyright: ignore[reportPrivateUsage]
 )
 
 # the free-threaded build has no abi3 (3.15 has abi3t, which wasmext does not build: cibuildwheel does not tag it yet): there the extension is native
@@ -111,7 +112,10 @@ def build_extension(wabt: Path, tmp_path_factory: pytest.TempPathFactory) -> Cal
         )
         w2c = out / f"{name}_w2c.c"
         w2c.write_bytes(
-            _export_tags(_repair_tail_calls(_repair_imported_elements([w2c.read_bytes()])[0]), module_prefix(name))
+            _export_tags(
+                _repair_tail_calls(_stack_limit_prologue(_repair_imported_elements([w2c.read_bytes()])[0])),
+                module_prefix(name),
+            )
         )  # the repairs that natify() makes
         runtime = wabt / "wasm2c"
         if by_setuptools:
@@ -134,7 +138,12 @@ def build_extension(wabt: Path, tmp_path_factory: pytest.TempPathFactory) -> Cal
                 _RUNTIME_WRAPPERS["impl"].replace("#include <wasm-rt-impl.c>", '#include "wasm-rt-impl.c"'),
                 encoding="utf-8",
             )
-            extra = [*extra, "-DWASMEXT_CHAIN=1"]
+            extra = [
+                *extra,
+                "-DWASMEXT_CHAIN=1",
+                "-DWASMEXT_STACK_LIMIT=1",
+                "-DWASM_RT_NONCONFORMING_UNCHECKED_STACK_EXHAUSTION=1",
+            ]
         link_extra = ["-Wl,-z,now"] if chain and sys.platform.startswith("linux") else []
         glue_object = out / f"{name}_py.o"
         # The glue is ours, so it is built strictly: GCC 14 makes these errors (older ones warn), and the manylinux and

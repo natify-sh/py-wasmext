@@ -350,6 +350,9 @@ def generate_shared(
         C("    }")
     C("    if (!api_ready) {")
     C("        wasm_rt_init();")
+    C("#ifdef WASMEXT_STACK_LIMIT")
+    C("        wasmext_stack_limit_init_();  /* this thread's limit of the stack (wasmext_glue.h) */")
+    C("#endif")
     C(
         "#ifdef WASMEXT_CHAIN  /* the runtime installs no handler of signals; this library installs a link of a chain (wasmext_glue.h), once */"
     )

@@ -1,0 +1,29 @@
+1. lookup of the owner by pointer (ns per lookup, wall time per thread's iterations)
+members   threads  contexts    no lock     mutex    rwlock
+10        1        one             4.0      24.7      24.4
+10        2        one             3.7     171.4     157.8
+10        2        each            4.7      23.0      24.9
+10        4        one             4.9     305.7     396.1
+10        4        each            5.1      59.9      29.3
+1000      1        one            10.0      21.5      29.2
+1000      2        one            12.2     198.3     152.3
+1000      2        each           10.9      25.2      29.7
+1000      4        one            11.6     398.5     348.2
+1000      4        each           11.5      26.5      29.0
+100000    1        one            17.2      31.0      31.1
+100000    2        one            19.1     221.2     173.8
+100000    2        each           18.3      29.4      31.6
+100000    4        one            18.3     484.4     388.8
+100000    4        each           22.9      45.6      48.3
+1000000   1        one            37.2     106.5      86.5
+1000000   2        one            37.6     697.5     201.3
+1000000   2        each           42.7     266.6      75.4
+1000000   4        one            33.5     945.6     383.2
+1000000   4        each           43.6      94.0     112.5
+
+2. the entry of a call (ns per call)
+                                1 thread 4 threads
+bare indirect call                  3.09   same counter 3.59, own counter 3.32
+plain counter + check (GIL)         4.54 (racy; not run)
+atomic seq_cst counter + check     16.21   same counter 221.78, own counter 24.55
+atomic acq/rel counter + check     18.11   same counter 229.18, own counter 19.13

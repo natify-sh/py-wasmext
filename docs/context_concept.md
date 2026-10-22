@@ -81,7 +81,11 @@ A target with no threads (a CPython built without them, some embedded ones) must
 
 The stack of entries for traps (`wasmext_traps`) is thread-local for a different reason and is not part of the context: a trap jumps to the innermost entry of the call chain **of this thread**, and each thread has its own C stack; wasm2c itself keeps its call depth and the active exception thread-local.
 
-## Overhead (not measured)
+## Overhead
+
+**Measured as a C micro-benchmark** (`docs/experiments/context_bench/`, one machine, two runs; the lines below are the estimates written before, kept for the record, and the results are in the README there): a lock costs 15-20 ns per lookup, one lock under 4 threads 300-950 ns; a plain counter + check 1.5 ns per call, an atomic counter 12-14 ns, and one atomic counter shared by 4 threads about 220 ns (a counter per member: 19-29 ns). So the counter of active calls should not be one atomic per context on the hot path, and the registry can be read lock-free because members never leave.
+
+Estimates written before the measurement:
 
 - a call into wasm: none from the registry; the active-call counter and the "closed" check are new (a counter in the entry that exists, a predictable branch; to measure);
 - making or closing a context, adding a member: rare, microseconds;

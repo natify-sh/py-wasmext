@@ -127,6 +127,8 @@ of different versions (small: the signals, the stacks), and a thread that runs s
 (`WASMEXT_MAX_RUNTIMES`) and its `enter`/`leave` loop over all of them on every call. A **lighter variant for modules that share no tables** (push and pop of the entry with no loop, the unwind target set for the module's own runtime only, two functions added at the end of `wasmext_traps`) and a **fall-back to the
 autonomous behaviour instead of `ImportError`** when the capsule is not compatible would be needed. Not built; it touches the ABI of the record of traps. (The thread capsule of the Python layer is another thing, for another problem: setting up and giving back the alternate stack of each thread.)
 
+**A larger alternative, possibly better and not investigated: master and slave, the whole runtime through the capsule** (one module publishes its runtime, a module that finds a compatible one attaches to it, any other works on its own): [shared_runtime_concept.md](shared_runtime_concept.md), with what has to be found out before anything is built.
+
 Open: how modules built apart find the record in a C host with no Python (an explicit pointer, or none), subinterpreters (the handler is of the process, a capsule is of the interpreter), and Windows (vectored handlers: each module adds its own).
 
 ## Taken from, and not taken from, other runtimes

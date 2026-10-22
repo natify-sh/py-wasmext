@@ -272,7 +272,7 @@ finishing**: not practical as it is. `lua.wasm` (329 KB) takes 44 seconds. For a
 - **Two modules in one process: a trap that comes from a signal works only in the module imported last.** Every runtime of wasm2c (each module has its own copy) installs the handler of SIGSEGV/SIGBUS with `sigaction` at `wasm_rt_init`,
   without chaining to the one before, so the handler of the process is the one of the last module imported; it raises the trap of **its** runtime, which is not the entry of the call that runs in the other module, and the process aborts (SIGABRT, exit 134). Found 2026-10-22 with two copies
   of one module (`tests/test_two_modules.py`, `xfail(strict)`): an access past the guard pages and a stack overflow in the module imported first abort; `unreachable` (no signal) and the last module are fine. Modules that **share tables** are not affected: they share one stack of
-  entries for traps (`wasmext_traps`). Not fixed; the way out is one handler for the process that goes to the entry of the current thread, as `wasmext_traps` does for the sharing modules, extended to all modules (see "A record of the process" in [context_concept.md](context_concept.md)).
+  entries for traps (`wasmext_traps`). Not fixed; the way out is one handler for the process that goes to the entry of the current thread, as `wasmext_traps` does for the sharing modules, extended to all modules (see "A record of the process" in [context_concept.md](context_concept.md), and the alternative of one shared runtime in [shared_runtime_concept.md](shared_runtime_concept.md)).
 - Attributes and methods of `Instance` take the names of the exports; a name that is not an identifier is reachable with `getattr`.
 
 ## What is open

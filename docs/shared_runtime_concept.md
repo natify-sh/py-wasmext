@@ -1,0 +1,64 @@
+# One runtime for modules built apart: master and slave (an alternative, to be investigated)
+
+Status: **an idea that may turn out better than the others, not investigated, not decided, nothing built.** Written 2026-10-22 after the finding that two autonomous modules in one process disagree about the one handler of signals
+([where_we_stopped_2026-10-22.md](where_we_stopped_2026-10-22.md), "Found and not solved"; `tests/test_two_modules.py`). How a fact is known: **[run]** run here, **[read]** read in sources (WABT `0086e24`, this repository), **[estimate]** a judgement.
+The first thing to do with it is **to find out whether it is possible at all**; the list of what to find out is below, and nothing should be built before it is answered.
+
+## The idea
+
+Every module has a **copy of the runtime of wasm2c** compiled into it (`wasm-rt-impl.c` and the others), and each copy acts as if it were the only one: it installs its own handler of signals, keeps its own thread-local state, and knows nothing of the others. That is the autonomy of a module,
+and the cause of the trouble where modules meet in one process.
+
+The alternative: **one module is the master and the others are slaves.** The module that loads first publishes its runtime through a capsule (a versioned record with a table of functions and the layout fingerprint, as `wasmext_traps` already does for the stack of entries). A module that loads later **looks
+for that capsule and, if the runtime in it is the same one as its own (same layout, same version of the contract), attaches to it**: it calls the master's functions instead of its own. If there is no capsule, or the runtime is not the same, it runs **on its own runtime**, as today. So the modules stay autonomous: nothing is installed, any module works alone, and
+sharing happens only when it can, and only between modules that agree. The context ([context_concept.md](context_concept.md)) stays what it is (who may exchange references, who keeps whom alive); this is about the state of the runtime.
+
+## What it would give, if it works
+
+- one handler of signals, one setup of the alternate stack for a thread (the thread capsule would move into the master), one stack of entries for traps: the abort in the module imported first goes away, and a thread that runs several modules leaves no stack behind;
+- no per-copy list of unwind targets, so **no limit of 64 modules and no loop over all of them on every call** (the cost of `--share-tables` for every module) **[read]**: with one copy of the state, there is nothing to keep in step;
+- a place for the **tags** of exceptions, which are not linked at all now: one registry for the modules that share the runtime;
+- a smaller surface than "a runtime as a DLL": the host installs nothing, and a module without a master is still complete.
+
+## What it is not
+
+Not a runtime library that the user has to install (that was refused for good reasons: wheels built apart, `auditwheel` and `delocate` give each wheel a copy of what it links), and not a change of what a module is: the code of the runtime is **still in every module**, only one copy of it is used when they agree.
+
+## The options side by side
+
+| | What | Cost | State |
+| --- | --- | --- | --- |
+| A | leave it: a known gap | none; a trap by a signal aborts in all but the last module | now (`FEATURES.md`, "Known gaps") |
+| B | the stack of entries of `wasmext_traps` for all modules, with a lighter `push`/`pop` for those that share no tables and a fall-back to working alone | two functions added at the end of the record; the fall-back must be written | checked that the full form works with `--share-tables` **[run]**; not built |
+| C | a small **record of the process** (handler, alternate stacks, stack of entries) found through a capsule | one record more in the contract | idea ([context_concept.md](context_concept.md)) |
+| **D** | **master and slave: the whole runtime through a capsule** (this page) | **the largest: every `wasm_rt_*` the generated code uses goes through a table when attached** | **to investigate** |
+| E | `WASM_RT_SKIP_SIGNAL_RECOVERY` in every copy and one handler of ours | a handler of our own; the thread-local state per copy is still not shared | not tried |
+| F | no handler at all: `WASM_RT_STACK_DEPTH_COUNT` and bounds checks | about 4 times slower on calls inside a module; a limit counted in frames **[run]** | measured for the stack ([experiments/free_threading/](experiments/free_threading/)) |
+
+B, C and E are steps on the way to D, or smaller answers to the same wound. D is **possibly the best** because it also gives one registry for tags and a single place for the state; it is also the one most likely to turn out impossible or too costly, which is why it comes first in the list of things to find out.
+
+## What has to be found out (in this order)
+
+1. **The surface of the runtime that the generated code touches.** From one small module **[run]**: the C of `wasm2c` and the glue use `wasm_rt_init`, `wasm_rt_init_thread`, `wasm_rt_free_thread`, `wasm_rt_is_initialized`, `wasm_rt_allocate_memory`, `wasm_rt_free_memory`, `wasm_rt_allocate_funcref_table`,
+   `wasm_rt_free_funcref_table`, `wasm_rt_trap`, `wasm_rt_strerror`, and, **by name, as variables**, `wasm_rt_call_stack_depth`, `wasm_rt_last_segment_val` and (through the macros of the memory) `wasm_rt_fsgsbase_inst_supported` and the segue base. More appear with other features (grow, externref tables, exceptions:
+   `wasm_rt_load_exception`, `wasm_rt_exception_tag`, `wasm_rt_set_unwind_target`, shared memories, the tags). To do: **make the full list for the biggest module and for each feature**, and for each name say whether it is a function that can be redirected by a macro or a variable that cannot.
+2. **The thread-local state.** `g_wasm_rt_jmp_buf`, `wasm_rt_call_stack_depth`, `wasm_rt_last_segment_val` are `WASM_RT_THREAD_LOCAL` variables **read and written directly by generated code and macros**; `g_unwind_target` and `g_active_exception*` are static in the exceptions file. A slave cannot reach the master's thread-local variable by name (each shared object has its own).
+   Ways to look at: an accessor function of the master that returns the address (a call on every entry), a copy kept in step by the master (what the loop of unwind targets does, which is the cost to avoid), or a rule that these stay per copy and only the entry is shared. **The answer decides whether D is possible with a good speed.**
+3. **Whether the layout is the same.** Both sides must agree on `wasm_rt_memory_t`, `wasm_rt_funcref_t`, the tables, `wasm_rt_jmp_buf`, the tags, and on every macro that changes them or the behaviour (`WASM_RT_USE_MMAP`, `WASM_RT_MEMCHECK_*`, the way the stack is checked, `WASM_RT_USE_SEGUE`, `WASM_RT_TRAP_HANDLER`, the build of the glue with `-DWASMEXT_*`).
+   wasmext has a fingerprint of the runtime (`WASMEXT_RUNTIME`) and a layout check (`WASMEXT_LAYOUT`); to do: **read what they cover and what they do not** (the file `wasm-rt-impl.c` itself, the version of `wabt-package`, the flags a user puts in `CFLAGS`, as the experiments here did).
+4. **What travels in the capsule.** A record with its size and version, the fingerprint of the runtime, and a table of functions that **grows only at its end** (as `wasmext_export` and `wasmext_traps` do); where it is kept (the dict of the interpreter state, as the stack of traps is; a process-wide place is not reachable from Python without a shared symbol); who writes it **and how two modules that import at the same moment in two threads
+   agree on who is the master** (a free-threaded build, or the GIL released during an import); what keeps the master alive (a slave holds a reference to the master's module, or to the capsule that holds it); what happens in a subinterpreter (the handler is of the process, the capsule is of the interpreter); the order of the imports (the master is whoever came first, so what the user sees depends on the order: how is that told).
+5. **Signals.** Only the master installs the handler; a slave must not install its own (it would call `wasm_rt_init` of its own copy: the attached path must skip it). To check: that the handler of the master finds the entry of the current call of **any** module (the stack of entries), that SIGBUS on macOS, `sigsetjmp` with the mask (`WASMEXT_TRY`), the alternate stack and the guard pages behave as with one module,
+   and what Windows does (a vectored handler for each module).
+6. **Fall-back and the report to the user.** A slave that cannot attach (another runtime, another version) works alone and **keeps the known bug**; to decide how that is told (a warning at the import? an attribute of the module that says whose runtime it runs on?), so that the behaviour is not a silent function of the order of imports.
+7. **Tags and exceptions.** Whether one registry of tags is really possible on top of the runtime (the tags are static data of the module and the glue adds a table of them: `wasmext_tags_*`), and what an exception that crosses from one module to another needs (the unwind target of the other copy).
+8. **The cost.** To measure with the benchmarks that exist ([experiments/context_bench/](experiments/context_bench/): a call through the library 23 ns; [experiments/free_threading/](experiments/free_threading/)): the entry and the exit through a table, the access to a thread-local variable of the master, the calls that are not on the hot path (allocation, growth, free); an estimate **[estimate]**: memory accesses are inline and do not call the runtime, so the hot path should not change, but the entry
+   of every call does.
+9. **The other products.** The shared library, the program and the wrapper for ctypes: a C host has no capsule, so the pointer has to be passed by the host (`<name>_traps_use` is the existing form); the program has one thread and one module. To decide what D means for them (probably nothing, or the same explicit pointer).
+10. **The test plan, before any code:** two and many modules in one process, in every order of import; modules built with different flags and with another `wabt-package`; concurrent imports; a thread that runs several modules; a trap by signal in each; the mismatch fall-back; the sanitizers ([.github/workflows/sanitizers.yml](../.github/workflows/sanitizers.yml)); `tests/test_two_modules.py` is the first test and is `xfail(strict)` today.
+11. **What WABT could do** that would make this simpler or unnecessary (a vtable for the runtime, a chain to the previous handler, a recognition of the memories of one runtime by address): a proposal for the upstream is to be drafted **after** it is known which of A-F works here, as the owner asked.
+
+## How to choose
+
+If 1 and 2 show that the thread-local state can be reached cheaply (or can stay per copy with only the entry shared), D is possible and is likely the best answer to the whole class of problems (signals, stacks, threads, tags). If not, **B** (the light entry on the existing stack of traps, with a fall-back) is the smaller answer to the wound that hurts now, and D stays an idea. Either way
+the thread capsule of the Python layer stays: it sets up and gives back the alternate stack of a thread, which any of these needs.

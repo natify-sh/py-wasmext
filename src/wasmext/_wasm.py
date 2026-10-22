@@ -639,7 +639,7 @@ def _name_bytes(text: str) -> bytes:
 def expand_compact_imports(data: bytes, module: Module) -> bytes:
     """`data`, which `module` was read from, with the import section written with ordinary imports. A module with none that are compact comes back as it is.
 
-    WABT 1.0.42 (and `main`) reads the form 0x7E and the number in front of the section differently from the proposal, so what `wasm2c` is given
+    WABT 1.0.42 (and `main`) reads the form 0x7E differently from the proposal (reported: WABT #2897), and 1.0.42 the number in front of the section too, so what `wasm2c` is given
     is the module with ordinary imports, whatever the version of WABT."""
     if module.plain_imports is None or module.import_section is None:
         return data

@@ -9,6 +9,9 @@ a neighbouring session on the component model (experiments A to D, "the first re
 report"). Their data is kept; what was repeated and what changed is told in "Corrections" at the end. **The code of the experiments** is in [experiments/](experiments/): `component_model/`
 (first report), `jco_zwasm/` (second report), `wasi_checks/` (the checks of 2026-10-21).
 
+A later study, with the same program built for WASI 0.1 and 0.2 and used in three ways (a 0.1 module, `unbundle`, `meld fuse`), with the numbers of imports that a host has to give and the shims that the build
+needed, is in [wasi_p1_vs_p2_host_requirements.md](wasi_p1_vs_p2_host_requirements.md).
+
 ## How to read the marks
 
 Every finding says how it is known, because the results depend on the tools and the machine:

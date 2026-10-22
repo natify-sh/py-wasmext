@@ -53,11 +53,11 @@ wasmext = "wasmext._setuptools:finalize_distribution_options"
 
 [tool.setuptools]
 package-dir = { "" = "src" }
-packages = ["wasmext"]
+packages = ["wasmext", "wasmext.p2"]
 py-modules = ["wasmimport"]
 
 [tool.setuptools.package-data]
-wasmext = ["py.typed", "c/*.h"]
+wasmext = ["py.typed", "c/*.h", "c/p2/*.h"]
 
 [tool.setuptools_scm]
 root = "."

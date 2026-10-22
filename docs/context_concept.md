@@ -112,6 +112,19 @@ A micro-benchmark in C (mutex plus hash lookup by pointer, one thread and severa
 - no implicit sharing: what is shared is in the same `with`;
 - the keep-alive chains of today become one case of the context (a rewrite of part of steps 3b to 7 of TABLES_PLAN.md: not small).
 
+## A record of the process, next to the context (an idea, not decided)
+
+Some things the autonomous modules touch are **one for the process or one for the thread**, and a context cannot own them: the handler of the signals (one for the process), the alternate stack (one for each thread), the stack of entries for traps (thread-local).
+Each module has a copy of the runtime of wasm2c, and each copy acts as if it were alone. Found by experiment (2026-10-22, `tests/test_two_modules.py`): **two modules in one process, a trap by a signal (out of bounds past the guard pages, stack overflow) works only in the module imported last**; in the other the process aborts,
+because the one handler of the process raises the trap of the runtime that installed it last. (`unreachable`, which is no signal, is not affected, and neither are modules that share tables, which already share the stack of entries.) The same one-alternate-stack-for-a-thread limit is why
+a thread that runs several modules leaves a stack of each but one.
+
+The idea: a **small record of the process** (the handler of the signals, who owns the alternate stack of a thread, the thread's stack of entries), **kept in each module as code**, found at run time through a capsule with a version (as `wasmext_traps` is), created by the first module that loads and joined by the others.
+A module that finds none, or one it cannot read, works alone as today. It decides nothing about who may exchange references; that stays with the context, which is explicit. So the host installs nothing, and the autonomy of a module is kept; the price is one more record in the contract between wheels
+of different versions (small: the signals, the stacks), and a thread that runs several modules is set up once and not once per module.
+
+Open: how modules built apart find the record in a C host with no Python (an explicit pointer, or none), subinterpreters (the handler is of the process, a capsule is of the interpreter), and Windows (vectored handlers: each module adds its own).
+
 ## Taken from, and not taken from, other runtimes
 
 (Read in the code, not from memory: `wasmtime` `crates/wasmtime/src/runtime/store.rs`, `func.rs`, `gc/enabled/rooting.rs`; `wasm3` `source/m3_env.c`, `m3_env.h`; JavaScriptCore `Source/JavaScriptCore/wasm/WasmTable.cpp`. Other runtimes (wasmer, WAMR, WasmEdge) were not read.)

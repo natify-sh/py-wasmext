@@ -1,3 +1,5 @@
+> **Status (2026-10-22): opened; the maintainers agreed to close it as not the intended use (wasm-rt is one implementation per program; users who need another build their own). The text below is kept as it was posted. Its first sentence about "every module translated by wasm2c" describes wasmext's build, not wasm2c's intended use.**
+
 # Title
 
 wasm2c runtime: a second module in the process takes over the SIGSEGV handler, and a fault in the first module aborts the process

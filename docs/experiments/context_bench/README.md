@@ -61,15 +61,16 @@ ns per call, per thread, run 2:
 | --- | ---: | ---: | ---: | ---: |
 | nothing (a call through the library) | 23 | 27 | 25 | 710 |
 | plain counter + check (one thread only) | 21 | - | - | - |
-| atomic counter, **one per instance** | 27-35 | 30-35 | 32-34 | 670-760 |
+| atomic counter, **one per thread** (own line) | 31-35 | 35 | 35 | 840-890 (the run was noisy: bare 886) |
+| atomic counter, **one per instance** | 34 | 34 | **292** | 800 |
 | atomic counter, **one per context** | 30-31 | **330** | **334** | 740-820 |
 | mutex + registry lookup **on every call** | 34-36 | **435** | **423** | 860-890 |
 
 - **A call through the library costs about 23 ns for a function that does nothing** (the entry that sets up the trap guard and the lookup of the thread's state), not the 3 ns of a bare indirect call. A guard that adds 4-12 ns is 20-50 % of *that*; at about 650 ns of work it is
   invisible on one thread (the differences are inside the noise), and at 100 us nothing is visible.
 - **Threads of the host scale**: 4 threads on their own instances, or all on one instance (a function with no state), take the same time per call as one thread (23, 27, 25 ns): **the runtime has no lock of its own on this path.**
-- **Contention is the cost, as in section 2:** a counter per context (one cache line for all threads) or a lock per call makes a `add` 13-18 times slower on 4 threads (330-435 ns) and adds 10-25 % to a call of about 650 ns. A counter on a line of its own for each instance is
-  as cheap as with one thread (30-35 ns).
+- **Contention is the cost, as in section 2:** a counter per context (one cache line for all threads) or a lock per call makes a `add` 13-18 times slower on 4 threads (330-435 ns) and adds 10-25 % to a call of about 650 ns. A counter on a line of its own **for each thread** is as cheap as with one thread (31-35 ns). **A counter per instance is cheap only while one thread calls the instance** (34 ns); when 4 threads call the same instance it
+  is as bad as one per context (292 ns): the cache line moves between the cores. (An earlier version of this README called the per-thread row "per instance" in the one-instance column; `real.c` is corrected and `real_results_run3.txt` is the run with both rows.)
 - The registry lookup is needed only to turn a bare `funcref` into its owner, **not on every call**; the row "on every call" is the worst case, to show what a lock costs if it were.
 
-So for the design: **the counter of active calls goes in the instance (its own cache line), never one per context on the path of a call**; the lock of the registry only where a `funcref` is turned into a `Function`; the plain counter is for a single thread under the GIL.
+So for the design: **the counter of active calls is split by thread (a few cache lines in the instance, a thread uses one), and `close` adds them up**; never one per context, and not one per instance if several threads may call it; the lock of the registry only where a `funcref` is turned into a `Function`; the plain counter is for a single thread under the GIL.

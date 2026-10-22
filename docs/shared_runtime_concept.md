@@ -1,6 +1,6 @@
 # One runtime for modules built apart: master and slave (an alternative, to be investigated)
 
-Status: **an idea that may turn out better than the others, not investigated, not decided, nothing built.** Written 2026-10-22 after the finding that two autonomous modules in one process disagree about the one handler of signals
+Status: **an idea; a first experiment says it is possible (see "What the first experiment showed" below); not decided, nothing built in wasmext.** Written 2026-10-22 after the finding that two autonomous modules in one process disagree about the one handler of signals
 ([where_we_stopped_2026-10-22.md](where_we_stopped_2026-10-22.md), "Found and not solved"; `tests/test_two_modules.py`). How a fact is known: **[run]** run here, **[read]** read in sources (WABT `0086e24`, this repository), **[estimate]** a judgement.
 The first thing to do with it is **to find out whether it is possible at all**; the list of what to find out is below, and nothing should be built before it is answered.
 
@@ -57,6 +57,17 @@ B, C and E are steps on the way to D, or smaller answers to the same wound. D is
 9. **The other products.** The shared library, the program and the wrapper for ctypes: a C host has no capsule, so the pointer has to be passed by the host (`<name>_traps_use` is the existing form); the program has one thread and one module. To decide what D means for them (probably nothing, or the same explicit pointer).
 10. **The test plan, before any code:** two and many modules in one process, in every order of import; modules built with different flags and with another `wabt-package`; concurrent imports; a thread that runs several modules; a trap by signal in each; the mismatch fall-back; the sanitizers ([.github/workflows/sanitizers.yml](../.github/workflows/sanitizers.yml)); `tests/test_two_modules.py` is the first test and is `xfail(strict)` today.
 11. **What WABT could do** that would make this simpler or unnecessary (a vtable for the runtime, a chain to the previous handler, a recognition of the memories of one runtime by address): a proposal for the upstream is to be drafted **after** it is known which of A-F works here, as the owner asked.
+
+## What the first experiment showed ([experiments/shared_runtime/](experiments/shared_runtime/), 2026-10-22 [run])
+
+- **The surface is functions only** in the default configuration: 12 for a small module and 23 with memory and table growth and exceptions; **no variable of the runtime** is named by the generated code (point 1 and 2 above: the thread-local state is behind functions). Depth counting, the segue registers and
+  the entry that does not use the shared stack would add variables; not tried.
+- **Master and slave work through a capsule with a table of functions**: a slave linked with **no file of the runtime** runs values, `memory.grow`, both kinds of `table.grow`, exceptions, traps by signals (out of bounds, stack overflow), threads, at the same speed as the master; a pure slave with no master does not import.
+- **Dual modules** (a runtime of their own, renamed `own_*`, and forwarders that choose; the first becomes the master, a later one attaches) work **in both orders of import**, with pure slaves alongside.
+- **The fall-back to its own runtime is not harmless** (point 6 above): a module that could not attach, and ran the `wasm_rt_init` of its own runtime, **replaced the handler of SIGSEGV of the process** and the master's traps by signals then aborted the process. The handler has to be decided by one party: either only the first module installs it (the others built with
+  `WASM_RT_SKIP_SIGNAL_RECOVERY`, and a handler of ours that goes to the stack of entries), or handlers are chained.
+- **So the traps may need a smaller contract than the whole runtime** (a hypothesis, not tried): one handler of ours plus the stack of entries that every runtime already routes `wasm_rt_trap` to. The table of the whole runtime would then be for what else is shared (a registry of tags, one setup of a thread, one place for the state), not for traps.
+- Still open from the list: concurrent imports (who is the master), subinterpreters, macOS and Windows, other configurations, the limit of 64 runtimes for slaves that still join the stack, the lifetime of the master, how the fall-back is told to the user, a C host without a capsule, and what the layout fingerprint does not cover.
 
 ## How to choose
 

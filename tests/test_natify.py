@@ -747,7 +747,9 @@ def test_the_chain_of_signal_handlers_is_for_the_target_that_has_signals(
         assert signal_build_flags() == (macros, link)
 
 
-def test_the_guard_page_can_be_asked_for_instead_of_the_check_of_the_stack(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_guard_page_can_be_asked_for_instead_of_the_check_of_the_stack_and_is_warned_about(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import sysconfig
 
     from wasmext._natify import signal_build_flags
@@ -756,5 +758,9 @@ def test_the_guard_page_can_be_asked_for_instead_of_the_check_of_the_stack(monke
         pytest.skip("Windows has neither")
     monkeypatch.setattr(sysconfig, "get_platform", lambda: "linux-x86_64")
     monkeypatch.setenv("WASMEXT_STACK_CHECK", "guard")
-    macros, link = signal_build_flags()
+    with pytest.warns(UserWarning, match="WASMEXT_STACK_CHECK=guard"):
+        macros, link = signal_build_flags()
     assert macros == [("WASMEXT_CHAIN", "1")] and link == ["-Wl,-z,now"]
+    monkeypatch.setenv("WASMEXT_STACK_CHECK", "fast")
+    with pytest.raises(ValueError, match="WASMEXT_STACK_CHECK"):
+        signal_build_flags()

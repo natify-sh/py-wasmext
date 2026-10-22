@@ -26,6 +26,7 @@ import subprocess
 import sys
 import sysconfig
 import tempfile
+import warnings
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -415,12 +416,23 @@ def signal_build_flags() -> tuple[list[tuple[str, str]], list[str]]:
     `WASMEXT_STACK_LIMIT`: the stack running out is seen by a comparison in each function (`_stack_limit_prologue`), so the runtime takes neither the counter of the depth nor the
     handler on an alternate stack. Not on Windows (it calls every vectored handler; the stack is the counter there) and not where there are no such signals or no thread stack to
     measure (Emscripten, WASI). The limit is a thread-local variable and the handler reads thread-local data, so on Linux the library is linked with `-z now`: with lazy binding the first
-    access resolves `__tls_get_addr` inside the handler, which hangs. `WASMEXT_STACK_CHECK=guard` in the environment of the build keeps the chain but sees the stack by the guard page (the handler on an alternate stack), which is the fastest on a program that is all calls (see docs/experiments/stack_limit/). The target is read from `sysconfig.get_platform()`, which a cross build sets to the target and not the host."""
+    access resolves `__tls_get_addr` inside the handler, which hangs. `WASMEXT_STACK_CHECK=guard` in the environment of the build keeps the chain but sees the stack by the guard page (the handler on an alternate stack), which is faster (CoreMark 98% of native against 91%) and is warned about when asked for (see docs/experiments/stack_limit/). The target is read from `sysconfig.get_platform()`, which a cross build sets to the target and not the host."""
     platform = sysconfig.get_platform().lower()
     if os.name == "nt" or platform.startswith("win") or any(t in platform for t in ("emscripten", "wasi")):
         return [], []
     macros = [("WASMEXT_CHAIN", "1")]
-    if os.environ.get("WASMEXT_STACK_CHECK", "limit").lower() != "guard":
+    choice = os.environ.get("WASMEXT_STACK_CHECK", "limit").lower()
+    if choice not in ("limit", "guard"):
+        raise ValueError(f"WASMEXT_STACK_CHECK is {choice!r}: it is 'limit' (the default) or 'guard'")
+    if choice == "guard":
+        warnings.warn(
+            "WASMEXT_STACK_CHECK=guard: the stack running out is seen by the guard page and a handler of SIGSEGV on an alternate stack kept for every thread "
+            "(about 8% faster than the default on CoreMark, up to 1.8 times on a program that is all calls). A stack overflow in a thread other than "
+            "the main one is reported as an out-of-bounds access, and a thread that ends gives its stack back through the Python layer only. "
+            "See docs/experiments/stack_limit/README.md",
+            stacklevel=2,
+        )
+    else:
         macros += [("WASMEXT_STACK_LIMIT", "1"), ("WASM_RT_NONCONFORMING_UNCHECKED_STACK_EXHAUSTION", "1")]
     return macros, (["-Wl,-z,now"] if platform.startswith("linux") else [])
 

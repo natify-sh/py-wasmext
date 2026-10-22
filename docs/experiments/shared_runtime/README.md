@@ -77,3 +77,24 @@ Results ([run]; `run_dual.py e1 e2` and so on, each in a process of its own):
 So the one handler **works for every module that takes part, whichever runtime version it has** (as long as it can join the stack of entries and installs no handler that goes elsewhere), and it **cannot protect against a module that does not take part**:
 wheels built before this change, or other wasm2c-based packages, break the arrangement exactly as two default modules break each other today (no regression, no repair). Also seen: a thread that runs several modules prints "alternate stack was modified unexpectedly" at its end in a debug build (one `sigaltstack` for a thread, one allocation per runtime copy), as before.
 Not measured here: the cost per call of the full stack of entries with many modules (the loop over runtimes, and the limit of 64, are those of `--share-tables`: the light `push`/`pop` is still to be built).
+
+## 4. A chain of handlers (`c1`, `c2`; `chain_handler.h`)
+
+Every module has a runtime of its own and **no capsule, no shared stack of entries**. Each module installs a handler at its import **and keeps the one that was there**. The entry of every call of the module sets a thread-local mark `chain_active_` (saved and restored around the call, and also on the path of a trap: `patch.py`).
+When a fault comes: if the mark of this module is up in this thread, **the module's own runtime turns it into its own trap**; if not, the fault is **given to the handler that was before** (called as it was installed: with `siginfo`, or the plain one, or the default action). As in section 3 the runtime of the module is not allowed to install a handler of its own (`no_sigaction.h`: the stock knobs cannot say "the alternate stack, but no handler").
+
+**A pitfall found: the handler must not use lazy binding or general-dynamic TLS.** The first version **hung** (a handler spinning in `__tls_get_addr@plt`, 97 % CPU) when a fault in the first module went through the handler of the second. **Either** `-Wl,-z,now` **or** `-ftls-model=initial-exec` alone removes it (checked separately). The handler of a module that is linked as a shared object touches a thread-local variable, which is not safe in
+a signal handler the usual way; the build has to make it so.
+
+Results ([run]; `run_dual.py` in a process of its own each; the three builds have `-z now` and `initial-exec`):
+
+| Case | Result |
+| --- | --- |
+| `c1 c2` and `c2 c1` | **both orders work**: a trap by a signal (out of bounds, stack overflow) in **each** module, also in a worker thread; the first module, behind the second in the chain, included |
+| `e5 c1` (`e5`: a default module of today, imported **before**) | **works**: `c1` kept the handler of `e5`, and the fault in `e5` reaches it through the chain |
+| `c1 e5` (the default module imported **after**) | **aborts**: it replaces the handler and does not chain (this is the one fault that the chain cannot repair; a module that does not take part and is imported last) |
+| a **real** fault outside any WebAssembly code (`ctypes.string_at(0)`), `-X faulthandler`, `c1 c2` loaded | **`Fatal Python error: Segmentation fault`**, exit 139: the fault reaches `faulthandler` (or the default action) as if the modules were not there |
+| the same with a **default module of today** (`e5`) loaded | **`Fatal Python error: Aborted`**, exit 134: its handler turns **any** SIGSEGV of the process into a trap of its own runtime and jumps to a buffer that is not set |
+| speed (`add`, `work(1000)`, a call-heavy `fib`) | the same as a default module, within the noise of the machine |
+
+Not tried: a call from a module into another through a host function (a nested call), where both marks are up and the order of the chain decides which entry the trap goes to (an **innermost** entry needs the order that the shared stack gives); macOS (SIGBUS, `sigsetjmp` with the mask) and Windows (vectored handlers); free-threaded builds; the cost of the entry on a C host with no Python (the mark is in the glue of any front end).

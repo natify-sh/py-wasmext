@@ -67,8 +67,9 @@ The second guess, **git itself on 0.2**, is right: `git.git` 2.56.0 builds for `
   the right one).
 - **A bug of `wasm2c` found on the way, and a repair.** meld puts every import into a table, and `wasm2c` 1.0.42 (and `main`) gives an imported function placed in a table by an element segment the *address
   of a field* of the instance instead of the pointer to the import's instance. Under wasmext the meld module trapped at the first call (zero imports called; in V8 it ran). It is not a bug of meld or of wasmext.
-  The repair of the generated C is `patch_import_elem.py` (4 lines in the C; a new kind of entry); then the meld module of `lg2` and of `git.git` runs as the unbundled one. **It is not in wasmext**: the other
-  patches of the C of `wasm2c` are in `_natify.py`; this one is waiting for a decision. A draft of the issue for WABT is in `experiments/wasi_p1_p2_git/wabt_issue/`.
+  Reported: [WABT #2896](https://github.com/WebAssembly/wabt/issues/2896) (the draft is in `experiments/wasi_p1_p2_git/wabt_issue/`). **wasmext repairs it** as it does the other bugs of the C of `wasm2c`
+  (`_repair_imported_elements` in `_natify.py`; FEATURES.md, "Patch for an imported function in an element segment"): a new kind of entry that reads the pointer. With it the meld module of `lg2` and of
+  `git.git` runs as the unbundled one, built by `natify` itself, also in many files **[run]**.
 
 ## What it means for wasmext
 
@@ -77,11 +78,10 @@ The second guess, **git itself on 0.2**, is right: `git.git` 2.56.0 builds for `
    the network, `wasi:sockets` (name lookup and TCP). The example host has the standard output streams, `poll`, the clocks and a TCP client, and none of the filesystem. A host of 0.2 inside the module, in C, as the one of 0.1 is, would bring the demand
    on the host back to nothing; it is a work of a size of `wasi_core.h` for 0.2, not designed here.
 3. **Unbundled** is the simpler way for one component; **meld** is for composed ones, and it needs the repair above and has the open questions about the memory of each import and about strings.
-4. Done in the code because of this study: `wasi_flavor` tells the output of `meld fuse` as `fused` (it was told `none` or `core-0.2`), and warns only when such a module imports WASI 0.2 or 0.3.
+4. Done in the code because of this study: `wasi_flavor` tells the output of `meld fuse` as `fused` (it was told `none` or `core-0.2`) and warns only when such a module imports WASI 0.2 or 0.3; and the repair of the C of `wasm2c` for imported functions in element segments.
 
 ## Not done
 
 - **CPython** for WASI 0.1 and 0.2 (the next target; py-wasmhost builds it with the build that CPython ships, `Platforms/WASI`, for `wasm32-wasip1` only).
 - The filesystem of WASI 0.2 in a host; the sockets run; HTTPS.
-- The repair of the C of `wasm2c` in `_natify.py`.
 - Measurements of speed; one machine, one compiler.

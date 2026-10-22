@@ -486,3 +486,17 @@ def test_v128_in_signatures_is_16_bytes_in_each_front_end(build_front_end: Build
         with pytest.raises(exc):
             i.double(bad)
     assert i.double(lanes(1, 1, 1, 1)) == lanes(2, 2, 2, 2)  # the instance goes on after a wrong argument
+
+
+def test_an_imported_function_put_in_a_table_by_an_element_segment_is_called_with_its_own_instance(
+    build_extension: Builder,
+) -> None:
+    """wasm2c 1.0.42 gave such an entry the address of a field of the module instance, and the call crashed (the output of `meld fuse` is built so)."""
+    mod = build_extension(DATA / "imported_in_table.wat", "imported_in_table")
+
+    def host(x: int) -> int:
+        return x + 100
+
+    inst = mod.Instance({"env": {"f": host}})
+    assert inst.via_import(5) == 105
+    assert inst.via_defined(5) == 10

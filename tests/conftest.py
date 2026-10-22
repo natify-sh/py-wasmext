@@ -20,7 +20,11 @@ import pytest
 
 from wasmext import generate, parse
 from wasmext._gen import module_prefix
-from wasmext._natify import _export_tags, _repair_tail_calls  # pyright: ignore[reportPrivateUsage]
+from wasmext._natify import (
+    _export_tags,  # pyright: ignore[reportPrivateUsage]
+    _repair_imported_elements,  # pyright: ignore[reportPrivateUsage]
+    _repair_tail_calls,  # pyright: ignore[reportPrivateUsage]
+)
 
 # the free-threaded build has no abi3 (3.15 has abi3t, which wasmext does not build: cibuildwheel does not tag it yet): there the extension is native
 
@@ -100,7 +104,7 @@ def build_extension(wabt: Path, tmp_path_factory: pytest.TempPathFactory) -> Cal
         )
         w2c = out / f"{name}_w2c.c"
         w2c.write_bytes(
-            _export_tags(_repair_tail_calls(w2c.read_bytes()), module_prefix(name))
+            _export_tags(_repair_tail_calls(_repair_imported_elements([w2c.read_bytes()])[0]), module_prefix(name))
         )  # the repairs that natify() makes
         runtime = wabt / "wasm2c"
         if by_setuptools:

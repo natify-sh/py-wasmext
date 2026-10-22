@@ -26,7 +26,7 @@ import subprocess
 import sys
 import sysconfig
 import tempfile
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -429,6 +429,48 @@ def _repair_tail_calls(c_source: bytes) -> bytes:
     return _tail_call_result(_tail_call_locals(c_source))
 
 
+# wasm2c 1.0.42 and `main` (read on 2026-10-22) give an *imported* function that an element segment puts into a table the wrong module instance: the entry is
+# `{RefFunc, type, wrapper, {tailcall}, offsetof(w2c_m, w2c_<import>_instance)}` and `funcref_table_init` stores `(char*)module_instance + module_offset`, the address
+# of the field that holds the pointer to the import's instance (with offset 0, the first field, the module instance itself). A `call_indirect` of that entry hands the wrapper
+# of the import a pointer to something else. (`ref.func` as an expression is right: it writes `instance->w2c_<import>`.) The output of `meld fuse` has such a table.
+# The repair gives the imports a kind of entry of their own that reads the pointer, as `GlobalGet` does. The template (an enum and a `switch`, in the file that has
+# `funcref_table_init`: the one file, or `<name>_w2c-impl.h`) is looked for in all the files, and the entries (in the files of the code) are rewritten only if it is
+# found in this shape, so a wasm2c that is fixed passes through. Entries of defined functions have the literal offset `0` and are not touched.
+# Reported: [WABT #2896](https://github.com/WebAssembly/wabt/issues/2896).
+_ELEM_KINDS = re.compile(rb"typedef enum \{ RefFunc, RefNull, GlobalGet \} wasm_elem_segment_expr_type_t;")
+_ELEM_REF_FUNC = re.compile(
+    rb"      case RefFunc:\n"
+    rb"        \*dest_val = \(wasm_rt_funcref_t\)\{\n"
+    rb"            src_expr->type, src_expr->func, src_expr->func_tailcallee,\n"
+    rb"            \(char\*\)module_instance \+ src_expr->module_offset\};\n"
+    rb"        break;\n"
+)
+_ELEM_IMPORT_CASE = (
+    b"      case RefImportFunc:\n"
+    b"        *dest_val = (wasm_rt_funcref_t){\n"
+    b"            src_expr->type, src_expr->func, src_expr->func_tailcallee,\n"
+    b"            *(void**)((char*)module_instance + src_expr->module_offset)};\n"
+    b"        break;\n"
+)
+_ELEM_ENTRY = re.compile(rb"^(  \{)RefFunc(, [^\n]*, offsetof\()", re.MULTILINE)
+
+
+def _repair_imported_elements(c_sources: Sequence[bytes]) -> list[bytes]:
+    """The files of the C of one module, with the element segments that hold imported functions repaired (see above); all the files, because the template and the entries are not in the same one."""
+    if not any(_ELEM_REF_FUNC.search(text) for text in c_sources):
+        return list(c_sources)
+    repaired: list[bytes] = []
+    for text in c_sources:
+        if b"RefImportFunc" not in text:
+            text = _ELEM_KINDS.sub(
+                b"typedef enum { RefFunc, RefNull, GlobalGet, RefImportFunc } wasm_elem_segment_expr_type_t;", text
+            )
+            text = _ELEM_REF_FUNC.sub(lambda m: m.group(0) + _ELEM_IMPORT_CASE, text)
+            text = _ELEM_ENTRY.sub(rb"\1RefImportFunc\2", text)
+        repaired.append(text)
+    return repaired
+
+
 # the tags of the module, as wasm2c declares them (in the order of the tags): `static` in a file of its own, a definition in the first of
 # several (the others see them as extern in <name>_w2c-impl.h)
 _TAG_PLACEHOLDER = re.compile(rb"^(?:static )?const wasm_tag_placeholder_t (\w+);$", re.MULTILINE)
@@ -579,15 +621,19 @@ def _prepare(
         result = subprocess.run(command, capture_output=True, text=True, check=False)
     if result.returncode:
         raise RuntimeError(f"wasm2c failed on {wasm}:\n{result.stderr.strip()}")
-    for part in _w2c_files(out_dir, last, wanted):
+    shared = out_dir / f"{last}_w2c-impl.h"  # the code every file includes, when there are several
+    code_files = _w2c_files(out_dir, last, wanted)
+    # the repair of imported functions in element segments looks at all the files of the module (the template may be in `shared`, the entries in the others)
+    all_files = [*code_files, *([shared] if shared.is_file() else [])]
+    repaired = dict(zip(all_files, _repair_imported_elements([f.read_bytes() for f in all_files]), strict=True))
+    for part in code_files:
         _write_atomic(
             part,
             _marker(toolchain.version, wanted, digest, name, share_tables).encode()
-            + _export_tags(_repair_tail_calls(_portable_on_arm64(part.read_bytes())), module_prefix(name)),
+            + _export_tags(_repair_tail_calls(_portable_on_arm64(repaired[part])), module_prefix(name)),
         )
-    shared = out_dir / f"{last}_w2c-impl.h"  # the code every file includes, when there are several
     if shared.is_file():
-        _write_atomic(shared, _portable_on_arm64(shared.read_bytes()))
+        _write_atomic(shared, _portable_on_arm64(repaired[shared]))
     _write_if_changed(
         glue_c, (_marker(toolchain.version, wanted, digest, name, share_tables) + glue.source).encode("utf-8")
     )

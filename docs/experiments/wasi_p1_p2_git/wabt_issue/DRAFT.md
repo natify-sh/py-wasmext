@@ -1,6 +1,6 @@
 # wasm2c: an imported function in an element segment gets the wrong module instance
 
-**Draft of an issue for WebAssembly/wabt (not posted).** Reproduced on 2026-10-22 with `wasm2c` 1.0.42 (`wabt-package` 1.0.42.0, Linux x86-64, gcc 13). The code that is
+**Draft of an issue for WebAssembly/wabt; posted as [WebAssembly/wabt#2896](https://github.com/WebAssembly/wabt/issues/2896).** Reproduced on 2026-10-22 with `wasm2c` 1.0.42 (`wabt-package` 1.0.42.0, Linux x86-64, gcc 13). The code that is
 responsible is the same on `main` (read on 2026-10-22): `src/c-writer.cc` (the element segments, `case ExprType::RefFunc`, about line 2488) and
 `src/template/wasm2c.declarations.c` (`funcref_table_init`).
 

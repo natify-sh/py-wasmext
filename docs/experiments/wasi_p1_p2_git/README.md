@@ -68,8 +68,8 @@ The 20 imports of UDP are there although git does not use UDP: the sockets of wa
 
 - For **one component** the two give the same set of imports and the same exports (`memory`, `wasi:cli/run@0.2.12#run`, `cabi_realloc`). meld adds 35 small functions and a table.
 - meld's module **trapped under wasmext before the first import** (and ran in V8). The cause is a bug of `wasm2c` 1.0.42 (and `main`): an imported function put into a table by an element segment gets the
-  *address of a field* of the module instance instead of the pointer to the import's instance. meld puts every WASI import into such a table. `patch_import_elem.py` repairs the generated C (a new
-  kind of entry); a minimal reproduction in plain C and a draft of the issue are in `wabt_issue/`. With it, `lg2` and `git.git` behave the same as unbundled (`git --version` runs).
+  *address of a field* of the module instance instead of the pointer to the import's instance. meld puts every WASI import into such a table. Reported as [WABT #2896](https://github.com/WebAssembly/wabt/issues/2896); a minimal reproduction in plain C and the draft are in `wabt_issue/`. wasmext now repairs the generated C
+  itself (`_repair_imported_elements` in `_natify.py`; `patch_import_elem.py` here is the first form of it, a script for a tree that is already made). With it, `lg2` and `git.git` behave the same as unbundled (`git --version` runs).
 - For **several components** (not git): `unbundle` with the default threshold (10240 bytes) takes **nothing** out of small modules, `--threshold 0` is needed; meld duplicates a WASI import for each
   component (`get-random-bytes`, `get-random-bytes$1`), and the memory and `realloc` of each are exported as `memory`, `memory$0`, `realloc`, `realloc$0`, `cabi_realloc$1`: which belongs to which is not told
   (the import map of meld says only `"kind": "wasi"`). Its adapters did not carry a **string** in a test of three levels of nesting: `jco` and V8 gave the right answer, the fused module gave an empty result.

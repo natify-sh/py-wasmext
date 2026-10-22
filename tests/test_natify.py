@@ -666,3 +666,51 @@ def test_share_tables_is_an_input_of_the_c_and_gives_the_module_the_stack_of_ent
     natify("pkg/*.wasm", quiet=True)  # and back
     assert "add_table_new" not in (out / "add_api.h").read_text(encoding="utf-8")
     assert "WASMEXT_GENERATED_SHARE 0" in (out / "add_py.c").read_text(encoding="utf-8")
+
+
+_ELEM_TEMPLATE = (
+    b"typedef enum { RefFunc, RefNull, GlobalGet } wasm_elem_segment_expr_type_t;\n"
+    b"    switch (src_expr->expr_type) {\n"
+    b"      case RefFunc:\n"
+    b"        *dest_val = (wasm_rt_funcref_t){\n"
+    b"            src_expr->type, src_expr->func, src_expr->func_tailcallee,\n"
+    b"            (char*)module_instance + src_expr->module_offset};\n"
+    b"        break;\n"
+    b"      case RefNull:\n"
+)
+_ELEM_ENTRIES = (
+    b"static const wasm_elem_segment_expr_t elem_segment_exprs_w2c_m_e0[] = {\n"
+    b"  {RefFunc, w2c_m_t0, (wasm_rt_function_ptr_t)wrap_w2c_env_f, {wasm_tailcall_w2c_env_f}, offsetof(w2c_m, w2c_env_instance)},\n"
+    b"  {RefFunc, w2c_m_t0, (wasm_rt_function_ptr_t)w2c_m_f1, {NULL}, 0},\n"
+    b"};\n"
+)
+
+
+def test_an_imported_function_in_an_element_segment_gets_the_pointer_to_the_import() -> None:
+    from wasmext._natify import _repair_imported_elements  # pyright: ignore[reportPrivateUsage]
+
+    template, entries = _repair_imported_elements(
+        [_ELEM_TEMPLATE, _ELEM_ENTRIES]
+    )  # the template and the entries are in different files
+    assert b"RefFunc, RefNull, GlobalGet, RefImportFunc }" in template
+    assert b"*(void**)((char*)module_instance + src_expr->module_offset)" in template
+    assert b"      case RefFunc:\n" in template  # the case of the defined functions stays
+    assert b"{RefImportFunc, w2c_m_t0, (wasm_rt_function_ptr_t)wrap_w2c_env_f" in entries
+    assert (
+        b"{RefFunc, w2c_m_t0, (wasm_rt_function_ptr_t)w2c_m_f1, {NULL}, 0}" in entries
+    )  # a defined function has the offset 0 and is as it was
+    assert _repair_imported_elements([template, entries]) == [template, entries]  # again: nothing more
+
+
+def test_a_wasm2c_that_writes_the_element_segments_another_way_is_left_alone() -> None:
+    from wasmext._natify import _repair_imported_elements  # pyright: ignore[reportPrivateUsage]
+
+    fixed = _ELEM_TEMPLATE.replace(
+        b"(char*)module_instance + src_expr->module_offset};",
+        b"*(void**)((char*)module_instance + src_expr->module_offset)};",
+    )
+    assert _repair_imported_elements([fixed, _ELEM_ENTRIES]) == [
+        fixed,
+        _ELEM_ENTRIES,
+    ]  # no such template: the entries are not rewritten either
+    assert _repair_imported_elements([b"int main(void) { return 0; }\n"]) == [b"int main(void) { return 0; }\n"]

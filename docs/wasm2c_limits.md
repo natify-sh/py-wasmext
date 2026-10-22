@@ -95,3 +95,12 @@ What this says:
 ## What `wasm-opt` is good for here, from the list of passes
 
 Lowerings that exist and that could be used to get *to* something `wasm2c` reads: `memory64-lowering` (and `table64-lowering`, an alias), `multi-memory-lowering`, `i64-to-i32-lowering`, `signext-lowering`, `llvm-nontrapping-fptoint-lowering`, `alignment-lowering`, `strip-eh`, `translate-to-exnref`, and `asyncify` (the pause and resume of the idea in FEATURES.md, "Fuel"). `wasm2c` reads most of the things these lower, so they are not needed now. `wasm-opt` is **not** in the wabt-package; using it means a second tool in the build.
+
+## Found here, not reported (yet)
+
+- **The handler of SIGSEGV/SIGBUS of every copy of the runtime replaces the one before it** (two modules in one process: a fault in the one set up first aborts the process), and **the alternate stack cannot be had without installing the handler** (`WASM_RT_STACK_EXHAUSTION_HANDLER` needs `WASM_RT_INSTALL_SIGNAL_HANDLER`). Draft of the issue, with a reproduction that was run on WABT 1.0.42: [wabt_issue_drafts/signal_handler.md](wabt_issue_drafts/signal_handler.md), files in [experiments/wabt_signal_repro/](experiments/wabt_signal_repro/). wasmext lives with it by a chain of handlers (`WASMEXT_CHAIN`, [patch_policy.md](patch_policy.md)).
+- **A stack overflow in a thread other than the main one is reported as an out-of-bounds access** by the stock handler (`os_signal_handler` takes `si_code == SEGV_ACCERR` for memory; the guard page of a thread stack is `ACCERR`, the growing main stack is `MAPERR`): a wrong trap code, no crash. Measured in [experiments/stack_limit/](experiments/stack_limit/README.md). wasmext avoids it with the check of the stack pointer.
+
+## Other open pull requests looked at (2026-10-22, the first page of 63)
+
+Nothing that overlaps the two pull requests above: the ones about tail calls (#2898, #2877, #2872) are in the interpreter (`interp.cc`), the ones about names, segments and text (#2876, #2869, #2838, #2833, #2883) in the text writer. **#2782** (`wasm2c: uvwasi adapter layer for wasm2c output`) is a host for WASI **preview 1 only** (uvwasi is that, by its README) and has libuv in it; wasmext has a host of its own for preview 1 and none for 0.2, so it is not taken. The files of these pull requests were not read (the page shows titles), only guessed from them.

@@ -380,6 +380,12 @@ def build_shared(
     flags = flags or BuildFlags()
     if glue.trap_handler:  # the module shares tables with other libraries: its traps go to the innermost call into WebAssembly code (wasmext_glue.h)
         flags = replace(flags, define_macros=[*flags.define_macros, ("WASMEXT_TRAP_HANDLER", glue.trap_handler)])
+    if (
+        os.name != "nt"
+    ):  # as natify() does for an extension: the runtime installs no handler of signals, the library installs a link of a chain (see wasmext_glue.h)
+        flags = replace(flags, define_macros=[*flags.define_macros, ("WASMEXT_CHAIN", "1")])
+        if sys.platform.startswith("linux"):
+            flags = replace(flags, extra_link_args=[*flags.extra_link_args, "-Wl,-z,now"])
     compiler, objects, msvc = _compile_sources(chosen.sources, prepared, out_dir, optimize=optimize, flags=flags)
     library_path.parent.mkdir(parents=True, exist_ok=True)
     if (

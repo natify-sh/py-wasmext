@@ -529,3 +529,70 @@ def test_a_name_reserved_by_a_pattern_gets_a_prefix_and_never_loops() -> None:
     assert _ident("memory", taken) == "memory"  # the plain names of the API are not touched
     assert _ident("call7", taken) == "x_call7"
     assert _ident("a b", taken) == "a_b" and _ident("a-b", taken) == "a_b_2"  # the suffix of a plain clash is as it was
+
+
+_TWO_HOST = r"""
+#include <stdio.h>
+#include <string.h>
+#include "a_api.h"
+#include "b_api.h"
+int main(int argc, char **argv) {
+    int e;
+    int32_t v = 0;
+    a_t *a = a_new(NULL, &e);
+    b_t *b = b_new(NULL, &e);
+    a_instantiate(a);
+    b_instantiate(b);
+    a_ok(a, &v);  /* both runtimes are set up before any fault: the handler of the signals is then the one of b, unless they chain */
+    b_ok(b, &v);
+    int a_first = argc > 1 && strcmp(argv[1], "a") == 0;
+    for (int i = 0; i < 2; i++) {  /* the library whose first call is later has its handler first in the chain */
+        int use_a = (i == 0) == a_first;
+        int rc = use_a ? a_oob(a, &v) : b_oob(b, &v);
+        printf("%s oob: %s\n", use_a ? "a" : "b", rc != 0 ? "trap" : "no trap");
+    }
+    printf("alive\n");
+    return 0;
+}
+"""
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows calls every vectored handler: no chain")
+@pytest.mark.skipif(SANITIZED, reason="ASan takes the signals of the process")
+@pytest.mark.parametrize("first", ["a", "b"])
+def test_two_shared_libraries_in_one_process_both_turn_a_fault_into_a_trap(
+    wabt: Path, tmp_path: Path, first: str
+) -> None:
+    """Each library is a runtime of its own; the handlers of the signals are a chain, so the library whose call runs is the one that traps, whichever was set up last."""
+    cc = shutil.which(os.environ.get("CC", "cc")) or shutil.which("gcc") or shutil.which("clang")
+    if cc is None:
+        pytest.skip("no C compiler of the cc kind")
+    (tmp_path / "m.wat").write_text(_OOB_WAT, encoding="utf-8")
+    subprocess.run([wabt / "bin" / "wat2wasm", tmp_path / "m.wat", "-o", tmp_path / "m.wasm"], check=True)
+    suffix = ".dylib" if platform.system() == "Darwin" else ".so"
+    libraries = [
+        build_shared(tmp_path / "m.wasm", tmp_path / f"lib{n}{suffix}", name=n, optimize=False, quiet=True)
+        for n in ("a", "b")
+    ]
+    (tmp_path / "host.c").write_text(_TWO_HOST, encoding="utf-8")
+    program = tmp_path / "host"
+    subprocess.run(
+        [
+            cc,
+            "-Wall",
+            "-o",
+            program,
+            tmp_path / "host.c",
+            f"-I{tmp_path / 'liba_wasmext'}",
+            f"-I{tmp_path / 'libb_wasmext'}",
+            *libraries,
+        ],
+        check=True,
+    )
+    env = {**os.environ, "LD_LIBRARY_PATH": str(tmp_path), "DYLD_LIBRARY_PATH": str(tmp_path)}
+    ran = subprocess.run([program, first], capture_output=True, text=True, env=env, check=False, timeout=60)
+    assert ran.returncode == 0 and ran.stdout.splitlines()[-1] == "alive" and ran.stdout.count("trap") >= 2, (
+        ran.returncode,
+        ran.stdout,
+        ran.stderr[-300:],
+    )

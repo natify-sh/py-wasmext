@@ -2,7 +2,7 @@
 
 wasmext does not carry a copy of WABT. It takes `wasm2c` and its runtime from the `wabt-package` and changes what it needs on the way, in three ways: a **wrapper** of a runtime file
 (`_RUNTIME_WRAPPERS` in `src/wasmext/_natify.py`: a macro, an `#include` around the original), a **repair of the generated C** (a regular expression, as `_TAIL_CALL_LOCALS` and
-`_MSVC_ADDCARRY`), and **macros and flags on the command line** (`WASMEXT_PY_CHAIN`, `WASM_RT_USE_MMAP`, `-z now`). All of them are patches, and WABT moves slowly and without
+`_MSVC_ADDCARRY`), and **macros and flags on the command line** (`WASMEXT_CHAIN`, `WASM_RT_USE_MMAP`, `-z now`). All of them are patches, and WABT moves slowly and without
 warning, so they follow the same policy. (No `.patch` files and no vendored copy of WABT for now: that is a decision, not an omission.)
 
 1. **Small and exact.** One patch, one cause. It changes the least that the cause needs, and nothing for "while we are here".

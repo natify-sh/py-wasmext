@@ -125,7 +125,7 @@ def build_extension(wabt: Path, tmp_path_factory: pytest.TempPathFactory) -> Cal
         extra = shlex.split(
             os.environ.get("WASMEXT_TEST_CFLAGS", "")
         )  # for a build with a sanitizer (.github/workflows/sanitizers.yml)
-        # as natify() does off Windows: the runtime installs no handler of signals and the Python layer installs a link of a chain (WASMEXT_PY_CHAIN, see _gen.py)
+        # as natify() does off Windows: the runtime installs no handler of signals and the Python layer installs a link of a chain (WASMEXT_CHAIN, see _gen.py)
         chain = os.name != "nt"
         impl = runtime / "wasm-rt-impl.c"
         if chain:
@@ -134,7 +134,7 @@ def build_extension(wabt: Path, tmp_path_factory: pytest.TempPathFactory) -> Cal
                 _RUNTIME_WRAPPERS["impl"].replace("#include <wasm-rt-impl.c>", '#include "wasm-rt-impl.c"'),
                 encoding="utf-8",
             )
-            extra = [*extra, "-DWASMEXT_PY_CHAIN=1"]
+            extra = [*extra, "-DWASMEXT_CHAIN=1"]
         link_extra = ["-Wl,-z,now"] if chain and sys.platform.startswith("linux") else []
         glue_object = out / f"{name}_py.o"
         # The glue is ours, so it is built strictly: GCC 14 makes these errors (older ones warn), and the manylinux and

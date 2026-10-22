@@ -2,7 +2,7 @@
 
 The handler of SIGSEGV/SIGBUS is one for the process. The runtime of wasm2c would install its own at `wasm_rt_init` without chaining to the one before it, so the handler
 would be the one of the module imported last, which turns the signal into a trap of ITS runtime and not of the call that is running in the other module. So off Windows
-the runtime installs none and every module installs a link of a chain (WASMEXT_PY_CHAIN, see _gen.py): a fault in a call of the module is its trap, any other is given
+the runtime installs none and every module installs a link of a chain (WASMEXT_CHAIN, see _gen.py): a fault in a call of the module is its trap, any other is given
 to the handler that was before. Windows calls every vectored handler, so it needs nothing.
 """
 

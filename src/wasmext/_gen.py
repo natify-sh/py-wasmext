@@ -695,8 +695,14 @@ def generate(module: Module, name: str, *, version: str | None = None, share_tab
     hadd("static int wasmext_chain_installed_;")
     hadd("static void wasmext_chain_handler_(int sig, siginfo_t *si, void *ctx) {")
     hadd(
+        "#ifdef WASMEXT_STACK_LIMIT  /* the stack is checked in the prologue, so a fault in a call is the memory (macOS gives the guard page another si_code than ACCERR) */"
+    )
+    hadd("    if (wasmext_chain_active_) wasm_rt_trap(WASM_RT_TRAP_OOB);  /* does not return */")
+    hadd("#else")
+    hadd(
         "    if (wasmext_chain_active_) wasm_rt_trap(si->si_code == SEGV_ACCERR ? WASM_RT_TRAP_OOB : WASM_RT_TRAP_EXHAUSTION);  /* does not return */"
     )
+    hadd("#endif")
     hadd("    const struct sigaction *old = sig == SIGSEGV ? &wasmext_chain_old_segv_ : &wasmext_chain_old_bus_;")
     hadd("    if (old->sa_flags & SA_SIGINFO) {")
     hadd("        old->sa_sigaction(sig, si, ctx);")

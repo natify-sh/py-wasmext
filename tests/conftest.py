@@ -8,6 +8,7 @@ import importlib.util
 import os
 import platform
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -115,6 +116,9 @@ def build_extension(wabt: Path, tmp_path_factory: pytest.TempPathFactory) -> Cal
         limited = ["-DPy_LIMITED_API=0x030B0000"] if abi3 else []
         so = out / (name + str(sysconfig.get_config_var("EXT_SUFFIX")))
         include = [f"-I{runtime}", f"-I{out}", f"-I{sysconfig.get_paths()['include']}", *(f"-I{d}" for d in _simde())]
+        extra = shlex.split(
+            os.environ.get("WASMEXT_TEST_CFLAGS", "")
+        )  # for a build with a sanitizer (.github/workflows/sanitizers.yml)
         glue_object = out / f"{name}_py.o"
         # The glue is ours, so it is built strictly: GCC 14 makes these errors (older ones warn), and the manylinux and
         # user machines have it. The C of wasm2c and its runtime are not ours to police.
@@ -129,6 +133,7 @@ def build_extension(wabt: Path, tmp_path_factory: pytest.TempPathFactory) -> Cal
                 cc,
                 "-O1",
                 "-fPIC",
+                *extra,
                 *strict,
                 *limited,
                 *(f"-D{d}" for d in defines),
@@ -142,7 +147,7 @@ def build_extension(wabt: Path, tmp_path_factory: pytest.TempPathFactory) -> Cal
         )
         subprocess.run(
             [
-                cc, "-O1", "-w", "-shared", "-fPIC", *link_flags, *limited, *(f"-D{d}" for d in defines), *include,
+                cc, "-O1", "-w", "-shared", "-fPIC", *extra, *link_flags, *limited, *(f"-D{d}" for d in defines), *include,
                 glue_object, out / f"{name}_w2c.c", runtime / "wasm-rt-impl.c", runtime / "wasm-rt-mem-impl.c",
                 runtime / "wasm-rt-exceptions-impl.c",
                 "-o", so,

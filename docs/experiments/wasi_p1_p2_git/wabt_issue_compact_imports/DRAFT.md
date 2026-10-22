@@ -32,8 +32,8 @@ if (kind_u8 == 0x7E) {
 }
 ```
 
-That is `kind count (name type)*` where the proposal has `kind type count name*`. The two agree only if there is exactly one item whose type is read before... they never agree on a group of more than one
-import, and they disagree on an empty one.
+That is `kind count (name type)*` where the proposal has `kind type count name*`: the type is read after the count and once for every name, instead of before the count and once. A group with no names (which the
+proposal allows) is read as having a count where the type is, and a group with several names is read with a type after each.
 
 ## Reproduction
 
@@ -63,8 +63,7 @@ small structure; then call `OnImport…` for each name). In the interpreter `dec
 ## Also
 
 - In 1.0.42 the loop was `while (i < num_imports)` where `num_imports` is the number in front of the section and `i` counts **imports**, but the proposal makes that number the number of **entries** (a group is one entry, and may
-  have no imports). `main` already counts entries (`for (entry < num_entries)`). Only noticed by reading the code of 1.0.42; the case that differs is a section whose groups hold more than one import in total and that has
-  an entry after them.
+  have no imports). `main` already counts entries (`for (entry < num_entries)`). Only noticed by reading the code of 1.0.42 (not run): the loop ends as soon as that many imports are read, so an entry after a group is left unread when the number in front counts entries.
 - The README of WABT has compact imports ticked for the binary format and validation, not for `wasm2c`; the bug is in the reader that all of them share.
 
 ## How it was found

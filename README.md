@@ -14,8 +14,11 @@ extension is built, not interpreted or compiled by a JIT while the program runs.
 C with little overhead of its own: what remains is what WebAssembly itself requires (every memory access is checked, by
 guard pages by default; traps) and the cost of crossing between Python and the module (converting arguments and results
 on a call, and a call into Python for each import the module uses). The code of the module should not be called in a
-loop from Python for tiny pieces of work; give it the work in larger pieces. On CoreMark the extension was on a par with the
-same benchmark compiled as C directly (within the noise of the measurement, on one machine: see [FEATURES.md](docs/FEATURES.md)).
+loop from Python for tiny pieces of work; give it the work in larger pieces. On CoreMark (one machine, gcc) the extension made with the
+default check of the stack reaches about 91% of the same benchmark compiled as C directly, and about 98% with the guard page for the stack
+(`WASMEXT_STACK_CHECK=guard`, which is warned about; the earlier build, with the guard page only, was within the noise of native). The 9% buys a stack check
+that needs no handler of signals on an alternate stack per thread and names an overflow right in every thread: see
+[experiments/stack_limit](docs/experiments/stack_limit/README.md) and [FEATURES.md](docs/FEATURES.md).
 The price of AOT is that the `.wasm` is fixed when the extension is built: a module cannot be loaded at run time (that is what
 an engine, or `wasmimport` as a development tool, is for), and building needs a C compiler.
 

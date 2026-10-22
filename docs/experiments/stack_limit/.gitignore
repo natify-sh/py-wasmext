@@ -5,3 +5,5 @@ ft.c
 ft.h
 ft.wasm
 ft_sp.c
+lib*.so
+so_*

@@ -44,7 +44,7 @@ static unsigned depth_reached(void) { return *(uint32_t *)w2c_ft_memory(&inst)->
 
 static void report(const char *where) {
     int code = try_recurse();
-    printf("  %-28s %s, depth reached %u\n", where, code == WASM_RT_TRAP_EXHAUSTION ? "EXHAUSTION trap" : "OTHER", depth_reached());
+    printf("  %-28s %s (%s), depth reached %u\n", where, code == WASM_RT_TRAP_EXHAUSTION ? "EXHAUSTION trap" : "OTHER", wasm_rt_strerror((wasm_rt_trap_t)code), depth_reached());
     fflush(stdout);
 }
 

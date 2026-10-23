@@ -11,10 +11,6 @@ from pathlib import Path
 
 import pytest
 
-if sys.platform == "win32":
-    pytest.skip("the host of the filesystem is POSIX only", allow_module_level=True)
-    raise AssertionError  # not reached: it tells the type checker that nothing below is for Windows
-
 import wasmext
 from wasmext.p2 import wasi_p2_filesystem as fs
 from wasmext.p2 import wasi_p2_io as io
@@ -23,6 +19,7 @@ from wasmext.p2.wasi_p2_core import Host, Trap, load_u32
 C_P2 = Path(wasmext.__file__).parent / "c" / "p2"
 DRIVER = Path(__file__).parent / "data" / "wasi_p2_filesystem_driver.c"
 CC = shutil.which("cc") or shutil.which("gcc") or shutil.which("clang")
+LIBS: list[str] = ["-lbcrypt"] if sys.platform == "win32" else []  # the random bytes of the core
 
 SCENARIOS = ["main", "bad_handle", "outside"]
 
@@ -352,9 +349,10 @@ def c_output(scenario: str, binary: Path, root: Path) -> str:
 def driver(tmp_path_factory: pytest.TempPathFactory) -> Path:
     if CC is None:
         pytest.skip("no C compiler")
-    binary = tmp_path_factory.mktemp("p2fs") / "driver"
+    binary = tmp_path_factory.mktemp("p2fs") / ("driver.exe" if sys.platform == "win32" else "driver")
     subprocess.run(
-        [CC, "-std=gnu11", "-Wall", "-Wextra", "-Werror", "-I", str(C_P2), str(DRIVER), "-o", str(binary)], check=True
+        [CC, "-std=gnu11", "-Wall", "-Wextra", "-Werror", "-I", str(C_P2), str(DRIVER), "-o", str(binary), *LIBS],
+        check=True,
     )
     return binary
 
@@ -426,11 +424,12 @@ def test_walk_stays_below_the_directory(tmp_path: Path) -> None:
     (tmp_path / "out").mkdir()
     (tmp_path / "out" / "secret").write_text("x")
     os.symlink("../out", tmp_path / "in" / "esc")
-    fd = os.open(tmp_path / "in", os.O_RDONLY | os.O_DIRECTORY)
+    base = fs._open_directory(str(tmp_path / "in"), 0)  # pyright: ignore[reportPrivateUsage]
     try:
         for path in (b"esc/secret", b"esc", b"./esc/../secret", b"a/../../out/secret"):
             with pytest.raises(fs.FsError) as caught:
-                fs._walk(fd, path, True)  # pyright: ignore[reportPrivateUsage]
+                fs._walk(fs._ref(base), path, True)  # pyright: ignore[reportPrivateUsage]
             assert fs.ERROR_CODES[caught.value.code] in ("not-permitted", "no-entry"), path
     finally:
-        os.close(fd)
+        if base.fd >= 0:
+            os.close(base.fd)

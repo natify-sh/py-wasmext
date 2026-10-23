@@ -1,19 +1,13 @@
 /* wasi:filesystem (32 imports): preopens and types (the twin of p2/wasi_p2_filesystem.py, where the confinement of paths, the rights and the layouts are described).
- * POSIX only (openat and the rest of the *at calls). The state keeps the preopens: `s->preopens`, a list of {path, name, writable} owned by the caller.
- * Every function that can fail with an error-code writes it in the result; a bad handle or a pointer outside the memory is a trap. */
+ * POSIX (openat and the rest of the *at calls: wasi_p2_fs_posix.h) and Windows (paths below a directory: wasi_p2_fs_win32.h). The state keeps the preopens:
+ * `s->preopens`, a list of {path, name, writable} owned by the caller. Every function that can fail with an error-code writes it in the result; a bad handle or a pointer
+ * outside the memory is a trap. */
 #ifndef WASI_P2_FILESYSTEM_H
 #define WASI_P2_FILESYSTEM_H
 
-#ifdef _WIN32
-#error "wasi_p2_filesystem.h needs POSIX"
-#endif
-
-#include <dirent.h>
 #include <errno.h>
-#include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/types.h>
-#include <unistd.h>
 
 #include "wasi_p2_io.h"
 
@@ -41,10 +35,18 @@ enum { WASI_P2_T_UNKNOWN, WASI_P2_T_BLOCK, WASI_P2_T_CHAR, WASI_P2_T_DIRECTORY, 
 #define WASI_P2_PATH_MAX 8192
 #define WASI_P2_STREAM_CHUNK 65536u
 
+/* what the system says of a file (for both systems): times in nanoseconds since 1970 */
 typedef struct {
-    int fd;
+    uint8_t type;
+    uint64_t nlink, size, dev, ino;
+    int64_t atime_ns, mtime_ns, ctime_ns;
+} wasi_p2_stat;
+
+typedef struct {
+    int fd; /* POSIX: the descriptor; Windows: the C-library descriptor of a file, -1 for a directory */
     uint32_t flags;
     int is_dir;
+    char *path; /* Windows: where it is, as UTF-8 with the \\?\ prefix (malloc'd); POSIX: NULL */
 } wasi_p2_descriptor;
 
 typedef struct {
@@ -57,22 +59,32 @@ WASI_P2_FN int wasi_p2_errno_code(int e) {
     switch (e) {
     case EACCES: return WASI_P2_E_ACCESS;
     case EAGAIN: return WASI_P2_E_WOULD_BLOCK;
+#ifdef EALREADY
     case EALREADY: return WASI_P2_E_ALREADY;
+#endif
     case EBADF: return WASI_P2_E_BAD_DESCRIPTOR;
     case EBUSY: return WASI_P2_E_BUSY;
     case EDEADLK: return WASI_P2_E_DEADLOCK;
+#ifdef EDQUOT
     case EDQUOT: return WASI_P2_E_QUOTA;
+#endif
     case EEXIST: return WASI_P2_E_EXIST;
     case EFBIG: return WASI_P2_E_FILE_TOO_LARGE;
     case EILSEQ: return WASI_P2_E_ILLEGAL_BYTE_SEQUENCE;
+#ifdef EINPROGRESS
     case EINPROGRESS: return WASI_P2_E_IN_PROGRESS;
+#endif
     case EINTR: return WASI_P2_E_INTERRUPTED;
     case EINVAL: return WASI_P2_E_INVALID;
     case EIO: return WASI_P2_E_IO;
     case EISDIR: return WASI_P2_E_IS_DIRECTORY;
+#ifdef ELOOP
     case ELOOP: return WASI_P2_E_LOOP;
+#endif
     case EMLINK: return WASI_P2_E_TOO_MANY_LINKS;
+#ifdef EMSGSIZE
     case EMSGSIZE: return WASI_P2_E_MESSAGE_SIZE;
+#endif
     case ENAMETOOLONG: return WASI_P2_E_NAME_TOO_LONG;
     case ENODEV: return WASI_P2_E_NO_DEVICE;
     case ENOENT: return WASI_P2_E_NO_ENTRY;
@@ -81,19 +93,25 @@ WASI_P2_FN int wasi_p2_errno_code(int e) {
     case ENOSPC: return WASI_P2_E_INSUFFICIENT_SPACE;
     case ENOTDIR: return WASI_P2_E_NOT_DIRECTORY;
     case ENOTEMPTY: return WASI_P2_E_NOT_EMPTY;
+#ifdef ENOTRECOVERABLE
     case ENOTRECOVERABLE: return WASI_P2_E_NOT_RECOVERABLE;
+#endif
     case ENOSYS: return WASI_P2_E_UNSUPPORTED;
-#if defined(ENOTSUP) && ENOTSUP != EOPNOTSUPP
+#if defined(ENOTSUP) && defined(EOPNOTSUPP) && ENOTSUP != EOPNOTSUPP
     case ENOTSUP: return WASI_P2_E_UNSUPPORTED;
 #endif
     case ENOTTY: return WASI_P2_E_NO_TTY;
     case ENXIO: return WASI_P2_E_NO_SUCH_DEVICE;
+#ifdef EOVERFLOW
     case EOVERFLOW: return WASI_P2_E_OVERFLOW;
+#endif
     case EPERM: return WASI_P2_E_NOT_PERMITTED;
     case EPIPE: return WASI_P2_E_PIPE;
     case EROFS: return WASI_P2_E_READ_ONLY;
     case ESPIPE: return WASI_P2_E_INVALID_SEEK;
+#ifdef ETXTBSY
     case ETXTBSY: return WASI_P2_E_TEXT_FILE_BUSY;
+#endif
     case EXDEV: return WASI_P2_E_CROSS_DEVICE;
     default: return WASI_P2_E_IO;
     }
@@ -102,35 +120,18 @@ WASI_P2_FN int wasi_p2_errno_code(int e) {
 /* the code for the last failed call */
 WASI_P2_FN int wasi_p2_fail(void) { return wasi_p2_errno_code(errno); }
 
-WASI_P2_FN uint8_t wasi_p2_type_of(mode_t m) {
-    if (S_ISREG(m)) return WASI_P2_T_REGULAR;
-    if (S_ISDIR(m)) return WASI_P2_T_DIRECTORY;
-    if (S_ISLNK(m)) return WASI_P2_T_SYMLINK;
-    if (S_ISCHR(m)) return WASI_P2_T_CHAR;
-    if (S_ISBLK(m)) return WASI_P2_T_BLOCK;
-    if (S_ISFIFO(m)) return WASI_P2_T_FIFO;
-    if (S_ISSOCK(m)) return WASI_P2_T_SOCKET;
-    return WASI_P2_T_UNKNOWN;
-}
-
-#ifdef __APPLE__
-#define WASI_P2_ATIME(st) ((st).st_atimespec)
-#define WASI_P2_MTIME(st) ((st).st_mtimespec)
-#define WASI_P2_CTIME(st) ((st).st_ctimespec)
+#ifdef _WIN32
+#include "wasi_p2_fs_win32.h"
 #else
-#define WASI_P2_ATIME(st) ((st).st_atim)
-#define WASI_P2_MTIME(st) ((st).st_mtim)
-#define WASI_P2_CTIME(st) ((st).st_ctim)
+#include "wasi_p2_fs_posix.h"
 #endif
-
-WASI_P2_FN int64_t wasi_p2_ts_ns(struct timespec t) { return (int64_t)t.tv_sec * 1000000000LL + t.tv_nsec; }
 
 /* the descriptors and what they stand for */
 
 WASI_P2_FN void wasi_p2_descriptor_destroy(wasi_p2_state *s, void *obj) {
     wasi_p2_descriptor *d = (wasi_p2_descriptor *)obj;
     (void)s;
-    close(d->fd);
+    wasi_p2_sys_close(d);
     free(d);
 }
 
@@ -153,139 +154,13 @@ WASI_P2_FN int wasi_p2_need(const wasi_p2_descriptor *d, uint32_t flag) {
     return flag == WASI_P2_MUTATE ? WASI_P2_E_READ_ONLY : WASI_P2_E_BAD_DESCRIPTOR; /* `mutate-directory` unset: read-only (the WIT says so) */
 }
 
-WASI_P2_FN uint32_t wasi_p2_descriptor_new(wasi_p2_state *s, int fd, uint32_t flags, int is_dir) {
+/* a handle on a descriptor that the system call filled (`d` is copied) */
+WASI_P2_FN uint32_t wasi_p2_descriptor_new(wasi_p2_state *s, const wasi_p2_descriptor *made, uint32_t flags) {
     wasi_p2_descriptor *d = (wasi_p2_descriptor *)malloc(sizeof *d);
     if (!d) s->trap(s, "out of memory");
-    d->fd = fd, d->flags = flags, d->is_dir = is_dir;
+    *d = *made;
+    d->flags = flags;
     return wasi_p2_table_new(s, WASI_P2_KIND_DESCRIPTOR, d, wasi_p2_descriptor_destroy);
-}
-
-/* the walk of a path, confined below a directory (see the Python twin): `dir` and `leaf` are the directory that holds the last name and that name ("." for none);
-   `wasi_p2_walk_close` closes what the walk opened. */
-typedef struct {
-    int dir;
-    char leaf[WASI_P2_NAME_MAX + 2];
-    int fds[WASI_P2_MAX_DEPTH + 2]; /* [0] is the base, the others are opened by the walk */
-    int depth;
-} wasi_p2_walk;
-
-WASI_P2_FN void wasi_p2_walk_close(wasi_p2_walk *w) {
-    for (int i = 1; i <= w->depth; i++) close(w->fds[i]);
-    w->depth = 0;
-}
-
-WASI_P2_FN int wasi_p2_walk_path(wasi_p2_walk *w, int base, const uint8_t *path, uint32_t len, int follow) {
-    char work[WASI_P2_PATH_MAX], name[WASI_P2_NAME_MAX + 2], target[WASI_P2_PATH_MAX];
-    int links = 0, rc = WASI_P2_OK;
-    w->depth = 0;
-    w->fds[0] = base;
-    if (memchr(path, 0, len)) return WASI_P2_E_INVALID;
-    if (len == 0) return WASI_P2_E_NO_ENTRY; /* an empty name is no name (POSIX; Wasmtime says the same) */
-    if (len && path[0] == '/') return WASI_P2_E_NOT_PERMITTED;
-    if (len >= sizeof work) return WASI_P2_E_NAME_TOO_LONG;
-    memcpy(work, path, len);
-    work[len] = '\0';
-    char *cur = work;
-    for (;;) {
-        while (*cur == '/') cur++;
-        if (*cur == '\0') {
-            strcpy(w->leaf, ".");
-            break;
-        }
-        char *end = strchr(cur, '/');
-        size_t clen = end ? (size_t)(end - cur) : strlen(cur);
-        char *rest = cur + clen;
-        while (*rest == '/') rest++;
-        int last = (*rest == '\0');
-        int slash = last && end != NULL;
-        if (clen > WASI_P2_NAME_MAX) {
-            rc = WASI_P2_E_NAME_TOO_LONG;
-            goto done;
-        }
-        memcpy(name, cur, clen);
-        name[clen] = '\0';
-        if (clen == 1 && name[0] == '.') {
-            if (last) {
-                strcpy(w->leaf, ".");
-                break;
-            }
-            cur = rest;
-            continue;
-        }
-        if (clen == 2 && name[0] == '.' && name[1] == '.') {
-            if (w->depth == 0) {
-                rc = WASI_P2_E_NOT_PERMITTED;
-                goto done;
-            }
-            close(w->fds[w->depth--]);
-            if (last) {
-                strcpy(w->leaf, ".");
-                break;
-            }
-            cur = rest;
-            continue;
-        }
-        if (last) {
-            if (!follow) {
-                /* a slash after a name makes the kernel follow a link there whatever O_NOFOLLOW says; the walk follows it itself, below the base */
-                char probe[1];
-                if (!(slash && readlinkat(w->fds[w->depth], name, probe, sizeof probe) >= 0)) {
-                    strcpy(w->leaf, name);
-                    if (slash) strcat(w->leaf, "/");
-                    break;
-                }
-            }
-        } else {
-            if (w->depth > WASI_P2_MAX_DEPTH) {
-                rc = WASI_P2_E_NAME_TOO_LONG;
-                goto done;
-            }
-            int next = openat(w->fds[w->depth], name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
-            if (next >= 0) {
-                w->fds[++w->depth] = next;
-                cur = rest;
-                continue;
-            }
-            if (errno != ELOOP && errno != ENOTDIR && errno != EMLINK) {
-                rc = wasi_p2_fail();
-                goto done;
-            }
-        }
-        ssize_t n = readlinkat(w->fds[w->depth], name, target, sizeof target - 1);
-        if (n < 0) {
-            if (last) { /* not a link: this is the last name */
-                strcpy(w->leaf, name);
-                if (slash) strcat(w->leaf, "/");
-                break;
-            }
-            rc = WASI_P2_E_NOT_DIRECTORY;
-            goto done;
-        }
-        target[n] = '\0';
-        if (++links > WASI_P2_MAX_LINKS) {
-            rc = WASI_P2_E_LOOP;
-            goto done;
-        }
-        if (target[0] == '/') {
-            rc = WASI_P2_E_NOT_PERMITTED;
-            goto done;
-        }
-        size_t rest_len = strlen(rest);
-        if ((size_t)n + 1 + rest_len >= sizeof work) {
-            rc = WASI_P2_E_NAME_TOO_LONG;
-            goto done;
-        }
-        memmove(work + n + 1, rest, rest_len + 1); /* rest may lie inside work */
-        memcpy(work, target, (size_t)n);
-        work[n] = '/';
-        if (rest_len == 0 && !slash) work[n] = '\0';
-        cur = work;
-    }
-    w->dir = w->fds[w->depth];
-    return WASI_P2_OK;
-done:
-    wasi_p2_walk_close(w);
-    return rc;
 }
 
 /* results */
@@ -310,13 +185,13 @@ WASI_P2_FN void wasi_p2_datetime_some(wasi_p2_state *s, uint32_t comp, uint32_t 
     wasi_p2_store_u32(s, comp, ptr + 16, (uint32_t)((uint64_t)ns % 1000000000ULL));
 }
 
-WASI_P2_FN void wasi_p2_write_stat(wasi_p2_state *s, uint32_t comp, uint32_t ptr, const struct stat *st) {
-    wasi_p2_store_u8(s, comp, ptr, wasi_p2_type_of(st->st_mode));
-    wasi_p2_store_u64(s, comp, ptr + 8, (uint64_t)st->st_nlink);
-    wasi_p2_store_u64(s, comp, ptr + 16, (uint64_t)st->st_size);
-    wasi_p2_datetime_some(s, comp, ptr + 24, wasi_p2_ts_ns(WASI_P2_ATIME(*st)));
-    wasi_p2_datetime_some(s, comp, ptr + 48, wasi_p2_ts_ns(WASI_P2_MTIME(*st)));
-    wasi_p2_datetime_some(s, comp, ptr + 72, wasi_p2_ts_ns(WASI_P2_CTIME(*st)));
+WASI_P2_FN void wasi_p2_write_stat(wasi_p2_state *s, uint32_t comp, uint32_t ptr, const wasi_p2_stat *st) {
+    wasi_p2_store_u8(s, comp, ptr, st->type);
+    wasi_p2_store_u64(s, comp, ptr + 8, st->nlink);
+    wasi_p2_store_u64(s, comp, ptr + 16, st->size);
+    wasi_p2_datetime_some(s, comp, ptr + 24, st->atime_ns);
+    wasi_p2_datetime_some(s, comp, ptr + 48, st->mtime_ns);
+    wasi_p2_datetime_some(s, comp, ptr + 72, st->ctime_ns);
 }
 
 /* streams over a file: the descriptor is duplicated, so the stream outlives the handle */
@@ -327,10 +202,10 @@ typedef struct {
     int append;
 } wasi_p2_file_stream;
 
-WASI_P2_FN void wasi_p2_file_stream_set_failure(wasi_p2_stream *st, int e, const char *what) {
+WASI_P2_FN void wasi_p2_file_stream_set_failure(wasi_p2_stream *st, int code, const char *what) {
     st->failure = what;
     st->failure_has_code = 1;
-    st->failure_code = wasi_p2_errno_code(e);
+    st->failure_code = code;
 }
 
 WASI_P2_FN int wasi_p2_file_read(wasi_p2_state *s, wasi_p2_stream *st, uint8_t *buf, uint64_t len, uint64_t *got) {
@@ -338,9 +213,10 @@ WASI_P2_FN int wasi_p2_file_read(wasi_p2_state *s, wasi_p2_stream *st, uint8_t *
     (void)s;
     *got = 0;
     if (len == 0) return WASI_P2_STREAM_OK;
-    ssize_t n = pread(f->fd, buf, (size_t)len, (off_t)f->pos);
+    int rc = WASI_P2_OK;
+    int64_t n = wasi_p2_sys_pread(f->fd, buf, (size_t)len, f->pos, &rc);
     if (n < 0) {
-        wasi_p2_file_stream_set_failure(st, errno, "read failed");
+        wasi_p2_file_stream_set_failure(st, rc, "read failed");
         return WASI_P2_STREAM_FAILED;
     }
     if (n == 0) return WASI_P2_STREAM_CLOSED;
@@ -360,19 +236,18 @@ WASI_P2_FN int wasi_p2_file_write(wasi_p2_state *s, wasi_p2_stream *st, const ui
     (void)s;
     uint64_t at = f->pos;
     if (f->append) {
-        struct stat sb;
-        if (fstat(f->fd, &sb) < 0) {
-            wasi_p2_file_stream_set_failure(st, errno, "write failed");
+        int rc = wasi_p2_sys_size(f->fd, &at);
+        if (rc != WASI_P2_OK) {
+            wasi_p2_file_stream_set_failure(st, rc, "write failed");
             return WASI_P2_STREAM_FAILED;
         }
-        at = (uint64_t)sb.st_size;
     }
     uint64_t done = 0;
     while (done < len) {
-        ssize_t n = pwrite(f->fd, data + done, (size_t)(len - done), (off_t)(at + done));
+        int rc = WASI_P2_OK;
+        int64_t n = wasi_p2_sys_pwrite(f->fd, data + done, (size_t)(len - done), at + done, &rc);
         if (n < 0) {
-            if (errno == EINTR) continue;
-            wasi_p2_file_stream_set_failure(st, errno, "write failed");
+            wasi_p2_file_stream_set_failure(st, rc, "write failed");
             return WASI_P2_STREAM_FAILED;
         }
         done += (uint64_t)n;
@@ -387,7 +262,7 @@ WASI_P2_FN int wasi_p2_file_flush(wasi_p2_state *s, wasi_p2_stream *st) {
 }
 
 WASI_P2_FN void wasi_p2_file_stream_destroy(wasi_p2_state *s, wasi_p2_stream *st) {
-    close(((wasi_p2_file_stream *)st)->fd);
+    wasi_p2_sys_closefd(((wasi_p2_file_stream *)st)->fd);
     wasi_p2_stream_free(s, st);
 }
 
@@ -395,7 +270,7 @@ WASI_P2_FN void wasi_p2_file_stream_destroy(wasi_p2_state *s, wasi_p2_stream *st
 WASI_P2_FN uint32_t wasi_p2_file_stream_new(wasi_p2_state *s, int fd, uint64_t pos, int output) {
     wasi_p2_file_stream *f = (wasi_p2_file_stream *)calloc(1, sizeof *f);
     if (!f) s->trap(s, "out of memory");
-    f->fd = dup(fd);
+    f->fd = fd >= 0 ? wasi_p2_sys_dup(fd) : -1;
     f->pos = pos;
     f->append = output == 2;
     f->base.ready = wasi_p2_always_ready;
@@ -415,9 +290,9 @@ WASI_P2_FN uint32_t wasi_p2_file_stream_new(wasi_p2_state *s, int fd, uint64_t p
 WASI_P2_FN void wasi_filesystem_preopens_get_directories(wasi_p2_state *s, uint32_t comp, uint32_t retptr) {
     uint32_t ptr = wasi_p2_alloc(s, comp, 4, 12 * s->preopen_count);
     for (uint32_t i = 0; i < s->preopen_count; i++) {
-        int fd = open(s->preopens[i].path, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
-        if (fd < 0) s->trap(s, "cannot open a preopened directory");
-        uint32_t handle = wasi_p2_descriptor_new(s, fd, WASI_P2_READ | (s->preopens[i].writable ? WASI_P2_MUTATE : 0), 1);
+        wasi_p2_descriptor made;
+        if (wasi_p2_sys_open_directory(s->preopens[i].path, &made) != WASI_P2_OK) s->trap(s, "cannot open a preopened directory");
+        uint32_t handle = wasi_p2_descriptor_new(s, &made, WASI_P2_READ | (s->preopens[i].writable ? WASI_P2_MUTATE : 0));
         wasi_p2_store_u32(s, comp, ptr + 12 * i, handle);
         wasi_p2_string(s, comp, s->preopens[i].name, ptr + 12 * i + 4);
     }
@@ -471,18 +346,11 @@ WASI_P2_FN void wasi_filesystem_types_descriptor_advise(wasi_p2_state *s, uint32
 }
 
 WASI_P2_FN void wasi_filesystem_types_descriptor_sync_data(wasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t retptr) {
-    wasi_p2_descriptor *d = wasi_p2_descriptor_get(s, self);
-#ifdef __APPLE__
-    int r = fsync(d->fd);
-#else
-    int r = fdatasync(d->fd);
-#endif
-    wasi_p2_status(s, comp, retptr, r < 0 ? wasi_p2_fail() : WASI_P2_OK);
+    wasi_p2_status(s, comp, retptr, wasi_p2_sys_fsync(wasi_p2_descriptor_get(s, self), 1));
 }
 
 WASI_P2_FN void wasi_filesystem_types_descriptor_sync(wasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t retptr) {
-    wasi_p2_descriptor *d = wasi_p2_descriptor_get(s, self);
-    wasi_p2_status(s, comp, retptr, fsync(d->fd) < 0 ? wasi_p2_fail() : WASI_P2_OK);
+    wasi_p2_status(s, comp, retptr, wasi_p2_sys_fsync(wasi_p2_descriptor_get(s, self), 0));
 }
 
 WASI_P2_FN void wasi_filesystem_types_descriptor_get_flags(wasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t retptr) {
@@ -493,19 +361,20 @@ WASI_P2_FN void wasi_filesystem_types_descriptor_get_flags(wasi_p2_state *s, uin
 
 WASI_P2_FN void wasi_filesystem_types_descriptor_get_type(wasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t retptr) {
     wasi_p2_descriptor *d = wasi_p2_descriptor_get(s, self);
-    struct stat st;
-    if (fstat(d->fd, &st) < 0) {
-        wasi_p2_fs_fail(s, comp, retptr, retptr + 1, wasi_p2_fail());
+    wasi_p2_stat st;
+    int rc = wasi_p2_sys_fstat(d, &st);
+    if (rc != WASI_P2_OK) {
+        wasi_p2_fs_fail(s, comp, retptr, retptr + 1, rc);
         return;
     }
     wasi_p2_ok(s, comp, retptr);
-    wasi_p2_store_u8(s, comp, retptr + 1, wasi_p2_type_of(st.st_mode));
+    wasi_p2_store_u8(s, comp, retptr + 1, st.type);
 }
 
 WASI_P2_FN void wasi_filesystem_types_descriptor_set_size(wasi_p2_state *s, uint32_t comp, uint32_t self, uint64_t size, uint32_t retptr) {
     wasi_p2_descriptor *d = wasi_p2_descriptor_get(s, self);
     int rc = wasi_p2_need(d, WASI_P2_WRITE);
-    if (rc == WASI_P2_OK && ftruncate(d->fd, (off_t)size) < 0) rc = wasi_p2_fail();
+    if (rc == WASI_P2_OK) rc = wasi_p2_sys_ftruncate(d->fd, size);
     wasi_p2_status(s, comp, retptr, rc);
 }
 
@@ -516,26 +385,16 @@ WASI_P2_FN int64_t wasi_p2_new_time(uint32_t tag, uint64_t seconds, uint32_t nan
     return (int64_t)seconds * 1000000000LL + nanos;
 }
 
-WASI_P2_FN struct timespec wasi_p2_ns_ts(int64_t ns) {
-    struct timespec t;
-    t.tv_sec = (time_t)(ns / 1000000000LL);
-    t.tv_nsec = (long)(ns % 1000000000LL);
-    return t;
-}
-
 WASI_P2_FN void wasi_filesystem_types_descriptor_set_times(wasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t a_tag, uint64_t a_seconds, uint32_t a_nanos,
                                                            uint32_t m_tag, uint64_t m_seconds, uint32_t m_nanos, uint32_t retptr) {
     wasi_p2_descriptor *d = wasi_p2_descriptor_get(s, self);
     int rc = wasi_p2_need(d, d->is_dir ? WASI_P2_MUTATE : WASI_P2_WRITE);
     if (rc == WASI_P2_OK) {
-        struct stat st;
-        if (fstat(d->fd, &st) < 0) {
-            rc = wasi_p2_fail();
-        } else {
+        wasi_p2_stat st;
+        rc = wasi_p2_sys_fstat(d, &st);
+        if (rc == WASI_P2_OK) {
             int64_t now = (int64_t)s->wall_ns(s);
-            struct timespec ts[2] = {wasi_p2_ns_ts(wasi_p2_new_time(a_tag, a_seconds, a_nanos, wasi_p2_ts_ns(WASI_P2_ATIME(st)), now)),
-                                     wasi_p2_ns_ts(wasi_p2_new_time(m_tag, m_seconds, m_nanos, wasi_p2_ts_ns(WASI_P2_MTIME(st)), now))};
-            if (futimens(d->fd, ts) < 0) rc = wasi_p2_fail();
+            rc = wasi_p2_sys_set_times_fd(d, wasi_p2_new_time(a_tag, a_seconds, a_nanos, st.atime_ns, now), wasi_p2_new_time(m_tag, m_seconds, m_nanos, st.mtime_ns, now));
         }
     }
     wasi_p2_status(s, comp, retptr, rc);
@@ -547,11 +406,8 @@ WASI_P2_FN void wasi_filesystem_types_descriptor_read(wasi_p2_state *s, uint32_t
     uint64_t want = length < WASI_P2_READ_CAP ? length : WASI_P2_READ_CAP;
     uint8_t *buf = (uint8_t *)malloc(want ? (size_t)want : 1);
     if (!buf) s->trap(s, "out of memory");
-    ssize_t n = 0;
-    if (rc == WASI_P2_OK) {
-        n = pread(d->fd, buf, (size_t)want, (off_t)offset);
-        if (n < 0) rc = wasi_p2_fail();
-    }
+    int64_t n = 0;
+    if (rc == WASI_P2_OK) n = wasi_p2_sys_pread(d->fd, buf, (size_t)want, offset, &rc);
     if (rc != WASI_P2_OK) {
         free(buf);
         wasi_p2_fs_fail(s, comp, retptr, retptr + 4, rc);
@@ -573,13 +429,8 @@ WASI_P2_FN void wasi_filesystem_types_descriptor_write(wasi_p2_state *s, uint32_
     int rc = wasi_p2_need(d, WASI_P2_WRITE);
     uint32_t done = 0;
     while (rc == WASI_P2_OK && done < length) {
-        ssize_t n = pwrite(d->fd, data + done, length - done, (off_t)(offset + done));
-        if (n < 0) {
-            if (errno == EINTR) continue;
-            rc = wasi_p2_fail();
-        } else {
-            done += (uint32_t)n;
-        }
+        int64_t n = wasi_p2_sys_pwrite(d->fd, data + done, length - done, offset + done, &rc);
+        if (n >= 0) done += (uint32_t)n;
     }
     if (rc != WASI_P2_OK) {
         wasi_p2_fs_fail(s, comp, retptr, retptr + 8, rc);
@@ -589,56 +440,23 @@ WASI_P2_FN void wasi_filesystem_types_descriptor_write(wasi_p2_state *s, uint32_
     wasi_p2_store_u64(s, comp, retptr + 8, length);
 }
 
-WASI_P2_FN int wasi_p2_name_cmp(const void *a, const void *b) {
-    return strcmp(*(char *const *)a, *(char *const *)b); /* the names are sorted with their types: see below */
-}
-
 WASI_P2_FN void wasi_filesystem_types_descriptor_read_directory(wasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t retptr) {
     wasi_p2_descriptor *d = wasi_p2_descriptor_get(s, self);
     if (!d->is_dir) {
         wasi_p2_handle_result(s, comp, retptr, WASI_P2_E_NOT_DIRECTORY, 0);
         return;
     }
-    int dupfd = dup(d->fd);
-    DIR *dir = dupfd < 0 ? NULL : fdopendir(dupfd);
-    if (!dir) {
-        int rc = wasi_p2_fail();
-        if (dupfd >= 0) close(dupfd);
+    char **names;
+    uint8_t *types;
+    uint32_t count;
+    int rc = wasi_p2_sys_list(d, &names, &types, &count, s);
+    if (rc != WASI_P2_OK) {
         wasi_p2_handle_result(s, comp, retptr, rc, 0);
         return;
     }
-    rewinddir(dir);
-    uint32_t count = 0, capacity = 16;
-    char **names = (char **)malloc(capacity * sizeof *names);
-    if (!names) s->trap(s, "out of memory");
-    struct dirent *e;
-    while ((e = readdir(dir)) != NULL) {
-        if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
-        if (count == capacity) {
-            capacity *= 2;
-            names = (char **)realloc(names, capacity * sizeof *names);
-            if (!names) s->trap(s, "out of memory");
-        }
-        names[count] = strdup(e->d_name);
-        if (!names[count]) s->trap(s, "out of memory");
-        count++;
-    }
-    closedir(dir);
-    qsort(names, count, sizeof *names, wasi_p2_name_cmp);
     wasi_p2_dir_entries *ent = (wasi_p2_dir_entries *)calloc(1, sizeof *ent);
-    uint8_t *types = (uint8_t *)malloc(count ? count : 1);
-    if (!ent || !types) s->trap(s, "out of memory");
-    uint32_t kept = 0;
-    for (uint32_t i = 0; i < count; i++) {
-        struct stat st;
-        if (fstatat(d->fd, names[i], &st, AT_SYMLINK_NOFOLLOW) < 0) { /* gone since the listing */
-            free(names[i]);
-            continue;
-        }
-        names[kept] = names[i];
-        types[kept++] = wasi_p2_type_of(st.st_mode);
-    }
-    ent->count = kept, ent->names = names, ent->types = types;
+    if (!ent) s->trap(s, "out of memory");
+    ent->count = count, ent->names = names, ent->types = types;
     wasi_p2_handle_result(s, comp, retptr, WASI_P2_OK, wasi_p2_table_new(s, WASI_P2_KIND_DIRECTORY_ENTRY_STREAM, ent, wasi_p2_dir_entries_destroy));
 }
 
@@ -657,9 +475,10 @@ WASI_P2_FN void wasi_filesystem_types_directory_entry_stream_read_directory_entr
 
 WASI_P2_FN void wasi_filesystem_types_descriptor_stat(wasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t retptr) {
     wasi_p2_descriptor *d = wasi_p2_descriptor_get(s, self);
-    struct stat st;
-    if (fstat(d->fd, &st) < 0) {
-        wasi_p2_fs_fail(s, comp, retptr, retptr + 8, wasi_p2_fail());
+    wasi_p2_stat st;
+    int rc = wasi_p2_sys_fstat(d, &st);
+    if (rc != WASI_P2_OK) {
+        wasi_p2_fs_fail(s, comp, retptr, retptr + 8, rc);
         return;
     }
     wasi_p2_ok(s, comp, retptr);
@@ -677,22 +496,22 @@ WASI_P2_FN int wasi_p2_begin(wasi_p2_state *s, uint32_t comp, wasi_p2_walk *w, u
         if (rc != WASI_P2_OK) return rc;
     }
     if (!d->is_dir) return WASI_P2_E_NOT_DIRECTORY;
-    return wasi_p2_walk_path(w, d->fd, path, length, follow);
+    return wasi_p2_walk_path(w, d, path, length, follow);
 }
 
-WASI_P2_FN int wasi_p2_stat_at_rc(wasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t path_flags, uint32_t ptr, uint32_t length, struct stat *st) {
+WASI_P2_FN int wasi_p2_stat_at_rc(wasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t path_flags, uint32_t ptr, uint32_t length, wasi_p2_stat *st) {
     wasi_p2_walk w;
     wasi_p2_descriptor *d;
     int rc = wasi_p2_begin(s, comp, &w, self, ptr, length, path_flags & WASI_P2_SYMLINK_FOLLOW, 0, &d);
     if (rc != WASI_P2_OK) return rc;
-    rc = fstatat(w.dir, w.leaf, st, AT_SYMLINK_NOFOLLOW) < 0 ? wasi_p2_fail() : WASI_P2_OK;
+    rc = wasi_p2_sys_lstat(w.dir, w.leaf, st);
     wasi_p2_walk_close(&w);
     return rc;
 }
 
 WASI_P2_FN void wasi_filesystem_types_descriptor_stat_at(wasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t path_flags, uint32_t ptr, uint32_t length,
                                                          uint32_t retptr) {
-    struct stat st;
+    wasi_p2_stat st;
     int rc = wasi_p2_stat_at_rc(s, comp, self, path_flags, ptr, length, &st);
     if (rc != WASI_P2_OK) {
         wasi_p2_fs_fail(s, comp, retptr, retptr + 8, rc);
@@ -709,14 +528,12 @@ WASI_P2_FN void wasi_filesystem_types_descriptor_set_times_at(wasi_p2_state *s, 
     wasi_p2_descriptor *d;
     int rc = wasi_p2_begin(s, comp, &w, self, ptr, length, path_flags & WASI_P2_SYMLINK_FOLLOW, WASI_P2_MUTATE, &d);
     if (rc == WASI_P2_OK) {
-        struct stat st;
-        if (fstatat(w.dir, w.leaf, &st, AT_SYMLINK_NOFOLLOW) < 0) {
-            rc = wasi_p2_fail();
-        } else {
+        wasi_p2_stat st;
+        rc = wasi_p2_sys_lstat(w.dir, w.leaf, &st);
+        if (rc == WASI_P2_OK) {
             int64_t now = (int64_t)s->wall_ns(s);
-            struct timespec ts[2] = {wasi_p2_ns_ts(wasi_p2_new_time(a_tag, a_seconds, a_nanos, wasi_p2_ts_ns(WASI_P2_ATIME(st)), now)),
-                                     wasi_p2_ns_ts(wasi_p2_new_time(m_tag, m_seconds, m_nanos, wasi_p2_ts_ns(WASI_P2_MTIME(st)), now))};
-            if (utimensat(w.dir, w.leaf, ts, AT_SYMLINK_NOFOLLOW) < 0) rc = wasi_p2_fail();
+            rc = wasi_p2_sys_set_times(w.dir, w.leaf, wasi_p2_new_time(a_tag, a_seconds, a_nanos, st.atime_ns, now),
+                                       wasi_p2_new_time(m_tag, m_seconds, m_nanos, st.mtime_ns, now));
         }
         wasi_p2_walk_close(&w);
     }
@@ -732,7 +549,7 @@ WASI_P2_FN void wasi_filesystem_types_descriptor_link_at(wasi_p2_state *s, uint3
         rc = wasi_p2_need(n, WASI_P2_MUTATE);
         if (rc == WASI_P2_OK) rc = wasi_p2_begin(s, comp, &w2, new_dir, new_ptr, new_len, 0, WASI_P2_MUTATE, &n);
         if (rc == WASI_P2_OK) {
-            if (linkat(w1.dir, w1.leaf, w2.dir, w2.leaf, 0) < 0) rc = wasi_p2_fail();
+            rc = wasi_p2_sys_link(w1.dir, w1.leaf, w2.dir, w2.leaf);
             wasi_p2_walk_close(&w2);
         }
         wasi_p2_walk_close(&w1);
@@ -755,30 +572,12 @@ WASI_P2_FN void wasi_filesystem_types_descriptor_open_at(wasi_p2_state *s, uint3
     } else if ((open_flags & (WASI_P2_CREATE | WASI_P2_TRUNCATE)) && !(d->flags & WASI_P2_MUTATE)) {
         rc = WASI_P2_E_READ_ONLY;
     } else {
-        int oflags = O_NOFOLLOW | O_CLOEXEC;
-        oflags |= (flags & WASI_P2_READ) && (flags & WASI_P2_WRITE) ? O_RDWR : (flags & WASI_P2_WRITE) ? O_WRONLY : O_RDONLY;
-        if (open_flags & WASI_P2_CREATE) oflags |= O_CREAT;
-        if (open_flags & WASI_P2_DIRECTORY) oflags |= O_DIRECTORY;
-        if (open_flags & WASI_P2_EXCLUSIVE) oflags |= O_EXCL;
-        if (open_flags & WASI_P2_TRUNCATE) oflags |= O_TRUNC;
-        if (flags & WASI_P2_FILE_SYNC) oflags |= O_SYNC;
-        if (flags & WASI_P2_DATA_SYNC) oflags |= O_DSYNC;
         wasi_p2_walk w;
-        rc = wasi_p2_walk_path(&w, d->fd, path, length, path_flags & WASI_P2_SYMLINK_FOLLOW);
+        rc = wasi_p2_walk_path(&w, d, path, length, path_flags & WASI_P2_SYMLINK_FOLLOW);
         if (rc == WASI_P2_OK) {
-            int fd = openat(w.dir, w.leaf, oflags, 0666);
-            if (fd < 0) {
-                rc = wasi_p2_fail();
-                char probe[1];
-                size_t leaf_len = strlen(w.leaf);
-                /* a link is not entered when links are not followed (O_NOFOLLOW) */
-                if (errno == ENOTDIR && (open_flags & WASI_P2_DIRECTORY) && leaf_len && w.leaf[leaf_len - 1] != '/' && readlinkat(w.dir, w.leaf, probe, sizeof probe) >= 0)
-                    rc = WASI_P2_E_LOOP;
-            } else {
-                struct stat st;
-                int is_dir = fstat(fd, &st) == 0 && S_ISDIR(st.st_mode);
-                handle = wasi_p2_descriptor_new(s, fd, flags, is_dir);
-            }
+            wasi_p2_descriptor made;
+            rc = wasi_p2_sys_open_at(w.dir, w.leaf, open_flags, flags, &made);
+            if (rc == WASI_P2_OK) handle = wasi_p2_descriptor_new(s, &made, flags);
             wasi_p2_walk_close(&w);
         }
     }
@@ -790,17 +589,14 @@ WASI_P2_FN void wasi_filesystem_types_descriptor_readlink_at(wasi_p2_state *s, u
     wasi_p2_descriptor *d;
     char target[WASI_P2_PATH_MAX];
     int rc = wasi_p2_begin(s, comp, &w, self, ptr, length, 0, 0, &d);
-    ssize_t n = 0;
     if (rc == WASI_P2_OK) {
-        n = readlinkat(w.dir, w.leaf, target, sizeof target - 1);
-        if (n < 0) rc = wasi_p2_fail();
+        rc = wasi_p2_sys_readlink(w.dir, w.leaf, target, sizeof target);
         wasi_p2_walk_close(&w);
     }
     if (rc != WASI_P2_OK) {
         wasi_p2_fs_fail(s, comp, retptr, retptr + 4, rc);
         return;
     }
-    target[n] = '\0';
     if (target[0] == '/') { /* an absolute or rooted target is not shown */
         wasi_p2_fs_fail(s, comp, retptr, retptr + 4, WASI_P2_E_NOT_PERMITTED);
         return;
@@ -809,7 +605,7 @@ WASI_P2_FN void wasi_filesystem_types_descriptor_readlink_at(wasi_p2_state *s, u
     wasi_p2_string(s, comp, target, retptr + 4);
 }
 
-typedef int (*wasi_p2_name_op)(int dir, const char *leaf, const void *arg);
+typedef int (*wasi_p2_name_op)(wasi_p2_dirref dir, const char *leaf, const void *arg);
 
 WASI_P2_FN void wasi_p2_at(wasi_p2_state *s, uint32_t comp, uint32_t retptr, uint32_t self, uint32_t ptr, uint32_t length, wasi_p2_name_op op, const void *arg) {
     wasi_p2_walk w;
@@ -822,25 +618,19 @@ WASI_P2_FN void wasi_p2_at(wasi_p2_state *s, uint32_t comp, uint32_t retptr, uin
     wasi_p2_status(s, comp, retptr, rc);
 }
 
-WASI_P2_FN int wasi_p2_op_mkdir(int dir, const char *leaf, const void *arg) {
+WASI_P2_FN int wasi_p2_op_mkdir(wasi_p2_dirref dir, const char *leaf, const void *arg) {
     (void)arg;
-    return mkdirat(dir, leaf, 0777) < 0 ? wasi_p2_fail() : WASI_P2_OK;
+    return wasi_p2_sys_mkdir(dir, leaf);
 }
-WASI_P2_FN int wasi_p2_op_rmdir(int dir, const char *leaf, const void *arg) {
+WASI_P2_FN int wasi_p2_op_rmdir(wasi_p2_dirref dir, const char *leaf, const void *arg) {
     (void)arg;
-    return unlinkat(dir, leaf, AT_REMOVEDIR) < 0 ? wasi_p2_fail() : WASI_P2_OK;
+    return wasi_p2_sys_rmdir(dir, leaf);
 }
-WASI_P2_FN int wasi_p2_op_unlink(int dir, const char *leaf, const void *arg) {
+WASI_P2_FN int wasi_p2_op_unlink(wasi_p2_dirref dir, const char *leaf, const void *arg) {
     (void)arg;
-    if (unlinkat(dir, leaf, 0) == 0) return WASI_P2_OK;
-    int e = errno;
-    struct stat st;
-    if (e == EPERM && fstatat(dir, leaf, &st, AT_SYMLINK_NOFOLLOW) == 0 && S_ISDIR(st.st_mode)) return WASI_P2_E_IS_DIRECTORY; /* some systems say EPERM */
-    return wasi_p2_errno_code(e);
+    return wasi_p2_sys_unlink(dir, leaf);
 }
-WASI_P2_FN int wasi_p2_op_symlink(int dir, const char *leaf, const void *arg) {
-    return symlinkat((const char *)arg, dir, leaf) < 0 ? wasi_p2_fail() : WASI_P2_OK;
-}
+WASI_P2_FN int wasi_p2_op_symlink(wasi_p2_dirref dir, const char *leaf, const void *arg) { return wasi_p2_sys_symlink((const char *)arg, dir, leaf); }
 
 WASI_P2_FN void wasi_filesystem_types_descriptor_create_directory_at(wasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t ptr, uint32_t length,
                                                                      uint32_t retptr) {
@@ -863,7 +653,7 @@ WASI_P2_FN void wasi_filesystem_types_descriptor_rename_at(wasi_p2_state *s, uin
         rc = wasi_p2_need(n, WASI_P2_MUTATE);
         if (rc == WASI_P2_OK) rc = wasi_p2_begin(s, comp, &w2, new_dir, new_ptr, new_len, 0, WASI_P2_MUTATE, &n);
         if (rc == WASI_P2_OK) {
-            if (renameat(w1.dir, w1.leaf, w2.dir, w2.leaf) < 0) rc = wasi_p2_fail();
+            rc = wasi_p2_sys_rename(w1.dir, w1.leaf, w2.dir, w2.leaf);
             wasi_p2_walk_close(&w2);
         }
         wasi_p2_walk_close(&w1);
@@ -888,9 +678,9 @@ WASI_P2_FN void wasi_filesystem_types_descriptor_symlink_at(wasi_p2_state *s, ui
 }
 
 WASI_P2_FN uint32_t wasi_filesystem_types_descriptor_is_same_object(wasi_p2_state *s, uint32_t self, uint32_t other) {
-    struct stat a, b;
-    int r1 = fstat(wasi_p2_descriptor_get(s, self)->fd, &a), r2 = fstat(wasi_p2_descriptor_get(s, other)->fd, &b);
-    return (uint32_t)(r1 == 0 && r2 == 0 && a.st_dev == b.st_dev && a.st_ino == b.st_ino);
+    wasi_p2_stat a, b;
+    int r1 = wasi_p2_sys_fstat(wasi_p2_descriptor_get(s, self), &a), r2 = wasi_p2_sys_fstat(wasi_p2_descriptor_get(s, other), &b);
+    return (uint32_t)(r1 == WASI_P2_OK && r2 == WASI_P2_OK && a.dev == b.dev && a.ino == b.ino);
 }
 
 WASI_P2_FN uint64_t wasi_p2_fnv(const uint64_t *values, int n) {
@@ -900,27 +690,27 @@ WASI_P2_FN uint64_t wasi_p2_fnv(const uint64_t *values, int n) {
     return h;
 }
 
-WASI_P2_FN void wasi_p2_hash_result(wasi_p2_state *s, uint32_t comp, uint32_t retptr, int rc, const struct stat *st) {
+WASI_P2_FN void wasi_p2_hash_result(wasi_p2_state *s, uint32_t comp, uint32_t retptr, int rc, const wasi_p2_stat *st) {
     if (rc != WASI_P2_OK) {
         wasi_p2_fs_fail(s, comp, retptr, retptr + 8, rc);
         return;
     }
     wasi_p2_ok(s, comp, retptr);
     /* `upper` names the object (device, inode); `lower` also takes in what changes when it is modified (size, modification time): FNV-1a 64 as the Python twin */
-    uint64_t lower[4] = {(uint64_t)st->st_size, (uint64_t)wasi_p2_ts_ns(WASI_P2_MTIME(*st)), (uint64_t)st->st_dev, (uint64_t)st->st_ino};
-    uint64_t upper[2] = {(uint64_t)st->st_dev, (uint64_t)st->st_ino};
+    uint64_t lower[4] = {st->size, (uint64_t)st->mtime_ns, st->dev, st->ino};
+    uint64_t upper[2] = {st->dev, st->ino};
     wasi_p2_store_u64(s, comp, retptr + 8, wasi_p2_fnv(lower, 4));
     wasi_p2_store_u64(s, comp, retptr + 16, wasi_p2_fnv(upper, 2));
 }
 
 WASI_P2_FN void wasi_filesystem_types_descriptor_metadata_hash(wasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t retptr) {
-    struct stat st;
-    wasi_p2_hash_result(s, comp, retptr, fstat(wasi_p2_descriptor_get(s, self)->fd, &st) < 0 ? wasi_p2_fail() : WASI_P2_OK, &st);
+    wasi_p2_stat st;
+    wasi_p2_hash_result(s, comp, retptr, wasi_p2_sys_fstat(wasi_p2_descriptor_get(s, self), &st), &st);
 }
 
 WASI_P2_FN void wasi_filesystem_types_descriptor_metadata_hash_at(wasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t path_flags, uint32_t ptr,
                                                                   uint32_t length, uint32_t retptr) {
-    struct stat st;
+    wasi_p2_stat st;
     wasi_p2_hash_result(s, comp, retptr, wasi_p2_stat_at_rc(s, comp, self, path_flags, ptr, length, &st), &st);
 }
 

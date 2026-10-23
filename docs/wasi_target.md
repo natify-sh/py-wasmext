@@ -37,11 +37,19 @@ Whatever the target, an import is answered in this order:
 2. **What the target binds** (the table above), by the key *(module without its version, name)*, e.g. `("wasi:io/streams", "[method]output-stream.write")` or `("wasi_snapshot_preview1", "fd_write")`. The patch versions of WASI 0.2 are compatible, so the version is not in the key.
 3. **The rest stays required**, as `_Imports*` is today.
 
-What this changes in the stub:
+## Two tiers: the imports are exact, `wasi=` is for the simple hooks
 
-- **Two layers.** The imports are the *behaviour* (a function the module calls; bound by the target, each one replaceable). `wasi=` is the *state of the built-in host* that the bound imports work from: data and hooks that are not imports. Without it a caller who only wants to give the arguments would have to write `fd_write` and `args_get`. So `wasi=` exists for the targets that have a built-in host (`wasm32-wasip1`, `wasm32-wasip2`), and not for `wasm32`.
-- **One core of keys, plus what only 0.2 has.** `args`, `env`, `preopens`, `readonly`, `stdin`, `stdout`, `stderr`, `clock` and `random` are the same for both; WASI 0.2 adds what its world has (which sockets are allowed, `http`). A type checker refuses a key the target does not know. Each key feeds imports (`args` feeds `args_get` and `args_sizes_get` in 0.1 and `wasi:cli/environment.get-arguments` in 0.2); `clock` and `random` are hooks at the level of the value (id to nanoseconds), not replacements of the raw call, so they need no access to the memory of the module. In 0.2 the arguments are still only an import that the host answers: a host of the caller's may replace that import instead of giving `args`.
-- The WASI modules of the imports are **optional replacements** (`NotRequired`, and each function in them too); only the modules that are not bound by the target are required. A replacement of `fd_write` (0.1) and of `[method]output-stream.write` (0.2) then looks the same.
+Agreed on 2026-10-23 after a look at the stubs of `examples/wasi2_unbundled` and at what each way costs the caller.
+
+1. **The imports (`imports=`) keep their full signatures**, the ones the module really calls: for `wasi_snapshot_preview1` the four integers of `fd_write(fd, iovs, iovs_len, nwritten_ptr)` and the errno it returns, for WASI 0.2 what the stubs show today (`get-arguments` takes the pointer of its result). A caller who replaces an import does it *explicitly and knowing the signature*, and what he does with it is his: he may take the original function, wrap it and put it back, which needs the signature of the original, so a lifted type under the same name is not possible (`fd_write(fd, data)` and the raw `fd_write` cannot be one key).
+   - For a target that has a built-in host the WASI modules of the imports are **optional** (`NotRequired`, and each function in them too); only the modules that the target does not bind are required.
+   - The names of the parameters come from the specification (witx for 0.1, WIT for 0.2), so the stub reads as the standard does.
+   - The original is **taken on demand** (a lazy `Instance.original(module, name)` or the like), so who does not wrap pays nothing; and it is a thin call of the C function, not an object made for every import. The cost of a wrapper (the border C to Python to C twice) is **not measured**; it has to be before the shape of this call is fixed.
+   - Optional **adapters in fusedwasi**, generated from the same table, convert between the exact level and the lifted one: `lift(raw)` gives the function with the values (`(fd, data) -> int`), `lower(fn)` makes the exact one from it. They are for the caller who wants to wrap a call and not to read the memory of the module by hand (in 0.2 the lowering of a list of strings is the `cabi_realloc` of the module).
+2. **`wasi=` stays, for the simple hooks of the built-in host.** It is what a caller reaches for when he wants `print` for the standard output, the arguments or the environment, not a function of the border. Its keys are values and hooks on the level of the value: `args`, `env`, `preopens`, `readonly`, `stdin`, `stdout`, `stderr`, `clock`, `random` (the same for 0.1 and 0.2); 0.2 may add what only its world has (which sockets are allowed, `http`). A type checker refuses a key the target does not know. Each key feeds imports: `args` feeds `args_get` and `args_sizes_get` in 0.1 and `wasi:cli/environment.get-arguments` in 0.2. `clock` and `random` are hooks of the value (the id of the clock to nanoseconds, the number of bytes to bytes), so they need no access to the memory.
+   - It exists for the targets that have a built-in host (`wasm32-wasip1`, `wasm32-wasip2`) and not for `wasm32`.
+   - **If both are given for one function, the import wins** over the hook (the exact replacement is the more explicit one).
+   - Whether 0.2 takes `wasi=` too (its arguments are only an import that the host answers, and the replacement of that import is possible) is open; the shape is the same for the caller, so it is likely.
 
 ## Where the types of WASI live
 
@@ -52,7 +60,7 @@ Together with it, **the names of the types are stable.** For the modules of WASI
 ## WASI 0.2: what the target `wasm32-wasip2` also asks
 
 - **`cabi_realloc` of every component** is an export that the build checks for and binds to the `realloc` hook of the state of fusedwasi (`fusedwasi_p2_*` takes the memory of a component and its realloc). A component without it is an error of the build, not a trap on the first string.
-- The arguments, the environment and the streams are **data in the configuration** `wasi=` that fills the state of fusedwasi; the module reads them through the imports (`wasi:cli/environment.get-arguments`), as it must.
+- The arguments, the environment and the streams can be given as **hooks in `wasi=`** that fill the state of fusedwasi (the module reads them through the imports, `wasi:cli/environment.get-arguments`, as it must), or by replacing those imports with their exact signatures (with the adapters of fusedwasi for the lowering).
 - The host of 0.2 is **not in the ABI of wasmext yet** (a standing decision); the first step is the stub and the Python path (the host of fusedwasi through `imports`), the C path comes later.
 
 ## What is not decided
@@ -61,4 +69,6 @@ Together with it, **the names of the types are stable.** For the modules of WASI
 - The exact spelling of the constant in the module and of the key in `[tool.wasmext]`.
 - Mixed modules (one module that imports both `wasi_snapshot_preview1` and `wasi:*`): an error of the build for now.
 - The order of the work: the target and the stub first (no change of the ABI of the C), the binding of 0.2 after.
+- The cost of wrapping an original import, and the shape of `original()`: after a measurement of the crossing C to Python to C.
+- Whether `wasi=` is also for WASI 0.2, and its keys there.
 - What the targets mean for wasmhost (it has no build): it would take the target as an argument of the host (`Preview1`, a later `Preview2`) or from the imports of the module it is given, and nothing in a file says which.

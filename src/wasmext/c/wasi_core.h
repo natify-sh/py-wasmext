@@ -73,6 +73,16 @@
 #endif
 #include "wasm-rt.h"
 
+/* the descriptors are the system's own (also where the files are those of Python: os.open gives them) and can be asked about with poll and fstat: not on Windows */
+#ifndef _WIN32
+#include <poll.h>
+#include <sys/ioctl.h>
+#include <sys/stat.h>
+#define WASI_NATIVE_POLL 1
+#else
+#define WASI_NATIVE_POLL 0
+#endif
+
 /* the memory of the state: the C library's, so that a host without Python has nothing else to link */
 #define WASI_MALLOC malloc
 #define WASI_CALLOC calloc
@@ -86,13 +96,20 @@ typedef struct wasmext_wasi wasmext_wasi;
 enum { WASI_END_NONE = 0, WASI_END_EXIT, WASI_END_SIGNAL, WASI_END_TRAP };
 
 
-/* errno of WASI (not the C library's) */
+/* errno of WASI (not the C library's): the whole list of the specification */
 enum {
-    WASI_E_SUCCESS = 0, WASI_E_ACCES = 2, WASI_E_AGAIN = 6, WASI_E_BADF = 8, WASI_E_EXIST = 20, WASI_E_FAULT = 21, WASI_E_FBIG = 22,
-    WASI_E_INTR = 27, WASI_E_INVAL = 28, WASI_E_IO = 29, WASI_E_ISDIR = 31, WASI_E_LOOP = 32, WASI_E_MFILE = 33, WASI_E_MLINK = 34,
-    WASI_E_NAMETOOLONG = 37, WASI_E_NFILE = 41, WASI_E_NODEV = 43, WASI_E_NOENT = 44, WASI_E_NOMEM = 48, WASI_E_NOSPC = 51,
-    WASI_E_NOSYS = 52, WASI_E_NOTDIR = 54, WASI_E_NOTEMPTY = 55, WASI_E_NOTSOCK = 57, WASI_E_NOTSUP = 58, WASI_E_PERM = 63,
-    WASI_E_PIPE = 64, WASI_E_RANGE = 68, WASI_E_ROFS = 69, WASI_E_SPIPE = 70, WASI_E_XDEV = 75, WASI_E_NOTCAPABLE = 76
+    WASI_E_SUCCESS = 0, WASI_E_2BIG = 1, WASI_E_ACCES = 2, WASI_E_ADDRINUSE = 3, WASI_E_ADDRNOTAVAIL = 4, WASI_E_AFNOSUPPORT = 5, WASI_E_AGAIN = 6,
+    WASI_E_ALREADY = 7, WASI_E_BADF = 8, WASI_E_BADMSG = 9, WASI_E_BUSY = 10, WASI_E_CANCELED = 11, WASI_E_CHILD = 12, WASI_E_CONNABORTED = 13,
+    WASI_E_CONNREFUSED = 14, WASI_E_CONNRESET = 15, WASI_E_DEADLK = 16, WASI_E_DESTADDRREQ = 17, WASI_E_DOM = 18, WASI_E_DQUOT = 19,
+    WASI_E_EXIST = 20, WASI_E_FAULT = 21, WASI_E_FBIG = 22, WASI_E_HOSTUNREACH = 23, WASI_E_IDRM = 24, WASI_E_ILSEQ = 25, WASI_E_INPROGRESS = 26,
+    WASI_E_INTR = 27, WASI_E_INVAL = 28, WASI_E_IO = 29, WASI_E_ISCONN = 30, WASI_E_ISDIR = 31, WASI_E_LOOP = 32, WASI_E_MFILE = 33,
+    WASI_E_MLINK = 34, WASI_E_MSGSIZE = 35, WASI_E_MULTIHOP = 36, WASI_E_NAMETOOLONG = 37, WASI_E_NETDOWN = 38, WASI_E_NETRESET = 39,
+    WASI_E_NETUNREACH = 40, WASI_E_NFILE = 41, WASI_E_NOBUFS = 42, WASI_E_NODEV = 43, WASI_E_NOENT = 44, WASI_E_NOEXEC = 45, WASI_E_NOLCK = 46,
+    WASI_E_NOLINK = 47, WASI_E_NOMEM = 48, WASI_E_NOMSG = 49, WASI_E_NOPROTOOPT = 50, WASI_E_NOSPC = 51, WASI_E_NOSYS = 52, WASI_E_NOTCONN = 53,
+    WASI_E_NOTDIR = 54, WASI_E_NOTEMPTY = 55, WASI_E_NOTRECOVERABLE = 56, WASI_E_NOTSOCK = 57, WASI_E_NOTSUP = 58, WASI_E_NOTTY = 59,
+    WASI_E_NXIO = 60, WASI_E_OVERFLOW = 61, WASI_E_OWNERDEAD = 62, WASI_E_PERM = 63, WASI_E_PIPE = 64, WASI_E_PROTO = 65,
+    WASI_E_PROTONOSUPPORT = 66, WASI_E_PROTOTYPE = 67, WASI_E_RANGE = 68, WASI_E_ROFS = 69, WASI_E_SPIPE = 70, WASI_E_SRCH = 71,
+    WASI_E_STALE = 72, WASI_E_TIMEDOUT = 73, WASI_E_TXTBSY = 74, WASI_E_XDEV = 75, WASI_E_NOTCAPABLE = 76
 };
 enum {
     WASI_FT_UNKNOWN = 0, WASI_FT_BLOCK = 1, WASI_FT_CHAR = 2, WASI_FT_DIR = 3, WASI_FT_REGULAR = 4, WASI_FT_SOCKET_STREAM = 6,
@@ -123,6 +140,7 @@ enum { WASI_T_ATIM = 1, WASI_T_ATIM_NOW = 2, WASI_T_MTIM = 4, WASI_T_MTIM_NOW = 
 #define WASI_R_FD_FILESTAT_GET WASI_R(21)
 #define WASI_R_FD_FILESTAT_SET_SIZE WASI_R(22)
 #define WASI_R_FD_FILESTAT_SET_TIMES WASI_R(23)
+#define WASI_R_POLL_FD_READWRITE WASI_R(27)
 #define WASI_R_PATH_REMOVE_DIRECTORY WASI_R(25)
 #define WASI_R_PATH_UNLINK_FILE WASI_R(26)
 #define WASI_R_ALL ((UINT64_C(1) << 30) - 1)
@@ -224,32 +242,155 @@ struct wasmext_wasi {
 static inline uint32_t wasi_errno(int e) {
     switch (e) {
     case 0: return WASI_E_SUCCESS;
+    case E2BIG: return WASI_E_2BIG;
     case EACCES: return WASI_E_ACCES;
+#ifdef EADDRINUSE
+    case EADDRINUSE: return WASI_E_ADDRINUSE;
+#endif
+#ifdef EADDRNOTAVAIL
+    case EADDRNOTAVAIL: return WASI_E_ADDRNOTAVAIL;
+#endif
+#ifdef EAFNOSUPPORT
+    case EAFNOSUPPORT: return WASI_E_AFNOSUPPORT;
+#endif
     case EAGAIN: return WASI_E_AGAIN;
+#ifdef EALREADY
+    case EALREADY: return WASI_E_ALREADY;
+#endif
     case EBADF: return WASI_E_BADF;
+#ifdef EBADMSG
+    case EBADMSG: return WASI_E_BADMSG;
+#endif
+    case EBUSY: return WASI_E_BUSY;
+#ifdef ECANCELED
+    case ECANCELED: return WASI_E_CANCELED;
+#endif
+    case ECHILD: return WASI_E_CHILD;
+#ifdef ECONNABORTED
+    case ECONNABORTED: return WASI_E_CONNABORTED;
+#endif
+#ifdef ECONNREFUSED
+    case ECONNREFUSED: return WASI_E_CONNREFUSED;
+#endif
+#ifdef ECONNRESET
+    case ECONNRESET: return WASI_E_CONNRESET;
+#endif
+    case EDEADLK: return WASI_E_DEADLK;
+#ifdef EDESTADDRREQ
+    case EDESTADDRREQ: return WASI_E_DESTADDRREQ;
+#endif
+    case EDOM: return WASI_E_DOM;
+#ifdef EDQUOT
+    case EDQUOT: return WASI_E_DQUOT;
+#endif
     case EEXIST: return WASI_E_EXIST;
+    case EFAULT: return WASI_E_FAULT;
     case EFBIG: return WASI_E_FBIG;
+#ifdef EHOSTUNREACH
+    case EHOSTUNREACH: return WASI_E_HOSTUNREACH;
+#endif
+#ifdef EIDRM
+    case EIDRM: return WASI_E_IDRM;
+#endif
+    case EILSEQ: return WASI_E_ILSEQ;
+#ifdef EINPROGRESS
+    case EINPROGRESS: return WASI_E_INPROGRESS;
+#endif
     case EINTR: return WASI_E_INTR;
     case EINVAL: return WASI_E_INVAL;
     case EIO: return WASI_E_IO;
+#ifdef EISCONN
+    case EISCONN: return WASI_E_ISCONN;
+#endif
     case EISDIR: return WASI_E_ISDIR;
     case ELOOP: return WASI_E_LOOP;
     case EMFILE: return WASI_E_MFILE;
     case EMLINK: return WASI_E_MLINK;
+#ifdef EMSGSIZE
+    case EMSGSIZE: return WASI_E_MSGSIZE;
+#endif
+#ifdef EMULTIHOP
+    case EMULTIHOP: return WASI_E_MULTIHOP;
+#endif
     case ENAMETOOLONG: return WASI_E_NAMETOOLONG;
+#ifdef ENETDOWN
+    case ENETDOWN: return WASI_E_NETDOWN;
+#endif
+#ifdef ENETRESET
+    case ENETRESET: return WASI_E_NETRESET;
+#endif
+#ifdef ENETUNREACH
+    case ENETUNREACH: return WASI_E_NETUNREACH;
+#endif
     case ENFILE: return WASI_E_NFILE;
+#ifdef ENOBUFS
+    case ENOBUFS: return WASI_E_NOBUFS;
+#endif
     case ENODEV: return WASI_E_NODEV;
     case ENOENT: return WASI_E_NOENT;
+    case ENOEXEC: return WASI_E_NOEXEC;
+    case ENOLCK: return WASI_E_NOLCK;
+#ifdef ENOLINK
+    case ENOLINK: return WASI_E_NOLINK;
+#endif
     case ENOMEM: return WASI_E_NOMEM;
+#ifdef ENOMSG
+    case ENOMSG: return WASI_E_NOMSG;
+#endif
+#ifdef ENOPROTOOPT
+    case ENOPROTOOPT: return WASI_E_NOPROTOOPT;
+#endif
     case ENOSPC: return WASI_E_NOSPC;
+    case ENOSYS: return WASI_E_NOSYS;
+#ifdef ENOTCONN
+    case ENOTCONN: return WASI_E_NOTCONN;
+#endif
     case ENOTDIR: return WASI_E_NOTDIR;
     case ENOTEMPTY: return WASI_E_NOTEMPTY;
+#ifdef ENOTRECOVERABLE
+    case ENOTRECOVERABLE: return WASI_E_NOTRECOVERABLE;
+#endif
+#ifdef ENOTSOCK
+    case ENOTSOCK: return WASI_E_NOTSOCK;
+#endif
+#ifdef ENOTSUP
     case ENOTSUP: return WASI_E_NOTSUP;
+#endif
+#if defined(EOPNOTSUPP) && (!defined(ENOTSUP) || EOPNOTSUPP != ENOTSUP)
+    case EOPNOTSUPP: return WASI_E_NOTSUP;
+#endif
+    case ENOTTY: return WASI_E_NOTTY;
+    case ENXIO: return WASI_E_NXIO;
+#ifdef EOVERFLOW
+    case EOVERFLOW: return WASI_E_OVERFLOW;
+#endif
+#ifdef EOWNERDEAD
+    case EOWNERDEAD: return WASI_E_OWNERDEAD;
+#endif
     case EPERM: return WASI_E_PERM;
     case EPIPE: return WASI_E_PIPE;
+#ifdef EPROTO
+    case EPROTO: return WASI_E_PROTO;
+#endif
+#ifdef EPROTONOSUPPORT
+    case EPROTONOSUPPORT: return WASI_E_PROTONOSUPPORT;
+#endif
+#ifdef EPROTOTYPE
+    case EPROTOTYPE: return WASI_E_PROTOTYPE;
+#endif
     case ERANGE: return WASI_E_RANGE;
     case EROFS: return WASI_E_ROFS;
     case ESPIPE: return WASI_E_SPIPE;
+    case ESRCH: return WASI_E_SRCH;
+#ifdef ESTALE
+    case ESTALE: return WASI_E_STALE;
+#endif
+#ifdef ETIMEDOUT
+    case ETIMEDOUT: return WASI_E_TIMEDOUT;
+#endif
+#ifdef ETXTBSY
+    case ETXTBSY: return WASI_E_TXTBSY;
+#endif
     case EXDEV: return WASI_E_XDEV;
     default: return WASI_E_IO;
     }
@@ -826,6 +967,14 @@ static inline uint32_t wasi_fd_read(void *s, uint32_t fd, uint32_t iovs, uint32_
         }
         total += (uint64_t)n;
         if ((uint32_t)n < len) break;
+#if WASI_NATIVE_POLL
+        /* A pipe, a FIFO, a terminal: when the first buffer is full, a read into the next one may wait for more although something has been read, and a
+           short read is allowed (found by comparing with uvwasi, which reads all the buffers with one readv). Only a regular file goes on. */
+        if (n > 0 && i + 1 < count) {
+            struct stat st;
+            if (fstat(e->osfd, &st) == 0 && !S_ISREG(st.st_mode)) break;
+        }
+#endif
     }
     return wasi_put_u32(w, nread, (uint32_t)total) ? WASI_E_SUCCESS : WASI_E_FAULT;
 }
@@ -887,12 +1036,15 @@ static inline uint32_t wasi_fd_advise(void *s, uint32_t fd, uint64_t offset, uin
     return e != NULL && e->kind == WASI_K_FILE ? WASI_E_SUCCESS : WASI_E_BADF;  /* a hint: nothing is done with it */
 }
 
+static inline int wasi_std_is_real(wasmext_wasi *w, wasi_entry *e);
+static inline uint8_t wasi_std_filetype(wasmext_wasi *w, wasi_entry *e);
+
 static inline uint32_t wasi_fd_fdstat_get(void *s, uint32_t fd, uint32_t ptr, int *trapped) {
     WASI_STATE(s);
     (void)trapped;
     wasi_entry *e = wasi_entry_of(w, fd);
     if (e == NULL) return WASI_E_BADF;
-    uint8_t filetype = e->kind == WASI_K_STD ? WASI_FT_CHAR : e->filetype;
+    uint8_t filetype = e->kind == WASI_K_STD ? wasi_std_filetype(w, e) : e->filetype;
     uint64_t base = e->kind == WASI_K_STD ? (e->osfd == 0 ? WASI_RIGHTS_STDIN : WASI_RIGHTS_STDOUT) : e->rights;
     if (!wasi_in_memory(w, ptr, 24)) return WASI_E_FAULT;
     memset(w->memory->data + ptr, 0, 24);
@@ -937,6 +1089,27 @@ static inline uint8_t wasi_filetype_of(unsigned long mode) {
     case 0140000UL: return WASI_FT_SOCKET_STREAM;
     default: return WASI_FT_UNKNOWN;
     }
+}
+
+/* A standard stream that is the descriptor of the process (no hook stands in for it): it is what the system says it is. wasi-libc takes a character
+   device without the right to seek for a terminal, so a stream that was redirected to a file or a pipe must not say it is one (found by comparing with
+   uvwasi, which asks the descriptor). A stream that goes through a hook (Python's `sys.stdout`) has no descriptor to ask and stays a character device. */
+static inline int wasi_std_is_real(wasmext_wasi *w, wasi_entry *e) {
+#if WASI_NATIVE_POLL
+    return e->kind == WASI_K_STD && (e->osfd == 0 ? w->hooks.stdin_read == NULL : w->hooks.stdout_write == NULL);
+#else
+    (void)w, (void)e;
+    return 0;
+#endif
+}
+
+static inline uint8_t wasi_std_filetype(wasmext_wasi *w, wasi_entry *e) {
+#if WASI_NATIVE_POLL
+    struct stat st;
+    if (wasi_std_is_real(w, e) && fstat(e->osfd, &st) == 0) return wasi_filetype_of((unsigned long)st.st_mode);  /* a pipe is unknown: not a terminal */
+#endif
+    (void)w, (void)e;
+    return WASI_FT_CHAR;
 }
 
 /* what the specification calls filestat, the same for both ways of getting it */
@@ -1447,11 +1620,11 @@ static inline uint32_t wasi_be_readlink(wasmext_wasi *w, wasi_entry *dir, uint32
     if (rc) return rc;
     ssize_t n = -1;
     if (itself) errno = EINVAL;
-    else n = readlinkat(parent, leaf, out, cap);
+    else n = readlinkat(parent, leaf, out, cap ? cap : 1);  /* a buffer of 0 bytes is the system's EINVAL; asked with 1 it says whether this is a link */
     int saved = errno;
     if (owned) close(parent);
     if (n < 0) return wasi_errno(saved);
-    *used = (size_t)n;
+    *used = cap ? (size_t)n : 0;
     return WASI_E_SUCCESS;
 }
 
@@ -1496,8 +1669,10 @@ static inline uint32_t wasi_filestat_of_fd(wasmext_wasi *w, uint32_t fd, uint32_
     wasi_entry *e = wasi_entry_of(w, fd);
     if (e == NULL) return WASI_E_BADF;
     wasi_stat st;
-    if (e->kind == WASI_K_STD) {  /* a terminal or a pipe: nothing to say but what it is */
-        memset(&st, 0, sizeof st);
+    if (e->kind == WASI_K_STD) {
+        if (wasi_std_is_real(w, e) && wasi_be_stat_fd(w, e, &st, trapped) == WASI_E_SUCCESS) return wasi_put_filestat(w, ptr, &st, legacy);  /* what it is */
+        *trapped = 0;
+        memset(&st, 0, sizeof st);  /* a stream of the host: nothing to say but that it is a character device */
         st.filetype = WASI_FT_CHAR;
         return wasi_put_filestat(w, ptr, &st, legacy);
     }
@@ -1909,6 +2084,45 @@ static inline uint32_t wasi_subscription_wait(wasmext_wasi *w, uint32_t sub, int
     return WASI_E_SUCCESS;
 }
 
+/* A subscription to a descriptor: 0 if it is answered at once (a bad descriptor, a right that is missing, a regular file, a directory, a stream that
+   goes through a hook, the standard output); 1 if the system has to say when it is ready (a pipe, a FIFO, a terminal, a socket, the standard input).
+   `*error` is the error of the event (a right that is missing is NOTCAPABLE, as the descriptor is not one to wait for) and `*fd` the descriptor to poll. */
+static inline int wasi_poll_kind(wasmext_wasi *w, uint32_t sub, uint8_t tag, uint32_t *error, int *fd) {
+    uint32_t number = 0;
+    wasi_get_u32(w, sub + 16, &number);
+    wasi_entry *e = wasi_entry_of(w, number);
+    *error = WASI_E_SUCCESS;
+    *fd = -1;
+    if (e == NULL) {
+        *error = WASI_E_BADF;
+        return 0;
+    }
+    uint64_t need = WASI_R_POLL_FD_READWRITE | (tag == 1 ? WASI_R_FD_READ : WASI_R_FD_WRITE);
+    if (e->kind == WASI_K_STD) {  /* the rights of the standard streams are fixed and include polling */
+#if WASI_NATIVE_POLL
+        if (tag == 1 && e->osfd == 0 && w->hooks.stdin_read == NULL) {
+            *fd = 0;
+            return 1;
+        }
+#endif
+        return 0;
+    }
+    if ((e->rights & need) != need) {
+        *error = WASI_E_NOTCAPABLE;
+        return 0;
+    }
+#if WASI_NATIVE_POLL
+    if (e->kind == WASI_K_FILE && e->osfd >= 0) {
+        struct stat st;
+        if (fstat(e->osfd, &st) == 0 && !S_ISREG(st.st_mode) && !S_ISDIR(st.st_mode)) {
+            *fd = e->osfd;
+            return 1;
+        }
+    }
+#endif
+    return 0;
+}
+
 static inline uint32_t wasi_poll(wasmext_wasi *w, uint32_t in, uint32_t out, uint32_t count, uint32_t nevents, int legacy,
                                  int *trapped) {
     uint32_t stride = legacy ? 56 : 48;
@@ -1916,6 +2130,7 @@ static inline uint32_t wasi_poll(wasmext_wasi *w, uint32_t in, uint32_t out, uin
     if (!wasi_in_memory(w, in, (uint64_t)count * stride) || !wasi_in_memory(w, out, (uint64_t)count * 32)) return WASI_E_FAULT;
     uint64_t entry_now[2] = {0, 0}, shortest = 0;
     int have[2] = {0, 0}, immediate = 0, timed = 0;  /* timed: a clock was subscribed, so `shortest` is a time (it may be UINT64_MAX: forever) */
+    uint32_t polled = 0;                              /* how many descriptors the system has to say about */
     for (uint32_t i = 0; i < count; i++) {  /* first, what is ready and how long the clocks wait */
         uint32_t sub = in + i * stride;
         uint8_t tag = w->memory->data[sub + 8];
@@ -1929,12 +2144,71 @@ static inline uint32_t wasi_poll(wasmext_wasi *w, uint32_t in, uint32_t out, uin
             if (rc == WASI_E_INVAL) immediate = 1;
             else if (rc || *trapped) return rc;
         } else if (tag == 1 || tag == 2) {
-            immediate = 1;
+            uint32_t error;
+            int fd;
+            if (wasi_poll_kind(w, sub, tag, &error, &fd)) polled++;
+            else immediate = 1;
         } else {
             return WASI_E_INVAL;
         }
     }
+    /* what the system says about the descriptors: ready or not, and the end of the wait (a clock, or the first descriptor that is ready) */
+    short *revents = NULL; (void)revents;
+    int *slot = NULL;
     uint64_t waited = 0;
+#if WASI_NATIVE_POLL
+    if (polled) {
+        struct pollfd *fds = (struct pollfd *)WASI_MALLOC(polled * sizeof *fds);
+        revents = (short *)WASI_MALLOC(polled * sizeof *revents);
+        slot = (int *)WASI_MALLOC(count * sizeof *slot);
+        if (fds == NULL || revents == NULL || slot == NULL) {
+            WASI_FREE(fds);
+            WASI_FREE(revents);
+            WASI_FREE(slot);
+            return WASI_E_NOMEM;
+        }
+        uint32_t k = 0;
+        for (uint32_t i = 0; i < count; i++) {
+            uint32_t sub = in + i * stride, error;
+            uint8_t tag = w->memory->data[sub + 8];
+            int fd;
+            slot[i] = -1;
+            if ((tag == 1 || tag == 2) && wasi_poll_kind(w, sub, tag, &error, &fd)) {
+                fds[k].fd = fd;
+                fds[k].events = tag == 1 ? POLLIN : POLLOUT;
+                fds[k].revents = 0;
+                slot[i] = (int)k++;
+            }
+        }
+        uint64_t started = 0;
+        int have_start = wasi_clock_system(1, &started) == 0;
+        int ready = 0;
+        for (;;) {
+            int timeout = 0;  /* ms; the wait is for the clocks, or for ever when there is none */
+            if (!immediate) {
+                if (!timed) {
+                    timeout = -1;
+                } else {
+                    uint64_t spent = 0, now;
+                    if (have_start && wasi_clock_system(1, &now) == 0) spent = now - started;
+                    uint64_t left = shortest > spent ? shortest - spent : 0;
+                    timeout = left > 2000000000ull ? 2000000000 : (int)((left + 999999u) / 1000000u);
+                }
+            }
+            ready = poll(fds, polled, timeout);
+            if (ready < 0 && errno == EINTR) continue;
+            break;
+        }
+        for (uint32_t i = 0; i < polled; i++) revents[i] = fds[i].revents;
+        WASI_FREE(fds);
+        if (ready <= 0 && !immediate && timed) {
+            waited = shortest;  /* the wait is over: the clocks are due */
+        } else if (ready > 0 && have_start) {
+            uint64_t now;
+            if (wasi_clock_system(1, &now) == 0) waited = now - started;
+        }
+    } else
+#endif
     if (!immediate && timed && shortest > 0) {
         int slept = wasi_sleep_ns(w, shortest);
         if (slept) return wasi_hook_status(slept, trapped);
@@ -1946,17 +2220,36 @@ static inline uint32_t wasi_poll(wasmext_wasi *w, uint32_t in, uint32_t out, uin
         uint8_t tag = w->memory->data[sub + 8];
         uint32_t error = WASI_E_SUCCESS;
         uint64_t nbytes = 0;
+        uint16_t flags = 0;
         if (tag == 0) {
             uint64_t wait;
             error = wasi_subscription_wait(w, sub, legacy, entry_now, have, &wait, trapped);
-            if (*trapped) return 0;
+            if (*trapped) {
+                WASI_FREE(revents);
+                WASI_FREE(slot);
+                return 0;
+            }
             if (error == WASI_E_SUCCESS && wait > waited) continue;  /* not yet */
         } else {
-            uint32_t fd = 0;
-            wasi_get_u32(w, sub + 16, &fd);
-            wasi_entry *e = wasi_entry_of(w, fd);
-            if (e == NULL) error = WASI_E_BADF;
-            else if (e->kind == WASI_K_FILE && tag == 1) {
+            uint32_t number = 0;
+            wasi_get_u32(w, sub + 16, &number);
+            wasi_entry *e = wasi_entry_of(w, number);
+            int fd;
+#if WASI_NATIVE_POLL
+            if (slot != NULL && slot[i] >= 0) {  /* the system has said */
+                short r = revents[slot[i]];
+                if (!(r & (POLLIN | POLLOUT | POLLHUP | POLLERR | POLLNVAL))) continue;  /* not ready */
+                if (r & POLLNVAL) error = WASI_E_BADF;
+                else if (r & (POLLHUP | POLLERR) && !(r & (POLLIN | POLLOUT))) flags = 1;  /* fd_readwrite_hangup */
+                if (tag == 1 && !(r & POLLNVAL)) {
+                    int pending = 0;
+                    if (ioctl(e->kind == WASI_K_STD ? 0 : e->osfd, FIONREAD, &pending) == 0 && pending > 0) nbytes = (uint64_t)pending;
+                }
+            } else
+#endif
+            if (!wasi_poll_kind(w, sub, tag, &error, &fd) && error != WASI_E_SUCCESS) {
+                /* a bad descriptor or a right that is missing: told in the event */
+            } else if (e != NULL && e->kind == WASI_K_FILE && tag == 1) {
                 wasi_stat st;
                 memset(&st, 0, sizeof st);
                 long long at = WASI_LSEEK(e->osfd, 0, SEEK_CUR);
@@ -1968,9 +2261,14 @@ static inline uint32_t wasi_poll(wasmext_wasi *w, uint32_t in, uint32_t out, uin
         memcpy(w->memory->data + event, w->memory->data + sub, 8);  /* userdata */
         wasi_put_u16(w, event + 8, (uint16_t)error);
         w->memory->data[event + 10] = tag;
-        if (tag != 0) wasi_put_u64(w, event + 16, nbytes);
+        if (tag != 0) {
+            wasi_put_u64(w, event + 16, nbytes);
+            wasi_put_u16(w, event + 24, flags);
+        }
         made++;
     }
+    WASI_FREE(revents);
+    WASI_FREE(slot);
     return wasi_put_u32(w, nevents, made) ? WASI_E_SUCCESS : WASI_E_FAULT;
 }
 

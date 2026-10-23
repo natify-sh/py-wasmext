@@ -117,3 +117,18 @@ def test_a_start_that_is_not_a_command_is_refused(wabt: Path, tmp_path: Path) ->
     subprocess.run([wabt / "bin" / "wat2wasm", wat, "-o", wasm], check=True)
     with pytest.raises(Exception, match=r"_start is \(i32\)"):
         build(wasm, tmp_path / "typed", optimize=False)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX descriptors")
+def test_the_standard_output_says_what_it_really_is(wabt: Path, tmp_path: Path) -> None:
+    """wasi-libc takes a character device without the right to seek for a terminal, so a redirected stream must not say it is one."""
+    program = _program(wabt, tmp_path, "wasi_std_type.wat")
+    assert subprocess.run([program, "m.wasm"], capture_output=True, check=True).stdout == b"0\n"  # a pipe: unknown
+    target = tmp_path / "out.txt"
+    with target.open("wb") as out:
+        subprocess.run([program, "m.wasm"], stdout=out, check=True)
+    assert target.read_bytes() == b"4\n"  # a regular file
+    with Path("/dev/null").open("wb") as null:
+        assert (
+            subprocess.run([program, "m.wasm"], stdout=null, check=True).returncode == 0
+        )  # a character device: nothing to read back

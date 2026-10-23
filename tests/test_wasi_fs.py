@@ -21,6 +21,7 @@ E_NOTEMPTY, E_NOTCAPABLE, E_NAMETOOLONG, E_SPIPE = 55, 76, 37, 70
 FILE_RIGHTS = (1 << 1) | (1 << 2) | (1 << 5) | (1 << 21)  # fd_read, fd_seek, fd_tell, fd_filestat_get
 # fd_datasync, fd_fdstat_set_flags, fd_sync, fd_write, fd_allocate, fd_filestat_set_size, fd_filestat_set_times
 WRITE_RIGHTS = FILE_RIGHTS | (1 << 0) | (1 << 3) | (1 << 4) | (1 << 6) | (1 << 8) | (1 << 22) | (1 << 23)
+POLL_RIGHT = 1 << 27  # poll_fd_readwrite
 DIR_RIGHTS = (1 << 13) | (1 << 14) | (1 << 18) | (1 << 21)  # path_open, fd_readdir, path_filestat_get, fd_filestat_get
 
 
@@ -491,6 +492,10 @@ def test_symbolic_links_are_made_and_read_and_never_lead_out(probe: Any, world: 
     assert fs.inst.path_readlink(3, ptr, length, 4000, 100, 120) == 0
     assert fs.u32(120) == 9 and bytes(fs.mem[4000:4009]) == b"hello.txt"
     assert fs.inst.path_readlink(3, ptr, length, 4000, 5, 120) == 0 and fs.u32(120) == 5  # cut short
+    assert (
+        fs.inst.path_readlink(3, ptr, length, 4000, 0, 120) == 0 and fs.u32(120) == 0
+    )  # a buffer of no bytes: nothing is written
+    assert fs.inst.path_readlink(3, *fs.path("hello.txt"), 4000, 0, 120) == E_INVAL  # and a file is still not a link
     code, fd = fs.open("link.txt")  # and it is followed
     assert code == 0 and fs.read(fd, 5) == (0, b"hello")
     assert fs.inst.path_readlink(3, *fs.path("hello.txt"), 4000, 100, 120) == E_INVAL  # not a link
@@ -559,7 +564,7 @@ def test_poll_oneoff_sleeps_until_a_clock_and_reports_what_is_ready(probe: Any, 
     started = time.monotonic()
     assert _poll(fs, [_clock(8, 1, flags=1)])[1] == [(8, 0, 0, 0)]  # an absolute time that has passed
     assert time.monotonic() - started < 0.05
-    _, fd = fs.open("hello.txt")
+    _, fd = fs.open("hello.txt", rights=FILE_RIGHTS | POLL_RIGHT)
     started = time.monotonic()
     code, events = _poll(
         fs, [_clock(1, 5_000_000_000), _fd_sub(2, fd, 1), _fd_sub(3, 1, 2)]
@@ -574,6 +579,53 @@ def test_poll_oneoff_sleeps_until_a_clock_and_reports_what_is_ready(probe: Any, 
     fs.put(5000, bytes(48))
     fs.mem[5008] = 9  # not a type of subscription
     assert fs.inst.poll_oneoff(5000, 7000, 1, 100) == E_INVAL
+
+
+def test_a_descriptor_without_the_right_to_poll_is_told_in_its_event(probe: Any, world: Path) -> None:
+    """The right poll_fd_readwrite and the right to read or write are what a subscription to a descriptor needs (uvwasi asks for both)."""
+    fs = Fs(probe, world)
+    _, plain = fs.open("hello.txt")  # FILE_RIGHTS: it can be read, not polled
+    _, polled = fs.open("hello.txt", rights=FILE_RIGHTS | POLL_RIGHT)
+    _, polled_for_writing = fs.open("hello.txt", rights=FILE_RIGHTS | POLL_RIGHT)  # not the right to write
+    code, events = _poll(fs, [_fd_sub(1, plain, 1), _fd_sub(2, polled, 1), _fd_sub(3, polled_for_writing, 2)])
+    assert code == 0
+    assert [(e[0], e[1]) for e in events] == [(1, E_NOTCAPABLE), (2, 0), (3, E_NOTCAPABLE)]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="polling a pipe is POSIX")
+def test_poll_oneoff_waits_for_a_pipe_and_does_not_report_it_ready_before_it_is(probe: Any, world: Path) -> None:
+    """A FIFO is not ready until something is written to it (it was always reported ready: found by comparing with uvwasi)."""
+    import time
+
+    fifo = world / "fifo"
+    os.mkfifo(fifo)
+    fs = Fs(probe, world)
+    writer = os.open(fifo, os.O_RDWR | os.O_NONBLOCK)  # holds the other end, so the reader does not see an end of file
+    try:
+        code, fd = fs.open("fifo", rights=FILE_RIGHTS | POLL_RIGHT, fdflags=4)  # non-blocking
+        assert code == 0
+        started = time.monotonic()
+        code, events = _poll(fs, [_fd_sub(1, fd, 1), _clock(2, 80_000_000)])
+        assert code == 0 and time.monotonic() - started >= 0.05  # it waited for the clock
+        assert [(e[0], e[1], e[2]) for e in events] == [(2, 0, 0)]  # and only the clock is due
+        os.write(writer, b"abc")
+        started = time.monotonic()
+        code, events = _poll(fs, [_fd_sub(1, fd, 1), _clock(2, 5_000_000_000)])
+        assert code == 0 and time.monotonic() - started < 1
+        assert events == [(1, 0, 1, 3)]  # ready with the 3 bytes that are there
+        # reading into two buffers does not wait for the second one when the first is full
+        fs.put(
+            0,
+            (2000).to_bytes(4, "little")
+            + (3).to_bytes(4, "little")
+            + (2100).to_bytes(4, "little")
+            + (10).to_bytes(4, "little"),
+        )
+        started = time.monotonic()
+        assert fs.inst.fd_read(fd, 0, 2, 8) == 0 and fs.u32(8) == 3
+        assert time.monotonic() - started < 1
+    finally:
+        os.close(writer)
 
 
 def test_the_first_snapshot_polls_with_its_own_subscription(

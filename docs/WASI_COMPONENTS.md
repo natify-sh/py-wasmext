@@ -991,6 +991,8 @@ Plus the patent clause (section 3). In wasmext this is already taken into accoun
 
 ## Ideas for the host of an unbundled module (not built, not decided)
 
+> **See also [wasi_target.md](wasi_target.md)** (2026-10-23): the target of a module (`wasm32-unknown-unknown`, `wasm32-wasip1`, `wasm32-wasip2`) is said by the build and decides what is bound by itself, what `wasi=` holds and which imports are required. It changes how the ideas below fit together (the types of WASI move to fusedwasi, the names of the types are stable); the ideas stay as they are.
+
 Written down after the host in [`examples/wasi2_unbundled`](../examples/wasi2_unbundled) was made. **Nothing here changes the public interface or the ABI now**; each idea says what it would touch, so that they can be taken one by one, in any order, and together.
 
 ### What is true today

@@ -112,12 +112,10 @@ def python_output(scenario: str, root: Path) -> str:
             fs.wasi_filesystem_preopens_get_directories(host, 0, 0)
             lp = r.u32(0)
             hd, ro = r.u32(lp), r.u32(lp + 12)
-            (
-                r.show("dirs", 0, 8),
-                r.show("dirs", lp, 24),
-                r.show("names", r.u32(lp + 4), 1),
-                r.show("names", r.u32(lp + 16), 3),
-            )
+            r.show("dirs", 0, 8)
+            r.show("dirs", lp, 24)
+            r.show("names", r.u32(lp + 4), 1)
+            r.show("names", r.u32(lp + 16), 3)
             r.lines.append(f"handles {hd} {ro}")
             cases = [
                 (b"sub/f", 1), (b"ln/f", 1), (b"abs/passwd", 1), (b"up", 1), (b"../x", 1), (b"sub/../sub/f", 1), (b"/etc", 1), (b"loop1", 1),
@@ -135,66 +133,82 @@ def python_output(scenario: str, root: Path) -> str:
             r.lines.append("[long] " + _stat(r, 200, "[long] stat"))
             # open, read
             n = r.path(b"sub/f")
-            fsc("descriptor_open_at", hd, 1, 1000, n, 0, 1, 200), r.show("open", 200, 8)
+            fsc("descriptor_open_at", hd, 1, 1000, n, 0, 1, 200)
+            r.show("open", 200, 8)
             h = r.u32(204)
-            (
-                r.read_all("read", h, 10, 0),
-                r.read_all("read", h, 10, 2),
-                r.read_all("read", h, 10, 4),
-                r.read_all("read", h, 2, 0),
-            )
-            fsc("descriptor_get_type", h, 240), r.show("type", 240, 2)
-            fsc("descriptor_get_flags", h, 242), r.show("flags", 242, 2)
+            r.read_all("read", h, 10, 0)
+            r.read_all("read", h, 10, 2)
+            r.read_all("read", h, 10, 4)
+            r.read_all("read", h, 2, 0)
+            fsc("descriptor_get_type", h, 240)
+            r.show("type", 240, 2)
+            fsc("descriptor_get_flags", h, 242)
+            r.show("flags", 242, 2)
             r.clear(300, 120)
-            fsc("descriptor_stat", h, 300), r.statline("fstat", 300)
-            fsc("descriptor_read_via_stream", h, 1, 250), r.show("read_via_stream", 250, 8)
+            fsc("descriptor_stat", h, 300)
+            r.statline("fstat", 300)
+            fsc("descriptor_read_via_stream", h, 1, 250)
+            r.show("read_via_stream", 250, 8)
             hs = r.u32(254)
-            (
-                ioc("input_stream_read", hs, 100, 260),
-                r.show("stream read", 260, 12),
-                r.show("  data", r.u32(264), r.u32(268)),
-            )
-            ioc("input_stream_read", hs, 100, 260), r.show("stream read at the end", 260, 12)
+            ioc("input_stream_read", hs, 100, 260)
+            r.show("stream read", 260, 12)
+            r.show("  data", r.u32(264), r.u32(268))
+            ioc("input_stream_read", hs, 100, 260)
+            r.show("stream read at the end", 260, 12)
             io.wasi_io_streams_input_stream_drop(host, hs)
-            fsc("descriptor_write", h, 1500, 3, 0, 270), r.show("write on read-only", 270, 16)
-            fsc("descriptor_set_size", h, 1, 290), r.show("set_size on read-only", 290, 2)
+            fsc("descriptor_write", h, 1500, 3, 0, 270)
+            r.show("write on read-only", 270, 16)
+            fsc("descriptor_set_size", h, 1, 290)
+            r.show("set_size on read-only", 290, 2)
             fs.wasi_filesystem_types_descriptor_drop(host, h)
             # create and write
             n = r.path(b"sub/new")
-            fsc("descriptor_open_at", hd, 1, 1000, n, 1, 3, 200), r.show("create", 200, 8)
+            fsc("descriptor_open_at", hd, 1, 1000, n, 1, 3, 200)
+            r.show("create", 200, 8)
             hn = r.u32(204)
-            fsc("descriptor_write", hn, 1500, 5, 0, 220), r.show("write", 220, 16)
+            fsc("descriptor_write", hn, 1500, 5, 0, 220)
+            r.show("write", 220, 16)
             fsc("descriptor_write_via_stream", hn, 5, 250)
             hw = r.u32(254)
-            ioc("output_stream_blocking_write_and_flush", hw, 1510, 6, 260), r.show("stream write", 260, 8)
+            ioc("output_stream_blocking_write_and_flush", hw, 1510, 6, 260)
+            r.show("stream write", 260, 8)
             io.wasi_io_streams_output_stream_drop(host, hw)
             r.read_all("read back", hn, 100, 0)
             fsc("descriptor_append_via_stream", hn, 250)
             ha = r.u32(254)
-            ioc("output_stream_write", ha, 1500, 5, 260), r.show("append", 260, 8)
+            ioc("output_stream_write", ha, 1500, 5, 260)
+            r.show("append", 260, 8)
             io.wasi_io_streams_output_stream_drop(host, ha)
             r.read_all("read appended", hn, 100, 0)
-            fsc("descriptor_set_size", hn, 3, 270), r.show("set_size", 270, 2)
+            fsc("descriptor_set_size", hn, 3, 270)
+            r.show("set_size", 270, 2)
             r.read_all("read truncated", hn, 100, 0)
-            (
-                fsc("descriptor_sync", hn, 280),
-                fsc("descriptor_sync_data", hn, 284),
-                fsc("descriptor_advise", hn, 0, 0, 0, 288),
-            )
+            fsc("descriptor_sync", hn, 280)
+            fsc("descriptor_sync_data", hn, 284)
+            fsc("descriptor_advise", hn, 0, 0, 0, 288)
             r.show("sync", 280, 10)
             fs.wasi_filesystem_types_descriptor_drop(host, hn)
-            fsc("descriptor_open_at", hd, 1, 1000, n, 5, 3, 200), r.show("exclusive create of an existing file", 200, 8)
-            fsc("descriptor_open_at", ro, 1, 1000, n, 8, 2, 200), r.show("truncate on a read-only preopen", 200, 8)
-            fsc("descriptor_open_at", ro, 1, 1000, n, 1, 1, 200), r.show("create on a read-only preopen", 200, 8)
-            fsc("descriptor_open_at", ro, 1, 1000, n, 0, 3, 200), r.show("write on a read-only preopen", 200, 8)
-            fsc("descriptor_open_at", ro, 1, 1000, n, 0, 1, 200), r.show("read on a read-only preopen", 200, 8)
+            fsc("descriptor_open_at", hd, 1, 1000, n, 5, 3, 200)
+            r.show("exclusive create of an existing file", 200, 8)
+            fsc("descriptor_open_at", ro, 1, 1000, n, 8, 2, 200)
+            r.show("truncate on a read-only preopen", 200, 8)
+            fsc("descriptor_open_at", ro, 1, 1000, n, 1, 1, 200)
+            r.show("create on a read-only preopen", 200, 8)
+            fsc("descriptor_open_at", ro, 1, 1000, n, 0, 3, 200)
+            r.show("write on a read-only preopen", 200, 8)
+            fsc("descriptor_open_at", ro, 1, 1000, n, 0, 1, 200)
+            r.show("read on a read-only preopen", 200, 8)
             fs.wasi_filesystem_types_descriptor_drop(host, r.u32(204))
-            fsc("descriptor_get_flags", ro, 240), fsc("descriptor_get_flags", hd, 242), r.show("preopen flags", 240, 4)
+            fsc("descriptor_get_flags", ro, 240)
+            fsc("descriptor_get_flags", hd, 242)
+            r.show("preopen flags", 240, 4)
             # directories
             n = r.path(b"sub")
-            fsc("descriptor_open_at", hd, 1, 1000, n, 2, 1, 200), r.show("open a directory", 200, 8)
+            fsc("descriptor_open_at", hd, 1, 1000, n, 2, 1, 200)
+            r.show("open a directory", 200, 8)
             hdir = r.u32(204)
-            fsc("descriptor_read_directory", hdir, 220), r.show("read_directory", 220, 8)
+            fsc("descriptor_read_directory", hdir, 220)
+            r.show("read_directory", 220, 8)
             he = r.u32(224)
             for _ in range(5):
                 r.clear(240, 20)
@@ -209,40 +223,41 @@ def python_output(scenario: str, root: Path) -> str:
             n = r.path(b"sub/f")
             fsc("descriptor_open_at", hd, 1, 1000, n, 0, 1, 200)
             h = r.u32(204)
-            fsc("descriptor_read_directory", h, 220), r.show("read_directory of a file", 220, 8)
+            fsc("descriptor_read_directory", h, 220)
+            r.show("read_directory of a file", 220, 8)
             fs.wasi_filesystem_types_descriptor_drop(host, h)
             # changes
             n = r.path(b"sub/d")
-            (
-                fsc("descriptor_create_directory_at", hd, 1000, n, 300),
-                fsc("descriptor_create_directory_at", hd, 1000, n, 302),
-            )
+            fsc("descriptor_create_directory_at", hd, 1000, n, 300)
+            fsc("descriptor_create_directory_at", hd, 1000, n, 302)
             fsc("descriptor_create_directory_at", ro, 1000, n, 304)
-            (
-                fsc("descriptor_remove_directory_at", hd, 1000, n, 306),
-                fsc("descriptor_remove_directory_at", hd, 1000, n, 308),
-            )
+            fsc("descriptor_remove_directory_at", hd, 1000, n, 306)
+            fsc("descriptor_remove_directory_at", hd, 1000, n, 308)
             r.show("mkdir mkdir mkdir(ro) rmdir rmdir", 300, 10)
             n = r.path(b"sub/new")
-            fsc("descriptor_unlink_file_at", hd, 1000, n, 300), fsc("descriptor_unlink_file_at", hd, 1000, n, 302)
+            fsc("descriptor_unlink_file_at", hd, 1000, n, 300)
+            fsc("descriptor_unlink_file_at", hd, 1000, n, 302)
             r.show("unlink unlink", 300, 4)
             n2 = r.path(b"sub/g")
             r.path(b"sub/g2", 1100)
-            fsc("descriptor_rename_at", hd, 1000, n2, hd, 1100, 6, 310), r.show("rename", 310, 2)
+            fsc("descriptor_rename_at", hd, 1000, n2, hd, 1100, 6, 310)
+            r.show("rename", 310, 2)
             r.path(b"sub/f2", 1200)
             n = r.path(b"sub/f")
-            fsc("descriptor_link_at", hd, 0, 1000, n, hd, 1200, 6, 312), r.show("link", 312, 2)
+            fsc("descriptor_link_at", hd, 0, 1000, n, hd, 1200, 6, 312)
+            r.show("link", 312, 2)
             r.clear(320, 120)
-            fsc("descriptor_stat_at", hd, 1, 1000, n, 320), r.statline("sub/f after link", 320)
+            fsc("descriptor_stat_at", hd, 1, 1000, n, 320)
+            r.statline("sub/f after link", 320)
             r.path(b"f", 1300)
             r.path(b"sub/sl", 1310)
-            fsc("descriptor_symlink_at", hd, 1300, 1, 1310, 6, 314), r.show("symlink", 314, 2)
-            (
-                fsc("descriptor_readlink_at", hd, 1310, 6, 330),
-                r.show("readlink", 330, 12),
-                r.show("  target", r.u32(334), r.u32(338)),
-            )
-            fsc("descriptor_readlink_at", hd, 1000, n, 330), r.show("readlink of a file", 330, 8)
+            fsc("descriptor_symlink_at", hd, 1300, 1, 1310, 6, 314)
+            r.show("symlink", 314, 2)
+            fsc("descriptor_readlink_at", hd, 1310, 6, 330)
+            r.show("readlink", 330, 12)
+            r.show("  target", r.u32(334), r.u32(338))
+            fsc("descriptor_readlink_at", hd, 1000, n, 330)
+            r.show("readlink of a file", 330, 8)
             # identity
             fsc("descriptor_open_at", hd, 1, 1000, n, 0, 1, 200)
             a = r.u32(204)
@@ -252,30 +267,35 @@ def python_output(scenario: str, root: Path) -> str:
             c = r.u32(204)
             same = fs.wasi_filesystem_types_descriptor_is_same_object
             r.lines.append(f"same {same(host, a, b)} {same(host, a, c)}")
-            (
-                fsc("descriptor_metadata_hash", a, 400),
-                fsc("descriptor_metadata_hash", b, 430),
-                fsc("descriptor_metadata_hash", c, 460),
-            )
+            fsc("descriptor_metadata_hash", a, 400)
+            fsc("descriptor_metadata_hash", b, 430)
+            fsc("descriptor_metadata_hash", c, 460)
             fsc("descriptor_metadata_hash_at", hd, 1, 1000, n, 490)
             r.lines.append(
                 f"hash a==b {int(m[408:424] == m[438:454])} a==c {int(m[408:424] == m[468:484])} a==at {int(m[408:424] == m[498:514])}"
             )
             # times
-            fsc("descriptor_set_times_at", hd, 1, 1000, n, 2, 1000, 0, 2, 2000, 5, 520), r.show("set_times_at", 520, 2)
+            fsc("descriptor_set_times_at", hd, 1, 1000, n, 2, 1000, 0, 2, 2000, 5, 520)
+            r.show("set_times_at", 520, 2)
             r.clear(530, 120)
-            fsc("descriptor_stat_at", hd, 1, 1000, n, 530), r.times("times", 530)
-            fsc("descriptor_set_times", a, 0, 0, 0, 1, 0, 0, 540), r.show("set_times on a read-only file", 540, 2)
+            fsc("descriptor_stat_at", hd, 1, 1000, n, 530)
+            r.times("times", 530)
+            fsc("descriptor_set_times", a, 0, 0, 0, 1, 0, 0, 540)
+            r.show("set_times on a read-only file", 540, 2)
             fsc("descriptor_open_at", hd, 1, 1000, n, 0, 3, 200)
             h = r.u32(204)
-            fsc("descriptor_set_times", h, 0, 0, 0, 1, 0, 0, 542), r.show("set_times", 542, 2)
+            fsc("descriptor_set_times", h, 0, 0, 0, 1, 0, 0, 542)
+            r.show("set_times", 542, 2)
             r.clear(530, 120)
-            fsc("descriptor_stat", h, 530), r.times("no-change, now", 530)
+            fsc("descriptor_stat", h, 530)
+            r.times("no-change, now", 530)
             # an error with a code
             fsc("descriptor_read_via_stream", hd, 0, 250)
             hs = r.u32(254)
-            ioc("input_stream_read", hs, 10, 260), r.show("read of a directory", 260, 12)
-            fs.wasi_filesystem_types_filesystem_error_code(host, 0, r.u32(268), 280), r.show("error code", 280, 2)
+            ioc("input_stream_read", hs, 10, 260)
+            r.show("read of a directory", 260, 12)
+            fs.wasi_filesystem_types_filesystem_error_code(host, 0, r.u32(268), 280)
+            r.show("error code", 280, 2)
         elif scenario == "bad_handle":
             fsc("descriptor_get_flags", 12345, 0)
         elif scenario == "outside":
@@ -352,7 +372,7 @@ def test_walk_stays_below_the_directory(tmp_path: Path) -> None:
     try:
         for path in (b"esc/secret", b"esc", b"./esc/../secret", b"a/../../out/secret"):
             with pytest.raises(fs.FsError) as caught:
-                fs._walk(fd, path, True)
+                fs._walk(fd, path, True)  # pyright: ignore[reportPrivateUsage]
             assert fs.ERROR_CODES[caught.value.code] in ("not-permitted", "no-entry"), path
     finally:
         os.close(fd)

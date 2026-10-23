@@ -52,12 +52,16 @@ def python_output(scenario: str) -> str:
 
     try:
         if scenario == "main":
-            rnd.wasi_random_random_get_random_bytes(host, 0, 5, 0), dump("bytes")
+            rnd.wasi_random_random_get_random_bytes(host, 0, 5, 0)
+            dump("bytes")
             lines.append(f"u64 {rnd.wasi_random_random_get_random_u64(host)}")
-            rnd.wasi_random_insecure_get_insecure_random_bytes(host, 0, 3, 8), dump("insecure bytes")
+            rnd.wasi_random_insecure_get_insecure_random_bytes(host, 0, 3, 8)
+            dump("insecure bytes")
             lines.append(f"insecure u64 {rnd.wasi_random_insecure_get_insecure_random_u64(host)}")
-            rnd.wasi_random_insecure_seed_insecure_seed(host, 0, 16), dump("seed")
-            rnd.wasi_random_random_get_random_bytes(host, 0, 0, 32), dump("empty")
+            rnd.wasi_random_insecure_seed_insecure_seed(host, 0, 16)
+            dump("seed")
+            rnd.wasi_random_random_get_random_bytes(host, 0, 0, 32)
+            dump("empty")
         elif scenario == "too_many":
             rnd.wasi_random_random_get_random_bytes(host, 0, 1 << 40, 0)
         elif scenario == "failing":

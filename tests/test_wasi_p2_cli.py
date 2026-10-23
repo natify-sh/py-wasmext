@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -39,18 +40,28 @@ def python_output(scenario: str) -> str:
     def dump(what: str) -> None:
         lines.append(f"{what} {bytes(memory).hex()}")
 
-    common = {"realloc": bump, "args": ["prog", "-x"], "env": [("A", "1"), ("LONG", "value")], "initial_cwd": "/work"}
+    common: dict[str, Any] = {
+        "realloc": bump,
+        "args": ["prog", "-x"],
+        "env": [("A", "1"), ("LONG", "value")],
+        "initial_cwd": "/work",
+    }
     try:
         if scenario == "main":
             stdin, stdout = io.MemoryInput(b"in!"), io.BufferOutput(100)
             host = Host([memory], stdin=stdin, stdout=stdout, terminals=["stdout"], **common)
             hi, ho = io.input_stream_new(host, stdin), io.output_stream_new(host, stdout)
             lines.append(f"handles {hi} {ho}")
-            cli.wasi_cli_environment_get_arguments(host, 0, 0), dump("arguments")
-            cli.wasi_cli_environment_get_environment(host, 0, 16), dump("environment")
-            cli.wasi_cli_environment_initial_cwd(host, 0, 40), dump("cwd")
-            cli.wasi_cli_terminal_stdin_get_terminal_stdin(host, 0, 56), dump("terminal stdin")
-            cli.wasi_cli_terminal_stdout_get_terminal_stdout(host, 0, 64), dump("terminal stdout")
+            cli.wasi_cli_environment_get_arguments(host, 0, 0)
+            dump("arguments")
+            cli.wasi_cli_environment_get_environment(host, 0, 16)
+            dump("environment")
+            cli.wasi_cli_environment_initial_cwd(host, 0, 40)
+            dump("cwd")
+            cli.wasi_cli_terminal_stdin_get_terminal_stdin(host, 0, 56)
+            dump("terminal stdin")
+            cli.wasi_cli_terminal_stdout_get_terminal_stdout(host, 0, 64)
+            dump("terminal stdout")
             cli.wasi_cli_terminal_output_terminal_output_drop(host, load_u32(host, 0, 68))
             a, b, c = (
                 cli.wasi_cli_stdin_get_stdin(host),
@@ -58,14 +69,14 @@ def python_output(scenario: str) -> str:
                 cli.wasi_cli_stdout_get_stdout(host),
             )
             lines.append(f"std handles {a} {b} {c}")
-            io.wasi_io_streams_output_stream_write(host, 0, b, 120, 5, 80), dump("write")
+            io.wasi_io_streams_output_stream_write(host, 0, b, 120, 5, 80)
+            dump("write")
             io.wasi_io_streams_output_stream_drop(host, b)
-            (
-                io.wasi_io_streams_output_stream_write(host, 0, c, 120, 5, 88),
-                dump("write after the other handle was dropped"),
-            )
+            io.wasi_io_streams_output_stream_write(host, 0, c, 120, 5, 88)
+            dump("write after the other handle was dropped")
             io.wasi_io_streams_output_stream_drop(host, c)
-            io.wasi_io_streams_input_stream_read(host, 0, a, 10, 96), dump("read")
+            io.wasi_io_streams_input_stream_read(host, 0, a, 10, 96)
+            dump("read")
             io.wasi_io_streams_input_stream_drop(host, a)
             lines.append(f"stderr {cli.wasi_cli_stderr_get_stderr(host)}")
             lines.append(f"stdout {bytes(stdout.data).hex()}")
@@ -77,9 +88,12 @@ def python_output(scenario: str) -> str:
             host = Host([memory], stdin=cli.FdInput(in_r), stdout=cli.FdOutput(out_w), **common)
             a, b = cli.wasi_cli_stdin_get_stdin(host), cli.wasi_cli_stdout_get_stdout(host)
             lines.append(f"std handles {a} {b}")
-            io.wasi_io_streams_input_stream_read(host, 0, a, 16, 0), dump("read")
-            io.wasi_io_streams_input_stream_read(host, 0, a, 16, 16), dump("read at the end")
-            io.wasi_io_streams_output_stream_blocking_write_and_flush(host, 0, b, 120, 5, 32), dump("write")
+            io.wasi_io_streams_input_stream_read(host, 0, a, 16, 0)
+            dump("read")
+            io.wasi_io_streams_input_stream_read(host, 0, a, 16, 16)
+            dump("read at the end")
+            io.wasi_io_streams_output_stream_blocking_write_and_flush(host, 0, b, 120, 5, 32)
+            dump("write")
             os.close(out_w)
             lines.append(f"pipe {os.read(out_r, 16).hex()}")
             os.close(in_r)

@@ -20,6 +20,7 @@ from __future__ import annotations
 import errno
 import os
 import stat as stat_module
+from collections.abc import Callable
 
 from .wasi_p2_core import (
     KIND_DESCRIPTOR,
@@ -343,7 +344,7 @@ def wasi_filesystem_types_directory_entry_stream_drop(host: Host, handle: int) -
     table_drop(host, handle, KIND_DIRECTORY_ENTRY_STREAM)
 
 
-def _stream_result(host: Host, comp: int, retptr: int, make) -> None:
+def _stream_result(host: Host, comp: int, retptr: int, make: Callable[[], int]) -> None:
     try:
         stream = make()
     except FsError as exc:
@@ -384,7 +385,7 @@ def wasi_filesystem_types_descriptor_append_via_stream(host: Host, comp: int, se
     _stream_result(host, comp, retptr, make)
 
 
-def _status(host: Host, comp: int, retptr: int, action) -> None:
+def _status(host: Host, comp: int, retptr: int, action: Callable[[], object]) -> None:
     """For a `result<_, error-code>`: runs `action()`, writes ok or the error."""
     try:
         action()
@@ -522,7 +523,7 @@ def wasi_filesystem_types_descriptor_read_directory(host: Host, comp: int, self:
             raise FsError("not-directory")
         try:
             names = sorted(os.fsencode(n) for n in os.listdir(d.fd))
-            entries = []
+            entries: list[tuple[int, bytes]] = []
             for name in names:
                 try:
                     entries.append((_type_of(os.stat(name, dir_fd=d.fd, follow_symlinks=False).st_mode), name))
@@ -691,7 +692,9 @@ def wasi_filesystem_types_descriptor_readlink_at(
     _string(host, comp, target, retptr + 4)
 
 
-def _at(host: Host, comp: int, retptr: int, self: int, ptr: int, length: int, call) -> None:
+def _at(
+    host: Host, comp: int, retptr: int, self: int, ptr: int, length: int, call: Callable[[bytes, int], object]
+) -> None:
     def action() -> None:
         d = _descriptor(host, self)
         _need(d, MUTATE)

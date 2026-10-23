@@ -11,12 +11,14 @@ from pathlib import Path
 
 import pytest
 
+if sys.platform == "win32":
+    pytest.skip("the host of the filesystem is POSIX only", allow_module_level=True)
+    raise AssertionError  # not reached: it tells the type checker that nothing below is for Windows
+
 import wasmext
 from wasmext.p2 import wasi_p2_filesystem as fs
 from wasmext.p2 import wasi_p2_io as io
 from wasmext.p2.wasi_p2_core import Host, Trap, load_u32
-
-pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="the host of the filesystem is POSIX only")
 
 C_P2 = Path(wasmext.__file__).parent / "c" / "p2"
 DRIVER = Path(__file__).parent / "data" / "wasi_p2_filesystem_driver.c"

@@ -282,6 +282,8 @@ def test_a_file_opened_only_to_set_its_size_is_opened_for_writing(probe: Any, wo
 
 @pytest.mark.skipif(sys.platform == "win32", reason="a FIFO is POSIX")
 def test_space_is_allocated_for_a_file_and_not_for_a_pipe(probe: Any, world: Path) -> None:
+    if sys.platform == "win32":
+        return  # (skipped above; this tells the type checker that the rest is not for Windows)
     fs = Fs(probe, world)
     _, fd = fs.open("hello.txt", rights=FILE_RIGHTS | (1 << 8) | (1 << 21))  # fd_allocate
     assert fs.inst.fd_allocate(fd, 0, 100) == 0
@@ -669,6 +671,8 @@ def test_a_descriptor_without_the_right_to_poll_is_told_in_its_event(probe: Any,
 
 @pytest.mark.skipif(sys.platform == "win32", reason="polling a pipe is POSIX")
 def test_poll_oneoff_waits_for_a_pipe_and_does_not_report_it_ready_before_it_is(probe: Any, world: Path) -> None:
+    if sys.platform == "win32":
+        return  # (skipped above; this tells the type checker that the rest is not for Windows)
     """A FIFO is not ready until something is written to it (it was always reported ready: found by comparing with uvwasi)."""
     import time
 

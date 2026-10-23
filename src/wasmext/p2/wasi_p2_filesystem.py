@@ -20,6 +20,7 @@ from __future__ import annotations
 import errno
 import os
 import stat as stat_module
+import sys
 from collections.abc import Callable
 
 from .wasi_p2_core import (
@@ -47,6 +48,11 @@ from .wasi_p2_io import (
     input_stream_new,
     output_stream_new,
 )
+
+if (
+    sys.platform == "win32"
+):  # descriptors relative to a directory: POSIX only (it also tells pyright that the rest is not for Windows)
+    raise ImportError("wasmext.p2.wasi_p2_filesystem needs POSIX")
 
 ERROR_CODES = [
     "access", "would-block", "already", "bad-descriptor", "busy", "deadlock", "quota", "exist", "file-too-large", "illegal-byte-sequence", "in-progress",
@@ -415,7 +421,8 @@ def wasi_filesystem_types_descriptor_advise(
 
 
 def wasi_filesystem_types_descriptor_sync_data(host: Host, comp: int, self: int, retptr: int) -> None:
-    _status(host, comp, retptr, lambda: os.fdatasync(_descriptor(host, self).fd))
+    sync = getattr(os, "fdatasync", os.fsync)  # macOS has no fdatasync
+    _status(host, comp, retptr, lambda: sync(_descriptor(host, self).fd))
 
 
 def wasi_filesystem_types_descriptor_sync(host: Host, comp: int, self: int, retptr: int) -> None:

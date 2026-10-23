@@ -630,7 +630,7 @@ def read_request(conn: socket.socket) -> tuple[str, str, list[tuple[str, str]], 
     return method, target, headers, body, trailers
 
 
-def respond(conn: socket.socket, port: int) -> None:
+def respond(conn: socket.socket, port: int, framing: bool = True) -> None:
     try:
         method, target, headers, body, trailers = read_request(conn)
         path = target.split("?")[0]
@@ -640,7 +640,11 @@ def respond(conn: socket.socket, port: int) -> None:
             head = b"HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\nX-Dup: a\r\nx-dup: b\r\ncontent-length: 11\r\n\r\n"
             conn.sendall(head + (b"" if method == "HEAD" else payload))
         elif path == "/echo":
-            seen = f"{method} {target} host={host_seen} len={len(body)} trailers={trailers} te={dict(headers).get('transfer-encoding')}"
+            seen = f"{method} {target} host={host_seen} len={len(body)}"
+            if (
+                framing
+            ):  # how the client sent the body (the conformance server leaves it out: Wasmtime always sends chunks)
+                seen += f" trailers={trailers} te={dict(headers).get('transfer-encoding')}"
             head = f"HTTP/1.1 200 OK\r\ncontent-length: {len(body)}\r\nx-seen: {seen}\r\n\r\n".encode("latin-1")
             conn.sendall(head + body)
         elif path == "/chunked":

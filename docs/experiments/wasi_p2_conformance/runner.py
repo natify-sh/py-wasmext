@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -21,7 +22,8 @@ sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE.parents[2] / "src"))
 import ours
 
-WASM = HERE / "guest" / "target" / "wasm32-wasip2" / "release" / "conf.wasm"
+RELEASE = HERE / "guest" / "target" / "wasm32-wasip2" / "release"
+WASM = RELEASE / "conf.wasm"
 
 
 def make_tree(root: Path) -> None:
@@ -82,11 +84,48 @@ def ours_lines(script: Path, base: Path) -> list[str]:
     return ours.run(script, [(str(rw), "/world", True), (str(ro), "/ro", False)])
 
 
+def wasmtime_http_lines(script: Path, base: Path) -> list[str]:
+    base.mkdir(parents=True, exist_ok=True)
+    out = base / "out.txt"
+    engine = w.Engine()
+    component = c.Component.from_file(engine, str(RELEASE / "http.wasm"))
+    linker = c.Linker(engine)
+    linker.add_wasip2()
+    linker.add_wasi_http()
+    store = w.Store(engine)
+    cfg = w.WasiConfig()
+    cfg.argv = ["http", str(script)]
+    cfg.stdout_file = str(out)
+    cfg.preopen_dir(str(script.parent), str(script.parent), False)
+    store.set_wasi(cfg)
+    store.set_wasi_http()
+    instance = linker.instantiate(store, component)
+    run = instance.get_func(store, instance.get_export_index(store, "run", instance.get_export_index(store, "wasi:cli/run@0.2.4")))
+    assert run is not None
+    run(store)
+    return out.read_text().splitlines()
+
+
 def main() -> int:
     script = Path(sys.argv[1] if len(sys.argv) > 1 else HERE / "script_fs.txt").resolve()
     work = Path(tempfile.mkdtemp(prefix="p2conf"))
-    theirs = wasmtime_lines(script, work / "wasmtime")
-    mine = ours_lines(script, work / "ours")
+    if script.name.startswith("script_http"):
+        import ours_http
+
+        server = subprocess.Popen([sys.executable, str(HERE / "server.py")], stdout=subprocess.PIPE, text=True)
+        try:
+            assert server.stdout is not None
+            port = server.stdout.readline().strip()
+            filled = work / "script_http.txt"
+            filled.write_text(script.read_text().replace("PORT", port))
+            theirs = wasmtime_http_lines(filled, work / "wasmtime")
+            mine = ours_http.run(filled)
+            script = filled
+        finally:
+            server.kill()
+    else:
+        theirs = wasmtime_lines(script, work / "wasmtime")
+        mine = ours_lines(script, work / "ours")
     source = [x.strip() for x in script.read_text().splitlines() if x.strip() and not x.strip().startswith("#")]
     bad = known = 0
     for i, (a, b) in enumerate(zip(theirs, mine, strict=False)):

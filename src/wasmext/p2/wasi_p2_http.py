@@ -1027,7 +1027,8 @@ def default_send(req: HttpRequest) -> HttpResponse:
         r = _Reader(sock, _seconds(req.first_byte_ns), between)
         status, headers = _read_head(r, req.method)
         body, trailers = _read_body(r, req.method, status, headers)
-        return HttpResponse(status, headers, body, trailers)
+        # the framing was undone here, so the guest is not shown it (as in Wasmtime)
+        return HttpResponse(status, [h for h in headers if h[0] != "transfer-encoding"], body, trailers)
     finally:
         sock.close()
 

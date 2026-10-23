@@ -1632,6 +1632,10 @@ WASI_P2_FN int wasi_p2_http_default_send(wasi_p2_state *s, const wasi_p2_http_re
         WASI_P2_HTTP_OOM(err);
         goto done;
     }
+    {  /* the framing was undone here, so the guest is not shown it (as in Wasmtime) */
+        static const uint8_t te[] = "transfer-encoding";
+        wasi_p2_http_fields_remove(headers, te, sizeof te - 1);
+    }
     out->status = status;
     out->headers = headers;
     out->body = blob;

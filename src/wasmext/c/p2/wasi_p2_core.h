@@ -13,6 +13,10 @@
 #include <string.h>
 #ifdef _WIN32
 #include <windows.h>
+#ifdef _MSC_VER
+#pragma comment(lib, "bcrypt") /* elsewhere: -lbcrypt */
+#endif
+#include <bcrypt.h>
 #else
 #include <time.h>
 #endif
@@ -60,6 +64,9 @@ typedef struct wasi_p2_state {
     uint32_t (*realloc)(struct wasi_p2_state *s, uint32_t comp, uint32_t old_ptr, uint32_t old_size, uint32_t align, uint32_t new_size);
     /* what a blocking call does between two looks at a pollable */
     void (*wait)(struct wasi_p2_state *s);
+    /* random bytes: returns 0, or nonzero if the source failed (a trap). `insecure_random_bytes` is the same source unless replaced. */
+    int (*random_bytes)(struct wasi_p2_state *s, uint8_t *buf, size_t n);
+    int (*insecure_random_bytes)(struct wasi_p2_state *s, uint8_t *buf, size_t n);
     /* the clocks, in nanoseconds; replaced in tests */
     uint64_t (*wall_ns)(struct wasi_p2_state *s);
     uint64_t (*monotonic_ns)(struct wasi_p2_state *s);
@@ -110,6 +117,19 @@ WASI_P2_FN uint64_t wasi_p2_default_resolution_ns(int monotonic) {
 #endif
 }
 
+WASI_P2_FN int wasi_p2_default_random_bytes(wasi_p2_state *s, uint8_t *buf, size_t n) {
+    (void)s;
+#ifdef _WIN32
+    return BCryptGenRandom(NULL, buf, (ULONG)n, BCRYPT_USE_SYSTEM_PREFERRED_RNG) != 0;
+#else
+    FILE *f = fopen("/dev/urandom", "rb");
+    if (!f) return 1;
+    size_t got = fread(buf, 1, n, f);
+    fclose(f);
+    return got != n;
+#endif
+}
+
 WASI_P2_FN void wasi_p2_default_wait(wasi_p2_state *s) {
     (void)s;
 #ifdef _WIN32
@@ -124,6 +144,7 @@ WASI_P2_FN void wasi_p2_init(wasi_p2_state *s) {
     memset(s, 0, sizeof *s);
     s->trap = wasi_p2_default_trap;
     s->wait = wasi_p2_default_wait;
+    s->random_bytes = s->insecure_random_bytes = wasi_p2_default_random_bytes;
     s->wall_ns = wasi_p2_default_wall_ns;
     s->monotonic_ns = wasi_p2_default_monotonic_ns;
     s->wall_resolution_ns = wasi_p2_default_resolution_ns(0);

@@ -6,6 +6,7 @@ A memory is any writable buffer (`bytearray`, `memoryview`); a module fused from
 
 from __future__ import annotations
 
+import os
 import struct
 import time
 from collections.abc import Callable, Sequence
@@ -54,11 +55,17 @@ class Host:
         monotonic_resolution_ns: int | None = None,
         realloc: Callable[[int, int, int, int, int], int] | None = None,
         wait: Callable[[], None] = lambda: time.sleep(0.001),
+        random_bytes: Callable[[int], bytes] = os.urandom,
+        insecure_random_bytes: Callable[[int], bytes] | None = None,
     ) -> None:
         self.memories: list[object] = list(memories)
         self.slots: list[Slot] = [Slot()]  # slot 0 is never used
         self.realloc = realloc  # (comp, old_ptr, old_size, align, new_size) -> ptr: the `cabi_realloc` of the component
         self.wait = wait  # what a blocking call does between two looks at a pollable
+        self.random_bytes = random_bytes  # the secure source
+        self.insecure_random_bytes = (
+            insecure_random_bytes or random_bytes
+        )  # `wasi:random/insecure*`: the same source unless replaced
         self.wall_ns = wall_ns
         self.monotonic_ns = monotonic_ns
         self.wall_resolution_ns = wall_resolution_ns or round(time.get_clock_info("time").resolution * 1e9) or 1

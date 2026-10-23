@@ -624,8 +624,8 @@ WASI_P2_FN int wasi_p2_walk_path(wasi_p2_walk *w, const wasi_p2_descriptor *base
         if (last) {
             if (!follow) {
                 /* a slash after a name makes a link there followed: the walk follows it itself, below the base */
-                char probe[8];
-                if (!(slash && wasi_p2_sys_readlink(w->buf, name, probe, sizeof probe) == WASI_P2_OK)) {
+                /* (the whole target: this readlink says "too long" and not a cut, as readlinkat does) */
+                if (!(slash && wasi_p2_sys_readlink(w->buf, name, target, sizeof target) == WASI_P2_OK)) {
                     strcpy(w->leaf, name);
                     if (slash) strcat(w->leaf, "/");
                     break;

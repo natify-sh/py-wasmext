@@ -2228,6 +2228,7 @@ static inline uint32_t wasi_poll(wasmext_wasi *w, uint32_t in, uint32_t out, uin
             return WASI_E_INVAL;
         }
     }
+    (void)polled;  /* only the native poll uses the count */
     /* what the system says about the descriptors: ready or not, and the end of the wait (a clock, or the first descriptor that is ready) */
     short *revents = NULL; (void)revents;
     int *slot = NULL;

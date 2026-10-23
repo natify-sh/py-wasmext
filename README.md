@@ -372,7 +372,12 @@ git clone https://github.com/natify-sh/py-wasmext
 cd py-wasmext
 uv sync
 uv run pytest        # builds real extensions: needs a C compiler
+uv tool install pre-commit && pre-commit install   # the hooks of .pre-commit-config.yaml, for commit and for push
 ```
+
+The hooks that run on a commit are the ones CI runs on the three systems (`pre-commit.yml`: pyright, ruff, pytest). Before a **push** two more run: pyright as it
+sees the code on Windows and on macOS (`--pythonplatform`), because an attribute of the library that exists on one system is an error of the type checker on another
+(CI found `os.fdatasync` and the POSIX-only `os` attributes that way); they are not part of CI, which has the real systems.
 
 The official WASI tests run with `tests/wasi_testsuite/` (see the header of `adapter.py`; the runner of the suite needs Python 3.12,
 `wasmext` itself 3.11): clone `WebAssembly/wasi-testsuite` (branch `prod/testsuite-base`), build the programs with

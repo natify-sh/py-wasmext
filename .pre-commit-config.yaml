@@ -1,4 +1,4 @@
-default_install_hook_types: [pre-commit]
+default_install_hook_types: [pre-commit, pre-push]
 default_language_version:
   python: python3
 
@@ -51,3 +51,23 @@ repos:
         language: system
         pass_filenames: false
         files: '\.py$'
+
+      # The type checker runs on the system it is run on, and POSIX-only or Windows-only attributes of the library are errors on another one. CI runs
+      # `pre-commit run --all-files` on the three systems (this stage is not part of it); before a push, the other two systems are asked here.
+      - id: pyright-windows
+        name: pyright (as on Windows)
+        entry: uv
+        args: ["run", "pyright", "--pythonplatform", "Windows"]
+        language: system
+        pass_filenames: false
+        files: '\.py$'
+        stages: [pre-push]
+
+      - id: pyright-darwin
+        name: pyright (as on macOS)
+        entry: uv
+        args: ["run", "pyright", "--pythonplatform", "Darwin"]
+        language: system
+        pass_filenames: false
+        files: '\.py$'
+        stages: [pre-push]

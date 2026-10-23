@@ -378,8 +378,9 @@ def test_values(tmp_path: Path) -> None:
     assert got["[loop1]"] == f"stat err {fs.ERROR_CODES.index('loop')}"
     assert got["[nope]"] == f"stat err {fs.ERROR_CODES.index('no-entry')}"
     assert got["[sub/f/x]"] == f"stat err {fs.ERROR_CODES.index('not-directory')}"
-    nd = f"stat err {fs.ERROR_CODES.index('not-directory')}"
-    assert got["[lkout/]"] == nd and got["[ln/]"] == nd  # a link with a slash and no symlink-follow is not a directory
+    # a slash after a link makes it followed, as in POSIX and in Wasmtime, but below the base: a link inside is a directory, one that leads out is refused
+    assert got["[ln/]"].startswith("stat type 3")
+    assert got["[lkout/]"] == f"stat err {fs.ERROR_CODES.index('not-permitted')}"
     assert got["[lkout]"].startswith("stat type 5")  # the link itself is there to see
     assert (
         got["[lkout/.]"] == f"stat err {fs.ERROR_CODES.index('not-permitted')}"
@@ -396,8 +397,8 @@ def test_values(tmp_path: Path) -> None:
 
     assert result("unlink of a directory", 620) == code("is-directory")
     assert result("open lkout/ without follow", 200, 4) == code(
-        "not-directory"
-    )  # not a descriptor of a directory outside the tree
+        "not-permitted"
+    )  # the slash makes the link followed, and it leads out of the tree: no descriptor
     assert result("symlink to an absolute path", 610) == code("not-permitted")
     assert result("symlink on a read-only preopen", 612) == code("read-only")
     assert result("readlink of an absolute link", 600, 4) == code("not-permitted")

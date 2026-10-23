@@ -1,0 +1,10 @@
+[package]
+name = "conf"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+wasi = "0.14.7"
+
+[profile.release]
+opt-level = "s"

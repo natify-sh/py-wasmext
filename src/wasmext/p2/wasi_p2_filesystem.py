@@ -150,6 +150,8 @@ def _walk(base: int, path: bytes, follow: bool) -> tuple[int, bytes, list[int]]:
     """(directory, name, descriptors to close): the directory that holds the last name of `path` and that name (`.` for none), the walk confined below `base`."""
     if b"\0" in path:
         raise FsError("invalid")
+    if not path:
+        raise FsError("no-entry")  # an empty name is no name (POSIX; Wasmtime says the same)
     if path.startswith(b"/"):
         raise FsError("not-permitted")
     stack = [base]
@@ -187,16 +189,18 @@ def _walk(base: int, path: bytes, follow: bool) -> tuple[int, bytes, list[int]]:
                 continue
             if last:
                 if not follow:
+                    is_link = False
                     if slash:
-                        # a slash after a name makes the kernel follow a link there whatever O_NOFOLLOW says: such a name is not a directory
+                        # a slash after a name makes the kernel follow a link there whatever O_NOFOLLOW says; the walk follows it itself, below the base
                         try:
                             os.readlink(name, dir_fd=stack[-1])
                         except OSError:
                             pass  # not a link
                         else:
-                            raise FsError("not-directory")
-                    leaf = name + (b"/" if slash else b"")
-                    break
+                            is_link = True
+                    if not is_link:
+                        leaf = name + (b"/" if slash else b"")
+                        break
                 # a link at the end is read before it is used (below)
             else:
                 if len(stack) > MAX_DEPTH:
@@ -510,7 +514,7 @@ def wasi_filesystem_types_descriptor_read(
     _ok(host, comp, retptr)
     store_u32(host, comp, retptr + 4, ptr)
     store_u32(host, comp, retptr + 8, len(data))
-    store_u8(host, comp, retptr + 12, int(len(data) < want))
+    store_u8(host, comp, retptr + 12, int(not data))  # end of file is when nothing was read (as in Wasmtime)
 
 
 def wasi_filesystem_types_descriptor_write(
@@ -681,7 +685,19 @@ def wasi_filesystem_types_descriptor_open_at(
         if flags & DATA_SYNC:
             oflags |= os.O_DSYNC
         with _Walked(d.fd, _path(host, comp, ptr, length), bool(path_flags & SYMLINK_FOLLOW)) as (parent, name):
-            fd = os.open(name, oflags, 0o666, dir_fd=parent)
+            try:
+                fd = os.open(name, oflags, 0o666, dir_fd=parent)
+            except NotADirectoryError:
+                if open_flags & DIRECTORY and not name.endswith(b"/"):
+                    try:
+                        os.readlink(name, dir_fd=parent)
+                    except OSError:
+                        pass
+                    else:
+                        raise FsError(
+                            "loop"
+                        ) from None  # a link is not entered when links are not followed (O_NOFOLLOW)
+                raise
         is_dir = stat_module.S_ISDIR(os.fstat(fd).st_mode)
         handle = table_new(host, KIND_DESCRIPTOR, Descriptor(fd, flags, is_dir))
     except FsError as exc:

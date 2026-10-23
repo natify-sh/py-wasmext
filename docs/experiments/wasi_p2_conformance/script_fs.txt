@@ -1,0 +1,279 @@
+# wasi:filesystem, the same operations on the guest in Wasmtime and on the host of wasmext.
+# open NAME DIR PATH PATHFLAGS(f|-) OPENFLAGS(c d e t|-) DESCRIPTORFLAGS(r w f d q m|-)
+preopen root 0
+preopen ro 1
+type root
+flags root
+stat root
+stat ro
+# files
+open h root hello.txt f - r
+stat h
+type h
+flags h
+read h 0 5
+read h 6 100
+read h 100 5
+read h 0 0
+read-stream h 0 5
+read-stream h 12 5
+read-stream h 99 5
+write h 0 x
+write-stream h 0 x  #~ a stream to write on a descriptor opened without write: here bad-descriptor at once, there the stream fails later
+open w root hello.txt f - w
+write w 0 J
+write w 20 end
+read h 0 100
+stat h
+open w2 root hello.txt f t w
+stat w2
+read h 0 10
+write-stream w2 0 abc
+append-stream w2 DEF
+read h 0 10
+set-size w2 2
+stat w2
+set-size w2 10
+read h 0 10
+set-size h 1  #~ a write on a descriptor that cannot write: bad-descriptor here, not-permitted/invalid there
+sync w2
+sync-data w2
+advise w2 0 0
+sync h
+same h w
+same h h
+hash h
+hash-at root f hello.txt
+hash-at root f nothing
+# open flags
+open x root newfile f c w
+stat x
+open x2 root newfile f ce w
+open x3 root newfile f e w
+open x4 root hello.txt f ce w
+open y root nope f - r
+open d1 root sub f d r
+open d2 root hello.txt f d r
+open d3 root sub f - r
+read d3 0 5  #~ read of a directory: is-directory here, bad-descriptor there
+write d3 0 x
+open d4 root sub f - w
+open d5 root sub f t w
+open d6 root newdir f cd w
+open d7 root sub f c w
+open d8 root hello.txt f c r
+# directories
+readdir root  #~ a FIFO: Wasmtime says unknown, the WIT has fifo
+readdir d1
+readdir h
+readdir empty
+open e root empty f d r
+readdir e
+stat-at root f sub
+stat-at root f sub/f
+stat-at root - sub/f
+stat-at root f nope
+stat-at root f ''
+stat-at root f .
+stat-at root f ./sub/../hello.txt
+stat-at root f sub/
+stat-at root f hello.txt/
+stat-at h f x
+# symlinks
+stat-at root f ln
+stat-at root - ln
+stat-at root - ln/
+stat-at root f ln/f
+stat-at root - ln/f
+stat-at root f filelink
+stat-at root - filelink
+stat-at root - filelink/
+stat-at root f dangling
+stat-at root - dangling
+stat-at root f loop1
+stat-at root - loop1
+stat-at root f deep
+stat-at root f deep/f
+readlink root ln
+readlink root filelink
+readlink root abs
+readlink root up
+readlink root hello.txt
+readlink root nope
+readlink root loop1
+open s1 root ln f d r
+open s2 root ln - d r
+open s3 root filelink f - r
+open s4 root filelink - - r
+open s5 root dangling f - r
+open s6 root dangling f c w
+open s7 root loop1 f - r
+open s8 root filelink/ f - r
+open s9 root filelink - d r
+# the way out
+stat-at root f ..
+stat-at root f ../outdir
+stat-at root f ../outdir/secret
+stat-at root f sub/../..
+stat-at root f sub/../../outdir
+stat-at root f abs
+stat-at root f abs/passwd
+stat-at root f up
+stat-at root f lkout
+stat-at root f lkout/secret
+stat-at root - lkout
+stat-at root f /etc/passwd
+stat-at root f /
+stat-at root f ln/../hello.txt
+open o1 root ../outdir/secret f - r
+open o2 root lkout/secret f - r
+open o3 root /etc/passwd f - r
+open o4 root abs/passwd f - r
+open o5 root sub/../../outdir f d r
+open o6 root lkout f d r
+readlink root lkout
+mkdir root lkout/newdir
+unlink root lkout/secret
+symlink root ../outdir evil
+open o7 root evil/secret f - r
+unlink root evil
+# names
+stat-at root f hello.txt/.
+stat-at root f ./hello.txt
+stat-at root f sub//f
+stat-at root f .//sub
+stat-at root f ...
+mkdir root a/b
+mkdir root sub
+mkdir root hello.txt
+mkdir root newdir
+mkdir root newdir/
+mkdir root newdir/inner
+mkdir root ''
+mkdir root .
+mkdir root ..
+mkdir root /abs
+rmdir root newdir
+rmdir root newdir/inner
+rmdir root newdir
+rmdir root newdir
+rmdir root sub
+rmdir root hello.txt
+rmdir root .
+rmdir root ..
+rmdir root ''
+rmdir root nope
+rmdir root ln
+unlink root newfile
+unlink root newfile
+unlink root sub
+unlink root ln
+unlink root dangling
+unlink root .
+unlink root ''
+unlink root hello.txt/
+unlink root sub/
+# rename and link
+open r root renameme f c w
+rename root renameme root renamed
+rename root renameme root renamed2
+rename root renamed root hello.txt
+rename root renamed root sub
+rename root sub root renamed
+rename root sub root sub2
+rename root sub2 root sub
+rename root empty root sub
+rename root hello.txt root empty
+rename root hello.txt root hello.txt
+rename root hello.txt root ''
+rename root '' root x
+rename root ln root ln2
+rename root ln2 root ln
+rename root . root dot
+rename root hello.txt ro hello2  #~ a read-only preopen: Wasmtime says not-permitted, the WIT says read-only (EROFS)
+rename ro hello.txt root hello2  #~ a read-only preopen: Wasmtime says not-permitted, the WIT says read-only (EROFS)
+link root - hello.txt root hardlink
+stat-at root f hardlink
+link root - hello.txt root hardlink
+link root - sub root dirlink
+link root - nope root x
+link root f ln root lnlink  #~ Wasmtime refuses symlink-follow in link-at with invalid; here it is done (linkat with AT_SYMLINK_FOLLOW)
+link root - ln root lnlink2
+stat-at root - lnlink2
+link root - hello.txt ro hl  #~ a read-only preopen: Wasmtime says not-permitted, the WIT says read-only (EROFS)
+symlink root hello.txt sl1
+symlink root hello.txt sl1
+symlink root nothing sl2
+symlink root '' sl3
+symlink root hello.txt ''
+symlink root /abs/path sl4
+readlink root sl4
+symlink root x sub
+symlink root x nope/y
+# read-only
+open q ro hello.txt f - r
+open q2 ro hello.txt f - w  #~ a read-only preopen: Wasmtime says not-permitted, the WIT says read-only (EROFS)
+open q3 ro hello.txt f c w  #~ a read-only preopen: Wasmtime says not-permitted, the WIT says read-only (EROFS)
+open q4 ro newfile f c r  #~ a read-only preopen: Wasmtime says not-permitted, the WIT says read-only (EROFS)
+open q5 ro ro.txt f t w  #~ a read-only preopen: Wasmtime says not-permitted, the WIT says read-only (EROFS)
+mkdir ro newdir  #~ a read-only preopen: Wasmtime says not-permitted, the WIT says read-only (EROFS)
+rmdir ro empty  #~ a read-only preopen: Wasmtime says not-permitted, the WIT says read-only (EROFS)
+unlink ro hello.txt  #~ a read-only preopen: Wasmtime says not-permitted, the WIT says read-only (EROFS)
+symlink ro x y  #~ a read-only preopen: Wasmtime says not-permitted, the WIT says read-only (EROFS)
+write q 0 x  #~ a write on a descriptor that cannot write: bad-descriptor here, not-permitted/invalid there
+flags q
+flags ro
+open q6 ro sub f d r
+open q7 ro sub f d w  #~ a read-only preopen: Wasmtime says not-permitted, the WIT says read-only (EROFS)
+set-size q 0  #~ a write on a descriptor that cannot write: bad-descriptor here, not-permitted/invalid there
+# permission
+open p1 root ro.txt f - r
+open p2 root ro.txt f - w
+open p3 root ro.txt f t w
+flags p1
+# stream details
+read-stream h 0 0  #~ a read of 0 bytes from a stream: an empty list here, closed there
+write-stream h 0 x  #~ a stream to write on a descriptor opened without write: here bad-descriptor at once, there the stream fails later
+append-stream h x  #~ a stream to write on a descriptor opened without write: here bad-descriptor at once, there the stream fails later
+open ap root hello.txt f - w
+append-stream ap TAIL
+read h 0 100
+write-stream ap 5 ZZ
+read h 0 100
+write-stream ap 1000 Q
+stat ap
+# fifo
+stat-at root f fifo  #~ a FIFO: Wasmtime says unknown, the WIT has fifo
+# end
+drop h
+drop w
+read h 0 1
+# empty and odd names for open
+open e0 root '' f - r
+open em root '' f d r
+open em2 root . f d r
+open em3 root ./ f d r
+open em4 root sub/. f d r
+# a directory opened with mutate-directory
+open mm root sub f d rm
+flags mm  #~ Wasmtime does not report mutate-directory in get-flags, even when it was asked for and given
+mkdir mm made
+rmdir mm made
+open mm2 mm f f - w
+flags mm2
+open mm3 mm f f d m
+open mm4 mm f f c rw
+flags mm4
+# a directory opened without mutate-directory: the WIT says read-only for what changes it; Wasmtime does not look at the flag (the rest of the script follows from that)
+open nm root sub f d r
+flags nm
+mkdir nm made  #~ mutate-directory unset on a directory: the WIT says read-only; Wasmtime ignores the flag
+unlink nm f  #~ mutate-directory unset on a directory: the WIT says read-only; Wasmtime ignores the flag
+rmdir nm none  #~ mutate-directory unset on a directory: the WIT says read-only; Wasmtime ignores the flag
+rename nm f root moved  #~ mutate-directory unset on a directory: the WIT says read-only; Wasmtime ignores the flag
+symlink nm x lnk  #~ mutate-directory unset on a directory: the WIT says read-only; Wasmtime ignores the flag
+open nm2 nm f f c w  #~ mutate-directory unset on a directory: the WIT says read-only; Wasmtime ignores the flag
+open nm3 nm f f - w  #~ mutate-directory unset on a directory: the WIT says read-only; Wasmtime ignores the flag
+open nm4 nm f f - r
+open nm5 nm g f t w  #~ mutate-directory unset on a directory: the WIT says read-only; Wasmtime ignores the flag
+stat-at nm f f

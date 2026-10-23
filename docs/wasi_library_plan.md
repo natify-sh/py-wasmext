@@ -29,7 +29,7 @@
 
 ## Open
 
-* The name and the home of the repository (`natify-sh`).
+* **The name is chosen (the owner, 2026-10-23): `fuzedwasi`** (free everywhere); **the repository is reserved: <https://github.com/natify-sh/fuzedwasi>** (empty; nothing is moved yet).
 * Whether the wrappers of item 1 are generated in the library or in wasmext.
 * How the move of 0.1 is counted by the ABI policy.
 * Windows `filesystem` and `sockets` (0.2) come before the move or after it.

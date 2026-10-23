@@ -180,6 +180,7 @@ WASI_P2_FN int wasi_p2_walk_path(wasi_p2_walk *w, int base, const uint8_t *path,
     w->depth = 0;
     w->fds[0] = base;
     if (memchr(path, 0, len)) return WASI_P2_E_INVALID;
+    if (len == 0) return WASI_P2_E_NO_ENTRY; /* an empty name is no name (POSIX; Wasmtime says the same) */
     if (len && path[0] == '/') return WASI_P2_E_NOT_PERMITTED;
     if (len >= sizeof work) return WASI_P2_E_NAME_TOO_LONG;
     memcpy(work, path, len);
@@ -226,15 +227,13 @@ WASI_P2_FN int wasi_p2_walk_path(wasi_p2_walk *w, int base, const uint8_t *path,
         }
         if (last) {
             if (!follow) {
-                /* a slash after a name makes the kernel follow a link there whatever O_NOFOLLOW says: such a name is not a directory */
+                /* a slash after a name makes the kernel follow a link there whatever O_NOFOLLOW says; the walk follows it itself, below the base */
                 char probe[1];
-                if (slash && readlinkat(w->fds[w->depth], name, probe, sizeof probe) >= 0) {
-                    rc = WASI_P2_E_NOT_DIRECTORY;
-                    goto done;
+                if (!(slash && readlinkat(w->fds[w->depth], name, probe, sizeof probe) >= 0)) {
+                    strcpy(w->leaf, name);
+                    if (slash) strcat(w->leaf, "/");
+                    break;
                 }
-                strcpy(w->leaf, name);
-                if (slash) strcat(w->leaf, "/");
-                break;
             }
         } else {
             if (w->depth > WASI_P2_MAX_DEPTH) {
@@ -564,7 +563,7 @@ WASI_P2_FN void wasi_filesystem_types_descriptor_read(wasi_p2_state *s, uint32_t
     wasi_p2_ok(s, comp, retptr);
     wasi_p2_store_u32(s, comp, retptr + 4, ptr);
     wasi_p2_store_u32(s, comp, retptr + 8, (uint32_t)n);
-    wasi_p2_store_u8(s, comp, retptr + 12, (uint8_t)((uint64_t)n < want));
+    wasi_p2_store_u8(s, comp, retptr + 12, (uint8_t)(n == 0)); /* end of file is when nothing was read (as in Wasmtime) */
 }
 
 WASI_P2_FN void wasi_filesystem_types_descriptor_write(wasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t ptr, uint32_t length, uint64_t offset,
@@ -770,6 +769,11 @@ WASI_P2_FN void wasi_filesystem_types_descriptor_open_at(wasi_p2_state *s, uint3
             int fd = openat(w.dir, w.leaf, oflags, 0666);
             if (fd < 0) {
                 rc = wasi_p2_fail();
+                char probe[1];
+                size_t leaf_len = strlen(w.leaf);
+                /* a link is not entered when links are not followed (O_NOFOLLOW) */
+                if (errno == ENOTDIR && (open_flags & WASI_P2_DIRECTORY) && leaf_len && w.leaf[leaf_len - 1] != '/' && readlinkat(w.dir, w.leaf, probe, sizeof probe) >= 0)
+                    rc = WASI_P2_E_LOOP;
             } else {
                 struct stat st;
                 int is_dir = fstat(fd, &st) == 0 && S_ISDIR(st.st_mode);

@@ -22,7 +22,7 @@ Three things are wrong with it.
 | `wasm32-wasip1` | the calls of `wasi_snapshot_preview1` and `wasi_unstable` (the snapshot is the name of the import module) | the configuration of WASI 0.1 |
 | `wasm32-wasip2` | the functions of `wasi:*@0.2.x` that fusedwasi has | the configuration of WASI 0.2 |
 
-- **The default is `wasm32`.** Nothing is bound unless it was asked for. The project is an alpha, so a module that has relied on the guess takes one line (`host = "wasm32-wasip1"`). When the host is `wasm32` and the module imports the names of `wasi_snapshot_preview1`, the build prints a **note** ("if this is a WASI program, say `--host wasm32-wasip1`") and does nothing else.
+- **The default is `wasm32`.** Nothing is bound unless it was asked for, and there is **no `auto`**: a guess is not wanted in any form (decided). The project is an alpha, so a module that has relied on the guess takes one line (`host = "wasm32-wasip1"`). When the host is `wasm32` and the module imports the names of `wasi_snapshot_preview1`, the build prints a **note** ("if this is a WASI program, say `--host wasm32-wasip1`") and does nothing else.
 - **The check of the signatures stays, as a check of what was said**, not as a detection: with `wasm32-wasip1` a name of `wasi_snapshot_preview1` that the specification does not have, or another type, is an error of the build (it is the mistake of the person, not a module of its own kind). With `wasm32` nothing is checked: the host is the caller's.
 - **The host is recorded in the artifact** (a constant of the module, `__host__` or the like) so that the run time and the stub do not guess either.
 - **It is given** to `wasmext natify`, in `[tool.wasmext]`, and as an argument of the extension of the build; one place per project is enough.
@@ -55,6 +55,7 @@ Agreed on 2026-10-23 after a look at the stubs of `examples/wasi2_unbundled` and
 
 Today a module of WASI 0.1 has `imports: None = None` in its stub, in the extension and (as `imports: Any`) in the wrapper for ctypes: the module `wasi_snapshot_preview1` is neither typed nor named, although a call of it can be replaced. The stub of a module of WASI 0.2 types every function as `Callable[[int, ...], None]`, in a `TypedDict` called `_Imports7`. What is wanted, for the hosts that have a built-in implementation:
 
+- **Every import module is named, none is only numbered.** Today the `TypedDict`s of the imports are `_Imports0`, `_Imports1`, … by the order of the import section, and `wasi_snapshot_preview1` (and `wasi_unstable`) has **no type at all**, in no stub and in no wrapper. After: each module of the imports has a type whose name follows from the module name, and the first snapshot is one of them like the others.
 - **A named `TypedDict` for each WASI module of the imports, with a name that follows from the module** (not from its place in the import section), listing *every function of the standard module*, each `NotRequired`. The key in `Imports` is the exact name of the import of this module (`'wasi:io/streams@0.2.12'`, `'wasi_snapshot_preview1'`, `'wasi_unstable'`), so a module that imports the first snapshot types `wasi_unstable` and not the other.
 - **Each function has the exact signature**, with the names of the parameters that the specification gives, as a `Protocol` with positional-only parameters, so that the name shows in the editor and any name works in the function of the caller:
   ```python
@@ -69,6 +70,7 @@ Today a module of WASI 0.1 has `imports: None = None` in its stub, in the extens
   ```
   For 0.1 the result is the errno (`int`); for 0.2 what the core signature has (`None`, or a handle as `int`), with the pointer of the result among the parameters.
 - **The same types in the stub of the extension and in the wrapper for ctypes** (the wrapper has `imports: Any` today): `Instance.__init__(self, imports: Imports | None = None, *, wasi: Wasi | None = None)` in both.
+- **Part of the stubs moves to fusedwasi.** What describes a standard module of WASI (its `TypedDict`, the `Protocol` of each function) is no longer generated into the stub of every module: it is a module of fusedwasi, and the stub imports it by name. What stays generated in the stub is what is the module's own (its exports, the modules of imports that are not WASI, `Instance`, `Wasi`).
 - **The types are not generated into every stub.** They are made once, from the same tables as the implementation (witx for 0.1, WIT for 0.2), and live in fusedwasi; the stub imports the module by name (`from fusedwasi.p1.types import WasiSnapshotPreview1`). A module that is not WASI keeps a generated `TypedDict`, named from its module name.
 - **The original** (`Instance.original(module, name)`) is typed with the same `Protocol`, so a wrapper has the signature in front of it.
 - For `host = "wasm32"` nothing of this is made: every import is generated as it is today (with the stable name).
@@ -87,7 +89,6 @@ Together with it, **the names of the types are stable.** For the modules of WASI
 
 ## What is not decided
 
-- Whether `host = "auto"` (a guess with a note, asked for by name) is wanted at all. Its answer is "no" unless somebody asks.
 - The exact spelling of the constant in the module and of the key in `[tool.wasmext]`.
 - Mixed modules (one module that imports both `wasi_snapshot_preview1` and `wasi:*`): an error of the build for now.
 - The order of the work: the host and the stub first (no change of the ABI of the C), the binding of 0.2 after.

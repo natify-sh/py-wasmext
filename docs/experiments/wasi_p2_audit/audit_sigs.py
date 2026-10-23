@@ -1,7 +1,7 @@
 """Expected flat core signatures of every import of WASI 0.2 (Canonical ABI) against the Python and C functions of wasmext.p2 / c/p2."""
 import inspect, json, re, sys
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[3] / "src"))
-from wasmext.p2 import wasi_p2_clocks, wasi_p2_cli, wasi_p2_io, wasi_p2_random, wasi_p2_filesystem
+from wasmext.p2 import wasi_p2_clocks, wasi_p2_cli, wasi_p2_io, wasi_p2_random, wasi_p2_filesystem, wasi_p2_sockets
 
 wit = json.load(open("stable.json"))
 T = wit["types"]
@@ -33,8 +33,9 @@ def flat(t):
     raise ValueError(kind)
 
 pk = [p["name"] for p in wit["packages"]]
-mods = {"clocks": wasi_p2_clocks, "cli": wasi_p2_cli, "io": wasi_p2_io, "random": wasi_p2_random, "filesystem": wasi_p2_filesystem}
-csrc = {n: open(__import__("pathlib").Path(__file__).resolve().parents[3] / "src" / "wasmext" / "c" / "p2" / f"wasi_p2_{n}.h").read() for n in mods}
+mods = {"clocks": wasi_p2_clocks, "cli": wasi_p2_cli, "io": wasi_p2_io, "random": wasi_p2_random, "filesystem": wasi_p2_filesystem, "sockets": wasi_p2_sockets}
+HEADERS = __import__("pathlib").Path(__file__).resolve().parents[3] / "src" / "wasmext" / "c" / "p2"
+csrc = {n: (HEADERS / f"wasi_p2_{n}.h").read_text() if (HEADERS / f"wasi_p2_{n}.h").exists() else "" for n in mods}  # "": the C twin does not exist yet
 bad = 0; total = 0
 def check(pyname, mod, cmod, params_flat, results_flat, uses_mem_hint):
     global bad, total
@@ -48,7 +49,10 @@ def check(pyname, mod, cmod, params_flat, results_flat, uses_mem_hint):
     if got != expected:
         print(f"ARITY {pyname}: python {got}, expected {expected} ({params_flat}+ret={len(results_flat)>1})"); bad += 1
     m = re.search(r"WASI_P2_FN\s+\w+\s+\**" + pyname + r"\(([^)]*)\)", csrc[cmod])
-    if not m: print("MISSING c", pyname); bad += 1; return
+    if not m:
+        if csrc[cmod]:
+            print("MISSING c", pyname); bad += 1
+        return
     n_c = len([p for p in m.group(1).split(",") if p.strip()]) - 1
     if n_c != n_py: print(f"C/PY ARITY {pyname}: c {n_c}, py {n_py}"); bad += 1
     # returns a value only when the result is flat 1

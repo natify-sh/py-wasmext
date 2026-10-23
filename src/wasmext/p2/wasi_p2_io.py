@@ -46,9 +46,10 @@ class StreamClosed(Exception):
 class StreamFailed(Exception):
     """The operation failed: the case `last-operation-failed`, with an `error` resource that carries the message (and, from a file, the `error-code` of wasi:filesystem)."""
 
-    def __init__(self, message: str = "", code: int | None = None) -> None:
+    def __init__(self, message: str = "", code: int | None = None, network_code: int | None = None) -> None:
         super().__init__(message)
         self.code = code
+        self.network_code = network_code  # the `error-code` of wasi:sockets, for a socket stream
 
 
 def _call(stream: object, fn: Callable[..., Any], *args: Any) -> Any:
@@ -132,18 +133,19 @@ class StreamPollable(Pollable):
 class Error:
     """The `error` resource: a message, and the `error-code` of wasi:filesystem if the error came from a file (`filesystem-error-code` reads it)."""
 
-    __slots__ = ("code", "message")
+    __slots__ = ("code", "message", "network_code")
 
-    def __init__(self, message: str, code: int | None = None) -> None:
+    def __init__(self, message: str, code: int | None = None, network_code: int | None = None) -> None:
         self.message = message
         self.code = code
+        self.network_code = network_code
 
 
 # making resources for the guest
 
 
-def error_new(host: Host, message: str, code: int | None = None) -> int:
-    return table_new(host, KIND_ERROR, Error(message, code))
+def error_new(host: Host, message: str, code: int | None = None, network_code: int | None = None) -> int:
+    return table_new(host, KIND_ERROR, Error(message, code, network_code))
 
 
 def input_stream_new(host: Host, stream: InputStream) -> int:
@@ -225,7 +227,7 @@ def _err(host: Host, comp: int, retptr: int, error_at: int, exc: Exception) -> N
     store_u8(host, comp, retptr, 1)
     if isinstance(exc, StreamFailed):
         store_u8(host, comp, error_at, 0)
-        store_u32(host, comp, error_at + 4, error_new(host, str(exc), exc.code))
+        store_u32(host, comp, error_at + 4, error_new(host, str(exc), exc.code, exc.network_code))
     else:
         store_u8(host, comp, error_at, 1)
 

@@ -23,6 +23,8 @@
 
 struct wasi_p2_state;
 
+enum { WASI_P2_USE_TCP_BIND, WASI_P2_USE_TCP_CONNECT, WASI_P2_USE_UDP_BIND, WASI_P2_USE_UDP_CONNECT, WASI_P2_USE_UDP_OUTGOING };
+
 /* a directory of the host that the guest sees under `name`; `writable` 0: the guest can only read it */
 struct wasi_p2_preopen {
     const char *path, *name;
@@ -39,7 +41,9 @@ struct wasi_p2_preopen {
 
 enum { WASI_P2_KIND_POLLABLE = 1, WASI_P2_KIND_ERROR = 2, WASI_P2_KIND_INPUT_STREAM = 3, WASI_P2_KIND_OUTPUT_STREAM = 4,
        WASI_P2_KIND_TERMINAL_INPUT = 5, WASI_P2_KIND_TERMINAL_OUTPUT = 6,
-       WASI_P2_KIND_DESCRIPTOR = 7, WASI_P2_KIND_DIRECTORY_ENTRY_STREAM = 8 };
+       WASI_P2_KIND_DESCRIPTOR = 7, WASI_P2_KIND_DIRECTORY_ENTRY_STREAM = 8,
+       WASI_P2_KIND_NETWORK = 9, WASI_P2_KIND_TCP_SOCKET = 10, WASI_P2_KIND_UDP_SOCKET = 11, WASI_P2_KIND_INCOMING_DATAGRAM_STREAM = 12,
+       WASI_P2_KIND_OUTGOING_DATAGRAM_STREAM = 13, WASI_P2_KIND_RESOLVE_STREAM = 14 };
 
 enum { WASI_P2_TERMINAL_STDIN = 1, WASI_P2_TERMINAL_STDOUT = 2, WASI_P2_TERMINAL_STDERR = 4 };
 
@@ -83,6 +87,10 @@ typedef struct wasi_p2_state {
     /* wasi:filesystem/preopens: owned by the caller */
     const struct wasi_p2_preopen *preopens;
     uint32_t preopen_count;
+    /* wasi:sockets: nothing is allowed unless the caller says so, as in Wasmtime. `socket_addr_check` decides for each bind or connect (`use` is a WASI_P2_USE_*),
+       `allow_ip_name_lookup` for resolve-addresses. `ip` is the address as text. NULL: everything is refused. */
+    int (*socket_addr_check)(struct wasi_p2_state *s, const char *ip, uint16_t port, int use);
+    int allow_ip_name_lookup;
     /* the standard streams (wasi_p2_stream, wasi_p2_io.h): [0] stdin, [1] stdout, [2] stderr; NULL means the descriptors of the process, made when first asked for
        (`std_default`, freed with the state). The streams of the caller are not closed when a handle to them is dropped. */
     void *std[3];
@@ -270,6 +278,18 @@ WASI_P2_FN void wasi_p2_store_u64(wasi_p2_state *s, uint32_t comp, uint32_t ptr,
 }
 
 WASI_P2_FN void wasi_p2_store_u8(wasi_p2_state *s, uint32_t comp, uint32_t ptr, uint8_t v) { *wasi_p2_mem(s, comp, ptr, 1) = v; }
+
+WASI_P2_FN void wasi_p2_store_u16(wasi_p2_state *s, uint32_t comp, uint32_t ptr, uint16_t v) {
+    uint8_t *p = wasi_p2_mem(s, comp, ptr, 2);
+    p[0] = (uint8_t)v, p[1] = (uint8_t)(v >> 8);
+}
+
+WASI_P2_FN uint8_t wasi_p2_load_u8(wasi_p2_state *s, uint32_t comp, uint32_t ptr) { return *wasi_p2_mem(s, comp, ptr, 1); }
+
+WASI_P2_FN uint16_t wasi_p2_load_u16(wasi_p2_state *s, uint32_t comp, uint32_t ptr) {
+    const uint8_t *p = wasi_p2_mem(s, comp, ptr, 2);
+    return (uint16_t)(p[0] | p[1] << 8);
+}
 
 WASI_P2_FN uint32_t wasi_p2_load_u32(wasi_p2_state *s, uint32_t comp, uint32_t ptr) {
     const uint8_t *p = wasi_p2_mem(s, comp, ptr, 4);

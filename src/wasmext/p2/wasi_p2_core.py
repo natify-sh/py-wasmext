@@ -23,6 +23,12 @@ KIND_TERMINAL_INPUT = 5
 KIND_TERMINAL_OUTPUT = 6
 KIND_DESCRIPTOR = 7
 KIND_DIRECTORY_ENTRY_STREAM = 8
+KIND_NETWORK = 9
+KIND_TCP_SOCKET = 10
+KIND_UDP_SOCKET = 11
+KIND_INCOMING_DATAGRAM_STREAM = 12
+KIND_OUTGOING_DATAGRAM_STREAM = 13
+KIND_RESOLVE_STREAM = 14
 
 
 class Trap(Exception):
@@ -77,6 +83,9 @@ class Host:
         stderr: object = None,
         terminals: Sequence[str] = (),
         preopens: Sequence[tuple[str, str] | tuple[str, str, bool]] = (),
+        network: bool = False,
+        socket_addr_check: Callable[[str, int, str], bool] | None = None,
+        allow_ip_name_lookup: bool | None = None,
     ) -> None:
         self.memories: list[object] = list(memories)
         self.slots: list[Slot] = [Slot()]  # slot 0 is never used
@@ -91,6 +100,10 @@ class Host:
         }
         # wasi:filesystem/preopens: (path on the host, name for the guest) or (path, name, writable); a directory is writable unless the third item is False
         self.preopens = [(p[0], p[1], p[2] if len(p) > 2 else True) for p in preopens]  # type: ignore[misc]
+        # wasi:sockets: nothing is allowed unless the caller says so, as in Wasmtime. `network=True` allows everything; `socket_addr_check(ip, port, use)` decides
+        # for each bind or connect (`use` is "tcp-bind", "tcp-connect", "udp-bind", "udp-connect" or "udp-outgoing"); `allow_ip_name_lookup` for `resolve-addresses`
+        self.socket_addr_check: Callable[[str, int, str], bool] = socket_addr_check or (lambda ip, port, use: network)
+        self.allow_ip_name_lookup = network if allow_ip_name_lookup is None else allow_ip_name_lookup
         self.terminals = set(terminals)  # which of "stdin", "stdout", "stderr" are terminals
         self.random_bytes = random_bytes  # the secure source
         self.insecure_random_bytes = (
@@ -153,6 +166,18 @@ def _check(host: Host, comp: int, ptr: int, size: int) -> memoryview:
 
 def store_u8(host: Host, comp: int, ptr: int, value: int) -> None:
     _check(host, comp, ptr, 1)[ptr] = value & 0xFF
+
+
+def store_u16(host: Host, comp: int, ptr: int, value: int) -> None:
+    struct.pack_into("<H", _check(host, comp, ptr, 2), ptr, value & 0xFFFF)
+
+
+def load_u8(host: Host, comp: int, ptr: int) -> int:
+    return _check(host, comp, ptr, 1)[ptr]
+
+
+def load_u16(host: Host, comp: int, ptr: int) -> int:
+    return struct.unpack_from("<H", _check(host, comp, ptr, 2), ptr)[0]
 
 
 def store_u32(host: Host, comp: int, ptr: int, value: int) -> None:

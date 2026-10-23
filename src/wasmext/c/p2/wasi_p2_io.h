@@ -21,13 +21,16 @@ typedef struct wasi_p2_stream {
     void (*destroy)(wasi_p2_state *s, struct wasi_p2_stream *st); /* when the handle is dropped; may be NULL */
     const char *failure;
     int failure_has_code, failure_code; /* the error-code of wasi:filesystem, when the failure came from a file */
+    int failure_network_code;           /* the error-code of wasi:sockets, when it came from a socket; -1 none (set it with the failure: calloc gives 0, so see failure_has_network) */
+    int failure_has_network;
     int dead;                           /* set when an operation failed: from then on every call is `closed` (the rule of stream-error) */
     void *ctx;
 } wasi_p2_stream;
 
 /* the `error` resource: a code (-1: none) and the message */
 typedef struct {
-    int code;
+    int code;         /* wasi:filesystem error-code, -1 none */
+    int network_code; /* wasi:sockets error-code, -1 none */
     char message[1];
 } wasi_p2_error;
 
@@ -66,14 +69,17 @@ WASI_P2_FN int wasi_p2_s_flush(wasi_p2_state *s, wasi_p2_stream *st) {
 
 /* making resources for the guest */
 
-WASI_P2_FN uint32_t wasi_p2_error_new_code(wasi_p2_state *s, const char *message, int code) {
+WASI_P2_FN uint32_t wasi_p2_error_new_codes(wasi_p2_state *s, const char *message, int code, int network_code) {
     size_t n = strlen(message) + 1;
     wasi_p2_error *e = (wasi_p2_error *)malloc(sizeof *e + n);
     if (!e) s->trap(s, "out of memory");
     e->code = code;
+    e->network_code = network_code;
     memcpy(e->message, message, n);
     return wasi_p2_table_new(s, WASI_P2_KIND_ERROR, e, wasi_p2_free_obj);
 }
+
+WASI_P2_FN uint32_t wasi_p2_error_new_code(wasi_p2_state *s, const char *message, int code) { return wasi_p2_error_new_codes(s, message, code, -1); }
 
 WASI_P2_FN uint32_t wasi_p2_error_new(wasi_p2_state *s, const char *message) { return wasi_p2_error_new_code(s, message, -1); }
 
@@ -198,7 +204,8 @@ WASI_P2_FN void wasi_p2_stream_err(wasi_p2_state *s, uint32_t comp, uint32_t ret
     wasi_p2_store_u8(s, comp, retptr, 1);
     if (status == WASI_P2_STREAM_FAILED) {
         wasi_p2_store_u8(s, comp, error_at, 0);
-        wasi_p2_store_u32(s, comp, error_at + 4, wasi_p2_error_new_code(s, failure ? failure : "failed", st->failure_has_code ? st->failure_code : -1));
+        wasi_p2_store_u32(s, comp, error_at + 4, wasi_p2_error_new_codes(s, failure ? failure : "failed", st->failure_has_code ? st->failure_code : -1,
+                                                                    st->failure_has_network ? st->failure_network_code : -1));
     } else {
         wasi_p2_store_u8(s, comp, error_at, 1);
     }

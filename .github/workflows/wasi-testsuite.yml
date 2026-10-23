@@ -32,7 +32,7 @@ env:
 
 jobs:
   wasi-testsuite:
-    name: WASI test suite on ${{ matrix.os }}${{ matrix.python_fs && ' (files through Python)' || '' }}${{ matrix.exe && ' (native executables)' || '' }}
+    name: WASI test suite on ${{ matrix.os }}${{ matrix.exe && ' (native executables)' || '' }}
     runs-on: ${{ matrix.os }}
     # a branch of this repository is run by its push; a pull request is run only when it comes from a fork (a push to a fork is not seen here)
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
@@ -45,9 +45,6 @@ jobs:
           - { os: ubuntu-latest }
           - { os: macos-latest }
           - { os: windows-latest }
-          # ... and through Python (os.stat, os.open ...): the way Windows had before the native one (wasi_p1_files_win32.h)
-          - { os: ubuntu-latest, python_fs: true }
-          - { os: windows-latest, python_fs: true }
           # ... and as native executables with no Python in them (wasmext._exe: the C of the module, its glue and the core of WASI): check (b) of the plan
           - { os: ubuntu-latest, exe: true }
           - { os: macos-latest, exe: true }
@@ -81,7 +78,6 @@ jobs:
       - name: Build the programs
         env:
           WASMEXT_TESTSUITE_CACHE: ${{ runner.temp }}/wasmext-testsuite
-          WASMEXT_TESTSUITE_CFLAGS: ${{ matrix.python_fs && '-DFUSEDWASI_P1_HOST_FS=1' || '' }}
           WASMEXT_TESTSUITE_EXE: ${{ matrix.exe && '1' || '' }}
         run: |
           WORK="$GITHUB_WORKSPACE"
@@ -92,7 +88,6 @@ jobs:
       - name: Run the tests
         env:
           WASMEXT_TESTSUITE_CACHE: ${{ runner.temp }}/wasmext-testsuite
-          WASMEXT_TESTSUITE_CFLAGS: ${{ matrix.python_fs && '-DFUSEDWASI_P1_HOST_FS=1' || '' }}
           WASMEXT_TESTSUITE_EXE: ${{ matrix.exe && '1' || '' }}
         run: |
           # paths in the form of the system (GITHUB_WORKSPACE has C:\ on Windows, $PWD in bash has /c/)
@@ -100,7 +95,7 @@ jobs:
           if [ "$RUNNER_OS" = "Windows" ]; then PY="$WORK\\.venv\\Scripts\\python.exe"; RUNNER="$WORK\\.runner\\Scripts\\python.exe"
           else PY="$WORK/.venv/bin/python"; RUNNER="$WORK/.runner/bin/python"; fi
           export WASMEXT_PYTHON="$PY"
-          EXPECT="tests/wasi_testsuite/expectations-$(echo "$RUNNER_OS" | tr 'A-Z' 'a-z')${{ matrix.python_fs && '-python-fs' || '' }}.toml"
+          EXPECT="tests/wasi_testsuite/expectations-$(echo "$RUNNER_OS" | tr 'A-Z' 'a-z').toml"
           ARGS=()
           if [ -f "$EXPECT" ]; then ARGS=(--expectations "$WORK/$EXPECT"); fi
           cd wasi-testsuite
@@ -119,7 +114,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: wasi-testsuite-${{ matrix.os }}${{ matrix.python_fs && '-python-fs' || '' }}${{ matrix.exe && '-exe' || '' }}
+          name: wasi-testsuite-${{ matrix.os }}${{ matrix.exe && '-exe' || '' }}
           path: ${{ runner.temp }}/wasi-testsuite.json
           retention-days: 7
           if-no-files-found: ignore

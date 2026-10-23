@@ -19,10 +19,9 @@ import exe_build  # pyright: ignore[reportMissingImports]
 # The tests expect other errors on other systems, and the suite asks for the system to be said with the environment of the
 # program (tests/rust/wasm32-wasip1/src/config.rs): without it any of the errors the systems give is taken.
 if sys.platform == "win32":
-    # The files through Python cannot rename a directory over an empty one, as POSIX does (the native files of Windows can)
     # (no ERRNO_MODE_WINDOWS: it asks for the errors that a system gives that is not POSIX, where wasmext gives the errors of POSIX,
     # and without it the tests take any of the errors of the systems)
-    PLATFORM = {}
+    PLATFORM: dict[str, str] = {}
 elif sys.platform == "darwin":
     PLATFORM = {"ERRNO_MODE_MACOS": "1"}
 else:

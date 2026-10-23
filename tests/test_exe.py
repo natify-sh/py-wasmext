@@ -16,7 +16,7 @@ from .conftest import DATA
 def _program(wabt: Path, tmp_path: Path, source: str) -> Path:
     wasm = tmp_path / "m.wasm"
     subprocess.run([wabt / "bin" / "wat2wasm", DATA / source, "-o", wasm], check=True)
-    return build(wasm, tmp_path / ("m.exe" if sys.platform == "win32" else "m"), optimize=False)
+    return build(wasm, tmp_path / ("m.exe" if sys.platform == "win32" else "m"), optimize=False, host="wasm32-wasip1")
 
 
 def test_a_command_runs_as_a_program_and_ends_with_its_code(wabt: Path, tmp_path: Path) -> None:
@@ -39,7 +39,7 @@ def test_a_module_with_other_imports_than_wasi_is_not_made_into_a_program(wabt: 
     wasm = tmp_path / "other.wasm"
     subprocess.run([wabt / "bin" / "wat2wasm", wat, "-o", wasm], check=True)
     with pytest.raises(Exception, match="serves the imports of WASI"):
-        build(wasm, tmp_path / "other", optimize=False)
+        build(wasm, tmp_path / "other", optimize=False, host="wasm32-wasip1")
 
 
 def test_a_module_that_imports_nothing_from_wasi_is_not_made_into_a_program_in_words(
@@ -50,7 +50,7 @@ def test_a_module_that_imports_nothing_from_wasi_is_not_made_into_a_program_in_w
     wasm = tmp_path / "plain.wasm"
     subprocess.run([wabt / "bin" / "wat2wasm", wat, "-o", wasm], check=True)
     with pytest.raises(Exception, match="imports nothing from WASI"):
-        build(wasm, tmp_path / "plain", optimize=False)
+        build(wasm, tmp_path / "plain", optimize=False, host="wasm32-wasip1")
 
 
 def _run(program: Path, *args: str) -> subprocess.CompletedProcess[bytes]:
@@ -97,7 +97,9 @@ def test_a_directory_can_be_given_read_only(wabt: Path, tmp_path: Path) -> None:
     )
     wasm = tmp_path / "create.wasm"
     subprocess.run([wabt / "bin" / "wat2wasm", wat, "-o", wasm], check=True)
-    program = build(wasm, tmp_path / ("create.exe" if sys.platform == "win32" else "create"), optimize=False)
+    program = build(
+        wasm, tmp_path / ("create.exe" if sys.platform == "win32" else "create"), optimize=False, host="wasm32-wasip1"
+    )
     writable, shared = tmp_path / "rw", tmp_path / "ro"
     writable.mkdir()
     shared.mkdir()
@@ -116,7 +118,7 @@ def test_a_start_that_is_not_a_command_is_refused(wabt: Path, tmp_path: Path) ->
     wasm = tmp_path / "typed.wasm"
     subprocess.run([wabt / "bin" / "wat2wasm", wat, "-o", wasm], check=True)
     with pytest.raises(Exception, match=r"_start is \(i32\)"):
-        build(wasm, tmp_path / "typed", optimize=False)
+        build(wasm, tmp_path / "typed", optimize=False, host="wasm32-wasip1")
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX descriptors")

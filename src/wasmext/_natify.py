@@ -32,7 +32,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from ._gen import GenError, Glue, generate, module_prefix
+from ._gen import GenError, Glue, check_host, generate, module_prefix
 from ._toolchain import Toolchain, find_toolchain
 from ._wasm import WasmError, expand_compact_imports, parse, wasi_hint
 
@@ -281,25 +281,30 @@ def sources_digest() -> str:
     return digest.hexdigest()
 
 
-def inputs_digest(sources: str, wabt: str, parts: int, name: str, wasm: str, share_tables: bool = False) -> str:
+def inputs_digest(
+    sources: str, wabt: str, parts: int, name: str, wasm: str, share_tables: bool = False, host: str = "wasm32"
+) -> str:
     """One fingerprint of everything the C is made from: the sources of wasmext, the WABT, the number of files, the name of the module and the
     content of the .wasm. A new input goes here and the C is made again when it changes, with no other place to remember."""
     return hashlib.sha256(
-        "\0".join((sources, wabt, str(parts), name, wasm, str(int(share_tables)))).encode()
+        "\0".join((sources, wabt, str(parts), name, wasm, str(int(share_tables)), host)).encode()
     ).hexdigest()
 
 
-def _marker(wabt: str, parts: int = 1, digest: str = "", name: str = "", share_tables: bool = False) -> str:
+def _marker(
+    wabt: str, parts: int = 1, digest: str = "", name: str = "", share_tables: bool = False, host: str = "wasm32"
+) -> str:
     """The head of every file of the C that wasmext made. Macros and not a comment: they are read by name, so nothing depends on the place or the
     wording of a line. INPUTS is what decides whether the file is current; the others say what it was made from (VERSION is for people only)."""
     sources = sources_digest()
     lines = [
         f'#define {GENERATED}VERSION "{_version()}"',
-        f'#define {GENERATED}INPUTS "{inputs_digest(sources, wabt, parts, name, digest, share_tables)}"',
+        f'#define {GENERATED}INPUTS "{inputs_digest(sources, wabt, parts, name, digest, share_tables, host)}"',
         f'#define {GENERATED}SOURCES "{sources}"',
         f'#define {GENERATED}WABT "{wabt}"',
         f"#define {GENERATED}PARTS {parts}",
         f"#define {GENERATED}SHARE {int(share_tables)}",
+        f'#define {GENERATED}HOST "{host}"',
     ]
     if digest:
         lines.append(f'#define {GENERATED}WASM "{digest}"')
@@ -363,7 +368,7 @@ def _existing_parts(out_dir: Path, last: str) -> int:
     return count
 
 
-def _made_by_this_wasmext(path: Path, digest: str, name: str, share_tables: bool = False) -> bool:
+def _made_by_this_wasmext(path: Path, digest: str, name: str, share_tables: bool = False, host: str = "wasm32") -> bool:
     """The head of `path` says it was made from these inputs: these sources of wasmext, this .wasm, this name and, where a WABT is installed, this WABT."""
     info = _generated_info(path)
     if info is None or not {"INPUTS", "WABT", "PARTS", "SHARE", "WASM"} <= set(info):
@@ -372,7 +377,7 @@ def _made_by_this_wasmext(path: Path, digest: str, name: str, share_tables: bool
         wabt = find_toolchain().version
     except RuntimeError:  # built where there is no WABT: what wasmext made from this .wasm stays, by the WABT it says
         wabt = info["WABT"]
-    return info["INPUTS"] == inputs_digest(sources_digest(), wabt, int(info["PARTS"]), name, digest, share_tables)
+    return info["INPUTS"] == inputs_digest(sources_digest(), wabt, int(info["PARTS"]), name, digest, share_tables, host)
 
 
 # wasm2c 1.0.42 checks the sum of 64-bit addresses with `_addcarry_u64` whenever the compiler is MSVC, an intrinsic that only
@@ -608,7 +613,9 @@ def _prepare(
     stubs: bool,
     parts: int | None,
     share_tables: bool = False,
+    host: str = "wasm32",
 ) -> _Prepared:
+    host = check_host(host)
     last = name.rsplit(".", 1)[-1]
     data = wasm.read_bytes()
     digest = wasm_digest(data)
@@ -641,7 +648,7 @@ def _prepare(
     # cannot be wrapped is reported on every run, and a stub deleted from a tree that ships its C is written again.
     try:
         parsed = parse(data)
-        glue = generate(parsed, name, version=_release_version(), share_tables=share_tables)
+        glue = generate(parsed, name, version=_release_version(), share_tables=share_tables, host=host)
     except (WasmError, GenError) as exc:
         raise type(exc)(f"{wasm}: {exc}") from None
     if not quiet and (hint := wasi_hint(data)):
@@ -671,7 +678,7 @@ def _prepare(
     have = _existing_parts(out_dir, last)
     first = _w2c_files(out_dir, last, have)[0] if have else None
     complete = bool(have) and all(p.is_file() for p in (glue_c, out_dir / f"{last}_rt_impl.c"))
-    if not force and complete and first is not None and _made_by_this_wasmext(first, digest, name, share_tables):
+    if not force and complete and first is not None and _made_by_this_wasmext(first, digest, name, share_tables, host):
         if have == wanted:
             return outputs(glue.skipped, have)
         try:
@@ -703,13 +710,13 @@ def _prepare(
     for part in code_files:
         _write_atomic(
             part,
-            _marker(toolchain.version, wanted, digest, name, share_tables).encode()
+            _marker(toolchain.version, wanted, digest, name, share_tables, host).encode()
             + _export_tags(_repair_tail_calls(_portable(repaired[part])), module_prefix(name)),
         )
     if shared.is_file():
         _write_atomic(shared, _portable(repaired[shared]))
     _write_if_changed(
-        glue_c, (_marker(toolchain.version, wanted, digest, name, share_tables) + glue.source).encode("utf-8")
+        glue_c, (_marker(toolchain.version, wanted, digest, name, share_tables, host) + glue.source).encode("utf-8")
     )
     for key, text in _RUNTIME_WRAPPERS.items():
         _write_if_changed(out_dir / f"{last}_rt_{key}.c", text.encode())
@@ -732,6 +739,7 @@ def generate_c(
     stubs: bool,
     parts: int | None,
     share_tables: bool = False,
+    host: str = "wasm32",
 ) -> Generated:
     """The C of `wasm` for every target that the module can have, written in `out_dir`: the C of wasm2c, its runtime and the glue (the same for all of them), and the front end of each
     target: `<name>_py.c` (an extension), `<name>_api.h` and `<name>_shared.c` (a shared library), `<name>_main.c` (a program). A target that the module cannot have is left out and the reason is
@@ -740,7 +748,7 @@ def generate_c(
     from ._exe import main_c, program_problem
 
     prepared = _prepare(
-        wasm, name, out_dir, force=force, quiet=quiet, stubs=stubs, parts=parts, share_tables=share_tables
+        wasm, name, out_dir, force=force, quiet=quiet, stubs=stubs, parts=parts, share_tables=share_tables, host=host
     )
     last = name.rsplit(".", 1)[-1]
     glue, parsed = prepared.glue, prepared.parsed
@@ -765,7 +773,7 @@ def generate_c(
         put(f"{last}_api.h", glue.api_header)
         shared_c = put(f"{last}_shared.c", glue.shared)
         targets["shared"] = Target([*common, shared_c.as_posix()])
-    problem = program_problem(parsed)
+    problem = program_problem(parsed, check_host(host))
     if problem:
         targets["exe"] = Target([], problem)
     else:
@@ -788,6 +796,7 @@ def natify(
     guard_pages: bool | str | Mapping[str, bool] | None = None,
     parts: int | None = None,
     share_tables: bool = False,
+    host: str = "wasm32",
     product: str = "extension",
 ) -> list[Extension]:
     """The extensions for the `.wasm` modules in `module_list`, ready for `setup(ext_modules=...)`.
@@ -825,6 +834,11 @@ def natify(
     funcref table shares tables whatever this says. The option is an input of the C (a change makes it again), costs a call into the module a few
     nanoseconds more, and gives the module the class `Table`.
 
+    `host` says who stands on the other side of the imports of the modules: `"wasm32"` (the default; every import is yours to give in `imports`),
+    `"wasm32-wasip1"` (the imports of `wasi_snapshot_preview1` and `wasi_unstable` are answered by wasmext, and `wasi=` configures them) or
+    `"wasm32-wasip2"` (named, but wasmext answers none of the imports of WASI 0.2 yet). It is not guessed from the names of the imports. It is
+    an input of the C and is told by the module as `__host__`. `"wasm32-unknown-unknown"` is another name for `"wasm32"`. See docs/wasi_target.md.
+
     `product` is what is made of each module: `"extension"` (the default, a Python extension), `"shared"` (a shared library with a C API, and
     beside it a `<stem>_ctypes.py` wrapper with the interface of the extension) or `"exe"` (a program, for a command with a `_start`). One product
     for each call: a module that is wanted in two ways is two calls (or two tables of `pyproject.toml`). The result is still `Extension` objects, marked
@@ -848,6 +862,7 @@ def natify(
             guard_pages=guard_pages,
             parts=parts,
             share_tables=share_tables,
+            host=host,
             product=product,
         )
     ]
@@ -865,6 +880,7 @@ def _natify(
     guard_pages: bool | str | Mapping[str, bool] | None = None,
     parts: int | None = None,
     share_tables: bool = False,
+    host: str = "wasm32",
     product: str = "extension",
 ) -> list[tuple[Path | None, Extension]]:
     """`natify()` with the `.wasm` file of each extension (None for an ordinary extension that passed through)."""
@@ -901,6 +917,7 @@ def _natify(
             stubs=stubs and product == "extension",
             parts=parts,
             share_tables=share_tables,
+            host=host,
         )
         prepared = generated.prepared
         chosen = generated.targets[product]
@@ -920,6 +937,7 @@ def _natify(
                 "work": out_dir.resolve(),
                 "parts": parts,
                 "share_tables": share_tables,
+                "host": host,
                 "quiet": quiet,
                 "force": force,
             }

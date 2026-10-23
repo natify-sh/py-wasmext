@@ -1,6 +1,6 @@
 # Plan: the `host` setting, typed named imports, `wasi=` hooks
 
-Status: **a plan, nothing is built.** The concept and the reasons are in [wasi_target.md](wasi_target.md); this file is the order of the work. Each stage is a separate change that leaves the tests green. No stage changes the C ABI (`WASMEXT_ABI`) unless it says so. The numbers in brackets are the items of the agreed list.
+Status: **stages 0 and 1 are built (see their results below); the rest is a plan.** The concept and the reasons are in [wasi_target.md](wasi_target.md); this file is the order of the work. Each stage is a separate change that leaves the tests green. No stage changes the C ABI (`WASMEXT_ABI`) unless it says so. The numbers in brackets are the items of the agreed list.
 
 ## Stage 0: measure and check (no code in the product)
 
@@ -13,7 +13,7 @@ Status: **a plan, nothing is built.** The concept and the reasons are in [wasi_t
 - A value `wasm32` (default) / `wasm32-wasip1` / `wasm32-wasip2`, no `auto`; given to `wasmext natify`, to `[tool.wasmext]` and to the extension of the build; recorded in the artifact (a constant of the module). The spelling of the constant and of the key is chosen here. [4-9, 38]
 - `_gen.py` binds the built-in WASI only for `wasm32-wasip1`; with `wasm32` every import is the caller's and a note is printed for the names of `wasi_snapshot_preview1`. The check of the signatures stays, only for the host that was said. [5-7]
 - `wasm32-wasip3`: an error with the reason; threads variant left out. [11, 12]
-- Mixed `wasi_snapshot_preview1` + `wasi:*`: an error of the build. [37]
+- Mixed `wasi_snapshot_preview1` + `wasi:*`: not an error, a warning; imports that do not belong to the host stay plain imports of the caller. [37]
 - The existing tests, examples and CI that rely on the guess get `host = "wasm32-wasip1"` (one line each); a test that a module with the same names and another host gets no binding; a test of the note.
 - Done when: all tests pass with the explicit host and the default does not bind.
 
@@ -71,7 +71,7 @@ Stubs. 26. Every import module is named, none numbered; `wasi_snapshot_preview1`
 
 WASI 0.2. 34. `cabi_realloc` is a required export; its absence is an error of the build. 35. Arguments, environment and streams through hooks of `wasi=` or replaced imports. 36. The host of 0.2 is not in the ABI of wasmext; stub and Python path first, C path later.
 
-Mixed. 37. `wasi_snapshot_preview1` + `wasi:*` in one module is not supported (an error of the build): a component fused through the component model is already P2.
+Mixed. 37. `wasi_snapshot_preview1` + `wasi:*` in one module is not an error but a warning (a note of the build): what does not belong to the chosen host is a plain import of the caller. A component fused through the component model is already P2, so nothing special is built for it.
 
 Open. 38. The name of the constant and of the key in `[tool.wasmext]`. 39. The shape and the cost of the reference to the original (to measure). 40. How `lift`/`lower` work. 41. The keys of `wasi=` for p2. 42. What `host` means for wasmhost. 43. What the module sees for `None`. 44. The order of the work (this plan). 45. The check of the extracted p2 names against a real module.
 
@@ -82,3 +82,7 @@ Open. 38. The name of the constant and of the key in `[tool.wasmext]`. 39. The s
 **The cost of a wrapper (item 39).** One process, CPython 3.13, Linux, 1,000,000 calls of an import with four `i32` and one result: a Python function that returns at once, **98 ns per call**; a Python function that calls a C function of another instance (a stand-in for the original: the border C to Python to C), **148 ns per call**. So wrapping adds about **50 ns per call**, one more border. The built-in WASI call without a wrapper stays in C. For the calls that do real work (a write, a read, a clock) 50 ns is below the noise; for a hot loop of tiny calls it is a third more than the call to Python already costs. This is acceptable for a reference made on demand: **a thin object over the C function is enough, no cache and no special path is needed.** (The reference was not built; the stand-in is an exported function of a second module.)
 
 Decision for stage 4 that follows: the reference is made on demand and is a thin callable; nothing in this measurement asks for a change of the shape. Stages 1 and 2 are not held up by stage 0.
+
+## Stage 1: built (2026-10-23)
+
+`host` is `wasm32` (default), `wasm32-wasip1` or `wasm32-wasip2` (alias `wasm32-unknown-unknown` for `wasm32`); anything else is an error (`wasm32-wasip3` says WASI 0.3 is not supported). It is an argument of `natify()`, `generate()`, `build_shared`/`build` and `wasmimport.install()`, the key `host` of `[tool.wasmext.ext-modules]`, and `wasmext natify --host`. It is an input of the C (it is in the digest and the head of the generated files) and is told by the module as `__host__` (also in the stub as `Literal`). Only `wasm32-wasip1` binds `wasi_snapshot_preview1` and `wasi_unstable`; with the others every import is the caller's and a note says so for the names of WASI 0.1 (and, with `wasm32-wasip1`, for `wasi:*` imports, a warning, not an error). `wasm32-wasip2` binds nothing yet and says so. A program (`--exe`) needs `wasm32-wasip1` and says so otherwise. The tests, the examples that use WASI 0.1 (lua, quickjs, wabt, products) and the test suite adapter now say `wasm32-wasip1`. The declaration of the ABI got `__host__` (an addition to the stub); its version is not changed here.

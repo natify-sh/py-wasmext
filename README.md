@@ -64,9 +64,11 @@ from wasmext import natify
 setup(ext_modules=natify("src/mypkg/*.wasm"))  # build-system.requires = ["setuptools", "wasmext"]
 ```
 
+**The host.** A module's imports are answered by someone, and wasmext does not guess who from their names (a module can import `fd_write` and be something else). `host` says it: `"wasm32"` (the default: every import is yours, in `imports=`), `"wasm32-wasip1"` (wasmext answers `wasi_snapshot_preview1` and `wasi_unstable` itself, `wasi=` configures them, and a WASI program can be made into an executable) or `"wasm32-wasip2"` (named; the imports of WASI 0.2 are yours for now). `natify(..., host="wasm32-wasip1")`, `host = "wasm32-wasip1"` in the table, `wasmext natify --host wasm32-wasip1`, `wasmimport.install(host=...)`. The module tells it as `__host__`. A module that imports WASI 0.1 and is built with `wasm32` gets a note and asks for those imports like any others. See docs/wasi_target.md.
+
 Or with no `setup.py` at all, in `pyproject.toml` (a hook of wasmext, an entry point of setuptools, reads the table). The keys are the
 arguments of `natify()` with dashes: `module-list` (a glob pattern, or a list of them), `exclude`, `build-dir`, `force`, `quiet`, `stubs`,
-`guard-pages`, `parts`, `share-tables`, `product`; and, added to each extension the table makes, those of `Extension`: `extra-compile-args`,
+`guard-pages`, `parts`, `share-tables`, `host`, `product`; and, added to each extension the table makes, those of `Extension`: `extra-compile-args`,
 `extra-link-args`, `define-macros` (`"NAME"`, `"NAME=value"` or `["NAME", "value"]`), `undef-macros`, `include-dirs`, `libraries`,
 `library-dirs`. One setting is for the whole project, not an entry, because a wheel has one tag: `limited-api` goes in `[tool.wasmext]` (above the entries), and all the modules
 are built the same way; a module of wasmext that took the default follows a hand-written extension that is not abi3, and settings that contradict each other are an error. (In a `setup.py` the same settings are those of an `Extension` given to `natify()`, as to `cythonize()`.)

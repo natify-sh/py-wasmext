@@ -101,6 +101,7 @@ class _Options:
         stubs: bool,
         parts: int | None = None,
         share_tables: bool = False,
+        host: str = "wasm32",
     ) -> None:
         self.build_dir = build_dir
         self.inplace = inplace
@@ -111,6 +112,7 @@ class _Options:
         self.stubs = stubs
         self.parts = parts
         self.share_tables = share_tables
+        self.host = host
 
 
 def _workdir(options: _Options, wasm: Path, name: str) -> Path:
@@ -141,6 +143,7 @@ def build_module(name: str, wasmfilename: str, options: _Options) -> str:
         guard_pages=options.guard_pages,
         parts=options.parts,
         share_tables=options.share_tables,
+        host=options.host,
     )
     lib = _package_root(wasm, name) if options.inplace else work / "lib"
     stamp = work / "options"
@@ -251,6 +254,7 @@ def _fingerprint(options: _Options, ext: Extension, special_args: dict[str, Any]
         "limited_api": options.limited_api,
         "parts": options.parts,
         "share_tables": options.share_tables,
+        "host": options.host,
         "setup_args": options.setup_args,
         "special_args": special_args,
         "extension": {
@@ -342,6 +346,7 @@ def install(
     stubs: bool = False,
     parts: int | None = None,
     share_tables: bool = False,
+    host: str = "wasm32",
 ) -> WasmFinder:
     """Main entry point: let `import` find `.wasm` files, for this process. Returns the finder (to hand to `uninstall()`).
 
@@ -350,7 +355,7 @@ def install(
         `build_dir`: easier to look at when something goes wrong, and it can meet files of the same name.
     :param setup_args: arguments for `setuptools.setup()`; a `.wasmbld` file can add to them.
     :param inplace: put the built extension (`.so` or `.pyd`) next to the `.wasm`.
-    :param guard_pages: and :param limited_api: and :param parts: and :param share_tables: as for `natify()`.
+    :param guard_pages: and :param limited_api: and :param parts: and :param share_tables: and :param host: as for `natify()`.
     :param stubs: write a `<name>.pyi` beside each `.wasm` (not by default: the directory you import from stays as it is).
 
     A second call replaces the finder of the first (where `pyximport` keeps the first one).
@@ -366,6 +371,7 @@ def install(
         stubs,
         parts,
         share_tables,
+        host,
     )
     finder = WasmFinder(options)
     sys.meta_path.append(finder)

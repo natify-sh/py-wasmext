@@ -47,7 +47,7 @@ def test_pyproject_asks_for_a_library_and_a_program(tmp_path: Path, wabt: Path) 
         tmp_path,
         wabt,
         '[[tool.wasmext.ext-modules]]\nmodule-list = "pkg/lib.wasm"\nproduct = "shared"\n'
-        '[[tool.wasmext.ext-modules]]\nmodule-list = "pkg/hello.wasm"\nproduct = "exe"\n',
+        '[[tool.wasmext.ext-modules]]\nmodule-list = "pkg/hello.wasm"\nproduct = "exe"\nhost = "wasm32-wasip1"\n',
     )
     assert pyproject_calls(root)[1]["product"] == "exe"
     done = _build_ext(root, wabt)
@@ -63,7 +63,7 @@ def test_pyproject_asks_for_a_library_and_a_program(tmp_path: Path, wabt: Path) 
 
 def test_natify_returns_extensions_marked_for_the_other_products(tmp_path: Path, wabt: Path) -> None:
     root = _project(tmp_path, wabt, "")
-    made = natify(str(root / "pkg" / "hello.wasm"), product="exe")
+    made = natify(str(root / "pkg" / "hello.wasm"), product="exe", host="wasm32-wasip1")
     assert len(made) == 1 and made[0].sources == [(root / "pkg" / "hello.wasm").as_posix()]
     assert made[0]._wasmext_product == "exe"  # type: ignore[attr-defined]
     with pytest.raises(ValueError, match="product must be one of"):
@@ -92,7 +92,7 @@ def test_the_command_line_makes_one_product_in_place_with_i(tmp_path: Path, wabt
             check=False,
         )
 
-    assert run("-i", "--exe", "pkg/hello.wasm").returncode == 0
+    assert run("-i", "--exe", "--host", "wasm32-wasip1", "pkg/hello.wasm").returncode == 0
     ran = subprocess.run([root / "pkg" / product_filename("hello", "exe")], capture_output=True, check=False)
     assert ran.stdout == b"hello, wasi\n"
     assert run("-i", "--shared", "pkg/lib.wasm").returncode == 0
@@ -100,7 +100,7 @@ def test_the_command_line_makes_one_product_in_place_with_i(tmp_path: Path, wabt
     both = run("--shared", "--exe", "pkg/lib.wasm")
     assert both.returncode == 2 and "not allowed with" in both.stderr  # one product for each run
     reactor = run(
-        "--exe", "pkg/lib.wasm"
+        "--exe", "--host", "wasm32-wasip1", "pkg/lib.wasm"
     )  # a library module is not a command (refused when the C is made, before any build)
     assert (
         reactor.returncode == 1 and "serves the imports of WASI" in reactor.stderr and "Traceback" not in reactor.stderr
@@ -113,7 +113,7 @@ def test_the_wheel_of_a_package_with_only_libraries_and_programs_is_not_tied_to_
     root = _project(
         tmp_path,
         wabt,
-        '[[tool.wasmext.ext-modules]]\nmodule-list = "pkg/hello.wasm"\nproduct = "exe"\n',
+        '[[tool.wasmext.ext-modules]]\nmodule-list = "pkg/hello.wasm"\nproduct = "exe"\nhost = "wasm32-wasip1"\n',
     )
     env = {**os.environ, "WASMEXT_WABT": str(wabt)}
     done = subprocess.run(
@@ -196,7 +196,7 @@ def test_without_i_or_b_the_command_line_only_writes_the_c_of_a_product(tmp_path
     assert (work / "lib_api.h").is_file() and (work / "lib_shared.c").is_file() and (work / "lib_w2c.c").is_file()
     assert "the C of the shared lib" in done.stdout
     assert not (root / "pkg" / product_filename("lib", "shared")).exists()  # nothing was compiled
-    done = run("--exe", "pkg/hello.wasm")
+    done = run("--exe", "--host", "wasm32-wasip1", "pkg/hello.wasm")
     assert done.returncode == 0, done.stderr[-600:]
     assert (root / "build" / "wasmext" / "pkg.hello" / "hello_main.c").is_file()
     assert not (root / "pkg" / product_filename("hello", "exe")).exists()
@@ -300,21 +300,25 @@ def test_the_c_of_every_target_the_module_can_have_is_generated_at_once(
     monkeypatch.setenv("WASMEXT_WABT", str(wabt))
     monkeypatch.chdir(root)
     work = root / "build" / "wasmext" / "pkg.hello"
-    natify("pkg/hello.wasm", quiet=True)  # an extension was asked for
+    natify("pkg/hello.wasm", quiet=True, host="wasm32-wasip1")  # an extension was asked for
     wanted = ("hello_py.c", "hello_shared.c", "hello_api.h", "hello_main.c", "hello_w2c.c", "hello_glue.h")
     for name in wanted:
         assert (work / name).is_file(), name  # a WASI command can be all three
     before = {name: (work / name).stat().st_mtime_ns for name in wanted}
-    natify("pkg/hello.wasm", product="exe", quiet=True)
-    natify("pkg/hello.wasm", product="shared", quiet=True)
+    natify("pkg/hello.wasm", product="exe", quiet=True, host="wasm32-wasip1")
+    natify("pkg/hello.wasm", product="shared", quiet=True, host="wasm32-wasip1")
     assert {
         name: (work / name).stat().st_mtime_ns for name in wanted
     } == before  # nothing is made again for another product
-    natify("pkg/lib.wasm", quiet=True)  # not a command: no program, and no error for the other targets
+    natify(
+        "pkg/lib.wasm", quiet=True, host="wasm32-wasip1"
+    )  # not a command: no program, and no error for the other targets
     lib = root / "build" / "wasmext" / "pkg.lib"
     assert (lib / "lib_py.c").is_file() and (lib / "lib_shared.c").is_file() and not (lib / "lib_main.c").exists()
     with pytest.raises(Exception, match="serves the imports of WASI"):
-        natify("pkg/lib.wasm", product="exe", quiet=True)  # only when the program itself is asked for
+        natify(
+            "pkg/lib.wasm", product="exe", quiet=True, host="wasm32-wasip1"
+        )  # only when the program itself is asked for
 
 
 def test_a_path_too_long_for_windows_fails_the_build_and_says_why(tmp_path: Path) -> None:

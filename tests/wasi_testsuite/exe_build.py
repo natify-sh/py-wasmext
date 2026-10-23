@@ -31,7 +31,9 @@ def build(program: Path) -> Path:
 
     where = exe_path(program)
     if not where.is_file():
-        build_exe(program, where, name=f"t_{digest(program)}", work=where.parent / "c", optimize=False)
+        build_exe(
+            program, where, name=f"t_{digest(program)}", work=where.parent / "c", optimize=False, host="wasm32-wasip1"
+        )
     return where
 
 

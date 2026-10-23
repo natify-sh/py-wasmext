@@ -39,7 +39,9 @@ def prepare(program: Path) -> str:
     # WASMEXT_TESTSUITE_CFLAGS: more flags for the compiler
     from wasmext import _importer  # pyright: ignore[reportPrivateUsage]
 
-    _importer.install(build_dir=cache / "build", parts=int(os.environ.get("WASMEXT_TESTSUITE_PARTS", "8")))
+    _importer.install(
+        build_dir=cache / "build", parts=int(os.environ.get("WASMEXT_TESTSUITE_PARTS", "8")), host="wasm32-wasip1"
+    )
     sys.path.insert(0, str(home))
     return module
 

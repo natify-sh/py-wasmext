@@ -21,6 +21,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
+from ._gen import HOST_ALIASES, HOSTS
 from ._natify import LIMITED_API_VERSION, PRODUCTS, _version, natify, wasm_digest  # pyright: ignore[reportPrivateUsage]
 from ._toolchain import find_toolchain
 
@@ -47,6 +48,7 @@ _WASMIZE_KEYS = {
     "guard-pages": "guard_pages",
     "parts": "parts",
     "share-tables": "share_tables",
+    "host": "host",
     "product": "product",
 }
 # ... and what holds for the whole project, because the wheel has one tag: [tool.wasmext] limited-api
@@ -87,6 +89,7 @@ _KEY_TYPES = {
     "guard-pages": "guard",
     "parts": "int",
     "share-tables": "bool",
+    "host": "host",
     "product": "product",
     "extra-compile-args": "list",
     "extra-link-args": "list",
@@ -105,6 +108,8 @@ def _check_value(path: Path, key: str, value: Any) -> None:
     strings = isinstance(value, list) and all(isinstance(v, str) for v in value)  # pyright: ignore[reportUnknownVariableType]
     if kind == "product" and value not in PRODUCTS:
         raise ValueError(f"{where} must be one of {', '.join(PRODUCTS)}, not {value!r}")
+    if kind == "host" and not (isinstance(value, str) and (value in HOSTS or value in HOST_ALIASES)):
+        raise ValueError(f"{where} must be one of {', '.join(HOSTS)}, not {value!r}")
     if kind == "guard":  # true/false, or a table of architectures
         table = isinstance(value, dict) and all(isinstance(k, str) and isinstance(v, bool) for k, v in value.items())  # pyright: ignore[reportUnknownVariableType]
         if not (isinstance(value, bool) or table):
@@ -319,7 +324,9 @@ def _jobs(command: Any, count: int) -> int:
     return max(1, min(wanted, count))
 
 
-def _product_fingerprint(ext: Any, wasm: Path, parts: int | None, share_tables: bool = False) -> str:
+def _product_fingerprint(
+    ext: Any, wasm: Path, parts: int | None, share_tables: bool = False, host: str = "wasm32"
+) -> str:
     """What a library or a program was made from and with: the content of the .wasm (not its time), this wasmext and WABT, the number of files
     and the flags of the build. A change of any of it makes the file stale; the time of a file says nothing of them."""
     try:
@@ -333,6 +340,7 @@ def _product_fingerprint(ext: Any, wasm: Path, parts: int | None, share_tables: 
         "product": ext._wasmext_product,
         "parts": parts,
         "share_tables": share_tables,
+        "host": host,
         "flags": {
             key: getattr(ext, key, None)
             for key in (
@@ -464,7 +472,9 @@ def parallel_build_ext(base: type) -> type:
             settings = ext._wasmext_settings
             work = settings["work"]
             stamp = Path(work) / f"{target.stem.split('.')[0]}.{ext._wasmext_product}.stamp"
-            fingerprint = _product_fingerprint(ext, wasm, settings["parts"], settings.get("share_tables", False))
+            fingerprint = _product_fingerprint(
+                ext, wasm, settings["parts"], settings.get("share_tables", False), settings.get("host", "wasm32")
+            )
             if (
                 not (self.force or settings["force"])
                 and target.is_file()
@@ -489,6 +499,7 @@ def parallel_build_ext(base: type) -> type:
                     work=work,
                     parts=settings["parts"],
                     share_tables=settings.get("share_tables", False),
+                    host=settings.get("host", "wasm32"),
                     quiet=settings["quiet"],
                     flags=flags,
                 )
@@ -499,6 +510,7 @@ def parallel_build_ext(base: type) -> type:
                     work=work,
                     parts=settings["parts"],
                     share_tables=settings.get("share_tables", False),
+                    host=settings.get("host", "wasm32"),
                     flags=flags,
                 )
             Path(work).mkdir(parents=True, exist_ok=True)

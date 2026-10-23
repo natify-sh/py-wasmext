@@ -63,7 +63,9 @@ def _library_and_host(
     wasm = tmp_path / "m.wasm"
     subprocess.run([wabt / "bin" / "wat2wasm", tmp_path / "m.wat", "-o", wasm], check=True)
     suffix = ".dll" if sys.platform == "win32" else ".dylib" if platform.system() == "Darwin" else ".so"
-    library = build_shared(wasm, tmp_path / f"lib{name}{suffix}", name=name, optimize=False, quiet=True, flags=flags)
+    library = build_shared(
+        wasm, tmp_path / f"lib{name}{suffix}", name=name, optimize=False, quiet=True, flags=flags, host="wasm32-wasip1"
+    )
     (tmp_path / "host.c").write_text(host, encoding="utf-8")
     include = tmp_path / f"{library.stem}_wasmext"
     if sys.platform == "win32":

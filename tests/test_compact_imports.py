@@ -188,7 +188,7 @@ START = "try:\n    m.Instance()._start()\nexcept m.WasiExit as exc:\n    print('
 @pytest.mark.parametrize("form", ["each", "kind", "empty", "overlong", "mixed"])
 def test_a_python_extension_runs(tmp_path: Path, wabt: Path, form: str) -> None:
     _module(tmp_path, form)
-    done = _wasmext(tmp_path, wabt, "natify", "-i", "-q", "m.wasm")
+    done = _wasmext(tmp_path, wabt, "natify", "-i", "-q", "--host", "wasm32-wasip1", "m.wasm")
     assert done.returncode == 0, done.stderr[-800:]
     ran = _run_start(tmp_path, wabt, "import m\n" + START)
     assert ran.returncode == 0, ran.stderr[-800:]
@@ -198,7 +198,7 @@ def test_a_python_extension_runs(tmp_path: Path, wabt: Path, form: str) -> None:
 @pytest.mark.parametrize("form", ["each", "mixed"])
 def test_a_shared_library_is_built(tmp_path: Path, wabt: Path, form: str) -> None:
     _module(tmp_path, form)
-    done = _wasmext(tmp_path, wabt, "natify", "-i", "-q", "--shared", "m.wasm")
+    done = _wasmext(tmp_path, wabt, "natify", "-i", "-q", "--host", "wasm32-wasip1", "--shared", "m.wasm")
     assert done.returncode == 0, done.stderr[-800:]
     assert (tmp_path / product_filename("m", "shared")).is_file()
     assert (tmp_path / "m_ctypes.py").is_file()
@@ -207,7 +207,7 @@ def test_a_shared_library_is_built(tmp_path: Path, wabt: Path, form: str) -> Non
 @pytest.mark.parametrize("form", ["each", "mixed"])
 def test_a_program_runs(tmp_path: Path, wabt: Path, form: str) -> None:
     _module(tmp_path, form)
-    done = _wasmext(tmp_path, wabt, "natify", "-i", "-q", "--exe", "m.wasm")
+    done = _wasmext(tmp_path, wabt, "natify", "-i", "-q", "--host", "wasm32-wasip1", "--exe", "m.wasm")
     assert done.returncode == 0, done.stderr[-800:]
     ran = subprocess.run([tmp_path / product_filename("m", "exe")], capture_output=True, check=False)
     assert ran.stdout == b"hello, wasi\n" and ran.returncode == 3
@@ -216,7 +216,7 @@ def test_a_program_runs(tmp_path: Path, wabt: Path, form: str) -> None:
 @pytest.mark.parametrize("form", ["each", "mixed"])
 def test_wasmimport_imports_it(tmp_path: Path, wabt: Path, form: str) -> None:
     _module(tmp_path, form)
-    ran = _run_start(tmp_path, wabt, "import wasmimport\nwasmimport.install()\nimport m\n" + START)
+    ran = _run_start(tmp_path, wabt, 'import wasmimport\nwasmimport.install(host="wasm32-wasip1")\nimport m\n' + START)
     assert ran.returncode == 0, ran.stderr[-800:]
     assert ran.stdout == "hello, wasi\nexit 3\n"
 

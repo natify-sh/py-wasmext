@@ -86,7 +86,7 @@ Together with it, **the names of the types are stable.** For the modules of WASI
 ## What is not decided
 
 - The exact spelling of the constant in the module and of the key in `[tool.wasmext]`.
-- Mixed modules (`wasi_snapshot_preview1` and `wasi:*` in one module): **not supported, an error of the build.** A component fused through the component model is already P2 (P1 sits behind an adapter inside it), so such a module is not expected; if it ever appears it is not a goal.
+- Mixed modules (`wasi_snapshot_preview1` and `wasi:*` in one module): **not an error, a warning (a note of the build).** The host binds what it is named for; every import that does not belong to it is a plain import of the caller, as with `wasm32` (decided). A component fused through the component model is already P2, so such a module is not expected, and nothing special is built for it.
 - The order of the work: the host and the stub first (no change of the ABI of the C), the binding of 0.2 after.
 - The cost of wrapping an original import, and the shape of the reference to the original: after a measurement of the crossing C to Python to C.
 - Whether `wasi=` is also for WASI 0.2, and its keys there.

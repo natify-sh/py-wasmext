@@ -179,6 +179,22 @@ def _ident(name: str) -> str:
 _WASI_PREVIEW1 = "wasi_snapshot_preview1"
 _WASI_UNSTABLE = "wasi_unstable"  # the first snapshot
 _WASI_HEADERS = {_WASI_PREVIEW1: "wasi_p1.h", _WASI_UNSTABLE: "wasi_p1_unstable.h"}
+
+# who stands on the other side of the imports of a module (docs/wasi_target.md): `wasm32` binds nothing, `wasm32-wasip1` binds WASI 0.1
+HOSTS = ("wasm32", "wasm32-wasip1", "wasm32-wasip2")
+DEFAULT_HOST = "wasm32"
+HOST_ALIASES = {"wasm32-unknown-unknown": "wasm32"}
+
+
+def check_host(host: str) -> str:
+    """The name of `host` that wasmext keeps (an alias such as `wasm32-unknown-unknown` is turned into `wasm32`), or a GenError for a host that is not known."""
+    host = HOST_ALIASES.get(host, host)
+    if host not in HOSTS:
+        extra = " (WASI 0.3 is not supported)" if host == "wasm32-wasip3" else ""
+        raise GenError(f"host {host!r} is not one of {', '.join(HOSTS)}{extra}")
+    return host
+
+
 # the 46 calls of WASI 0.1 and their signatures (the witx files of the wasi-0.1 branch of WebAssembly/WASI): wasi_p1.h has a
 # function for each, and a module that imports one with another signature is refused when the glue is made
 _WASI_PREVIEW1_SIGNATURES = {
@@ -439,9 +455,15 @@ def _emit_links(
         hadd("")
 
 
-def generate(module: Module, name: str, *, version: str | None = None, share_tables: bool = False) -> Glue:
+def generate(
+    module: Module, name: str, *, version: str | None = None, share_tables: bool = False, host: str = DEFAULT_HOST
+) -> Glue:
     """The C source of the extension module `name` (dotted, as it is imported) for the parsed `module`. `version`, the version of
-    wasmext, goes into the header of the stub."""
+    wasmext, goes into the header of the stub. `host` says who stands on the other side of the imports (see HOSTS): only with
+    `wasm32-wasip1` are the imports of `wasi_snapshot_preview1` and `wasi_unstable` answered by wasmext; with `wasm32` all of them are the caller's."""
+    host = check_host(host)
+    wasi_headers = _WASI_HEADERS if host == "wasm32-wasip1" else {}
+    host_name = host
     last = _ident(name)
     prefix = mangle(last, module=True)
     skipped: list[str] = []
@@ -466,7 +488,7 @@ def generate(module: Module, name: str, *, version: str | None = None, share_tab
             )  # a funcref in the signature of an import is not supported
             if reason:
                 raise GenError(f"import {imp.module}.{imp.name} {reason}: not supported yet")
-            if imp.module in _WASI_HEADERS:
+            if imp.module in wasi_headers:
                 wanted = _WASI_SIGNATURES[imp.module].get(imp.name)
                 if wanted is None:
                     raise GenError(f"import {imp.module}.{imp.name} is not a function of {imp.module}")
@@ -595,10 +617,10 @@ def generate(module: Module, name: str, *, version: str | None = None, share_tab
         _ref_types(module) if shares_tables else []
     )  # the types of the elements of a table that a Function of this module can call
     has_imports = bool(imports or global_imports or memory_imports or table_imports)
-    wasi_modules = sorted({imp.module for imp in imports if imp.module in _WASI_HEADERS})
+    wasi_modules = sorted({imp.module for imp in imports if imp.module in wasi_headers})
     uses_wasi = bool(wasi_modules)
     # without other imports the caller need not give any: the module gets WASI by itself
-    needs_imports = any(imp.module not in _WASI_HEADERS for imp in imports) or bool(
+    needs_imports = any(imp.module not in wasi_headers for imp in imports) or bool(
         global_imports or memory_imports or table_imports
     )
     if uses_wasi and "memory" not in memories:
@@ -618,7 +640,7 @@ def generate(module: Module, name: str, *, version: str | None = None, share_tab
     hadd(f'#include "{last}_w2c.h"')
     hadd('#include "wasmext_glue.h"')
     for module_name in wasi_modules:
-        hadd(f'#include "{_WASI_HEADERS[module_name]}"')
+        hadd(f'#include "{wasi_headers[module_name]}"')
     tags = module.tags
     notes: list[str] = []
     for tag_index, tag in enumerate(tags):
@@ -628,6 +650,19 @@ def generate(module: Module, name: str, *, version: str | None = None, share_tab
                 f"exception tag {tag_index} carries {size} bytes: the runtime keeps at most 256, "
                 "so its values are not decoded when it is not caught"
             )
+    wasi_names = sorted({imp.module for imp in module.imports if imp.kind == "func" and imp.module in _WASI_HEADERS})
+    if wasi_names and host_name != "wasm32-wasip1":
+        notes.append(
+            f"the module imports {', '.join(wasi_names)}; with host {host_name!r} they are yours to give in imports "
+            "(if this is a WASI program, say host 'wasm32-wasip1')"
+        )
+    other_wasi = sorted({imp.module for imp in module.imports if imp.kind == "func" and imp.module.startswith("wasi:")})
+    if other_wasi and host_name == "wasm32-wasip1":
+        notes.append(
+            f"the module also imports {', '.join(other_wasi)}, which host 'wasm32-wasip1' does not answer: they are yours to give in imports"
+        )
+    if host_name == "wasm32-wasip2":
+        notes.append("host 'wasm32-wasip2': wasmext does not answer the imports of WASI 0.2 yet; give them in imports")
     if tags:
         hadd(
             "/* The tags of the module: their identities (a table that wasmext adds to the C of wasm2c, in the order of the tags) and the"
@@ -1368,7 +1403,7 @@ def generate(module: Module, name: str, *, version: str | None = None, share_tab
             hold = f"self->hold{imp.host}"
             signature = _signature_code(imp.func)
             add("    {")
-            if imp.module in _WASI_HEADERS:
+            if imp.module in wasi_headers:
                 # what the caller gives wins; otherwise wasmext gives the call (a function of the WASI headers), called directly
                 add("        PyObject *v = NULL;")
                 add("        if (imports != Py_None) {")
@@ -1431,7 +1466,7 @@ def generate(module: Module, name: str, *, version: str | None = None, share_tab
             add("            Py_DECREF(self);")
             add("            return NULL;")
             add("        }")
-            if imp.module in _WASI_HEADERS:
+            if imp.module in wasi_headers:
                 add("        }")
             add("    }")
         for j, g in enumerate(global_imports):
@@ -1647,7 +1682,7 @@ def generate(module: Module, name: str, *, version: str | None = None, share_tab
         hadd("/* the imports of WASI over the functions of the core, with the state `self->wasi` (made first): 0 */")
         hadd(f"static inline int {last}_wasi_bind({last}_instance *self) {{")
         for imp in imports:
-            if imp.module in _WASI_HEADERS:
+            if imp.module in wasi_headers:
                 own = imp.module == _WASI_UNSTABLE and imp.field in _WASI_UNSTABLE_OWN
                 hadd(
                     f"    self->host{imp.host}.fn[{imp.slot}] = (void *)fusedwasi_p1_{'unstable_' if own else ''}{imp.field};"
@@ -2175,6 +2210,7 @@ def generate(module: Module, name: str, *, version: str | None = None, share_tab
     if tags:
         add('    if (PyModule_AddObjectRef(m, "UncaughtException", UncaughtExceptionError) < 0) goto fail;')
     add('    if (PyModule_AddObjectRef(m, "LinkError", LinkError) < 0) goto fail;')
+    add(f'    if (PyModule_AddStringConstant(m, "__host__", {_c_string(host_name)}) < 0) goto fail;')
     add('    if (PyModule_AddObjectRef(m, "Instance", (PyObject *)InstanceType) < 0) goto fail;')
     if shares_tables:
         add('    if (PyModule_AddObjectRef(m, "Table", (PyObject *)TableType) < 0) goto fail;')
@@ -2184,7 +2220,7 @@ def generate(module: Module, name: str, *, version: str | None = None, share_tab
     add("    Py_DECREF(m);")
     add("    return NULL;")
     add("}")
-    stub_imports = [imp for imp in module.imports if imp.module not in _WASI_HEADERS]
+    stub_imports = [imp for imp in module.imports if imp.module not in wasi_headers]
     from ._shared import generate_shared, unsupported
 
     reason = unsupported(
@@ -2201,7 +2237,7 @@ def generate(module: Module, name: str, *, version: str | None = None, share_tab
             prefix,
             funcs,
             memories,
-            [(i.module, i.field, i.func, i.module in _WASI_HEADERS, i.host, i.slot) for i in imports],
+            [(i.module, i.field, i.func, i.module in wasi_headers, i.host, i.slot) for i in imports],
             uses_wasi,
             len(tags),
             skipped,
@@ -2230,8 +2266,9 @@ def generate(module: Module, name: str, *, version: str | None = None, share_tab
             bool(tags),
             shares_tables,
             tables,
+            host_name,
         ),
-        tuple(_WASI_HEADERS[m] for m in wasi_modules),
+        tuple(wasi_headers[m] for m in wasi_modules),
         api_header=api_header,
         shared=shared,
         shared_unsupported=reason or "",
@@ -3059,6 +3096,7 @@ def _stub(
     tags: bool = False,
     table: bool = False,
     tables: list[str] | None = None,
+    host: str = "wasm32",
 ) -> str:
     """The `.pyi` for the extension module: what a type checker and an editor can know of an extension."""
     # The formatter and the linter of the project the stub lands in leave a generated file alone (the second noqa is
@@ -3079,9 +3117,14 @@ def _stub(
     elif imports or table:
         lines += ["from collections.abc import Callable"] + (["from typing import TypedDict"] if imports else [])
     names = [t for t in (tables or ()) if _usable(t)]
-    if names:
-        lines.append("from typing import Literal, overload")
-    lines += ["", "class Trap(RuntimeError): ...", "class LinkError(Exception): ..."]
+    lines.append("from typing import Literal, overload" if names else "from typing import Literal")
+    lines += [
+        "",
+        f"__host__: Literal[{_py_string(host)}]",
+        "",
+        "class Trap(RuntimeError): ...",
+        "class LinkError(Exception): ...",
+    ]
     if tags:
         lines += [
             "class UncaughtException(Trap):",

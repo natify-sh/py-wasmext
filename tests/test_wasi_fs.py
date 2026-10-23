@@ -95,8 +95,12 @@ class Fs:
 def probe(request: pytest.FixtureRequest) -> Any:
     """The probe module built as an extension and as the shared library used through ctypes (the system's files: openat on POSIX, Win32 on Windows)."""
     if request.param == "ctypes":
-        return request.getfixturevalue("build_ctypes")(DATA / "wasi_fs_probe.wat", "wasi_fs_probe_ctypes")
-    return request.getfixturevalue("build_extension")(DATA / "wasi_fs_probe.wat", f"wasi_fs_probe_{request.param}")
+        return request.getfixturevalue("build_ctypes")(
+            DATA / "wasi_fs_probe.wat", "wasi_fs_probe_ctypes", host="wasm32-wasip1"
+        )
+    return request.getfixturevalue("build_extension")(
+        DATA / "wasi_fs_probe.wat", f"wasi_fs_probe_{request.param}", host="wasm32-wasip1"
+    )
 
 
 def test_a_preopen_is_a_descriptor_with_a_name(probe: Any, world: Path) -> None:
@@ -341,7 +345,7 @@ def test_the_first_snapshot_reads_with_its_own_whence_and_filestat(
     wat.write_text(
         (DATA / "wasi_fs_probe.wat").read_text("utf-8").replace("wasi_snapshot_preview1", "wasi_unstable"), "utf-8"
     )
-    fs = Fs(build_extension(wat, "wasi_unstable_fs_probe"), world)
+    fs = Fs(build_extension(wat, "wasi_unstable_fs_probe", host="wasm32-wasip1"), world)
     _, fd = fs.open("hello.txt")
     assert fs.read(fd, 5) == (0, b"hello")
     assert fs.inst.fd_seek(fd, 0, 2, 100) == 0 and fs.u64(100) == 0  # whence 2 is "set" here
@@ -710,7 +714,7 @@ def test_the_first_snapshot_polls_with_its_own_subscription(
     wat.write_text(
         (DATA / "wasi_fs_probe.wat").read_text("utf-8").replace("wasi_snapshot_preview1", "wasi_unstable"), "utf-8"
     )
-    fs = Fs(build_extension(wat, "wasi_unstable_fs_probe2"), world)
+    fs = Fs(build_extension(wat, "wasi_unstable_fs_probe2", host="wasm32-wasip1"), world)
     code, events = _poll(fs, [_clock(7, 20_000_000, legacy=True), _fd_sub(9, 3, 2, legacy=True)])
     assert code == 0 and events == [(9, 0, 2, 0)]  # the directory is ready; the clock has not run out
     assert fs.inst.poll_oneoff(5000, 7000, 1, 100) == 0

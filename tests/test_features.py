@@ -206,7 +206,7 @@ def test_feature(case: Case, tmp_path: Path, wabt: Path) -> None:
     (package / "m.wat").write_text(case.wat, encoding="utf-8")
     subprocess.run([wabt / "bin" / "wat2wasm", *case.flags, "m.wat", "-o", "m.wasm"], cwd=package, check=True)
 
-    built = wasmext(tmp_path, wabt, "natify", "-i", "-q", "pkg/m.wasm")
+    built = wasmext(tmp_path, wabt, "natify", "-i", "-q", "--host", "wasm32-wasip1", "pkg/m.wasm")
     assert built.returncode == 0, built.stderr[-600:]
 
     code = f"import pkg.m\ninstance = pkg.m.Instance()\nprint(repr(instance.{case.call}(*{case.args!r})))\n"
@@ -225,7 +225,7 @@ def test_an_exception_nobody_catches_is_a_trap(tmp_path: Path, wabt: Path) -> No
         encoding="utf-8",
     )
     subprocess.run([wabt / "bin" / "wat2wasm", "m.wat", "-o", "m.wasm"], cwd=package, check=True)
-    built = wasmext(tmp_path, wabt, "natify", "-i", "-q", "pkg/m.wasm")
+    built = wasmext(tmp_path, wabt, "natify", "-i", "-q", "--host", "wasm32-wasip1", "pkg/m.wasm")
     assert built.returncode == 0, built.stderr[-600:]
     code = (
         "import pkg.m\n"
@@ -253,7 +253,7 @@ def test_an_imported_function_returns_several_results_as_a_tuple(tmp_path: Path,
         encoding="utf-8",
     )
     subprocess.run([wabt / "bin" / "wat2wasm", "m.wat", "-o", "m.wasm"], cwd=package, check=True)
-    built = wasmext(tmp_path, wabt, "natify", "-i", "-q", "pkg/m.wasm")
+    built = wasmext(tmp_path, wabt, "natify", "-i", "-q", "--host", "wasm32-wasip1", "pkg/m.wasm")
     assert built.returncode == 0, built.stderr[-600:]
     code = """
 import pkg.m
@@ -282,7 +282,7 @@ def test_an_exported_memory64_is_a_memoryview_too(tmp_path: Path, wabt: Path) ->
         encoding="utf-8",
     )
     subprocess.run([wabt / "bin" / "wat2wasm", "m.wat", "-o", "m.wasm"], cwd=package, check=True)
-    built = wasmext(tmp_path, wabt, "natify", "-i", "-q", "pkg/m.wasm")
+    built = wasmext(tmp_path, wabt, "natify", "-i", "-q", "--host", "wasm32-wasip1", "pkg/m.wasm")
     assert built.returncode == 0, built.stderr[-600:]
     code = """
 import pkg.m
@@ -303,7 +303,7 @@ def _build_pkg(tmp_path: Path, wabt: Path, wat: str) -> None:
     (package / "__init__.py").write_text("", encoding="utf-8")
     (package / "m.wat").write_text(wat, encoding="utf-8")
     subprocess.run([wabt / "bin" / "wat2wasm", "m.wat", "-o", "m.wasm"], cwd=package, check=True)
-    built = wasmext(tmp_path, wabt, "natify", "-i", "-q", "pkg/m.wasm")
+    built = wasmext(tmp_path, wabt, "natify", "-i", "-q", "--host", "wasm32-wasip1", "pkg/m.wasm")
     assert built.returncode == 0, built.stderr[-600:]
 
 
@@ -854,7 +854,7 @@ def test_a_wasi_module_is_built_with_the_wasi_header_of_wasmext(tmp_path: Path, 
     (package / "__init__.py").write_text("", encoding="utf-8")
     (package / "m.wat").write_text((Path(__file__).parent / "data" / "wasi_hello.wat").read_text("utf-8"), "utf-8")
     subprocess.run([wabt / "bin" / "wat2wasm", "m.wat", "-o", "m.wasm"], cwd=package, check=True)
-    built = wasmext(tmp_path, wabt, "natify", "-i", "-q", "pkg/m.wasm")
+    built = wasmext(tmp_path, wabt, "natify", "-i", "-q", "--host", "wasm32-wasip1", "pkg/m.wasm")
     assert built.returncode == 0, built.stderr[-800:]
     assert (tmp_path / "build" / "wasmext" / "pkg.m" / "wasi_p1.h").is_file()
     code = (
@@ -878,7 +878,7 @@ def test_wasi_files_work_on_every_platform_of_ci(tmp_path: Path, wabt: Path) -> 
     (package / "__init__.py").write_text("", encoding="utf-8")
     (package / "m.wat").write_text((Path(__file__).parent / "data" / "wasi_fs_probe.wat").read_text("utf-8"), "utf-8")
     subprocess.run([wabt / "bin" / "wat2wasm", "m.wat", "-o", "m.wasm"], cwd=package, check=True)
-    built = wasmext(tmp_path, wabt, "natify", "-i", "-q", "pkg/m.wasm")
+    built = wasmext(tmp_path, wabt, "natify", "-i", "-q", "--host", "wasm32-wasip1", "pkg/m.wasm")
     assert built.returncode == 0, built.stderr[-800:]
     world = tmp_path / "world"
     (world / "sub").mkdir(parents=True)

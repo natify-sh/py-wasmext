@@ -323,8 +323,11 @@ def _compile_sources(
     return compiler, objects, msvc
 
 
-def program_problem(parsed: Any) -> str:
-    """Why the module cannot be a program (a command), or an empty string: it serves the imports of WASI and no others, and has a `_start () -> ()`."""
+def program_problem(parsed: Any, host: str = "wasm32-wasip1") -> str:
+    """Why the module cannot be a program (a command), or an empty string: it serves the imports of WASI and no others, and has a `_start () -> ()`.
+    The program answers the imports of WASI 0.1 itself, so the host must be `wasm32-wasip1`."""
+    if host != "wasm32-wasip1":
+        return f"an executable is a WASI program and the host is {host!r}: say host 'wasm32-wasip1'"
     other = next((i for i in parsed.imports if i.module not in ("wasi_snapshot_preview1", "wasi_unstable")), None)
     if other is not None:
         return f"an executable serves the imports of WASI and no others (import {other.module}.{other.name})"
@@ -351,6 +354,7 @@ def build_shared(
     work: str | os.PathLike[str] | None = None,
     parts: int | None = None,
     share_tables: bool = False,
+    host: str = "wasm32",
     optimize: bool = True,
     quiet: bool = False,
     wrapper: bool = True,
@@ -368,7 +372,15 @@ def build_shared(
     last = _name_of(wasm_path, name)
     out_dir = Path(work)
     generated = generate_c(
-        wasm_path, last, out_dir, force=False, quiet=True, stubs=False, parts=parts, share_tables=share_tables
+        wasm_path,
+        last,
+        out_dir,
+        force=False,
+        quiet=True,
+        stubs=False,
+        parts=parts,
+        share_tables=share_tables,
+        host=host,
     )
     chosen = generated.targets["shared"]
     if chosen.reason:
@@ -429,6 +441,7 @@ def build(
     work: str | os.PathLike[str] | None = None,
     parts: int | None = None,
     share_tables: bool = False,
+    host: str = "wasm32",
     optimize: bool = True,
     flags: BuildFlags | None = None,
 ) -> Path:
@@ -449,6 +462,7 @@ def build(
         stubs=False,
         parts=parts,
         share_tables=share_tables,
+        host=host,
     )
     chosen = generated.targets["exe"]
     if chosen.reason:

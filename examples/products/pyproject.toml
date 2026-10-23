@@ -28,6 +28,7 @@ product = "shared"
 [[tool.wasmext.ext-modules]]
 module-list = "src/productsdemo/hello.wasm"
 product = "exe"
+host = "wasm32-wasip1"
 
 [tool.cibuildwheel]
 # the wheel is the same for every Python: one build per platform

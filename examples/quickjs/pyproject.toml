@@ -24,6 +24,7 @@ qjswasm = ["py.typed", "*.pyi"]
 # writes for it is in 4 files, compiled at the same time.
 [[tool.wasmext.ext-modules]]
 module-list = "src/qjswasm/*.wasm"
+host = "wasm32-wasip1"
 parts = 4
 
 [tool.cibuildwheel]

@@ -30,7 +30,7 @@ result = luawasm.run(["script.lua"], root="some/directory")  # Result(code, stdo
 from setuptools import setup
 from wasmext import natify
 
-setup(ext_modules=natify("src/luawasm/*.wasm", parts=8))  # the C of the module in 8 files, compiled at the same time
+setup(ext_modules=natify("src/luawasm/*.wasm", parts=8, host="wasm32-wasip1"))  # the C of the module in 8 files, compiled at the same time
 ```
 
 `cibuildwheel` builds wheels of it as it does for any extension (see `.github/workflows/example-wheels.yml`: Linux, macOS and Windows).

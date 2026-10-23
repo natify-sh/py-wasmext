@@ -86,7 +86,13 @@ def build_extension(wabt: Path, tmp_path_factory: pytest.TempPathFactory) -> Cal
     ] = {}  # a loaded extension is not made again under the feet of the process (Windows cannot overwrite a loaded .pyd)
 
     def build(
-        source: Path, name: str, *, abi3: bool = False, defines: tuple[str, ...] = (), share_tables: bool = False
+        source: Path,
+        name: str,
+        *,
+        abi3: bool = False,
+        defines: tuple[str, ...] = (),
+        share_tables: bool = False,
+        host: str = "wasm32",
     ) -> ModuleType:
         if name in built:
             return built[name]
@@ -94,7 +100,7 @@ def build_extension(wabt: Path, tmp_path_factory: pytest.TempPathFactory) -> Cal
         if source.suffix == ".wat":
             wasm = out / f"{name}.wasm"
             subprocess.run([wabt / "bin" / "wat2wasm", source, "-o", wasm], check=True)
-        glue = generate(parse(wasm.read_bytes()), name, share_tables=share_tables)
+        glue = generate(parse(wasm.read_bytes()), name, share_tables=share_tables, host=host)
         if glue.trap_handler:  # the module shares tables: what natify() defines for it
             defines = (
                 *defines,
@@ -244,7 +250,13 @@ def build_ctypes(wabt: Path, tmp_path_factory: pytest.TempPathFactory) -> Callab
     built: dict[str, ModuleType] = {}  # a loaded library is not made again under the feet of the process
 
     def build(
-        source: Path, name: str, *, abi3: bool = False, defines: tuple[str, ...] = (), share_tables: bool = False
+        source: Path,
+        name: str,
+        *,
+        abi3: bool = False,
+        defines: tuple[str, ...] = (),
+        share_tables: bool = False,
+        host: str = "wasm32",
     ) -> ModuleType:
         del abi3  # of the extension
         if name in built:
@@ -261,6 +273,7 @@ def build_ctypes(wabt: Path, tmp_path_factory: pytest.TempPathFactory) -> Callab
             name=name,
             work=out / f"{name}_work",
             share_tables=share_tables,
+            host=host,
             optimize=False,
             quiet=True,
             flags=BuildFlags(define_macros=macros),

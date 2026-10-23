@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 from collections.abc import Callable
 from pathlib import Path
 from types import ModuleType
@@ -18,7 +19,8 @@ Builder = Callable[..., ModuleType]
 @pytest.fixture(params=["extension", "ctypes"])
 def build_extension(request: pytest.FixtureRequest) -> Builder:
     """The tests of WASI run on both front ends: the extension, and the shared library through ctypes (the name `build_extension` is kept for the tests)."""
-    return request.getfixturevalue("build_extension" if request.param == "extension" else "build_ctypes")  # type: ignore[no-any-return]
+    build: Builder = request.getfixturevalue("build_extension" if request.param == "extension" else "build_ctypes")
+    return functools.partial(build, host="wasm32-wasip1")
 
 
 def test_hello_writes_to_stdout_and_exits_with_a_code(
@@ -256,17 +258,17 @@ def test_a_call_that_wasi_does_not_have_or_has_with_another_signature_is_refused
 
     unknown = wasm('(import "wasi_snapshot_preview1" "fd_teleport" (func (param i32)))')
     with pytest.raises(GenError, match="not a function of wasi_snapshot_preview1"):
-        generate(parse(unknown), "m")
+        generate(parse(unknown), "m", host="wasm32-wasip1")
     wrong = wasm('(import "wasi_snapshot_preview1" "fd_write" (func (param i32 i32 i32) (result i32)))')
     with pytest.raises(GenError, match="fd_write is ii?i>i, wasi_snapshot_preview1 says iiii>i"):
-        generate(parse(wrong), "m")
+        generate(parse(wrong), "m", host="wasm32-wasip1")
     no_memory = (
         b"\x00asm\x01\x00\x00\x00"  # a module that imports proc_exit and exports no memory
         b"\x01\x05\x01\x60\x01\x7f\x00"
         b"\x02\x24\x01\x16wasi_snapshot_preview1\x09proc_exit\x00\x00"
     )
     with pytest.raises(GenError, match="does not export its memory"):
-        generate(parse(no_memory), "m")
+        generate(parse(no_memory), "m", host="wasm32-wasip1")
 
 
 def test_the_first_snapshot_wasi_unstable_is_served_too(build_extension: Builder, tmp_path: Path) -> None:
@@ -325,7 +327,7 @@ def test_sock_accept_is_not_a_call_of_the_first_snapshot(wabt: Path, tmp_path: P
     )
     subprocess.run([wabt / "bin" / "wat2wasm", wat, "-o", tmp_path / "m.wasm"], check=True)
     with pytest.raises(GenError, match="sock_accept is not a function of wasi_unstable"):
-        generate(parse((tmp_path / "m.wasm").read_bytes()), "m")
+        generate(parse((tmp_path / "m.wasm").read_bytes()), "m", host="wasm32-wasip1")
 
 
 def test_a_function_imported_twice_is_one_function(build_extension: Builder) -> None:
@@ -450,7 +452,7 @@ def test_the_glue_of_a_module_compiles_with_no_python(source: str, wabt: Path, t
         subprocess.run([wabt / "bin" / "wat2wasm", DATA / source, "-o", wasm], check=True)
     else:
         wasm.write_bytes((DATA / source).read_bytes())
-    glue = generate(parse(wasm.read_bytes()), "m")
+    glue = generate(parse(wasm.read_bytes()), "m", host="wasm32-wasip1")
     (tmp_path / "m_glue.h").write_text(glue.header, encoding="utf-8")
     shared = [
         "wasmext_glue.h",

@@ -140,7 +140,7 @@ def test_the_stub_of_a_wasi_program_types_every_key_of_wasi_and_the_exit() -> No
         section(5, vec(b"\x00" + leb(1))),
         section(7, vec(name("memory") + b"\x02" + leb(0))),
     )
-    stub = generate(parse(data), "m").stub
+    stub = generate(parse(data), "m", host="wasm32-wasip1").stub
     assert "class WasiExit(WasiTerminated):" in stub and "class WasiSignal(WasiTerminated):" in stub
     assert "class WasiTerminated(Exception)" in stub and "wasi: Wasi | None = None" in stub
     for key in ("args", "env", "stdin", "stdout", "stderr", "preopens", "readonly", "clock", "random"):

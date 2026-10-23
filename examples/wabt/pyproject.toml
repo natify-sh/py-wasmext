@@ -24,6 +24,7 @@ wabtwasm = ["py.typed", "*.pyi", "runtime/*"]
 # writes for it is in 8 files each, compiled at the same time.
 [[tool.wasmext.ext-modules]]
 module-list = "src/wabtwasm/*.wasm"
+host = "wasm32-wasip1"
 parts = 8
 
 [tool.cibuildwheel]

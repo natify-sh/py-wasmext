@@ -271,7 +271,7 @@ def test_a_wasi_module_with_imports_of_its_own_still_reaches_wasi(
         ' (func (export "_start") (call $exit (call $get))))',
         encoding="utf-8",
     )
-    mod = build_front_end(wat, f"wasienv_{front_end}")
+    mod = build_front_end(wat, f"wasienv_{front_end}", host="wasm32-wasip1")
     inst = mod.Instance({"env": {"get": lambda: 5}})
     with pytest.raises(mod.WasiExit) as raised:
         inst._start()  # pyright: ignore[reportPrivateUsage]

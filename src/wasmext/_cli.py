@@ -18,7 +18,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
-from ._gen import GenError
+from ._gen import HOST_ALIASES, HOSTS, GenError
 from ._inspect import read
 from ._natify import Generated, _natify, _version, parse_guard_pages  # pyright: ignore[reportPrivateUsage]
 from ._toolchain import find_toolchain
@@ -98,6 +98,13 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="build the modules with the stack of entries for traps that modules with a funcref table share, whether or not they have one, so that "
         "a function of such a module can be put in a table (Table.set)",
+    )
+    parser.add_argument(
+        "--host",
+        default="wasm32",
+        choices=[*HOSTS, *HOST_ALIASES],
+        help="who stands on the other side of the imports: wasm32 (the default; every import is yours to give), wasm32-wasip1 (wasmext answers "
+        "the imports of wasi_snapshot_preview1 and wasi_unstable; a program needs it) or wasm32-wasip2 (named; the imports of WASI 0.2 are yours for now)",
     )
     what = parser.add_mutually_exclusive_group()
     what.add_argument(
@@ -181,6 +188,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             guard_pages=_guard_pages_of(args),
             parts=args.parts,
             share_tables=args.share_tables,
+            host=args.host,
             product=args.product,
         )
     except (WasmError, GenError, ValueError, RuntimeError) as exc:

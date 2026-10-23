@@ -1935,6 +1935,7 @@ static inline uint32_t wasi_fd_allocate(void *s, uint32_t fd, uint64_t offset, u
     memset(&st, 0, sizeof st);
     rc = wasi_be_stat_fd(w, e, &st, trapped);
     if (rc || *trapped) return rc;
+    if (st.filetype != WASI_FT_REGULAR) return WASI_E_SPIPE; /* a pipe: macOS would truncate it without a word */
     return st.size >= offset + length ? WASI_E_SUCCESS : wasi_set_size(e, offset + length);
 }
 

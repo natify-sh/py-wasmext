@@ -33,7 +33,7 @@ def lay(t):
 seen={}
 for x in wit["interfaces"]:
     pk=wit["packages"][x["package"]]["name"].split(":")[1].split("@")[0]
-    if pk not in("filesystem","io","cli","clocks","random"): continue
+    if pk not in("filesystem","io","cli","clocks","random","http"): continue
     for fn,f in x["functions"].items():
         r=f.get("result")
         if r is None: continue

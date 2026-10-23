@@ -10,6 +10,7 @@ import os
 import struct
 import time
 from collections.abc import Callable, Sequence
+from typing import Any
 
 INDEX_BITS = 20  # a handle is (generation << INDEX_BITS) | index; index 0 is never given out
 INDEX_MASK = (1 << INDEX_BITS) - 1
@@ -29,6 +30,17 @@ KIND_UDP_SOCKET = 11
 KIND_INCOMING_DATAGRAM_STREAM = 12
 KIND_OUTGOING_DATAGRAM_STREAM = 13
 KIND_RESOLVE_STREAM = 14
+KIND_FIELDS = 15
+KIND_INCOMING_REQUEST = 16
+KIND_OUTGOING_REQUEST = 17
+KIND_REQUEST_OPTIONS = 18
+KIND_RESPONSE_OUTPARAM = 19
+KIND_INCOMING_RESPONSE = 20
+KIND_INCOMING_BODY = 21
+KIND_FUTURE_TRAILERS = 22
+KIND_OUTGOING_RESPONSE = 23
+KIND_OUTGOING_BODY = 24
+KIND_FUTURE_INCOMING_RESPONSE = 25
 
 
 class Trap(Exception):
@@ -86,6 +98,9 @@ class Host:
         network: bool = False,
         socket_addr_check: Callable[[str, int, str], bool] | None = None,
         allow_ip_name_lookup: bool | None = None,
+        http: bool = False,
+        http_check: Callable[[str, str], bool] | None = None,
+        http_send: Callable[[Any], Any] | None = None,
     ) -> None:
         self.memories: list[object] = list(memories)
         self.slots: list[Slot] = [Slot()]  # slot 0 is never used
@@ -104,6 +119,10 @@ class Host:
         # for each bind or connect (`use` is "tcp-bind", "tcp-connect", "udp-bind", "udp-connect" or "udp-outgoing"); `allow_ip_name_lookup` for `resolve-addresses`
         self.socket_addr_check: Callable[[str, int, str], bool] = socket_addr_check or (lambda ip, port, use: network)
         self.allow_ip_name_lookup = network if allow_ip_name_lookup is None else allow_ip_name_lookup
+        # wasi:http: an outgoing request is refused (`HTTP-request-denied`) unless the caller says so. `http=True` allows every request; `http_check(scheme, authority)` decides for each one
+        # (`scheme` is "http" or "https"); `http_send(request) -> response` replaces the transport of `wasi_p2_http` (it raises `ErrorCode` for a failure)
+        self.http_check: Callable[[str, str], bool] = http_check or (lambda scheme, authority: http)
+        self.http_send = http_send
         self.terminals = set(terminals)  # which of "stdin", "stdout", "stderr" are terminals
         self.random_bytes = random_bytes  # the secure source
         self.insecure_random_bytes = (
@@ -144,6 +163,14 @@ def table_get(host: Host, handle: int, kind: int) -> object:
     if not slot.live or slot.generation != handle >> INDEX_BITS or slot.kind != kind:
         raise Trap(f"bad handle {handle}")
     return slot.obj
+
+
+def table_alive(host: Host, handle: int, kind: int) -> bool:
+    index = handle & INDEX_MASK
+    if index == 0 or index >= len(host.slots):
+        return False
+    slot = host.slots[index]
+    return slot.live and slot.generation == handle >> INDEX_BITS and slot.kind == kind
 
 
 def table_drop(host: Host, handle: int, kind: int) -> None:

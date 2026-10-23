@@ -22,6 +22,9 @@
 #endif
 
 struct wasi_p2_state;
+struct wasi_p2_http_request;
+struct wasi_p2_http_response;
+struct wasi_p2_http_error;
 
 enum { WASI_P2_USE_TCP_BIND, WASI_P2_USE_TCP_CONNECT, WASI_P2_USE_UDP_BIND, WASI_P2_USE_UDP_CONNECT, WASI_P2_USE_UDP_OUTGOING };
 
@@ -43,7 +46,10 @@ enum { WASI_P2_KIND_POLLABLE = 1, WASI_P2_KIND_ERROR = 2, WASI_P2_KIND_INPUT_STR
        WASI_P2_KIND_TERMINAL_INPUT = 5, WASI_P2_KIND_TERMINAL_OUTPUT = 6,
        WASI_P2_KIND_DESCRIPTOR = 7, WASI_P2_KIND_DIRECTORY_ENTRY_STREAM = 8,
        WASI_P2_KIND_NETWORK = 9, WASI_P2_KIND_TCP_SOCKET = 10, WASI_P2_KIND_UDP_SOCKET = 11, WASI_P2_KIND_INCOMING_DATAGRAM_STREAM = 12,
-       WASI_P2_KIND_OUTGOING_DATAGRAM_STREAM = 13, WASI_P2_KIND_RESOLVE_STREAM = 14 };
+       WASI_P2_KIND_OUTGOING_DATAGRAM_STREAM = 13, WASI_P2_KIND_RESOLVE_STREAM = 14,
+       WASI_P2_KIND_FIELDS = 15, WASI_P2_KIND_INCOMING_REQUEST = 16, WASI_P2_KIND_OUTGOING_REQUEST = 17, WASI_P2_KIND_REQUEST_OPTIONS = 18,
+       WASI_P2_KIND_RESPONSE_OUTPARAM = 19, WASI_P2_KIND_INCOMING_RESPONSE = 20, WASI_P2_KIND_INCOMING_BODY = 21, WASI_P2_KIND_FUTURE_TRAILERS = 22,
+       WASI_P2_KIND_OUTGOING_RESPONSE = 23, WASI_P2_KIND_OUTGOING_BODY = 24, WASI_P2_KIND_FUTURE_INCOMING_RESPONSE = 25 };
 
 enum { WASI_P2_TERMINAL_STDIN = 1, WASI_P2_TERMINAL_STDOUT = 2, WASI_P2_TERMINAL_STDERR = 4 };
 
@@ -91,6 +97,10 @@ typedef struct wasi_p2_state {
        `allow_ip_name_lookup` for resolve-addresses. `ip` is the address as text. NULL: everything is refused. */
     int (*socket_addr_check)(struct wasi_p2_state *s, const char *ip, uint16_t port, int use);
     int allow_ip_name_lookup;
+    /* wasi:http: an outgoing request is refused (`HTTP-request-denied`) unless `http_check` says yes (`scheme` is "http" or "https"; NULL: everything is refused).
+       `http_send` replaces the transport of wasi_p2_http.h: returns 0 with `out` filled, or nonzero with `err` filled. */
+    int (*http_check)(struct wasi_p2_state *s, const char *scheme, const char *authority);
+    int (*http_send)(struct wasi_p2_state *s, const struct wasi_p2_http_request *req, struct wasi_p2_http_response *out, struct wasi_p2_http_error *err);
     /* the standard streams (wasi_p2_stream, wasi_p2_io.h): [0] stdin, [1] stdout, [2] stderr; NULL means the descriptors of the process, made when first asked for
        (`std_default`, freed with the state). The streams of the caller are not closed when a handle to them is dropped. */
     void *std[3];
@@ -250,6 +260,22 @@ WASI_P2_FN wasi_p2_slot *wasi_p2_table_get(wasi_p2_state *s, uint32_t handle, ui
     wasi_p2_slot *slot = &s->slots[index];
     if (!slot->live || slot->generation != (handle >> WASI_P2_INDEX_BITS) || slot->kind != kind) s->trap(s, "bad handle");
     return slot;
+}
+
+/* The object of a live handle of the given kind; the handle is spent and `destroy` is not called (the caller owns the object now). */
+WASI_P2_FN void *wasi_p2_table_take(wasi_p2_state *s, uint32_t handle, uint32_t kind) {
+    wasi_p2_slot *slot = wasi_p2_table_get(s, handle, kind);
+    void *obj = slot->obj;
+    slot->live = 0;
+    slot->obj = NULL;
+    return obj;
+}
+
+WASI_P2_FN int wasi_p2_table_alive(wasi_p2_state *s, uint32_t handle, uint32_t kind) {
+    uint32_t index = handle & WASI_P2_INDEX_MASK;
+    if (index == 0 || index >= s->slot_count) return 0;
+    wasi_p2_slot *slot = &s->slots[index];
+    return slot->live && slot->generation == (handle >> WASI_P2_INDEX_BITS) && slot->kind == kind;
 }
 
 WASI_P2_FN void wasi_p2_table_drop(wasi_p2_state *s, uint32_t handle, uint32_t kind) {

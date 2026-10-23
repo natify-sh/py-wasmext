@@ -15,10 +15,20 @@ INDEX_MASK = (1 << INDEX_BITS) - 1
 GENERATION_MASK = (1 << (32 - INDEX_BITS)) - 1
 
 KIND_POLLABLE = 1
+KIND_ERROR = 2
+KIND_INPUT_STREAM = 3
+KIND_OUTPUT_STREAM = 4
 
 
 class Trap(Exception):
     """What the canonical ABI calls a trap: a bad handle, a pointer outside the memory."""
+
+
+class Pollable:
+    """Something a guest can wait for; `wasi:clocks` and `wasi:io` make the kinds."""
+
+    def ready(self, host: Host) -> bool:
+        raise NotImplementedError
 
 
 class Slot:
@@ -42,9 +52,13 @@ class Host:
         monotonic_ns: Callable[[], int] = time.monotonic_ns,
         wall_resolution_ns: int | None = None,
         monotonic_resolution_ns: int | None = None,
+        realloc: Callable[[int, int, int, int, int], int] | None = None,
+        wait: Callable[[], None] = lambda: time.sleep(0.001),
     ) -> None:
         self.memories: list[object] = list(memories)
         self.slots: list[Slot] = [Slot()]  # slot 0 is never used
+        self.realloc = realloc  # (comp, old_ptr, old_size, align, new_size) -> ptr: the `cabi_realloc` of the component
+        self.wait = wait  # what a blocking call does between two looks at a pollable
         self.wall_ns = wall_ns
         self.monotonic_ns = monotonic_ns
         self.wall_resolution_ns = wall_resolution_ns or round(time.get_clock_info("time").resolution * 1e9) or 1
@@ -110,6 +124,23 @@ def store_u32(host: Host, comp: int, ptr: int, value: int) -> None:
 
 def store_u64(host: Host, comp: int, ptr: int, value: int) -> None:
     struct.pack_into("<Q", _check(host, comp, ptr, 8), ptr, value & 0xFFFFFFFFFFFFFFFF)
+
+
+def store_bytes(host: Host, comp: int, ptr: int, data: bytes) -> None:
+    _check(host, comp, ptr, len(data))[ptr : ptr + len(data)] = data
+
+
+def load_bytes(host: Host, comp: int, ptr: int, size: int) -> bytes:
+    return bytes(_check(host, comp, ptr, size)[ptr : ptr + size])
+
+
+def alloc(host: Host, comp: int, align: int, size: int) -> int:
+    """Memory from the component for a list or a string that the host returns (`cabi_realloc`)."""
+    if size == 0:
+        return align
+    if host.realloc is None:
+        raise Trap("the component has no cabi_realloc")
+    return host.realloc(comp, 0, 0, align, size)
 
 
 def load_u32(host: Host, comp: int, ptr: int) -> int:

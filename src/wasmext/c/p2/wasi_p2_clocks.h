@@ -7,31 +7,46 @@
 
 #include "wasi_p2_core.h"
 
-static void wasi_p2_datetime(wasi_p2_state *s, uint32_t comp, uint32_t retptr, uint64_t ns) {
+WASI_P2_FN void wasi_p2_datetime(wasi_p2_state *s, uint32_t comp, uint32_t retptr, uint64_t ns) {
     wasi_p2_store_u64(s, comp, retptr, ns / 1000000000ULL);
     wasi_p2_store_u32(s, comp, retptr + 8, (uint32_t)(ns % 1000000000ULL));
 }
 
-static void wasi_clocks_wall_clock_now(wasi_p2_state *s, uint32_t comp, uint32_t retptr) {
+WASI_P2_FN void wasi_clocks_wall_clock_now(wasi_p2_state *s, uint32_t comp, uint32_t retptr) {
     wasi_p2_datetime(s, comp, retptr, s->wall_ns(s));
 }
 
-static void wasi_clocks_wall_clock_resolution(wasi_p2_state *s, uint32_t comp, uint32_t retptr) {
+WASI_P2_FN void wasi_clocks_wall_clock_resolution(wasi_p2_state *s, uint32_t comp, uint32_t retptr) {
     wasi_p2_datetime(s, comp, retptr, s->wall_resolution_ns);
 }
 
-static uint64_t wasi_clocks_monotonic_clock_now(wasi_p2_state *s) { return s->monotonic_ns(s); }
+WASI_P2_FN uint64_t wasi_clocks_monotonic_clock_now(wasi_p2_state *s) { return s->monotonic_ns(s); }
 
-static uint64_t wasi_clocks_monotonic_clock_resolution(wasi_p2_state *s) { return s->monotonic_resolution_ns; }
+WASI_P2_FN uint64_t wasi_clocks_monotonic_clock_resolution(wasi_p2_state *s) { return s->monotonic_resolution_ns; }
 
-/* a pollable that is ready at an instant of the monotonic clock (the other kinds come with wasi:io); its value is the deadline */
-static uint32_t wasi_clocks_monotonic_clock_subscribe_instant(wasi_p2_state *s, uint64_t when) {
-    return wasi_p2_table_new(s, WASI_P2_KIND_POLLABLE, when, NULL);
+/* a pollable that is ready at an instant of the monotonic clock */
+WASI_P2_FN int wasi_p2_deadline_ready(wasi_p2_state *s, wasi_p2_pollable *p) { return s->monotonic_ns(s) >= p->deadline; }
+
+WASI_P2_FN void wasi_p2_free_obj(wasi_p2_state *s, void *obj) {
+    (void)s;
+    free(obj);
 }
 
-static uint32_t wasi_clocks_monotonic_clock_subscribe_duration(wasi_p2_state *s, uint64_t when) {
+WASI_P2_FN uint32_t wasi_p2_deadline_pollable(wasi_p2_state *s, uint64_t deadline) {
+    wasi_p2_pollable *p = (wasi_p2_pollable *)calloc(1, sizeof *p);
+    if (!p) s->trap(s, "out of memory");
+    p->ready = wasi_p2_deadline_ready;
+    p->deadline = deadline;
+    return wasi_p2_table_new(s, WASI_P2_KIND_POLLABLE, p, wasi_p2_free_obj);
+}
+
+WASI_P2_FN uint32_t wasi_clocks_monotonic_clock_subscribe_instant(wasi_p2_state *s, uint64_t when) {
+    return wasi_p2_deadline_pollable(s, when);
+}
+
+WASI_P2_FN uint32_t wasi_clocks_monotonic_clock_subscribe_duration(wasi_p2_state *s, uint64_t when) {
     uint64_t now = s->monotonic_ns(s);
-    return wasi_p2_table_new(s, WASI_P2_KIND_POLLABLE, when > UINT64_MAX - now ? UINT64_MAX : now + when, NULL);
+    return wasi_p2_deadline_pollable(s, when > UINT64_MAX - now ? UINT64_MAX : now + when);
 }
 
 #endif /* WASI_P2_CLOCKS_H */

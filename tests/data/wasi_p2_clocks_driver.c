@@ -31,8 +31,8 @@ int main(int argc, char **argv) {
         uint32_t b = wasi_clocks_monotonic_clock_subscribe_instant(&s, 9000);
         uint32_t c = wasi_clocks_monotonic_clock_subscribe_duration(&s, UINT64_MAX);
         printf("%u %u %u\n", a, b, c);
-        printf("%" PRIu64 " %" PRIu64 " %" PRIu64 "\n", wasi_p2_table_get(&s, a, WASI_P2_KIND_POLLABLE)->value,
-               wasi_p2_table_get(&s, b, WASI_P2_KIND_POLLABLE)->value, wasi_p2_table_get(&s, c, WASI_P2_KIND_POLLABLE)->value);
+        printf("%" PRIu64 " %" PRIu64 " %" PRIu64 "\n", ((wasi_p2_pollable *)wasi_p2_table_get(&s, a, WASI_P2_KIND_POLLABLE)->obj)->deadline,
+               ((wasi_p2_pollable *)wasi_p2_table_get(&s, b, WASI_P2_KIND_POLLABLE)->obj)->deadline, ((wasi_p2_pollable *)wasi_p2_table_get(&s, c, WASI_P2_KIND_POLLABLE)->obj)->deadline);
         wasi_p2_table_drop(&s, a, WASI_P2_KIND_POLLABLE);
         printf("%u\n", wasi_clocks_monotonic_clock_subscribe_instant(&s, 1)); /* the slot of `a` again, another generation */
     } else if (!strcmp(scenario, "double_drop")) {

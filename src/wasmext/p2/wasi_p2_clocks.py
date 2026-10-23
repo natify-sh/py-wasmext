@@ -6,7 +6,7 @@ argument (the canonical ABI); `datetime` is a record `{seconds: u64, nanoseconds
 
 from __future__ import annotations
 
-from .wasi_p2_core import KIND_POLLABLE, Host, store_u32, store_u64, table_new
+from .wasi_p2_core import KIND_POLLABLE, Host, Pollable, store_u32, store_u64, table_new
 
 _NS = 1_000_000_000
 _MAX_U64 = (1 << 64) - 1
@@ -33,8 +33,8 @@ def wasi_clocks_monotonic_clock_resolution(host: Host) -> int:
     return host.monotonic_resolution_ns
 
 
-class Pollable:
-    """A pollable that is ready at an instant of the monotonic clock (the other kinds come with `wasi:io`)."""
+class DeadlinePollable(Pollable):
+    """A pollable that is ready at an instant of the monotonic clock."""
 
     __slots__ = ("deadline",)
 
@@ -46,8 +46,8 @@ class Pollable:
 
 
 def wasi_clocks_monotonic_clock_subscribe_instant(host: Host, when: int) -> int:
-    return table_new(host, KIND_POLLABLE, Pollable(when))
+    return table_new(host, KIND_POLLABLE, DeadlinePollable(when))
 
 
 def wasi_clocks_monotonic_clock_subscribe_duration(host: Host, when: int) -> int:
-    return table_new(host, KIND_POLLABLE, Pollable(min(host.monotonic_ns() + when, _MAX_U64)))
+    return table_new(host, KIND_POLLABLE, DeadlinePollable(min(host.monotonic_ns() + when, _MAX_U64)))

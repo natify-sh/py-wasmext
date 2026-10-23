@@ -144,6 +144,9 @@ true of every module before.
 
 ## Design: WASI
 
+> **Update 2026-10-23.** The backend of files through Python (`FUSEDWASI_P1_HOST_FS` and the block of `wasi_python.h`, about 600 lines) is **removed**: the files of Windows are native (`wasi_p1_files_win32.h` in fusedwasi) and POSIX has `openat`, so it served only tests. What the text below says about it is history; `wasi_python.h` keeps the configuration `wasi=` and the hooks of the core (the streams, the clocks, the random bytes, the sleep, the exceptions).
+
+
 **Decided.** WASI is part of wasmext and is compiled into the native module; a built module needs nothing at run time (not wasmext
 either), so a shared library that modules call into was rejected. The code is hand-written C, **header only**, one header for each interface the module
 imports: `wasi_preview1.h` for `wasi_snapshot_preview1` and `wasi_unstable.h` for `wasi_unstable` (the first snapshot,

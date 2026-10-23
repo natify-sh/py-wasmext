@@ -22,11 +22,7 @@ if sys.platform == "win32":
     # The files through Python cannot rename a directory over an empty one, as POSIX does (the native files of Windows can)
     # (no ERRNO_MODE_WINDOWS: it asks for the errors that a system gives that is not POSIX, where wasmext gives the errors of POSIX,
     # and without it the tests take any of the errors of the systems)
-    PLATFORM = (
-        {"NO_RENAME_DIR_TO_EMPTY_DIR": "1"}
-        if "FUSEDWASI_P1_HOST_FS=1" in os.environ.get("WASMEXT_TESTSUITE_CFLAGS", "")
-        else {}
-    )
+    PLATFORM = {}
 elif sys.platform == "darwin":
     PLATFORM = {"ERRNO_MODE_MACOS": "1"}
 else:

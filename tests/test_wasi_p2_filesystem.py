@@ -289,6 +289,27 @@ def python_output(scenario: str, root: Path) -> str:
             r.clear(530, 120)
             fsc("descriptor_stat", h, 530)
             r.times("no-change, now", 530)
+            # the rules of the WIT: absolute links, a directory to unlink, the hash follows the contents
+            r.path(b"abs", 1400)
+            fsc("descriptor_readlink_at", hd, 1400, 3, 600)
+            r.show("readlink of an absolute link", 600, 8)
+            r.path(b"/etc", 1410)
+            r.path(b"sub/sl2", 1420)
+            fsc("descriptor_symlink_at", hd, 1410, 4, 1420, 7, 610)
+            r.show("symlink to an absolute path", 610, 2)
+            fsc("descriptor_symlink_at", ro, 1300, 1, 1420, 7, 612)
+            r.show("symlink on a read-only preopen", 612, 2)
+            r.path(b"sub", 1430)
+            fsc("descriptor_unlink_file_at", hd, 1430, 3, 620)
+            r.show("unlink of a directory", 620, 2)
+            fsc("descriptor_metadata_hash_at", hd, 1, 1000, n, 640)
+            fsc("descriptor_open_at", hd, 1, 1000, n, 0, 2, 200)
+            h = r.u32(204)
+            fsc("descriptor_write", h, 1500, 1, 100, 670)
+            r.show("write past the end", 670, 16)
+            fs.wasi_filesystem_types_descriptor_drop(host, h)
+            fsc("descriptor_metadata_hash_at", hd, 1, 1000, n, 700)
+            r.lines.append(f"hash after a write: same {int(m[648:664] == m[708:724])}")
             # an error with a code
             fsc("descriptor_read_via_stream", hd, 0, 250)
             hs = r.u32(254)
@@ -350,6 +371,25 @@ def test_values(tmp_path: Path) -> None:
     assert got["[nope]"] == f"stat err {fs.ERROR_CODES.index('no-entry')}"
     assert got["[sub/f/x]"] == f"stat err {fs.ERROR_CODES.index('not-directory')}"
     assert got["[long]"] == f"stat err {fs.ERROR_CODES.index('name-too-long')}"
+    code = fs.ERROR_CODES.index
+
+    def result(label: str, offset: int, at: int = 1) -> int:
+        """The error-code byte of an `err` result that the scenario shows (at 1 in `result<_, error-code>`, at 4 in `result<string, error-code>`)."""
+        line = next(line for line in lines if line.startswith(f"{label} {offset}:"))
+        data = bytes.fromhex(line.split(":")[1])
+        assert data[0] == 1, line  # an error
+        return data[at]
+
+    assert result("unlink of a directory", 620) == code("is-directory")
+    assert result("symlink to an absolute path", 610) == code("not-permitted")
+    assert result("symlink on a read-only preopen", 612) == code("read-only")
+    assert result("readlink of an absolute link", 600, 4) == code("not-permitted")
+    assert "hash after a write: same 0" in lines  # the hash follows size and modification time
+    # open-at on a read-only preopen with write: the code is at 4 in the 8 bytes of result<descriptor, error-code>
+    ro_write = bytes.fromhex(
+        next(line for line in lines if line.startswith("write on a read-only preopen 200:")).split(":")[1]
+    )
+    assert ro_write[0] == 1 and ro_write[4] == code("read-only")
     assert "same 1 0" in lines and "hash a==b 1 a==c 0 a==at 1" in lines
     assert any(line.startswith("times atime 1000.0 mtime 2000.5") for line in lines)
     assert any(line.startswith("no-change, now atime 1000.0 mtime 1700000000.123456789") for line in lines)

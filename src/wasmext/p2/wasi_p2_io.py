@@ -13,6 +13,9 @@ limited by `check_write`, and a write of more than that is a trap.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from typing import Any
+
 from .wasi_p2_core import (
     KIND_ERROR,
     KIND_INPUT_STREAM,
@@ -48,7 +51,20 @@ class StreamFailed(Exception):
         self.code = code
 
 
+def _call(stream: object, fn: Callable[..., Any], *args: Any) -> Any:
+    """Calls a method of a stream under the rule of `stream-error`: after `last-operation-failed` the stream is closed, and every later call is `closed`."""
+    if getattr(stream, "dead", False):
+        raise StreamClosed
+    try:
+        return fn(*args)
+    except StreamFailed:
+        stream.dead = True  # type: ignore[attr-defined]
+        raise
+
+
 class InputStream:
+    dead = False
+
     def read(self, n: int) -> bytes:
         raise NotImplementedError
 
@@ -60,6 +76,8 @@ class InputStream:
 
 
 class OutputStream:
+    dead = False
+
     def check_write(self) -> int:
         raise NotImplementedError
 
@@ -108,7 +126,7 @@ class StreamPollable(Pollable):
         self.stream = stream
 
     def ready(self, host: Host) -> bool:
-        return self.stream.ready()
+        return bool(getattr(self.stream, "dead", False)) or self.stream.ready()  # a closed stream is always ready
 
 
 class Error:
@@ -215,7 +233,7 @@ def _err(host: Host, comp: int, retptr: int, error_at: int, exc: Exception) -> N
 def _read(host: Host, stream: InputStream, n: int, block: bool) -> bytes:
     """Up to `n` bytes; when `block`, waits for at least one (a read of 0 bytes is empty at once)."""
     while True:
-        data = stream.read(min(n, READ_CAP))
+        data = _call(stream, stream.read, min(n, READ_CAP))
         if data or not block or n == 0:
             return data
         host.wait()
@@ -276,7 +294,7 @@ def wasi_io_streams_input_stream_drop(host: Host, handle: int) -> None:
 def wasi_io_streams_output_stream_check_write(host: Host, comp: int, self: int, retptr: int) -> None:
     stream = _output(host, self)
     try:
-        budget = stream.check_write()
+        budget = _call(stream, stream.check_write)
     except (StreamClosed, StreamFailed) as exc:
         _err(host, comp, retptr, retptr + 8, exc)
         return
@@ -287,9 +305,9 @@ def wasi_io_streams_output_stream_check_write(host: Host, comp: int, self: int, 
 def _write(host: Host, comp: int, stream: OutputStream, data: bytes, retptr: int) -> bool:
     """One write, limited by the budget (a bigger one traps); False if it wrote an error."""
     try:
-        if len(data) > stream.check_write():
+        if len(data) > _call(stream, stream.check_write):
             raise Trap("write of more than check-write allows")
-        stream.write(data)
+        _call(stream, stream.write, data)
     except (StreamClosed, StreamFailed) as exc:
         _err(host, comp, retptr, retptr + 4, exc)
         return False
@@ -307,13 +325,13 @@ def _write_all_and_flush(host: Host, comp: int, stream: OutputStream, data: byte
     try:
         view = memoryview(data)
         while len(view):
-            budget = stream.check_write()
+            budget = _call(stream, stream.check_write)
             if budget == 0:
                 host.wait()
                 continue
-            stream.write(bytes(view[:budget]))
+            _call(stream, stream.write, bytes(view[:budget]))
             view = view[budget:]
-        stream.flush()
+        _call(stream, stream.flush)
     except (StreamClosed, StreamFailed) as exc:
         _err(host, comp, retptr, retptr + 4, exc)
         return
@@ -341,7 +359,7 @@ def wasi_io_streams_output_stream_blocking_write_zeroes_and_flush(
 def wasi_io_streams_output_stream_flush(host: Host, comp: int, self: int, retptr: int) -> None:
     stream = _output(host, self)
     try:
-        stream.flush()
+        _call(stream, stream.flush)
     except (StreamClosed, StreamFailed) as exc:
         _err(host, comp, retptr, retptr + 4, exc)
         return
@@ -356,7 +374,7 @@ def _splice(host: Host, comp: int, self: int, src: int, n: int, retptr: int, blo
     out, source = _output(host, self), _input(host, src)
     try:
         while True:
-            budget = out.check_write()
+            budget = _call(out, out.check_write)
             if budget == 0:
                 if not block:
                     data = b""
@@ -365,7 +383,7 @@ def _splice(host: Host, comp: int, self: int, src: int, n: int, retptr: int, blo
                 continue
             data = _read(host, source, min(n, budget), block)
             break
-        out.write(data)
+        _call(out, out.write, data)
     except (StreamClosed, StreamFailed) as exc:
         _err(host, comp, retptr, retptr + 8, exc)
         return

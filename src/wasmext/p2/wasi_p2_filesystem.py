@@ -5,8 +5,8 @@ one before it; `..` may not go above the directory the descriptor stands for; an
 is read and its target put in front of the rest of the path (at most 40 links, then `loop`); a link at the end is expanded only if `symlink-follow` is set. This is a walk by
 name, not the `openat2(RESOLVE_BENEATH)` of the kernel, and a race with another process that changes the tree under the walk is not closed.
 
-**Rights.** A descriptor has the flags `read`, `write`, `mutate-directory` and the sync flags; what it was not given is `bad-descriptor` (read, write) or `not-permitted` (changing a
-directory), and a `preopens` entry may be read-only. Directory entries come sorted by name, without `.` and `..`, as a snapshot when `read-directory` is called.
+**Rights.** A descriptor has the flags `read`, `write`, `mutate-directory` and the sync flags; what it was not given is `bad-descriptor` (read, write) or `read-only` (changing a
+directory, as the WIT says), and a `preopens` entry may be read-only. Directory entries come sorted by name, without `.` and `..`, as a snapshot when `read-directory` is called.
 
 Layouts of the results (Canonical ABI), for `retptr`: `result<_, error-code>`: tag at 0, the code at 1; `result<handle, error-code>`: 8 bytes, handle (or code) at 4;
 `result<descriptor-flags | descriptor-type>`: 2 bytes, the value at 1; `result<descriptor-stat>`: 104 bytes, the stat at 8 (type 0, link-count 8, size 16, then three
@@ -122,7 +122,9 @@ def _descriptor(host: Host, handle: int) -> Descriptor:
 
 def _need(descriptor: Descriptor, flag: int) -> None:
     if not descriptor.flags & flag:
-        raise FsError("not-permitted" if flag == MUTATE else "bad-descriptor")
+        raise FsError(
+            "read-only" if flag == MUTATE else "bad-descriptor"
+        )  # `mutate-directory` unset: read-only (the WIT says so)
 
 
 def _type_of(mode: int) -> int:
@@ -643,8 +645,10 @@ def wasi_filesystem_types_descriptor_open_at(
         d = _descriptor(host, self)
         if not d.is_dir:
             raise FsError("not-directory")
-        if (flags & (WRITE | MUTATE) and not d.flags & MUTATE) or (flags & READ and not d.flags & READ):
-            raise FsError("not-permitted")  # a descriptor cannot hand out more than it has
+        if flags & (WRITE | MUTATE) and not d.flags & MUTATE:
+            raise FsError("read-only")  # a descriptor cannot hand out more than it has (as the WIT says for open-at)
+        if flags & READ and not d.flags & READ:
+            raise FsError("not-permitted")
         if open_flags & (CREATE | TRUNCATE):
             _need(d, MUTATE)
         oflags = os.O_NOFOLLOW | os.O_CLOEXEC
@@ -682,6 +686,8 @@ def wasi_filesystem_types_descriptor_readlink_at(
         d = _descriptor(host, self)
         with _Walked(d.fd, _path(host, comp, ptr, length), False) as (parent, name):
             target = os.fsencode(os.readlink(name, dir_fd=parent))
+        if target.startswith(b"/"):
+            raise FsError("not-permitted")  # an absolute or rooted target is not shown
     except FsError as exc:
         _fail(host, comp, retptr, retptr + 4, exc)
         return
@@ -719,7 +725,15 @@ def wasi_filesystem_types_descriptor_remove_directory_at(
 def wasi_filesystem_types_descriptor_unlink_file_at(
     host: Host, comp: int, self: int, ptr: int, length: int, retptr: int
 ) -> None:
-    _at(host, comp, retptr, self, ptr, length, lambda name, parent: os.unlink(name, dir_fd=parent))
+    def unlink(name: bytes, parent: int) -> None:
+        try:
+            os.unlink(name, dir_fd=parent)
+        except PermissionError:
+            if stat_module.S_ISDIR(os.stat(name, dir_fd=parent, follow_symlinks=False).st_mode):
+                raise FsError("is-directory") from None  # some systems say EPERM for a directory
+            raise
+
+    _at(host, comp, retptr, self, ptr, length, unlink)
 
 
 def wasi_filesystem_types_descriptor_rename_at(
@@ -742,8 +756,13 @@ def wasi_filesystem_types_descriptor_symlink_at(
     host: Host, comp: int, self: int, old_ptr: int, old_len: int, new_ptr: int, new_len: int, retptr: int
 ) -> None:
     target = load_bytes(host, comp, old_ptr, old_len)
-    if b"\0" in target:
-        _status(host, comp, retptr, lambda: (_ for _ in ()).throw(FsError("invalid")))
+    if b"\0" in target or target.startswith(b"/"):
+        error = FsError("invalid" if b"\0" in target else "not-permitted")
+
+        def refuse() -> None:
+            raise error
+
+        _status(host, comp, retptr, refuse)
         return
     _at(host, comp, retptr, self, new_ptr, new_len, lambda name, parent: os.symlink(target, name, dir_fd=parent))
 
@@ -753,10 +772,20 @@ def wasi_filesystem_types_descriptor_is_same_object(host: Host, self: int, other
     return int((a.st_dev, a.st_ino) == (b.st_dev, b.st_ino))
 
 
+def _fnv(*values: int) -> int:
+    """FNV-1a 64 over the values, each as 8 bytes little-endian (the C twin does the same)."""
+    h = 0xCBF29CE484222325
+    for v in values:
+        for byte in (v & 0xFFFFFFFFFFFFFFFF).to_bytes(8, "little"):
+            h = ((h ^ byte) * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
+    return h
+
+
 def _hash(host: Host, comp: int, retptr: int, st: os.stat_result) -> None:
+    """`upper` names the object (device, inode); `lower` also takes in what changes when the object is modified (size, modification time)."""
     _ok(host, comp, retptr)
-    store_u64(host, comp, retptr + 8, st.st_ino)
-    store_u64(host, comp, retptr + 16, st.st_dev)
+    store_u64(host, comp, retptr + 8, _fnv(st.st_size, st.st_mtime_ns, st.st_dev, st.st_ino))
+    store_u64(host, comp, retptr + 16, _fnv(st.st_dev, st.st_ino))
 
 
 def wasi_filesystem_types_descriptor_metadata_hash(host: Host, comp: int, self: int, retptr: int) -> None:

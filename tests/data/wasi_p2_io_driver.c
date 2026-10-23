@@ -14,10 +14,29 @@ static uint32_t bump(wasi_p2_state *s, uint32_t comp, uint32_t old_ptr, uint32_t
 
 static uint8_t memory[256];
 
+/* streams that fail: the first call is an error with a message, and then the stream is closed (the rule of stream-error) */
+static int failing_read(wasi_p2_state *st, wasi_p2_stream *stream, uint8_t *buf, uint64_t len, uint64_t *got) {
+    (void)st, (void)buf, (void)len;
+    *got = 0;
+    stream->failure = "boom";
+    return WASI_P2_STREAM_FAILED;
+}
+static uint64_t failing_check_write(wasi_p2_state *st, wasi_p2_stream *stream, int *status) {
+    (void)st;
+    stream->failure = "boom";
+    *status = WASI_P2_STREAM_FAILED;
+    return 0;
+}
+static int never_ready(wasi_p2_state *st, wasi_p2_stream *stream) { (void)st, (void)stream; return 0; }
+
 static void dump(const char *what) {
     printf("%s ", what);
     for (int i = 0; i < 256; i++) printf("%02x", memory[i]);
     printf("\n");
+}
+
+static uint32_t u32_at(uint32_t off) {
+    return (uint32_t)memory[off] | (uint32_t)memory[off + 1] << 8 | (uint32_t)memory[off + 2] << 16 | (uint32_t)memory[off + 3] << 24;
 }
 
 static void hex(const char *what, const uint8_t *p, uint64_t n) {
@@ -71,6 +90,20 @@ int main(int argc, char **argv) {
         wasi_io_poll_pollable_drop(&s, p);
         wasi_io_streams_input_stream_drop(&s, i);
         wasi_io_streams_output_stream_drop(&s, o);
+    } else if (!strcmp(scenario, "failure")) {
+        wasi_p2_stream *fin = (wasi_p2_stream *)calloc(1, sizeof *fin), *fout = (wasi_p2_stream *)calloc(1, sizeof *fout);
+        fin->read = failing_read, fin->ready = never_ready, fin->destroy = wasi_p2_stream_free;
+        fout->check_write = failing_check_write, fout->ready = never_ready, fout->destroy = wasi_p2_stream_free;
+        uint32_t hfi = wasi_p2_input_stream_new(&s, fin), hfo = wasi_p2_output_stream_new(&s, fout);
+        printf("failing %u %u\n", hfi, hfo);
+        wasi_io_streams_input_stream_read(&s, 0, hfi, 4, 0), dump("read fails");
+        wasi_io_streams_input_stream_read(&s, 0, hfi, 4, 16), dump("read after the failure");
+        uint32_t p = wasi_io_streams_input_stream_subscribe(&s, hfi);
+        printf("pollable of a closed stream: ready %u\n", wasi_io_poll_pollable_ready(&s, p));
+        wasi_io_error_error_to_debug_string(&s, 0, u32_at(8), 80), dump("message");
+        wasi_io_streams_output_stream_check_write(&s, 0, hfo, 96), dump("check_write fails");
+        wasi_io_streams_output_stream_write(&s, 0, hfo, 100, 1, 112), dump("write after the failure");
+        wasi_io_streams_output_stream_flush(&s, 0, hfo, 128), dump("flush after the failure");
     } else if (!strcmp(scenario, "bad_handle")) {
         wasi_io_streams_input_stream_read(&s, 0, o, 4, 0);
     } else if (!strcmp(scenario, "oversize")) {

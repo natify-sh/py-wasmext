@@ -194,6 +194,21 @@ int main(int argc, char **argv) {
         FS(descriptor_set_times, h, 0, 0, 0, 1, 0, 0, 542), show("set_times", 542, 2);
         clear(530, 120);
         FS(descriptor_stat, h, 530), times("no-change, now", 530);
+        /* the rules of the WIT: absolute links, a directory to unlink, the hash follows the contents */
+        memcpy(memory + 1400, "abs", 3);
+        FS(descriptor_readlink_at, hd, 1400, 3, 600), show("readlink of an absolute link", 600, 8);
+        memcpy(memory + 1410, "/etc", 4);
+        memcpy(memory + 1420, "sub/sl2", 7);
+        FS(descriptor_symlink_at, hd, 1410, 4, 1420, 7, 610), show("symlink to an absolute path", 610, 2);
+        FS(descriptor_symlink_at, ro, 1300, 1, 1420, 7, 612), show("symlink on a read-only preopen", 612, 2);
+        memcpy(memory + 1430, "sub", 3);
+        FS(descriptor_unlink_file_at, hd, 1430, 3, 620), show("unlink of a directory", 620, 2);
+        FS(descriptor_metadata_hash_at, hd, 1, 1000, n, 640);
+        FS(descriptor_open_at, hd, 1, 1000, n, 0, 2, 200), h = u32(204);
+        FS(descriptor_write, h, 1500, 1, 100, 670), show("write past the end", 670, 16);
+        wasi_filesystem_types_descriptor_drop(&s, h);
+        FS(descriptor_metadata_hash_at, hd, 1, 1000, n, 700);
+        printf("hash after a write: same %d\n", !memcmp(memory + 648, memory + 708, 16));
         /* an error with a code */
         FS(descriptor_read_via_stream, hd, 0, 250);
         hs = u32(254);

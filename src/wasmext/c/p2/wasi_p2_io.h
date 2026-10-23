@@ -21,6 +21,7 @@ typedef struct wasi_p2_stream {
     void (*destroy)(wasi_p2_state *s, struct wasi_p2_stream *st); /* when the handle is dropped; may be NULL */
     const char *failure;
     int failure_has_code, failure_code; /* the error-code of wasi:filesystem, when the failure came from a file */
+    int dead;                           /* set when an operation failed: from then on every call is `closed` (the rule of stream-error) */
     void *ctx;
 } wasi_p2_stream;
 
@@ -29,6 +30,39 @@ typedef struct {
     int code;
     char message[1];
 } wasi_p2_error;
+
+/* The calls of a stream under the rule of `stream-error`: after FAILED the stream is closed. */
+WASI_P2_FN int wasi_p2_s_read(wasi_p2_state *s, wasi_p2_stream *st, uint8_t *buf, uint64_t len, uint64_t *got) {
+    *got = 0;
+    if (st->dead) return WASI_P2_STREAM_CLOSED;
+    int r = st->read(s, st, buf, len, got);
+    if (r == WASI_P2_STREAM_FAILED) st->dead = 1;
+    return r;
+}
+
+WASI_P2_FN uint64_t wasi_p2_s_check_write(wasi_p2_state *s, wasi_p2_stream *st, int *status) {
+    if (st->dead) {
+        *status = WASI_P2_STREAM_CLOSED;
+        return 0;
+    }
+    uint64_t n = st->check_write(s, st, status);
+    if (*status == WASI_P2_STREAM_FAILED) st->dead = 1;
+    return n;
+}
+
+WASI_P2_FN int wasi_p2_s_write(wasi_p2_state *s, wasi_p2_stream *st, const uint8_t *data, uint64_t len) {
+    if (st->dead) return WASI_P2_STREAM_CLOSED;
+    int r = st->write(s, st, data, len);
+    if (r == WASI_P2_STREAM_FAILED) st->dead = 1;
+    return r;
+}
+
+WASI_P2_FN int wasi_p2_s_flush(wasi_p2_state *s, wasi_p2_stream *st) {
+    if (st->dead) return WASI_P2_STREAM_CLOSED;
+    int r = st->flush(s, st);
+    if (r == WASI_P2_STREAM_FAILED) st->dead = 1;
+    return r;
+}
 
 /* making resources for the guest */
 
@@ -240,7 +274,7 @@ WASI_P2_FN int wasi_p2_read(wasi_p2_state *s, wasi_p2_stream *st, uint64_t len, 
     if (!buf) s->trap(s, "out of memory");
     for (;;) {
         *got = 0;
-        int status = st->read(s, st, buf, n, got);
+        int status = wasi_p2_s_read(s, st, buf, n, got);
         if (status != WASI_P2_STREAM_OK || *got || !block || n == 0) {
             *out = buf;
             return status;
@@ -296,7 +330,7 @@ WASI_P2_FN void wasi_io_streams_input_stream_blocking_skip(wasi_p2_state *s, uin
 
 WASI_P2_FN int wasi_p2_stream_pollable_ready(wasi_p2_state *s, wasi_p2_pollable *p) {
     wasi_p2_stream *st = (wasi_p2_stream *)p->ctx;
-    return st->ready ? st->ready(s, st) : 1;
+    return st->dead || !st->ready || st->ready(s, st); /* a closed stream is always ready */
 }
 
 WASI_P2_FN uint32_t wasi_p2_stream_pollable(wasi_p2_state *s, wasi_p2_stream *st) {
@@ -319,7 +353,7 @@ WASI_P2_FN void wasi_io_streams_input_stream_drop(wasi_p2_state *s, uint32_t han
 WASI_P2_FN void wasi_io_streams_output_stream_check_write(wasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t retptr) {
     wasi_p2_stream *st = wasi_p2_output_get(s, self);
     int status = WASI_P2_STREAM_OK;
-    uint64_t budget = st->check_write(s, st, &status);
+    uint64_t budget = wasi_p2_s_check_write(s, st, &status);
     if (status != WASI_P2_STREAM_OK) {
         wasi_p2_stream_err(s, comp, retptr, retptr + 8, status, st);
         return;
@@ -331,10 +365,10 @@ WASI_P2_FN void wasi_io_streams_output_stream_check_write(wasi_p2_state *s, uint
 /* One write, limited by the budget (a bigger one traps); returns 0 and writes the error if it failed. */
 WASI_P2_FN int wasi_p2_write(wasi_p2_state *s, uint32_t comp, wasi_p2_stream *st, const uint8_t *data, uint64_t len, uint32_t retptr) {
     int status = WASI_P2_STREAM_OK;
-    uint64_t budget = st->check_write(s, st, &status);
+    uint64_t budget = wasi_p2_s_check_write(s, st, &status);
     if (status == WASI_P2_STREAM_OK) {
         if (len > budget) s->trap(s, "write of more than check-write allows");
-        status = st->write(s, st, data, len);
+        status = wasi_p2_s_write(s, st, data, len);
     }
     if (status != WASI_P2_STREAM_OK) {
         wasi_p2_stream_err(s, comp, retptr, retptr + 4, status, st);
@@ -354,7 +388,7 @@ WASI_P2_FN void wasi_p2_write_all_and_flush(wasi_p2_state *s, uint32_t comp, was
     static const uint8_t zeroes[4096] = {0};
     int status = WASI_P2_STREAM_OK;
     while (len) {
-        uint64_t budget = st->check_write(s, st, &status);
+        uint64_t budget = wasi_p2_s_check_write(s, st, &status);
         if (status != WASI_P2_STREAM_OK) break;
         if (budget == 0) {
             s->wait(s);
@@ -362,12 +396,12 @@ WASI_P2_FN void wasi_p2_write_all_and_flush(wasi_p2_state *s, uint32_t comp, was
         }
         uint64_t n = len < budget ? len : budget;
         if (!data && n > sizeof zeroes) n = sizeof zeroes;
-        status = st->write(s, st, data ? data : zeroes, n);
+        status = wasi_p2_s_write(s, st, data ? data : zeroes, n);
         if (status != WASI_P2_STREAM_OK) break;
         if (data) data += n;
         len -= n;
     }
-    if (status == WASI_P2_STREAM_OK) status = st->flush(s, st);
+    if (status == WASI_P2_STREAM_OK) status = wasi_p2_s_flush(s, st);
     if (status != WASI_P2_STREAM_OK) {
         wasi_p2_stream_err(s, comp, retptr, retptr + 4, status, st);
         return;
@@ -397,7 +431,7 @@ WASI_P2_FN void wasi_io_streams_output_stream_blocking_write_zeroes_and_flush(wa
 
 WASI_P2_FN void wasi_io_streams_output_stream_flush(wasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t retptr) {
     wasi_p2_stream *st = wasi_p2_output_get(s, self);
-    int status = st->flush(s, st);
+    int status = wasi_p2_s_flush(s, st);
     if (status != WASI_P2_STREAM_OK) {
         wasi_p2_stream_err(s, comp, retptr, retptr + 4, status, st);
         return;
@@ -417,7 +451,7 @@ WASI_P2_FN void wasi_p2_splice(wasi_p2_state *s, uint32_t comp, uint32_t self, u
     int status = WASI_P2_STREAM_OK;
     wasi_p2_stream *failed = NULL; /* the stream that failed, for the error */
     for (;;) {
-        uint64_t budget = out->check_write(s, out, &status);
+        uint64_t budget = wasi_p2_s_check_write(s, out, &status);
         if (status != WASI_P2_STREAM_OK) {
             failed = out;
             break;
@@ -432,7 +466,7 @@ WASI_P2_FN void wasi_p2_splice(wasi_p2_state *s, uint32_t comp, uint32_t self, u
                 failed = in;
                 break;
             }
-            status = out->write(s, out, buf, got);
+            status = wasi_p2_s_write(s, out, buf, got);
             if (status != WASI_P2_STREAM_OK) failed = out;
         }
         break;

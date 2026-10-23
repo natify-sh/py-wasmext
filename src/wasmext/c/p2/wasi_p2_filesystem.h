@@ -150,7 +150,7 @@ WASI_P2_FN wasi_p2_descriptor *wasi_p2_descriptor_get(wasi_p2_state *s, uint32_t
 /* the rights: WASI_P2_OK, or the error-code that the absence of the flag is */
 WASI_P2_FN int wasi_p2_need(const wasi_p2_descriptor *d, uint32_t flag) {
     if (d->flags & flag) return WASI_P2_OK;
-    return flag == WASI_P2_MUTATE ? WASI_P2_E_NOT_PERMITTED : WASI_P2_E_BAD_DESCRIPTOR;
+    return flag == WASI_P2_MUTATE ? WASI_P2_E_READ_ONLY : WASI_P2_E_BAD_DESCRIPTOR; /* `mutate-directory` unset: read-only (the WIT says so) */
 }
 
 WASI_P2_FN uint32_t wasi_p2_descriptor_new(wasi_p2_state *s, int fd, uint32_t flags, int is_dir) {
@@ -743,10 +743,12 @@ WASI_P2_FN void wasi_filesystem_types_descriptor_open_at(wasi_p2_state *s, uint3
     uint32_t handle = 0;
     if (!d->is_dir) {
         rc = WASI_P2_E_NOT_DIRECTORY;
-    } else if (((flags & (WASI_P2_WRITE | WASI_P2_MUTATE)) && !(d->flags & WASI_P2_MUTATE)) || ((flags & WASI_P2_READ) && !(d->flags & WASI_P2_READ))) {
-        rc = WASI_P2_E_NOT_PERMITTED; /* a descriptor cannot hand out more than it has */
-    } else if ((open_flags & (WASI_P2_CREATE | WASI_P2_TRUNCATE)) && !(d->flags & WASI_P2_MUTATE)) {
+    } else if ((flags & (WASI_P2_WRITE | WASI_P2_MUTATE)) && !(d->flags & WASI_P2_MUTATE)) {
+        rc = WASI_P2_E_READ_ONLY; /* a descriptor cannot hand out more than it has (as the WIT says for open-at) */
+    } else if ((flags & WASI_P2_READ) && !(d->flags & WASI_P2_READ)) {
         rc = WASI_P2_E_NOT_PERMITTED;
+    } else if ((open_flags & (WASI_P2_CREATE | WASI_P2_TRUNCATE)) && !(d->flags & WASI_P2_MUTATE)) {
+        rc = WASI_P2_E_READ_ONLY;
     } else {
         int oflags = O_NOFOLLOW | O_CLOEXEC;
         oflags |= (flags & WASI_P2_READ) && (flags & WASI_P2_WRITE) ? O_RDWR : (flags & WASI_P2_WRITE) ? O_WRONLY : O_RDONLY;
@@ -789,6 +791,10 @@ WASI_P2_FN void wasi_filesystem_types_descriptor_readlink_at(wasi_p2_state *s, u
         return;
     }
     target[n] = '\0';
+    if (target[0] == '/') { /* an absolute or rooted target is not shown */
+        wasi_p2_fs_fail(s, comp, retptr, retptr + 4, WASI_P2_E_NOT_PERMITTED);
+        return;
+    }
     wasi_p2_ok(s, comp, retptr);
     wasi_p2_string(s, comp, target, retptr + 4);
 }
@@ -816,7 +822,11 @@ WASI_P2_FN int wasi_p2_op_rmdir(int dir, const char *leaf, const void *arg) {
 }
 WASI_P2_FN int wasi_p2_op_unlink(int dir, const char *leaf, const void *arg) {
     (void)arg;
-    return unlinkat(dir, leaf, 0) < 0 ? wasi_p2_fail() : WASI_P2_OK;
+    if (unlinkat(dir, leaf, 0) == 0) return WASI_P2_OK;
+    int e = errno;
+    struct stat st;
+    if (e == EPERM && fstatat(dir, leaf, &st, AT_SYMLINK_NOFOLLOW) == 0 && S_ISDIR(st.st_mode)) return WASI_P2_E_IS_DIRECTORY; /* some systems say EPERM */
+    return wasi_p2_errno_code(e);
 }
 WASI_P2_FN int wasi_p2_op_symlink(int dir, const char *leaf, const void *arg) {
     return symlinkat((const char *)arg, dir, leaf) < 0 ? wasi_p2_fail() : WASI_P2_OK;
@@ -854,9 +864,9 @@ WASI_P2_FN void wasi_filesystem_types_descriptor_rename_at(wasi_p2_state *s, uin
 WASI_P2_FN void wasi_filesystem_types_descriptor_symlink_at(wasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t old_ptr, uint32_t old_len, uint32_t new_ptr,
                                                             uint32_t new_len, uint32_t retptr) {
     const uint8_t *target = wasi_p2_mem(s, comp, old_ptr, old_len);
-    if (memchr(target, 0, old_len)) {
+    if (memchr(target, 0, old_len) || (old_len && target[0] == '/')) {
         wasi_p2_descriptor_get(s, self);
-        wasi_p2_status(s, comp, retptr, WASI_P2_E_INVALID);
+        wasi_p2_status(s, comp, retptr, memchr(target, 0, old_len) ? WASI_P2_E_INVALID : WASI_P2_E_NOT_PERMITTED);
         return;
     }
     char *copy = (char *)malloc((size_t)old_len + 1);
@@ -873,14 +883,24 @@ WASI_P2_FN uint32_t wasi_filesystem_types_descriptor_is_same_object(wasi_p2_stat
     return (uint32_t)(r1 == 0 && r2 == 0 && a.st_dev == b.st_dev && a.st_ino == b.st_ino);
 }
 
+WASI_P2_FN uint64_t wasi_p2_fnv(const uint64_t *values, int n) {
+    uint64_t h = 0xCBF29CE484222325ULL;
+    for (int i = 0; i < n; i++)
+        for (int b = 0; b < 8; b++) h = (h ^ ((values[i] >> (8 * b)) & 0xFF)) * 0x100000001B3ULL;
+    return h;
+}
+
 WASI_P2_FN void wasi_p2_hash_result(wasi_p2_state *s, uint32_t comp, uint32_t retptr, int rc, const struct stat *st) {
     if (rc != WASI_P2_OK) {
         wasi_p2_fs_fail(s, comp, retptr, retptr + 8, rc);
         return;
     }
     wasi_p2_ok(s, comp, retptr);
-    wasi_p2_store_u64(s, comp, retptr + 8, (uint64_t)st->st_ino);
-    wasi_p2_store_u64(s, comp, retptr + 16, (uint64_t)st->st_dev);
+    /* `upper` names the object (device, inode); `lower` also takes in what changes when it is modified (size, modification time): FNV-1a 64 as the Python twin */
+    uint64_t lower[4] = {(uint64_t)st->st_size, (uint64_t)wasi_p2_ts_ns(WASI_P2_MTIME(*st)), (uint64_t)st->st_dev, (uint64_t)st->st_ino};
+    uint64_t upper[2] = {(uint64_t)st->st_dev, (uint64_t)st->st_ino};
+    wasi_p2_store_u64(s, comp, retptr + 8, wasi_p2_fnv(lower, 4));
+    wasi_p2_store_u64(s, comp, retptr + 16, wasi_p2_fnv(upper, 2));
 }
 
 WASI_P2_FN void wasi_filesystem_types_descriptor_metadata_hash(wasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t retptr) {

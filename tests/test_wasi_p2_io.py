@@ -12,13 +12,29 @@ import pytest
 
 import wasmext
 from wasmext.p2 import wasi_p2_io as io
-from wasmext.p2.wasi_p2_core import Host, Trap, store_u32
+from wasmext.p2.wasi_p2_core import Host, Trap, load_u32, store_u32
 
 C_P2 = Path(wasmext.__file__).parent / "c" / "p2"
 DRIVER = Path(__file__).parent / "data" / "wasi_p2_io_driver.c"
 CC = shutil.which("cc") or shutil.which("gcc") or shutil.which("clang")
 
-SCENARIOS = ["streams", "bad_handle", "oversize", "empty_poll", "no_realloc"]
+SCENARIOS = ["streams", "failure", "bad_handle", "oversize", "empty_poll", "no_realloc"]
+
+
+class FailingInput(io.InputStream):
+    def read(self, n: int) -> bytes:
+        raise io.StreamFailed("boom")
+
+    def ready(self) -> bool:
+        return False
+
+
+class FailingOutput(io.OutputStream):
+    def check_write(self) -> int:
+        raise io.StreamFailed("boom")
+
+    def ready(self) -> bool:
+        return False
 
 
 def python_output(scenario: str) -> str:
@@ -90,6 +106,23 @@ def python_output(scenario: str) -> str:
             io.wasi_io_poll_pollable_drop(host, p)
             io.wasi_io_streams_input_stream_drop(host, i)
             io.wasi_io_streams_output_stream_drop(host, o)
+        elif scenario == "failure":
+            hfi, hfo = io.input_stream_new(host, FailingInput()), io.output_stream_new(host, FailingOutput())
+            lines.append(f"failing {hfi} {hfo}")
+            io.wasi_io_streams_input_stream_read(host, 0, hfi, 4, 0)
+            dump("read fails")
+            io.wasi_io_streams_input_stream_read(host, 0, hfi, 4, 16)
+            dump("read after the failure")
+            p = io.wasi_io_streams_input_stream_subscribe(host, hfi)
+            lines.append(f"pollable of a closed stream: ready {io.wasi_io_poll_pollable_ready(host, p)}")
+            io.wasi_io_error_error_to_debug_string(host, 0, load_u32(host, 0, 8), 80)
+            dump("message")
+            io.wasi_io_streams_output_stream_check_write(host, 0, hfo, 96)
+            dump("check_write fails")
+            io.wasi_io_streams_output_stream_write(host, 0, hfo, 100, 1, 112)
+            dump("write after the failure")
+            io.wasi_io_streams_output_stream_flush(host, 0, hfo, 128)
+            dump("flush after the failure")
         elif scenario == "bad_handle":
             io.wasi_io_streams_input_stream_read(host, 0, o, 4, 0)
         elif scenario == "oversize":
@@ -132,6 +165,23 @@ def test_values() -> None:
     assert "o2 58" in lines
     assert lines[1].startswith("read ")  # a read of 4 bytes: ok, the list at 160 (a0000000), length 4
     assert lines[1].split()[1].startswith("00000000a000000004000000")
+
+
+def test_a_failed_stream_is_closed() -> None:
+    lines = python_output("failure").splitlines()
+    first, second = (
+        bytes.fromhex(line.split()[-1]) for line in lines if line.startswith(("read fails", "read after the failure"))
+    )
+    assert first[0] == 1 and first[4] == 0  # err, last-operation-failed (with an error resource)
+    assert second[16] == 1 and second[20] == 1  # err, closed
+    assert "pollable of a closed stream: ready 1" in lines  # ready although its own ready() says no
+    check, write, flush = (
+        bytes.fromhex(next(x for x in lines if x.startswith(k)).split()[-1])
+        for k in ("check_write fails", "write after", "flush after")
+    )
+    assert check[96] == 1 and check[104] == 0  # last-operation-failed
+    assert write[112] == 1 and write[116] == 1  # closed
+    assert flush[128] == 1 and flush[132] == 1  # closed
 
 
 @pytest.mark.parametrize("scenario", ["bad_handle", "oversize", "empty_poll", "no_realloc"])

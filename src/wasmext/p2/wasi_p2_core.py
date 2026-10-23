@@ -19,10 +19,20 @@ KIND_POLLABLE = 1
 KIND_ERROR = 2
 KIND_INPUT_STREAM = 3
 KIND_OUTPUT_STREAM = 4
+KIND_TERMINAL_INPUT = 5
+KIND_TERMINAL_OUTPUT = 6
 
 
 class Trap(Exception):
     """What the canonical ABI calls a trap: a bad handle, a pointer outside the memory."""
+
+
+class Exit(Exception):
+    """The guest called `wasi:cli/exit`: the program is over with this code (0 is success)."""
+
+    def __init__(self, code: int) -> None:
+        super().__init__(f"exit {code}")
+        self.code = code
 
 
 class Pollable:
@@ -57,11 +67,26 @@ class Host:
         wait: Callable[[], None] = lambda: time.sleep(0.001),
         random_bytes: Callable[[int], bytes] = os.urandom,
         insecure_random_bytes: Callable[[int], bytes] | None = None,
+        args: Sequence[str] = (),
+        env: Sequence[tuple[str, str]] = (),
+        initial_cwd: str | None = None,
+        stdin: object = None,
+        stdout: object = None,
+        stderr: object = None,
+        terminals: Sequence[str] = (),
     ) -> None:
         self.memories: list[object] = list(memories)
         self.slots: list[Slot] = [Slot()]  # slot 0 is never used
         self.realloc = realloc  # (comp, old_ptr, old_size, align, new_size) -> ptr: the `cabi_realloc` of the component
         self.wait = wait  # what a blocking call does between two looks at a pollable
+        self.args = list(args)  # wasi:cli/environment
+        self.env = list(env)
+        self.initial_cwd = initial_cwd
+        # the standard streams: an `InputStream` / `OutputStream` of `wasi_p2_io`, or None for the default of `wasi_p2_cli` (made when first asked for)
+        self.std: dict[str, object] = {
+            k: v for k, v in (("stdin", stdin), ("stdout", stdout), ("stderr", stderr)) if v is not None
+        }
+        self.terminals = set(terminals)  # which of "stdin", "stdout", "stderr" are terminals
         self.random_bytes = random_bytes  # the secure source
         self.insecure_random_bytes = (
             insecure_random_bytes or random_bytes

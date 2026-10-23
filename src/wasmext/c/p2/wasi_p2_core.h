@@ -31,7 +31,10 @@ struct wasi_p2_state;
 #define WASI_P2_INDEX_MASK ((1u << WASI_P2_INDEX_BITS) - 1)
 #define WASI_P2_GENERATION_MASK ((1u << (32 - WASI_P2_INDEX_BITS)) - 1)
 
-enum { WASI_P2_KIND_POLLABLE = 1, WASI_P2_KIND_ERROR = 2, WASI_P2_KIND_INPUT_STREAM = 3, WASI_P2_KIND_OUTPUT_STREAM = 4 };
+enum { WASI_P2_KIND_POLLABLE = 1, WASI_P2_KIND_ERROR = 2, WASI_P2_KIND_INPUT_STREAM = 3, WASI_P2_KIND_OUTPUT_STREAM = 4,
+       WASI_P2_KIND_TERMINAL_INPUT = 5, WASI_P2_KIND_TERMINAL_OUTPUT = 6 };
+
+enum { WASI_P2_TERMINAL_STDIN = 1, WASI_P2_TERMINAL_STDOUT = 2, WASI_P2_TERMINAL_STDERR = 4 };
 
 typedef struct {
     uint8_t *base;
@@ -64,6 +67,21 @@ typedef struct wasi_p2_state {
     uint32_t (*realloc)(struct wasi_p2_state *s, uint32_t comp, uint32_t old_ptr, uint32_t old_size, uint32_t align, uint32_t new_size);
     /* what a blocking call does between two looks at a pollable */
     void (*wait)(struct wasi_p2_state *s);
+    /* wasi:cli/environment: owned by the caller, they must outlive the state */
+    const char *const *args;
+    uint32_t arg_count;
+    const char *const *env_names, *const *env_values;
+    uint32_t env_count;
+    const char *initial_cwd; /* NULL: none */
+    /* the standard streams (wasi_p2_stream, wasi_p2_io.h): [0] stdin, [1] stdout, [2] stderr; NULL means the descriptors of the process, made when first asked for
+       (`std_default`, freed with the state). The streams of the caller are not closed when a handle to them is dropped. */
+    void *std[3];
+    void *std_default[3];
+    unsigned terminals; /* WASI_P2_TERMINAL_*: which of the three are terminals */
+    /* the guest called wasi:cli/exit: `exit` is told, and by default records the code and traps; the code is in `exit_code` when `exited` */
+    void (*exit)(struct wasi_p2_state *s, uint32_t code);
+    int exited;
+    uint32_t exit_code;
     /* random bytes: returns 0, or nonzero if the source failed (a trap). `insecure_random_bytes` is the same source unless replaced. */
     int (*random_bytes)(struct wasi_p2_state *s, uint8_t *buf, size_t n);
     int (*insecure_random_bytes)(struct wasi_p2_state *s, uint8_t *buf, size_t n);
@@ -130,6 +148,12 @@ WASI_P2_FN int wasi_p2_default_random_bytes(wasi_p2_state *s, uint8_t *buf, size
 #endif
 }
 
+WASI_P2_FN void wasi_p2_default_exit(wasi_p2_state *s, uint32_t code) {
+    s->exited = 1;
+    s->exit_code = code;
+    s->trap(s, "exit");
+}
+
 WASI_P2_FN void wasi_p2_default_wait(wasi_p2_state *s) {
     (void)s;
 #ifdef _WIN32
@@ -144,6 +168,7 @@ WASI_P2_FN void wasi_p2_init(wasi_p2_state *s) {
     memset(s, 0, sizeof *s);
     s->trap = wasi_p2_default_trap;
     s->wait = wasi_p2_default_wait;
+    s->exit = wasi_p2_default_exit;
     s->random_bytes = s->insecure_random_bytes = wasi_p2_default_random_bytes;
     s->wall_ns = wasi_p2_default_wall_ns;
     s->monotonic_ns = wasi_p2_default_monotonic_ns;
@@ -154,6 +179,7 @@ WASI_P2_FN void wasi_p2_init(wasi_p2_state *s) {
 WASI_P2_FN void wasi_p2_free(wasi_p2_state *s) {
     for (uint32_t i = 1; i < s->slot_count; i++)
         if (s->slots[i].live && s->slots[i].destroy) s->slots[i].destroy(s, s->slots[i].obj);
+    for (int i = 0; i < 3; i++) free(s->std_default[i]), s->std_default[i] = NULL;
     free(s->slots);
     s->slots = NULL;
     s->slot_count = s->slot_capacity = 0;

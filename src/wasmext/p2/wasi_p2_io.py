@@ -262,7 +262,8 @@ def wasi_io_streams_input_stream_subscribe(host: Host, self: int) -> int:
 def wasi_io_streams_input_stream_drop(host: Host, handle: int) -> None:
     stream = _input(host, handle)
     table_drop(host, handle, KIND_INPUT_STREAM)
-    stream.close()
+    if not any(stream is std for std in host.std.values()):  # a standard stream outlives the handles to it
+        stream.close()
 
 
 def wasi_io_streams_output_stream_check_write(host: Host, comp: int, self: int, retptr: int) -> None:
@@ -382,4 +383,5 @@ def wasi_io_streams_output_stream_subscribe(host: Host, self: int) -> int:
 def wasi_io_streams_output_stream_drop(host: Host, handle: int) -> None:
     stream = _output(host, handle)
     table_drop(host, handle, KIND_OUTPUT_STREAM)
-    stream.close()
+    if not any(stream is std for std in host.std.values()):
+        stream.close()

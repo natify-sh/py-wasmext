@@ -21,6 +21,8 @@ KIND_INPUT_STREAM = 3
 KIND_OUTPUT_STREAM = 4
 KIND_TERMINAL_INPUT = 5
 KIND_TERMINAL_OUTPUT = 6
+KIND_DESCRIPTOR = 7
+KIND_DIRECTORY_ENTRY_STREAM = 8
 
 
 class Trap(Exception):
@@ -74,6 +76,7 @@ class Host:
         stdout: object = None,
         stderr: object = None,
         terminals: Sequence[str] = (),
+        preopens: Sequence[tuple[str, str] | tuple[str, str, bool]] = (),
     ) -> None:
         self.memories: list[object] = list(memories)
         self.slots: list[Slot] = [Slot()]  # slot 0 is never used
@@ -86,6 +89,8 @@ class Host:
         self.std: dict[str, object] = {
             k: v for k, v in (("stdin", stdin), ("stdout", stdout), ("stderr", stderr)) if v is not None
         }
+        # wasi:filesystem/preopens: (path on the host, name for the guest) or (path, name, writable); a directory is writable unless the third item is False
+        self.preopens = [(p[0], p[1], p[2] if len(p) > 2 else True) for p in preopens]  # type: ignore[misc]
         self.terminals = set(terminals)  # which of "stdin", "stdout", "stderr" are terminals
         self.random_bytes = random_bytes  # the secure source
         self.insecure_random_bytes = (

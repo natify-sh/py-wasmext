@@ -23,6 +23,12 @@
 
 struct wasi_p2_state;
 
+/* a directory of the host that the guest sees under `name`; `writable` 0: the guest can only read it */
+struct wasi_p2_preopen {
+    const char *path, *name;
+    int writable;
+};
+
 /* every function is static, and `inline` so that the ones a module does not use do not warn */
 #define WASI_P2_FN static inline
 
@@ -32,7 +38,8 @@ struct wasi_p2_state;
 #define WASI_P2_GENERATION_MASK ((1u << (32 - WASI_P2_INDEX_BITS)) - 1)
 
 enum { WASI_P2_KIND_POLLABLE = 1, WASI_P2_KIND_ERROR = 2, WASI_P2_KIND_INPUT_STREAM = 3, WASI_P2_KIND_OUTPUT_STREAM = 4,
-       WASI_P2_KIND_TERMINAL_INPUT = 5, WASI_P2_KIND_TERMINAL_OUTPUT = 6 };
+       WASI_P2_KIND_TERMINAL_INPUT = 5, WASI_P2_KIND_TERMINAL_OUTPUT = 6,
+       WASI_P2_KIND_DESCRIPTOR = 7, WASI_P2_KIND_DIRECTORY_ENTRY_STREAM = 8 };
 
 enum { WASI_P2_TERMINAL_STDIN = 1, WASI_P2_TERMINAL_STDOUT = 2, WASI_P2_TERMINAL_STDERR = 4 };
 
@@ -73,6 +80,9 @@ typedef struct wasi_p2_state {
     const char *const *env_names, *const *env_values;
     uint32_t env_count;
     const char *initial_cwd; /* NULL: none */
+    /* wasi:filesystem/preopens: owned by the caller */
+    const struct wasi_p2_preopen *preopens;
+    uint32_t preopen_count;
     /* the standard streams (wasi_p2_stream, wasi_p2_io.h): [0] stdin, [1] stdout, [2] stderr; NULL means the descriptors of the process, made when first asked for
        (`std_default`, freed with the state). The streams of the caller are not closed when a handle to them is dropped. */
     void *std[3];
@@ -273,6 +283,14 @@ WASI_P2_FN uint32_t wasi_p2_alloc(wasi_p2_state *s, uint32_t comp, uint32_t alig
     uint32_t ptr = s->realloc(s, comp, 0, 0, align, size);
     if (!ptr) s->trap(s, "cabi_realloc failed");
     return ptr;
+}
+
+WASI_P2_FN void wasi_p2_string(wasi_p2_state *s, uint32_t comp, const char *text, uint32_t at) {
+    uint32_t n = (uint32_t)strlen(text);
+    uint32_t ptr = wasi_p2_alloc(s, comp, 1, n);
+    if (n) memcpy(wasi_p2_mem(s, comp, ptr, n), text, n);
+    wasi_p2_store_u32(s, comp, at, ptr);
+    wasi_p2_store_u32(s, comp, at + 4, n);
 }
 
 #endif /* WASI_P2_CORE_H */

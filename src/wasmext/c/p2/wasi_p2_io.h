@@ -20,18 +20,28 @@ typedef struct wasi_p2_stream {
     int (*ready)(wasi_p2_state *s, struct wasi_p2_stream *st);
     void (*destroy)(wasi_p2_state *s, struct wasi_p2_stream *st); /* when the handle is dropped; may be NULL */
     const char *failure;
+    int failure_has_code, failure_code; /* the error-code of wasi:filesystem, when the failure came from a file */
     void *ctx;
 } wasi_p2_stream;
 
+/* the `error` resource: a code (-1: none) and the message */
+typedef struct {
+    int code;
+    char message[1];
+} wasi_p2_error;
+
 /* making resources for the guest */
 
-WASI_P2_FN uint32_t wasi_p2_error_new(wasi_p2_state *s, const char *message) {
+WASI_P2_FN uint32_t wasi_p2_error_new_code(wasi_p2_state *s, const char *message, int code) {
     size_t n = strlen(message) + 1;
-    char *copy = (char *)malloc(n);
-    if (!copy) s->trap(s, "out of memory");
-    memcpy(copy, message, n);
-    return wasi_p2_table_new(s, WASI_P2_KIND_ERROR, copy, wasi_p2_free_obj);
+    wasi_p2_error *e = (wasi_p2_error *)malloc(sizeof *e + n);
+    if (!e) s->trap(s, "out of memory");
+    e->code = code;
+    memcpy(e->message, message, n);
+    return wasi_p2_table_new(s, WASI_P2_KIND_ERROR, e, wasi_p2_free_obj);
 }
+
+WASI_P2_FN uint32_t wasi_p2_error_new(wasi_p2_state *s, const char *message) { return wasi_p2_error_new_code(s, message, -1); }
 
 WASI_P2_FN void wasi_p2_stream_destroy(wasi_p2_state *s, void *obj) {
     wasi_p2_stream *st = (wasi_p2_stream *)obj;
@@ -149,11 +159,12 @@ WASI_P2_FN void wasi_p2_buffer_output_release(wasi_p2_buffer_output *b) {
 WASI_P2_FN void wasi_p2_ok(wasi_p2_state *s, uint32_t comp, uint32_t retptr) { wasi_p2_store_u8(s, comp, retptr, 0); }
 
 /* err(stream-error): the tag of the result at retptr, the variant at error_at */
-WASI_P2_FN void wasi_p2_stream_err(wasi_p2_state *s, uint32_t comp, uint32_t retptr, uint32_t error_at, int status, const char *failure) {
+WASI_P2_FN void wasi_p2_stream_err(wasi_p2_state *s, uint32_t comp, uint32_t retptr, uint32_t error_at, int status, wasi_p2_stream *st) {
+    const char *failure = st->failure;
     wasi_p2_store_u8(s, comp, retptr, 1);
     if (status == WASI_P2_STREAM_FAILED) {
         wasi_p2_store_u8(s, comp, error_at, 0);
-        wasi_p2_store_u32(s, comp, error_at + 4, wasi_p2_error_new(s, failure ? failure : "failed"));
+        wasi_p2_store_u32(s, comp, error_at + 4, wasi_p2_error_new_code(s, failure ? failure : "failed", st->failure_has_code ? st->failure_code : -1));
     } else {
         wasi_p2_store_u8(s, comp, error_at, 1);
     }
@@ -162,7 +173,7 @@ WASI_P2_FN void wasi_p2_stream_err(wasi_p2_state *s, uint32_t comp, uint32_t ret
 /* error */
 
 WASI_P2_FN void wasi_io_error_error_to_debug_string(wasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t retptr) {
-    const char *message = (const char *)wasi_p2_table_get(s, self, WASI_P2_KIND_ERROR)->obj;
+    const char *message = ((wasi_p2_error *)wasi_p2_table_get(s, self, WASI_P2_KIND_ERROR)->obj)->message;
     uint32_t n = (uint32_t)strlen(message);
     uint32_t ptr = wasi_p2_alloc(s, comp, 1, n);
     if (n) memcpy(wasi_p2_mem(s, comp, ptr, n), message, n);
@@ -245,7 +256,7 @@ WASI_P2_FN void wasi_p2_read_list(wasi_p2_state *s, uint32_t comp, uint32_t self
     int status = wasi_p2_read(s, st, len, block, &buf, &got);
     if (status != WASI_P2_STREAM_OK) {
         free(buf);
-        wasi_p2_stream_err(s, comp, retptr, retptr + 4, status, st->failure);
+        wasi_p2_stream_err(s, comp, retptr, retptr + 4, status, st);
         return;
     }
     uint32_t ptr = wasi_p2_alloc(s, comp, 1, (uint32_t)got);
@@ -263,7 +274,7 @@ WASI_P2_FN void wasi_p2_skip(wasi_p2_state *s, uint32_t comp, uint32_t self, uin
     int status = wasi_p2_read(s, st, len, block, &buf, &got);
     free(buf);
     if (status != WASI_P2_STREAM_OK) {
-        wasi_p2_stream_err(s, comp, retptr, retptr + 8, status, st->failure);
+        wasi_p2_stream_err(s, comp, retptr, retptr + 8, status, st);
         return;
     }
     wasi_p2_ok(s, comp, retptr);
@@ -310,7 +321,7 @@ WASI_P2_FN void wasi_io_streams_output_stream_check_write(wasi_p2_state *s, uint
     int status = WASI_P2_STREAM_OK;
     uint64_t budget = st->check_write(s, st, &status);
     if (status != WASI_P2_STREAM_OK) {
-        wasi_p2_stream_err(s, comp, retptr, retptr + 8, status, st->failure);
+        wasi_p2_stream_err(s, comp, retptr, retptr + 8, status, st);
         return;
     }
     wasi_p2_ok(s, comp, retptr);
@@ -326,7 +337,7 @@ WASI_P2_FN int wasi_p2_write(wasi_p2_state *s, uint32_t comp, wasi_p2_stream *st
         status = st->write(s, st, data, len);
     }
     if (status != WASI_P2_STREAM_OK) {
-        wasi_p2_stream_err(s, comp, retptr, retptr + 4, status, st->failure);
+        wasi_p2_stream_err(s, comp, retptr, retptr + 4, status, st);
         return 0;
     }
     return 1;
@@ -358,7 +369,7 @@ WASI_P2_FN void wasi_p2_write_all_and_flush(wasi_p2_state *s, uint32_t comp, was
     }
     if (status == WASI_P2_STREAM_OK) status = st->flush(s, st);
     if (status != WASI_P2_STREAM_OK) {
-        wasi_p2_stream_err(s, comp, retptr, retptr + 4, status, st->failure);
+        wasi_p2_stream_err(s, comp, retptr, retptr + 4, status, st);
         return;
     }
     wasi_p2_ok(s, comp, retptr);
@@ -388,7 +399,7 @@ WASI_P2_FN void wasi_io_streams_output_stream_flush(wasi_p2_state *s, uint32_t c
     wasi_p2_stream *st = wasi_p2_output_get(s, self);
     int status = st->flush(s, st);
     if (status != WASI_P2_STREAM_OK) {
-        wasi_p2_stream_err(s, comp, retptr, retptr + 4, status, st->failure);
+        wasi_p2_stream_err(s, comp, retptr, retptr + 4, status, st);
         return;
     }
     wasi_p2_ok(s, comp, retptr);
@@ -404,11 +415,11 @@ WASI_P2_FN void wasi_p2_splice(wasi_p2_state *s, uint32_t comp, uint32_t self, u
     uint8_t *buf = NULL;
     uint64_t got = 0;
     int status = WASI_P2_STREAM_OK;
-    const char *failure = NULL;
+    wasi_p2_stream *failed = NULL; /* the stream that failed, for the error */
     for (;;) {
         uint64_t budget = out->check_write(s, out, &status);
         if (status != WASI_P2_STREAM_OK) {
-            failure = out->failure;
+            failed = out;
             break;
         }
         if (budget == 0 && block) {
@@ -418,17 +429,17 @@ WASI_P2_FN void wasi_p2_splice(wasi_p2_state *s, uint32_t comp, uint32_t self, u
         if (budget) {
             status = wasi_p2_read(s, in, len < budget ? len : budget, block, &buf, &got);
             if (status != WASI_P2_STREAM_OK) {
-                failure = in->failure;
+                failed = in;
                 break;
             }
             status = out->write(s, out, buf, got);
-            if (status != WASI_P2_STREAM_OK) failure = out->failure;
+            if (status != WASI_P2_STREAM_OK) failed = out;
         }
         break;
     }
     free(buf);
     if (status != WASI_P2_STREAM_OK) {
-        wasi_p2_stream_err(s, comp, retptr, retptr + 8, status, failure);
+        wasi_p2_stream_err(s, comp, retptr, retptr + 8, status, failed);
         return;
     }
     wasi_p2_ok(s, comp, retptr);

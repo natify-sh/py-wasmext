@@ -41,7 +41,11 @@ class StreamClosed(Exception):
 
 
 class StreamFailed(Exception):
-    """The operation failed: the case `last-operation-failed`, with an `error` resource that carries the message."""
+    """The operation failed: the case `last-operation-failed`, with an `error` resource that carries the message (and, from a file, the `error-code` of wasi:filesystem)."""
+
+    def __init__(self, message: str = "", code: int | None = None) -> None:
+        super().__init__(message)
+        self.code = code
 
 
 class InputStream:
@@ -107,18 +111,21 @@ class StreamPollable(Pollable):
         return self.stream.ready()
 
 
-class _Error:
-    __slots__ = ("message",)
+class Error:
+    """The `error` resource: a message, and the `error-code` of wasi:filesystem if the error came from a file (`filesystem-error-code` reads it)."""
 
-    def __init__(self, message: str) -> None:
+    __slots__ = ("code", "message")
+
+    def __init__(self, message: str, code: int | None = None) -> None:
         self.message = message
+        self.code = code
 
 
 # making resources for the guest
 
 
-def error_new(host: Host, message: str) -> int:
-    return table_new(host, KIND_ERROR, _Error(message))
+def error_new(host: Host, message: str, code: int | None = None) -> int:
+    return table_new(host, KIND_ERROR, Error(message, code))
 
 
 def input_stream_new(host: Host, stream: InputStream) -> int:
@@ -133,7 +140,7 @@ def output_stream_new(host: Host, stream: OutputStream) -> int:
 
 
 def wasi_io_error_error_to_debug_string(host: Host, comp: int, self: int, retptr: int) -> None:
-    error: _Error = table_get(host, self, KIND_ERROR)  # type: ignore[assignment]
+    error: Error = table_get(host, self, KIND_ERROR)  # type: ignore[assignment]
     data = error.message.encode()
     ptr = alloc(host, comp, 1, len(data))
     store_bytes(host, comp, ptr, data)
@@ -200,7 +207,7 @@ def _err(host: Host, comp: int, retptr: int, error_at: int, exc: Exception) -> N
     store_u8(host, comp, retptr, 1)
     if isinstance(exc, StreamFailed):
         store_u8(host, comp, error_at, 0)
-        store_u32(host, comp, error_at + 4, error_new(host, str(exc)))
+        store_u32(host, comp, error_at + 4, error_new(host, str(exc), exc.code))
     else:
         store_u8(host, comp, error_at, 1)
 

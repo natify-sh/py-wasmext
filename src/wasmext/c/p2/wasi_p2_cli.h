@@ -113,14 +113,6 @@ WASI_P2_FN wasi_p2_stream *wasi_p2_std(wasi_p2_state *s, int i) {
 
 /* environment */
 
-WASI_P2_FN void wasi_p2_string(wasi_p2_state *s, uint32_t comp, const char *text, uint32_t at) {
-    uint32_t n = (uint32_t)strlen(text);
-    uint32_t ptr = wasi_p2_alloc(s, comp, 1, n);
-    if (n) memcpy(wasi_p2_mem(s, comp, ptr, n), text, n);
-    wasi_p2_store_u32(s, comp, at, ptr);
-    wasi_p2_store_u32(s, comp, at + 4, n);
-}
-
 WASI_P2_FN void wasi_cli_environment_get_environment(wasi_p2_state *s, uint32_t comp, uint32_t retptr) {
     uint32_t ptr = wasi_p2_alloc(s, comp, 4, 16 * s->env_count);
     for (uint32_t i = 0; i < s->env_count; i++) {

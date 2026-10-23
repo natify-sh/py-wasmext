@@ -36,4 +36,5 @@ The fingerprint of the ABI reads every file directly in `src/wasmext/c/`, and th
 * **The name is chosen (the owner, 2026-10-23): `fusedwasi`** (free everywhere; first written `fuzedwasi` by a slip; the name that is reserved is `fusedwasi`). **Reserved: the repository <https://github.com/natify-sh/fusedwasi> and the project <https://pypi.org/project/fusedwasi> on PyPI** (both empty; nothing is moved yet).
 * Whether the wrappers of item 1 are generated in the library or in wasmext.
 * How the move of 0.1 is counted by the ABI policy.
-* Windows `filesystem` and `sockets` (0.2) come before the move or after it.
+* ~~Windows `filesystem` and `sockets` (0.2) come before the move or after it.~~ Before: they are done (the real Windows CI is the last check, 2026-10-23).
+* **Decided (the owner, 2026-10-23): wasmext takes `fusedwasi` as a git submodule** (not a copy of the files). So: the submodule's commit pins the version of the WASI that a wasmext has; the build and `pyproject` must find the headers in the submodule (sdist/wheel have to carry them); the fingerprint of the ABI reads `src/wasmext/c/` only, which no longer has WASI; CI checks out with `submodules: true`.

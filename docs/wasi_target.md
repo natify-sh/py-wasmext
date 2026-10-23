@@ -51,6 +51,28 @@ Agreed on 2026-10-23 after a look at the stubs of `examples/wasi2_unbundled` and
    - **If both are given for one function, the import wins** over the hook (the exact replacement is the more explicit one).
    - Whether 0.2 takes `wasi=` too (its arguments are only an import that the host answers, and the replacement of that import is possible) is open; the shape is the same for the caller, so it is likely.
 
+## The typed imports in the stubs (the extension, the wrapper for ctypes)
+
+Today a module of WASI 0.1 has `imports: None = None` in its stub, in the extension and (as `imports: Any`) in the wrapper for ctypes: the module `wasi_snapshot_preview1` is neither typed nor named, although a call of it can be replaced. The stub of a module of WASI 0.2 types every function as `Callable[[int, ...], None]`, in a `TypedDict` called `_Imports7`. What is wanted, for the hosts that have a built-in implementation:
+
+- **A named `TypedDict` for each WASI module of the imports, with a name that follows from the module** (not from its place in the import section), listing *every function of the standard module*, each `NotRequired`. The key in `Imports` is the exact name of the import of this module (`'wasi:io/streams@0.2.12'`, `'wasi_snapshot_preview1'`, `'wasi_unstable'`), so a module that imports the first snapshot types `wasi_unstable` and not the other.
+- **Each function has the exact signature**, with the names of the parameters that the specification gives, as a `Protocol` with positional-only parameters, so that the name shows in the editor and any name works in the function of the caller:
+  ```python
+  class Fd_write(Protocol):
+      def __call__(self, fd: int, iovs: int, iovs_len: int, nwritten: int, /) -> int: ...   # the errno
+
+  class WasiSnapshotPreview1(TypedDict, total=False):
+      fd_write: Fd_write
+      args_get: Args_get
+      ...
+  Imports = TypedDict('Imports', {'wasi_snapshot_preview1': NotRequired[WasiSnapshotPreview1], **the modules that are the caller's: required})
+  ```
+  For 0.1 the result is the errno (`int`); for 0.2 what the core signature has (`None`, or a handle as `int`), with the pointer of the result among the parameters.
+- **The same types in the stub of the extension and in the wrapper for ctypes** (the wrapper has `imports: Any` today): `Instance.__init__(self, imports: Imports | None = None, *, wasi: Wasi | None = None)` in both.
+- **The types are not generated into every stub.** They are made once, from the same tables as the implementation (witx for 0.1, WIT for 0.2), and live in fusedwasi; the stub imports the module by name (`from fusedwasi.p1.types import WasiSnapshotPreview1`). A module that is not WASI keeps a generated `TypedDict`, named from its module name.
+- **The original** (`Instance.original(module, name)`) is typed with the same `Protocol`, so a wrapper has the signature in front of it.
+- For `host = "wasm32"` nothing of this is made: every import is generated as it is today (with the stable name).
+
 ## Where the types of WASI live
 
 The types of the functions of WASI 0.1 and 0.2 (the standard interfaces) are kept **in fusedwasi**, with the implementation they describe, so that they change together; the stub of a module imports them by name instead of copying them. wasmhost uses the same types for its replacements. wasmext keeps only what is the module's own: the modules that are not WASI.

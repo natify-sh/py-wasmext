@@ -1,13 +1,18 @@
 /* wasi:sockets (58 imports): network, instance-network, ip-name-lookup, tcp, tcp-create-socket, udp, udp-create-socket (the twin of p2/wasi_p2_sockets.py, where the
- * rules, the states and the layouts are described). POSIX only (BSD sockets). Nothing is allowed unless `s->socket_addr_check` / `s->allow_ip_name_lookup` say so.
+ * rules, the states and the layouts are described). BSD sockets, or Winsock on Windows (link ws2_32). Nothing is allowed unless `s->socket_addr_check` / `s->allow_ip_name_lookup` say so.
  * A socket is shared by its streams and its handle (a count of references), so a stream can outlive the handle of the socket; the descriptor is closed with the handle. */
 #ifndef WASI_P2_SOCKETS_H
 #define WASI_P2_SOCKETS_H
 
 #ifdef _WIN32
-#error "wasi_p2_sockets.h needs POSIX"
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <errno.h>
+#ifdef _MSC_VER
+#pragma comment(lib, "ws2_32") /* elsewhere: -lws2_32 */
+typedef intptr_t ssize_t;
 #endif
-
+#else
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -17,6 +22,7 @@
 #include <poll.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#endif
 
 #include "wasi_p2_io.h"
 
@@ -37,6 +43,84 @@ enum { WASI_P2_SS_UNBOUND, WASI_P2_SS_BIND_IN_PROGRESS, WASI_P2_SS_BOUND, WASI_P
 #define WASI_P2_CHECK_SEND_PERMIT 16u
 #define WASI_P2_BACKLOG_MAX 4096u
 
+
+/* The system calls, as they are on POSIX and on Windows (Winsock): the descriptor is an `int` in this file (a SOCKET is a handle, whose value fits in 32 bits), the errors are
+   those of `errno` (on Windows the WSA numbers are turned into them by `wasi_p2_errno`), and a socket is non-blocking. */
+#ifdef _WIN32
+#define WASI_P2_CLOSE(fd) closesocket((SOCKET)(fd))
+#define WASI_P2_POLL(p, n, ms) WSAPoll((p), (ULONG)(n), (ms))
+#define WASI_P2_RECV(fd, b, n, f) recv((SOCKET)(fd), (char *)(b), (int)(n), (f))
+#define WASI_P2_SEND(fd, b, n, f) send((SOCKET)(fd), (const char *)(b), (int)(n), (f))
+#define WASI_P2_RECVFROM(fd, b, n, f, a, l) recvfrom((SOCKET)(fd), (char *)(b), (int)(n), (f), (a), (l))
+#define WASI_P2_SENDTO(fd, b, n, f, a, l) sendto((SOCKET)(fd), (const char *)(b), (int)(n), (f), (a), (l))
+#define WASI_P2_SETSOCKOPT(fd, level, name, v, n) setsockopt((SOCKET)(fd), (level), (name), (const char *)(v), (int)(n))
+#define WASI_P2_GETSOCKOPT(fd, level, name, v, n) getsockopt((SOCKET)(fd), (level), (name), (char *)(v), (n))
+#define WASI_P2_CLOEXEC(fd) ((void)(fd))
+#define WASI_P2_SOCKET(family, type) ((int)socket((family), (type), 0))
+#define WASI_P2_ACCEPT(fd) ((int)accept((SOCKET)(fd), NULL, NULL))
+#ifndef MSG_NOSIGNAL
+#define MSG_NOSIGNAL 0
+#endif
+#ifndef SHUT_RD
+#define SHUT_RD SD_RECEIVE
+#define SHUT_WR SD_SEND
+#define SHUT_RDWR SD_BOTH
+#endif
+/* the number of a Winsock error as the `errno` that has the same meaning */
+WASI_P2_FN int wasi_p2_wsa_errno(int e) {
+    switch (e) {
+    case WSAEWOULDBLOCK: return EWOULDBLOCK;
+    case WSAEINPROGRESS: return EINPROGRESS;
+    case WSAEALREADY: return EALREADY;
+    case WSAEINTR: return EINTR;
+    case WSAEACCES: return EACCES;
+    case WSAEADDRINUSE: return EADDRINUSE;
+    case WSAEADDRNOTAVAIL: return EADDRNOTAVAIL;
+    case WSAEAFNOSUPPORT: return EAFNOSUPPORT;
+    case WSAECONNABORTED: return ECONNABORTED;
+    case WSAECONNREFUSED: return ECONNREFUSED;
+    case WSAECONNRESET: return ECONNRESET;
+    case WSAEHOSTUNREACH: return EHOSTUNREACH;
+    case WSAEINVAL: return EINVAL;
+    case WSAEISCONN: return EISCONN;
+    case WSAEMFILE: return EMFILE;
+    case WSAEMSGSIZE: return EMSGSIZE;
+    case WSAENETDOWN: return ENETDOWN;
+    case WSAENETUNREACH: return ENETUNREACH;
+    case WSAENOBUFS: return ENOBUFS;
+    case WSAENOPROTOOPT: return ENOPROTOOPT;
+    case WSAENOTCONN: return ENOTCONN;
+    case WSAEOPNOTSUPP: return EOPNOTSUPP;
+    case WSAEPROTONOSUPPORT: return EPROTONOSUPPORT;
+    case WSAETIMEDOUT: return ETIMEDOUT;
+    case WSAESHUTDOWN: return EPIPE;
+    case 0: return 0;
+    default: return EIO;
+    }
+}
+WASI_P2_FN int wasi_p2_errno(void) { return wasi_p2_wsa_errno(WSAGetLastError()); }
+WASI_P2_FN int wasi_p2_sockerr(int e) { return wasi_p2_wsa_errno(e); } /* the value of SO_ERROR */
+WASI_P2_FN void wasi_p2_net_start(void) {
+    WSADATA data;
+    WSAStartup(MAKEWORD(2, 2), &data); /* counted by the system: calling it again is harmless */
+}
+#else
+#define WASI_P2_CLOSE(fd) close(fd)
+#define WASI_P2_POLL(p, n, ms) poll((p), (n), (ms))
+#define WASI_P2_RECV(fd, b, n, f) recv((fd), (b), (n), (f))
+#define WASI_P2_SEND(fd, b, n, f) send((fd), (b), (n), (f))
+#define WASI_P2_RECVFROM(fd, b, n, f, a, l) recvfrom((fd), (b), (n), (f), (a), (l))
+#define WASI_P2_SENDTO(fd, b, n, f, a, l) sendto((fd), (b), (n), (f), (a), (l))
+#define WASI_P2_SETSOCKOPT(fd, level, name, v, n) setsockopt((fd), (level), (name), (v), (n))
+#define WASI_P2_GETSOCKOPT(fd, level, name, v, n) getsockopt((fd), (level), (name), (v), (n))
+#define WASI_P2_CLOEXEC(fd) fcntl((fd), F_SETFD, FD_CLOEXEC)
+#define WASI_P2_SOCKET(family, type) socket((family), (type), 0)
+#define WASI_P2_ACCEPT(fd) accept((fd), NULL, NULL)
+WASI_P2_FN int wasi_p2_errno(void) { return errno; }
+WASI_P2_FN int wasi_p2_sockerr(int e) { return e; }
+WASI_P2_FN void wasi_p2_net_start(void) {}
+#endif
+
 WASI_P2_FN int wasi_p2_net_errno(int e) {
     switch (e) {
     case EACCES: case EPERM: return WASI_P2_N_ACCESS_DENIED;
@@ -45,10 +129,16 @@ WASI_P2_FN int wasi_p2_net_errno(int e) {
     case ETIMEDOUT: return WASI_P2_N_TIMEOUT;
     case EALREADY: return WASI_P2_N_CONCURRENCY_CONFLICT;
     case EAGAIN: case EINPROGRESS: return WASI_P2_N_WOULD_BLOCK;
+#if defined(EWOULDBLOCK) && EWOULDBLOCK != EAGAIN
+    case EWOULDBLOCK: return WASI_P2_N_WOULD_BLOCK;
+#endif
     case EMFILE: case ENFILE: return WASI_P2_N_NEW_SOCKET_LIMIT;
     case EADDRNOTAVAIL: return WASI_P2_N_ADDRESS_NOT_BINDABLE;
     case EADDRINUSE: return WASI_P2_N_ADDRESS_IN_USE;
-    case EHOSTUNREACH: case EHOSTDOWN: case ENETUNREACH: case ENETDOWN: return WASI_P2_N_REMOTE_UNREACHABLE;
+    case EHOSTUNREACH: case ENETUNREACH: case ENETDOWN: return WASI_P2_N_REMOTE_UNREACHABLE;
+#ifdef EHOSTDOWN
+    case EHOSTDOWN: return WASI_P2_N_REMOTE_UNREACHABLE;
+#endif
     case ECONNREFUSED: return WASI_P2_N_CONNECTION_REFUSED;
     case ECONNRESET: case EPIPE: return WASI_P2_N_CONNECTION_RESET;
     case ECONNABORTED: return WASI_P2_N_CONNECTION_ABORTED;
@@ -223,30 +313,36 @@ typedef struct {
 } wasi_p2_resolved;
 
 WASI_P2_FN int wasi_p2_set_nonblock(int fd) {
+#ifdef _WIN32
+    u_long on = 1;
+    return ioctlsocket((SOCKET)fd, FIONBIO, &on) == 0 ? 0 : -1;
+#else
     int fl = fcntl(fd, F_GETFL, 0);
     return fl < 0 || fcntl(fd, F_SETFL, fl | O_NONBLOCK) < 0 ? -1 : 0;
+#endif
 }
 
 WASI_P2_FN int wasi_p2_poll_fd(int fd, short events) {
     struct pollfd p = {fd, events, 0};
-    return poll(&p, 1, 0) > 0;
+    return WASI_P2_POLL(&p, 1, 0) > 0;
 }
 
 /* a socket of the given family and type: the descriptor, or -1 and the network error in *rc */
 WASI_P2_FN int wasi_p2_net_socket(int family, int type, int *rc) {
-    int fd = socket(family == 0 ? AF_INET : AF_INET6, type, 0);
+    wasi_p2_net_start();
+    int fd = WASI_P2_SOCKET(family == 0 ? AF_INET : AF_INET6, type);
     if (fd < 0) {
-        *rc = wasi_p2_net_errno(errno);
+        *rc = wasi_p2_net_errno(wasi_p2_errno());
         return -1;
     }
     if (wasi_p2_set_nonblock(fd) < 0) {
-        *rc = wasi_p2_net_errno(errno);
-        close(fd);
+        *rc = wasi_p2_net_errno(wasi_p2_errno());
+        WASI_P2_CLOSE(fd);
         return -1;
     }
     int on = 1;
-    if (family == 1) setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &on, sizeof on);
-    fcntl(fd, F_SETFD, FD_CLOEXEC);
+    if (family == 1) WASI_P2_SETSOCKOPT(fd, IPPROTO_IPV6, IPV6_V6ONLY, &on, sizeof on);
+    WASI_P2_CLOEXEC(fd);
     return fd;
 }
 
@@ -262,7 +358,7 @@ WASI_P2_FN void wasi_p2_udp_unref(wasi_p2_state *s, wasi_p2_udp *u) {
 
 WASI_P2_FN void wasi_p2_tcp_destroy(wasi_p2_state *s, void *obj) { /* the handle of the socket is dropped, or the state is freed */
     wasi_p2_tcp *t = (wasi_p2_tcp *)obj;
-    if (t->fd >= 0) close(t->fd);
+    if (t->fd >= 0) WASI_P2_CLOSE(t->fd);
     t->fd = -1;
     t->state = WASI_P2_SS_CLOSED;
     wasi_p2_tcp_unref(s, t);
@@ -270,7 +366,7 @@ WASI_P2_FN void wasi_p2_tcp_destroy(wasi_p2_state *s, void *obj) { /* the handle
 
 WASI_P2_FN void wasi_p2_udp_destroy(wasi_p2_state *s, void *obj) {
     wasi_p2_udp *u = (wasi_p2_udp *)obj;
-    if (u->fd >= 0) close(u->fd);
+    if (u->fd >= 0) WASI_P2_CLOSE(u->fd);
     u->fd = -1;
     u->closed = 1;
     wasi_p2_udp_unref(s, u);
@@ -343,10 +439,10 @@ WASI_P2_FN int wasi_p2_sock_read(wasi_p2_state *s, wasi_p2_stream *st, uint8_t *
     *got = 0;
     if (t->recv_shut || t->state == WASI_P2_SS_CLOSED) return WASI_P2_STREAM_CLOSED;
     if (len == 0) return WASI_P2_STREAM_OK;
-    ssize_t n = recv(t->fd, buf, (size_t)len, 0);
+    ssize_t n = WASI_P2_RECV(t->fd, buf, (size_t)len, 0);
     if (n < 0) {
-        if (errno == EAGAIN || errno == EWOULDBLOCK) return WASI_P2_STREAM_OK;
-        wasi_p2_sock_fail(st, errno, "read failed");
+        if (wasi_p2_errno() == EAGAIN || wasi_p2_errno() == EWOULDBLOCK) return WASI_P2_STREAM_OK;
+        wasi_p2_sock_fail(st, wasi_p2_errno(), "read failed");
         return WASI_P2_STREAM_FAILED;
     }
     if (n == 0) return WASI_P2_STREAM_CLOSED;
@@ -371,15 +467,15 @@ WASI_P2_FN int wasi_p2_sock_write(wasi_p2_state *s, wasi_p2_stream *st, const ui
     wasi_p2_tcp *t = ((wasi_p2_sock_stream *)st)->t;
     (void)s;
     while (len) {
-        ssize_t n = send(t->fd, data, (size_t)len, MSG_NOSIGNAL);
+        ssize_t n = WASI_P2_SEND(t->fd, data, (size_t)len, MSG_NOSIGNAL);
         if (n < 0) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) { /* the system buffer is full: wait for room */
+            if (wasi_p2_errno() == EAGAIN || wasi_p2_errno() == EWOULDBLOCK) { /* the system buffer is full: wait for room */
                 struct pollfd p = {t->fd, POLLOUT, 0};
-                poll(&p, 1, 50);
+                WASI_P2_POLL(&p, 1, 50);
                 continue;
             }
-            if (errno == EINTR) continue;
-            wasi_p2_sock_fail(st, errno, "write failed");
+            if (wasi_p2_errno() == EINTR) continue;
+            wasi_p2_sock_fail(st, wasi_p2_errno(), "write failed");
             return WASI_P2_STREAM_FAILED;
         }
         data += n;
@@ -456,11 +552,17 @@ WASI_P2_FN void wasi_sockets_tcp_tcp_socket_start_bind(wasi_p2_state *s, uint32_
     if (t->state != WASI_P2_SS_UNBOUND) rc = WASI_P2_N_INVALID_STATE;
     if (rc == WASI_P2_NOK) rc = wasi_p2_check_bind(s, t->family, &a, WASI_P2_USE_TCP_BIND);
     if (rc == WASI_P2_NOK) {
+#ifdef _WIN32
+        /* SO_REUSEADDR on Windows lets another program take the port; the address is made exclusive instead */
         int on = 1;
-        setsockopt(t->fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof on);
+        WASI_P2_SETSOCKOPT(t->fd, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, &on, sizeof on);
+#else
+        int on = 1;
+        WASI_P2_SETSOCKOPT(t->fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof on);
+#endif
         struct sockaddr_storage ss;
         socklen_t n = wasi_p2_to_sockaddr(&a, &ss);
-        if (bind(t->fd, (struct sockaddr *)&ss, n) < 0) rc = wasi_p2_net_errno(errno);
+        if (bind(t->fd, (struct sockaddr *)&ss, n) < 0) rc = wasi_p2_net_errno(wasi_p2_errno());
         else t->state = WASI_P2_SS_BIND_IN_PROGRESS;
     }
     wasi_p2_net_status(s, comp, retptr, rc);
@@ -487,8 +589,8 @@ WASI_P2_FN void wasi_sockets_tcp_tcp_socket_start_connect(wasi_p2_state *s, uint
     if (rc == WASI_P2_NOK) {
         struct sockaddr_storage ss;
         socklen_t n = wasi_p2_to_sockaddr(&a, &ss);
-        if (connect(t->fd, (struct sockaddr *)&ss, n) < 0 && errno != EINPROGRESS && errno != EWOULDBLOCK) {
-            rc = wasi_p2_net_errno(errno);
+        if (connect(t->fd, (struct sockaddr *)&ss, n) < 0 && wasi_p2_errno() != EINPROGRESS && wasi_p2_errno() != EWOULDBLOCK) {
+            rc = wasi_p2_net_errno(wasi_p2_errno());
             t->state = WASI_P2_SS_CLOSED;
         } else {
             t->state = WASI_P2_SS_CONNECT_IN_PROGRESS;
@@ -507,10 +609,10 @@ WASI_P2_FN void wasi_sockets_tcp_tcp_socket_finish_connect(wasi_p2_state *s, uin
     } else {
         int err = 0;
         socklen_t n = sizeof err;
-        getsockopt(t->fd, SOL_SOCKET, SO_ERROR, &err, &n);
+        WASI_P2_GETSOCKOPT(t->fd, SOL_SOCKET, SO_ERROR, &err, &n);
         if (err) {
             t->state = WASI_P2_SS_CLOSED;
-            rc = wasi_p2_net_errno(err);
+            rc = wasi_p2_net_errno(wasi_p2_sockerr(err));
         } else {
             t->state = WASI_P2_SS_CONNECTED;
         }
@@ -528,7 +630,7 @@ WASI_P2_FN void wasi_sockets_tcp_tcp_socket_start_listen(wasi_p2_state *s, uint3
     wasi_p2_tcp *t = wasi_p2_tcp_get(s, self);
     int rc = WASI_P2_NOK;
     if (t->state != WASI_P2_SS_BOUND) rc = WASI_P2_N_INVALID_STATE;
-    else if (listen(t->fd, (int)t->backlog) < 0) rc = wasi_p2_net_errno(errno);
+    else if (listen(t->fd, (int)t->backlog) < 0) rc = wasi_p2_net_errno(wasi_p2_errno());
     else t->state = WASI_P2_SS_LISTEN_IN_PROGRESS;
     wasi_p2_net_status(s, comp, retptr, rc);
 }
@@ -547,16 +649,16 @@ WASI_P2_FN void wasi_sockets_tcp_tcp_socket_accept(wasi_p2_state *s, uint32_t co
     if (t->state != WASI_P2_SS_LISTENING) {
         rc = WASI_P2_N_INVALID_STATE;
     } else {
-        fd = accept(t->fd, NULL, NULL);
-        if (fd < 0) rc = errno == EAGAIN || errno == EWOULDBLOCK ? WASI_P2_N_WOULD_BLOCK : wasi_p2_net_errno(errno);
-        else if (wasi_p2_set_nonblock(fd) < 0) rc = wasi_p2_net_errno(errno);
+        fd = WASI_P2_ACCEPT(t->fd);
+        if (fd < 0) rc = wasi_p2_errno() == EAGAIN || wasi_p2_errno() == EWOULDBLOCK ? WASI_P2_N_WOULD_BLOCK : wasi_p2_net_errno(wasi_p2_errno());
+        else if (wasi_p2_set_nonblock(fd) < 0) rc = wasi_p2_net_errno(wasi_p2_errno());
     }
     if (rc != WASI_P2_NOK) {
-        if (fd >= 0) close(fd);
+        if (fd >= 0) WASI_P2_CLOSE(fd);
         wasi_p2_net_fail(s, comp, retptr, retptr + 4, rc);
         return;
     }
-    fcntl(fd, F_SETFD, FD_CLOEXEC);
+    WASI_P2_CLOEXEC(fd);
     wasi_p2_tcp *conn = wasi_p2_tcp_make(s, t->family, fd, WASI_P2_SS_CONNECTED);
     wasi_p2_ok(s, comp, retptr);
     wasi_p2_store_u32(s, comp, retptr + 4, wasi_p2_table_new(s, WASI_P2_KIND_TCP_SOCKET, conn, wasi_p2_tcp_destroy));
@@ -576,7 +678,7 @@ WASI_P2_FN void wasi_p2_address_result(wasi_p2_state *s, uint32_t comp, uint32_t
 WASI_P2_FN int wasi_p2_name_of(int fd, int peer, wasi_p2_addr *out) {
     struct sockaddr_storage ss;
     socklen_t n = sizeof ss;
-    if ((peer ? getpeername(fd, (struct sockaddr *)&ss, &n) : getsockname(fd, (struct sockaddr *)&ss, &n)) < 0) return wasi_p2_net_errno(errno);
+    if ((peer ? getpeername(fd, (struct sockaddr *)&ss, &n) : getsockname(fd, (struct sockaddr *)&ss, &n)) < 0) return wasi_p2_net_errno(wasi_p2_errno());
     *out = wasi_p2_from_sockaddr(&ss);
     return WASI_P2_NOK;
 }
@@ -609,7 +711,7 @@ WASI_P2_FN void wasi_sockets_tcp_tcp_socket_set_listen_backlog_size(wasi_p2_stat
     if (rc == WASI_P2_NOK && (t->state == WASI_P2_SS_CONNECT_IN_PROGRESS || t->state == WASI_P2_SS_CONNECTED)) rc = WASI_P2_N_INVALID_STATE;
     if (rc == WASI_P2_NOK) {
         t->backlog = value < WASI_P2_BACKLOG_MAX ? (uint32_t)value : WASI_P2_BACKLOG_MAX;
-        if (t->state == WASI_P2_SS_LISTENING && listen(t->fd, (int)t->backlog) < 0) rc = wasi_p2_net_errno(errno);
+        if (t->state == WASI_P2_SS_LISTENING && listen(t->fd, (int)t->backlog) < 0) rc = wasi_p2_net_errno(wasi_p2_errno());
     }
     wasi_p2_net_status(s, comp, retptr, rc);
 }
@@ -618,11 +720,11 @@ WASI_P2_FN void wasi_sockets_tcp_tcp_socket_set_listen_backlog_size(wasi_p2_stat
 
 WASI_P2_FN int wasi_p2_getopt(int fd, int level, int name, int *value) {
     socklen_t n = sizeof *value;
-    return getsockopt(fd, level, name, value, &n) < 0 ? wasi_p2_net_errno(errno) : WASI_P2_NOK;
+    return WASI_P2_GETSOCKOPT(fd, level, name, value, &n) < 0 ? wasi_p2_net_errno(wasi_p2_errno()) : WASI_P2_NOK;
 }
 
 WASI_P2_FN int wasi_p2_setopt(int fd, int level, int name, int value) {
-    return setsockopt(fd, level, name, &value, sizeof value) < 0 ? wasi_p2_net_errno(errno) : WASI_P2_NOK;
+    return WASI_P2_SETSOCKOPT(fd, level, name, &value, sizeof value) < 0 ? wasi_p2_net_errno(wasi_p2_errno()) : WASI_P2_NOK;
 }
 
 #ifdef TCP_KEEPIDLE
@@ -823,7 +925,7 @@ WASI_P2_FN void wasi_sockets_tcp_tcp_socket_shutdown(wasi_p2_state *s, uint32_t 
         rc = WASI_P2_N_INVALID_STATE;
     } else {
         int how = shutdown_type == 0 ? SHUT_RD : shutdown_type == 1 ? SHUT_WR : SHUT_RDWR;
-        if (shutdown(t->fd, how) < 0 && errno != ENOTCONN) rc = wasi_p2_net_errno(errno);
+        if (shutdown(t->fd, how) < 0 && wasi_p2_errno() != ENOTCONN) rc = wasi_p2_net_errno(wasi_p2_errno());
         else {
             if (how != SHUT_WR) t->recv_shut = 1;
             if (how != SHUT_RD) t->send_shut = 1;
@@ -841,6 +943,16 @@ WASI_P2_FN void wasi_sockets_udp_create_socket_create_udp_socket(wasi_p2_state *
         wasi_p2_net_fail(s, comp, retptr, retptr + 4, rc);
         return;
     }
+#ifdef _WIN32
+    { /* a datagram sent to a closed port would make the next receive fail with a reset; no other system does that */
+#ifndef SIO_UDP_CONNRESET
+#define SIO_UDP_CONNRESET _WSAIOW(IOC_VENDOR, 12)
+#endif
+        BOOL off = FALSE;
+        DWORD ret = 0;
+        WSAIoctl((SOCKET)fd, SIO_UDP_CONNRESET, &off, sizeof off, NULL, 0, &ret, NULL, NULL);
+    }
+#endif
     wasi_p2_udp *u = (wasi_p2_udp *)calloc(1, sizeof *u);
     if (!u) s->trap(s, "out of memory");
     u->fd = fd, u->family = (int)address_family, u->state = WASI_P2_SS_UNBOUND, u->refs = 1;
@@ -868,7 +980,7 @@ WASI_P2_FN void wasi_sockets_udp_udp_socket_start_bind(wasi_p2_state *s, uint32_
     if (rc == WASI_P2_NOK) {
         struct sockaddr_storage ss;
         socklen_t n = wasi_p2_to_sockaddr(&a, &ss);
-        if (bind(u->fd, (struct sockaddr *)&ss, n) < 0) rc = wasi_p2_net_errno(errno);
+        if (bind(u->fd, (struct sockaddr *)&ss, n) < 0) rc = wasi_p2_net_errno(wasi_p2_errno());
         else u->state = WASI_P2_SS_BIND_IN_PROGRESS;
     }
     wasi_p2_net_status(s, comp, retptr, rc);
@@ -1008,11 +1120,11 @@ WASI_P2_FN void wasi_sockets_udp_incoming_datagram_stream_receive(wasi_p2_state 
     while (rc == WASI_P2_NOK && count < max_results) {
         struct sockaddr_storage ss;
         socklen_t n = sizeof ss;
-        ssize_t r = recvfrom(u->fd, buf, sizeof buf, 0, (struct sockaddr *)&ss, &n);
+        ssize_t r = WASI_P2_RECVFROM(u->fd, buf, sizeof buf, 0, (struct sockaddr *)&ss, &n);
         if (r < 0) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) break;
+            if (wasi_p2_errno() == EAGAIN || wasi_p2_errno() == EWOULDBLOCK) break;
             if (count) break;
-            rc = wasi_p2_net_errno(errno);
+            rc = wasi_p2_net_errno(wasi_p2_errno());
             break;
         }
         wasi_p2_addr src = wasi_p2_from_sockaddr(&ss);
@@ -1100,9 +1212,9 @@ WASI_P2_FN void wasi_sockets_udp_outgoing_datagram_stream_send(wasi_p2_state *s,
         if (e == WASI_P2_NOK) {
             struct sockaddr_storage ss;
             socklen_t n = wasi_p2_to_sockaddr(&target, &ss);
-            if (sendto(u->fd, data, dlen, MSG_NOSIGNAL, (struct sockaddr *)&ss, n) < 0) {
-                if (errno == EAGAIN || errno == EWOULDBLOCK) would_block = 1;
-                else e = wasi_p2_net_errno(errno);
+            if (WASI_P2_SENDTO(u->fd, data, dlen, MSG_NOSIGNAL, (struct sockaddr *)&ss, n) < 0) {
+                if (wasi_p2_errno() == EAGAIN || wasi_p2_errno() == EWOULDBLOCK) would_block = 1;
+                else e = wasi_p2_net_errno(wasi_p2_errno());
             }
         }
         if (would_block) break; /* the system cannot take it now: the rest is not sent */
@@ -1183,6 +1295,7 @@ WASI_P2_FN void wasi_sockets_ip_name_lookup_resolve_addresses(wasi_p2_state *s, 
             memset(&hints, 0, sizeof hints);
             hints.ai_family = AF_UNSPEC;
             hints.ai_socktype = SOCK_STREAM;
+            wasi_p2_net_start();
             int g = getaddrinfo(name, NULL, &hints, &res);
             if (g != 0) {
                 rc = g == EAI_AGAIN ? WASI_P2_N_TEMPORARY_RESOLVER_FAILURE : g == EAI_FAIL ? WASI_P2_N_PERMANENT_RESOLVER_FAILURE : WASI_P2_N_NAME_UNRESOLVABLE;

@@ -29,11 +29,12 @@ from wasmext.p2.wasi_p2_core import (
     table_get,
 )
 
-pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="the host of the sockets is POSIX only")
-
 C_P2 = Path(wasmext.__file__).parent / "c" / "p2"
 DRIVER = Path(__file__).parent / "data" / "wasi_p2_sockets_driver.c"
 CC = shutil.which("cc") or shutil.which("gcc") or shutil.which("clang")
+LIBS: list[str] = (
+    ["-lws2_32", "-lbcrypt"] if sys.platform == "win32" else []
+)  # Winsock and the random bytes of the core
 
 SCENARIOS = ["main", "reset", "denied", "udp_trap", "bad_handle"]
 R = 100
@@ -541,9 +542,10 @@ def c_output(scenario: str, binary: Path) -> str:
 def driver(tmp_path_factory: pytest.TempPathFactory) -> Path:
     if CC is None:
         pytest.skip("no C compiler")
-    binary = tmp_path_factory.mktemp("p2sk") / "driver"
+    binary = tmp_path_factory.mktemp("p2sk") / ("driver.exe" if sys.platform == "win32" else "driver")
     subprocess.run(
-        [CC, "-std=gnu11", "-Wall", "-Wextra", "-Werror", "-I", str(C_P2), str(DRIVER), "-o", str(binary)], check=True
+        [CC, "-std=gnu11", "-Wall", "-Wextra", "-Werror", "-I", str(C_P2), str(DRIVER), "-o", str(binary), *LIBS],
+        check=True,
     )
     return binary
 

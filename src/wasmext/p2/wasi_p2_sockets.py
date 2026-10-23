@@ -1,4 +1,4 @@
-"""wasi:sockets (58 imports): `network`, `instance-network`, `ip-name-lookup`, `tcp`, `tcp-create-socket`, `udp`, `udp-create-socket` (the twin of `c/p2/wasi_p2_sockets.h`). POSIX only.
+"""wasi:sockets (58 imports): `network`, `instance-network`, `ip-name-lookup`, `tcp`, `tcp-create-socket`, `udp`, `udp-create-socket` (the twin of `c/p2/wasi_p2_sockets.h`). POSIX and Windows (Winsock).
 
 **Nothing is allowed unless the caller says so** (as in Wasmtime): `Host(network=True)` allows every address and the lookup of names; `Host(socket_addr_check=f)` decides for each bind or connect
 (`f(ip_text, port, use)`, `use` is "tcp-bind", "tcp-connect", "udp-bind", "udp-connect" or "udp-outgoing"), `Host(allow_ip_name_lookup=...)` for names. A refusal is `access-denied`.
@@ -13,7 +13,7 @@ IPv6 port at 4, flow-info at 8, eight u16 at 12, scope-id at 28; as a flat argum
 at 8; `result<u32>`: 8 bytes, at 4; `result<bool | u8>`: 2 bytes, at 1. `result<option<ip-address>>`: 22 bytes, option tag at 2, `ip-address` tag at 4, data at 6. A datagram in a list: `incoming-datagram` 40 bytes (data at 0,
 address at 8), `outgoing-datagram` 44 bytes (data at 0, option tag at 8, address at 12).
 
-Not done: Windows; the properties of a listener are not copied to the sockets it accepts (the system gives its own); a write to a socket waits when the system buffer is full
+Not done: the properties of a listener are not copied to the sockets it accepts (the system gives its own); a write to a socket waits when the system buffer is full
 (`check-write` is a fixed amount); the lookup of a name is done at once and blocks (names with characters outside letters, digits, `.`, `-`, `_` are `invalid-argument`; no IDNA).
 """
 
@@ -73,7 +73,7 @@ _CODE = {name: i for i, name in enumerate(NETWORK_ERRORS)}
 _ERRNO = {
     errno.EACCES: "access-denied", errno.EPERM: "access-denied", errno.EAFNOSUPPORT: "not-supported", errno.EOPNOTSUPP: "not-supported",
     errno.ENOPROTOOPT: "not-supported", errno.EPROTONOSUPPORT: "not-supported", errno.ENOMEM: "out-of-memory", errno.ENOBUFS: "out-of-memory",
-    errno.ETIMEDOUT: "timeout", errno.EALREADY: "concurrency-conflict", errno.EAGAIN: "would-block", errno.EINPROGRESS: "would-block",
+    errno.ETIMEDOUT: "timeout", errno.EALREADY: "concurrency-conflict", errno.EAGAIN: "would-block", errno.EWOULDBLOCK: "would-block", errno.EINPROGRESS: "would-block",
     errno.EMFILE: "new-socket-limit", errno.ENFILE: "new-socket-limit", errno.EADDRNOTAVAIL: "address-not-bindable", errno.EADDRINUSE: "address-in-use",
     errno.EHOSTUNREACH: "remote-unreachable", errno.EHOSTDOWN: "remote-unreachable", errno.ENETUNREACH: "remote-unreachable",
     errno.ENETDOWN: "remote-unreachable", errno.ECONNREFUSED: "connection-refused", errno.ECONNRESET: "connection-reset", errno.EPIPE: "connection-reset",
@@ -251,7 +251,9 @@ def _readable(sock: socket.socket) -> bool:
 
 
 def _writable(sock: socket.socket) -> bool:
-    return bool(select.select([], [sock], [], 0)[1])
+    _, writable, failed = select.select([], [sock], [sock], 0)
+    # on Windows a connection that failed is not writable but in the third set (the system call that finishes it reports the error)
+    return bool(writable) or (sys.platform == "win32" and bool(failed))
 
 
 def _network(host: Host, handle: int) -> None:
@@ -553,8 +555,13 @@ def wasi_sockets_tcp_tcp_socket_set_listen_backlog_size(
     _status(host, comp, retptr, action)
 
 
+_WINDOWS_TCP_OPTIONS = {"TCP_KEEPIDLE": 3, "TCP_KEEPCNT": 16, "TCP_KEEPINTVL": 17}
+
+
 def _sockopt(sock: socket.socket, level: int, name: str, alt: str | None = None) -> tuple[int, int]:
     option = getattr(socket, name, None) if hasattr(socket, name) else (getattr(socket, alt, None) if alt else None)
+    if option is None and sys.platform == "win32":
+        option = _WINDOWS_TCP_OPTIONS.get(name)  # Windows 10 1709 has them; Python has the names from 3.12
     if option is None:
         raise NetError("not-supported")
     return level, option
@@ -919,6 +926,8 @@ def wasi_sockets_udp_incoming_datagram_stream_receive(
             except BlockingIOError:
                 break
             except OSError as exc:
+                if isinstance(exc, ConnectionResetError) and sys.platform == "win32":
+                    continue  # Windows tells a receive about an earlier datagram that reached a closed port (no other system does)
                 if received:
                     break
                 raise _from_oserror(exc) from exc

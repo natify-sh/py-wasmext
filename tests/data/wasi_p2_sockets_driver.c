@@ -28,8 +28,12 @@ static uint32_t u32(uint32_t off) { return wasi_p2_load_u32(&s, 0, off); }
 static uint16_t u16(uint32_t off) { return wasi_p2_load_u16(&s, 0, off); }
 static void clear(void) { memset(memory + R, 0, 64); }
 static void nap(void) {
+#ifdef _WIN32
+    Sleep(1);
+#else
     struct timespec ts = {0, 1000000};
     nanosleep(&ts, NULL);
+#endif
 }
 
 /* the flat form of an address: tag and eleven numbers */
@@ -303,7 +307,7 @@ int main(int argc, char **argv) {
         settle_accept(srv);
         uint32_t conn = u32(R + 4);
         struct linger lg = {1, 0};
-        setsockopt(wasi_p2_tcp_get(&s, conn)->fd, SOL_SOCKET, SO_LINGER, &lg, sizeof lg);
+        setsockopt(wasi_p2_tcp_get(&s, conn)->fd, SOL_SOCKET, SO_LINGER, (const char *)&lg, sizeof lg);
         wasi_sockets_tcp_tcp_socket_drop(&s, conn); /* closing with linger 0 sends a reset */
         read_some("read after a reset", cin);
         uint32_t err = u32(R + 8);

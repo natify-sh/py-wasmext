@@ -480,11 +480,11 @@ def generate_shared(
     C(f"    {last}_t *m = ({last}_t *)calloc(1, sizeof *m);")
     C("    if (m == NULL) { *error = 12; return NULL; }")
     if uses_wasi:
-        C("    wasmext_wasi_config wasi;")
+        C("    fusedwasi_p1_config wasi;")
         C("    memset(&wasi, 0, sizeof wasi);")
         C("    char *args = NULL, *env = NULL;")
         C("    char **hosts = NULL;")
-        C("    wasmext_wasi_preopen *preopens = NULL;")
+        C("    fusedwasi_p1_preopen *preopens = NULL;")
         C(f"    wasi.program = {_c_string(last)};")
         C("    size_t ndirs = config != NULL ? config->ndirs : 0;")
         C("    if (config != NULL) {")
@@ -498,7 +498,7 @@ def generate_shared(
         C("            wasi.env = env; wasi.env_size = size; wasi.envc = (uint32_t)config->nenv;")
         C("        }")
         C("        if (ndirs > 0) {")
-        C("            preopens = (wasmext_wasi_preopen *)calloc(ndirs, sizeof *preopens);")
+        C("            preopens = (fusedwasi_p1_preopen *)calloc(ndirs, sizeof *preopens);")
         C("            hosts = (char **)calloc(ndirs, sizeof(char *));")
         C("            for (size_t i = 0; preopens != NULL && hosts != NULL && i < ndirs; i++) {")
         C('                const char *item = config->dirs[i], *sep = strstr(item, "::");')
@@ -530,11 +530,13 @@ def generate_shared(
         C("    wasi.user = m;")
         C("    size_t bad;")
         C("    int err = 0;")
-        C("    m->core.wasi = wasmext_wasi_create(&wasi, &err, &bad);")
+        C("    m->core.wasi = fusedwasi_p1_create(&wasi, &err, &bad);")
         C("    free(args); free(env); free(preopens);")
         C("    if (hosts != NULL) { for (size_t i = 0; i < ndirs; i++) free(hosts[i]); free(hosts); }")
         C("    if (m->core.wasi == NULL) { *error = err; free(m); return NULL; }")
-        C(f"    wasmext_wasi_bind(m->core.wasi, w2c_{prefix}_memory(&m->core.inst));")
+        C(
+            f"    {{ wasm_rt_memory_t *m_ = w2c_{prefix}_memory(&m->core.inst); fusedwasi_p1_bind(m->core.wasi, &m_->data, &m_->size); }}"
+        )
         C(f"    {last}_wasi_bind(&m->core);")
         for k, (_module, _field, _func, is_wasi, _host, _slot) in enumerate(imports):
             if is_wasi:
@@ -549,7 +551,7 @@ def generate_shared(
     C("    if (m == NULL) return;")
     C(f"    {last}_glue_free(&m->core);")
     if uses_wasi:
-        C("    wasmext_wasi_destroy(m->core.wasi);")
+        C("    fusedwasi_p1_destroy(m->core.wasi);")
     C("    free(m);")
     C("}")
     C("")
@@ -959,7 +961,7 @@ def generate_shared(
                 "    /* the call in which the program ends (proc_exit, proc_raise) unwound with the code of a host function; it is the end that it answers */"
             )
             C(
-                "    if (trapped == (int)WASMEXT_TRAP_HOST && m->core.wasi != NULL && (m->core.wasi->finished == WASI_END_EXIT || m->core.wasi->finished == WASI_END_SIGNAL))"
+                "    if (trapped == (int)WASMEXT_TRAP_HOST && m->core.wasi != NULL && (m->core.wasi->finished == FUSEDWASI_P1_END_EXIT || m->core.wasi->finished == FUSEDWASI_P1_END_SIGNAL))"
             )
             C("        trapped = (int)WASMEXT_TRAP_ENDED;")
         C("    if (trapped) return trapped;")

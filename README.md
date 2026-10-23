@@ -192,7 +192,7 @@ What is there, of the 46 calls of the specification (WASI 0.1):
   specification allows. WASI 0.2 and 0.3 (components) are not supported: build for `wasm32-wasip1`.
 - A symbolic link is made only with a relative target, and one that leads out of the directory is not followed.
 - **How files are reached.** The calls go straight to the system, with no interpreter in between: `openat` on POSIX, the Win32 API
-  (wide-character functions) on Windows. `-DWASMEXT_WASI_PYTHON_FS=1` makes them go through Python (`os`) instead, as a way to test.
+  (wide-character functions) on Windows. `-DFUSEDWASI_P1_HOST_FS=1` makes them go through Python (`os`) instead, as a way to test.
 - **Tested** against the programs of the official [wasi-testsuite](https://github.com/WebAssembly/wasi-testsuite) for WASI 0.1 (72 of
   them: C, Rust, AssemblyScript), all passing on Linux (both ways of reaching files), macOS and Windows in CI (`tests/wasi_testsuite/`);
   with the files through Python on Windows, `symlink_filestat` is expected to fail before Python 3.13, which cannot set the times of a link. A real program that

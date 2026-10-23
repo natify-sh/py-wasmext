@@ -36,7 +36,7 @@ def prepare(program: Path) -> str:
         os.environ.setdefault("_CL_", f"/Od /GL- {os.environ.get('WASMEXT_TESTSUITE_CFLAGS', '')}".strip())
     else:
         os.environ.setdefault("CFLAGS", f"-O0 {os.environ.get('WASMEXT_TESTSUITE_CFLAGS', '')}".strip())
-    # WASMEXT_TESTSUITE_CFLAGS: more flags, such as -DWASMEXT_WASI_PYTHON_FS=1 for the files through Python (on Windows, where the
+    # WASMEXT_TESTSUITE_CFLAGS: more flags, such as -DFUSEDWASI_P1_HOST_FS=1 for the files through Python (on Windows, where the
     # files are native, as well as elsewhere)
     from wasmext import _importer  # pyright: ignore[reportPrivateUsage]
 

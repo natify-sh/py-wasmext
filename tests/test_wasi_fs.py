@@ -97,7 +97,7 @@ def probe(request: pytest.FixtureRequest) -> Any:
     and as the shared library used through ctypes (the system's files)."""
     if request.param == "ctypes":
         return request.getfixturevalue("build_ctypes")(DATA / "wasi_fs_probe.wat", "wasi_fs_probe_ctypes")
-    defines = ("WASMEXT_WASI_PYTHON_FS=1",) if request.param == "python" else ()
+    defines = ("FUSEDWASI_P1_HOST_FS=1",) if request.param == "python" else ()
     return request.getfixturevalue("build_extension")(
         DATA / "wasi_fs_probe.wat", f"wasi_fs_probe_{request.param}", defines=defines
     )

@@ -137,7 +137,7 @@ toml = [
 [[package]]
 name = "fusedwasi"
 version = "0.0.0"
-source = { git = "https://github.com/natify-sh/fusedwasi?branch=wasi-p2#f7436d84e292d46b63a70f0a2994c74184fc4890" }
+source = { git = "https://github.com/natify-sh/fusedwasi?branch=wasi-p2#c1495671c5832d12b13d363ceea9a24e5d0491de" }
 
 [[package]]
 name = "iniconfig"
@@ -400,13 +400,13 @@ wheels = [
 name = "wasmext"
 source = { editable = "." }
 dependencies = [
+    { name = "fusedwasi" },
     { name = "setuptools" },
     { name = "wabt-package" },
 ]
 
 [package.dev-dependencies]
 dev = [
-    { name = "fusedwasi" },
     { name = "pyright" },
     { name = "pytest" },
     { name = "pytest-cov" },
@@ -420,13 +420,13 @@ wasm = [
 
 [package.metadata]
 requires-dist = [
+    { name = "fusedwasi", git = "https://github.com/natify-sh/fusedwasi?branch=wasi-p2" },
     { name = "setuptools", specifier = ">=84" },
     { name = "wabt-package", specifier = ">=1.0.42.0" },
 ]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "fusedwasi", git = "https://github.com/natify-sh/fusedwasi?branch=wasi-p2" },
     { name = "pyright", specifier = ">=1.1.400" },
     { name = "pytest", specifier = ">=9.1.1" },
     { name = "pytest-cov", specifier = ">=6" },

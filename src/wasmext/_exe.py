@@ -1,7 +1,7 @@
 """A native executable from a WebAssembly command: the first host of the C layers that is not Python (item 10 of DESIGN.md, stage 5).
 
 `build(module.wasm, program)` makes the C of the module with wasm2c (the way `natify` does), writes a `main()` that uses the glue of the module
-(`<name>_glue.h`) and the core of WASI (`wasi_core.h`) with no Python in it, and compiles and links all of it. The program runs the `_start` of the
+(`<name>_glue.h`) and the core of WASI (`wasi_p1_core.h`) with no Python in it, and compiles and links all of it. The program runs the `_start` of the
 module: `--env NAME=VALUE` and `--dir HOST::GUEST` (both may be repeated) give it an environment and the directories it may reach, then comes the path of the
 module (its name for the program, `argv[0]`), then the arguments. It ends with the code of `proc_exit`, or 134 on a trap (what the Python runner of the
 test suite answers too). Only the imports of WASI are served: another import is refused when the program is made.
@@ -159,9 +159,9 @@ int main(int argc, char **argv) {
     args[nargs++] = program;
     for (int k = i + 1; k < argc; k++) args[nargs++] = argv[k];
 
-    wasmext_wasi_config config;
+    fusedwasi_p1_config config;
     memset(&config, 0, sizeof config);
-    wasmext_wasi_preopen *preopens = (wasmext_wasi_preopen *)calloc((size_t)ndirs + 1, sizeof *preopens);
+    fusedwasi_p1_preopen *preopens = (fusedwasi_p1_preopen *)calloc((size_t)ndirs + 1, sizeof *preopens);
     for (int k = 0; k < ndirs; k++) {
         char *separator = strstr(dirs[k], "::");
         size_t length = strlen(dirs[k]);
@@ -197,22 +197,22 @@ int main(int argc, char **argv) {
     wasm_rt_init();
     int error = 0;
     size_t bad = (size_t)-1;
-    instance.wasi = wasmext_wasi_create(&config, &error, &bad);
+    instance.wasi = fusedwasi_p1_create(&config, &error, &bad);
     if (instance.wasi == NULL) {
         if (bad != (size_t)-1) fprintf(stderr, "%s: --dir %s: %s\n", argv[0], dirs[bad], strerror(error));
         else fprintf(stderr, "%s: cannot set up WASI: %s\n", argv[0], strerror(error));
         return 2;
     }
-    wasmext_wasi_bind(instance.wasi, w2c_@PREFIX@_memory(&instance.inst));
+    { wasm_rt_memory_t *m_ = w2c_@PREFIX@_memory(&instance.inst); fusedwasi_p1_bind(instance.wasi, &m_->data, &m_->size); }
     @LAST@_wasi_bind(&instance);
     int trapped = @LAST@_glue_instantiate(&instance);
     if (!trapped) {
         @LAST_U@_START(&instance.inst, &trapped);
     }
     int code = 0;
-    if (ended.how == WASI_END_EXIT) {
+    if (ended.how == FUSEDWASI_P1_END_EXIT) {
         code = (int)ended.value;
-    } else if (ended.how == WASI_END_SIGNAL) {
+    } else if (ended.how == FUSEDWASI_P1_END_SIGNAL) {
         fprintf(stderr, "%s: the program was ended by the signal %u\n", argv[0], (unsigned)ended.value);
         code = 134;
     } else if (trapped) {
@@ -221,7 +221,7 @@ int main(int argc, char **argv) {
     }
     fflush(stdout);
     @LAST@_glue_free(&instance);
-    wasmext_wasi_destroy(instance.wasi);
+    fusedwasi_p1_destroy(instance.wasi);
     return code;
 }
 """

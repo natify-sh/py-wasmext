@@ -1,16 +1,16 @@
-/* WASI 0.1 for a host that is Python: the configuration `wasi=` (a dict) turned into the plain-C `wasmext_wasi_config` of wasi_core.h,
+/* WASI 0.1 for a host that is Python: the configuration `wasi=` (a dict) turned into the plain-C `fusedwasi_p1_config` of wasi_p1_core.h,
    and the hooks of the core (the standard streams as Python objects, the functions `clock` and `random`, the sleep that lets a signal
-   through, the exceptions of proc_exit and proc_raise). The glue of the extension includes it after wasi_preview1.h / wasi_unstable.h.
-   And, until the files of Windows are native (stage 3 of the plan), the file backend through `os`: WASMEXT_WASI_PYTHON_FS.
+   through, the exceptions of proc_exit and proc_raise). The glue of the extension includes it after wasi_p1.h / wasi_p1_unstable.h.
+   And, until the files of Windows are native (stage 3 of the plan), the file backend through `os`: FUSEDWASI_P1_HOST_FS.
 
    The Python objects are in `wasmext_wasi_py`, which the core knows only as `user`. A hook that fails with an exception of Python
-   keeps it where Python keeps it, in the state of the thread, and answers WASI_HOOK_TRAP; an OSError becomes an errno of WASI. */
+   keeps it where Python keeps it, in the state of the thread, and answers FUSEDWASI_P1_HOOK_TRAP; an OSError becomes an errno of WASI. */
 #ifndef WASMEXT_WASI_PYTHON_H
 #define WASMEXT_WASI_PYTHON_H
 
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
-#include "wasi_core.h"
+#include "wasi_p1_core.h"
 
 typedef struct {
     PyObject *stream[3];  /* what the caller gave for stdin, stdout, stderr (NULL: sys.stdin, sys.stdout, sys.stderr) */
@@ -33,19 +33,19 @@ static inline PyObject *wasi_module_of(PyObject **slot, const char *name) {
 
 /* ---- errors of Python ------------------------------------------------------------------------------------------------ */
 
-/* An OSError becomes the errno of WASI that its errno says (and is cleared); anything else is WASI_HOOK_TRAP, with the exception still set. */
+/* An OSError becomes the errno of WASI that its errno says (and is cleared); anything else is FUSEDWASI_P1_HOOK_TRAP, with the exception still set. */
 static inline int wasi_python_status(void) {
     if (PyErr_ExceptionMatches(PyExc_BrokenPipeError)) {
         PyErr_Clear();
-        return WASI_E_PIPE;
+        return FUSEDWASI_P1_E_PIPE;
     }
     if (PyErr_ExceptionMatches(PyExc_OSError)) {
         PyObject *type, *value, *traceback;
         PyErr_Fetch(&type, &value, &traceback);
         PyErr_NormalizeException(&type, &value, &traceback);
-        uint32_t code = WASI_E_IO;
+        uint32_t code = FUSEDWASI_P1_E_IO;
         PyObject *number = value ? PyObject_GetAttrString(value, "errno") : NULL;
-        if (number != NULL && PyLong_Check(number)) code = wasi_errno((int)PyLong_AsLong(number));
+        if (number != NULL && PyLong_Check(number)) code = fusedwasi_p1_errno((int)PyLong_AsLong(number));
         PyErr_Clear();
         Py_XDECREF(number);
         Py_XDECREF(type);
@@ -53,10 +53,10 @@ static inline int wasi_python_status(void) {
         Py_XDECREF(traceback);
         return (int)code;
     }
-    return WASI_HOOK_TRAP;
+    return FUSEDWASI_P1_HOOK_TRAP;
 }
 
-static inline uint32_t wasi_python_error(int *trapped) { return wasi_hook_status(wasi_python_status(), trapped); }
+static inline uint32_t wasi_python_error(int *trapped) { return fusedwasi_p1_hook_status(wasi_python_status(), trapped); }
 
 /* ---- the standard streams ---------------------------------------------------------------------------------------------- */
 
@@ -267,13 +267,13 @@ static int wasi_py_random(void *user, uint8_t *buf, size_t size) {
 static int wasi_py_sleep(void *user, uint64_t ns) {
     (void)user;
     uint64_t start;
-    if (wasi_clock_system(1, &start) != 0) {
+    if (fusedwasi_p1_clock_system(1, &start) != 0) {
         PyErr_SetString(PyExc_OSError, "wasi: the monotonic clock cannot be read");
         return wasi_python_status();
     }
     for (;;) {
         uint64_t now;
-        if (wasi_clock_system(1, &now) != 0) return 0;
+        if (fusedwasi_p1_clock_system(1, &now) != 0) return 0;
         uint64_t spent = now - start;
         if (spent >= ns) return 0;
         uint64_t left = ns - spent, slice = left < 100000000ull ? left : 100000000ull;
@@ -289,7 +289,7 @@ static int wasi_py_sleep(void *user, uint64_t ns) {
         }
 #endif
         Py_END_ALLOW_THREADS
-        if (PyErr_CheckSignals() < 0) return WASI_HOOK_TRAP;
+        if (PyErr_CheckSignals() < 0) return FUSEDWASI_P1_HOOK_TRAP;
     }
 }
 
@@ -302,7 +302,7 @@ static const char *const wasi_signal_names[31] = {
 /* the program is over by proc_exit (WasiExit, with .code) or by proc_raise (WasiSignal, with .signal and .name): raised in the call */
 static void wasi_py_end(void *user, int how, uint32_t value) {
     wasmext_wasi_py *p = (wasmext_wasi_py *)user;
-    if (how == WASI_END_EXIT) {
+    if (how == FUSEDWASI_P1_END_EXIT) {
         PyObject *exc = PyObject_CallFunction(p->exit_type, "I", value);
         if (exc != NULL) {
             PyObject *number = PyLong_FromUnsignedLong(value);
@@ -334,18 +334,18 @@ typedef struct {
     size_t args_size, env_size;
     uint32_t argc, envc;
     PyObject *preopens, *readonly;  /* until the preopens are made */
-    wasmext_wasi_preopen *items;    /* the preopens, made: names and paths are new memory */
+    fusedwasi_p1_preopen *items;    /* the preopens, made: names and paths are new memory */
     size_t nitems;
 } wasi_py_options;
 
 static inline void wasi_py_options_free(wasi_py_options *o) {
-    WASI_FREE(o->args);
-    WASI_FREE(o->env);
+    FUSEDWASI_P1_FREE(o->args);
+    FUSEDWASI_P1_FREE(o->env);
     for (size_t i = 0; i < o->nitems; i++) {
-        WASI_FREE((char *)o->items[i].name);
-        WASI_FREE((char *)o->items[i].host);
+        FUSEDWASI_P1_FREE((char *)o->items[i].name);
+        FUSEDWASI_P1_FREE((char *)o->items[i].host);
     }
-    WASI_FREE(o->items);
+    FUSEDWASI_P1_FREE(o->items);
     Py_CLEAR(o->preopens);
     Py_CLEAR(o->readonly);
 }
@@ -375,7 +375,7 @@ static inline int wasi_pack_strings(PyObject *seq, char **out, size_t *size, uin
         }
         total += len + 1;
     }
-    char *buf = (char *)WASI_MALLOC(total > 0 ? (size_t)total : 1);
+    char *buf = (char *)FUSEDWASI_P1_MALLOC(total > 0 ? (size_t)total : 1);
     if (buf == NULL) {
         Py_DECREF(list);
         PyErr_NoMemory();
@@ -465,7 +465,7 @@ static inline int wasi_setup_preopens(wasmext_wasi_py *p, wasi_py_options *o) {
     PyObject *items = ospath ? PyMapping_Items(o->preopens) : NULL;
     int rc = -1;
     if (items == NULL) goto done;
-    o->items = (wasmext_wasi_preopen *)WASI_CALLOC((size_t)PyList_Size(items) + 1, sizeof(wasmext_wasi_preopen));
+    o->items = (fusedwasi_p1_preopen *)FUSEDWASI_P1_CALLOC((size_t)PyList_Size(items) + 1, sizeof(fusedwasi_p1_preopen));
     if (o->items == NULL) {
         PyErr_NoMemory();
         goto done;
@@ -487,10 +487,10 @@ static inline int wasi_setup_preopens(wasmext_wasi_py *p, wasi_py_options *o) {
         Py_XDECREF(isdir);
         int made = 0;
         if (root != NULL && shown != NULL) {
-            wasmext_wasi_preopen *item = &o->items[o->nitems];
-            item->name = wasi_copy(PyBytes_AsString(shown), (size_t)PyBytes_Size(shown));
+            fusedwasi_p1_preopen *item = &o->items[o->nitems];
+            item->name = fusedwasi_p1_copy(PyBytes_AsString(shown), (size_t)PyBytes_Size(shown));
             item->name_len = (size_t)PyBytes_Size(shown);
-            item->host = wasi_copy(PyBytes_AsString(root), strlen(PyBytes_AsString(root)));
+            item->host = fusedwasi_p1_copy(PyBytes_AsString(root), strlen(PyBytes_AsString(root)));
             o->nitems++;  /* counted before the check, so that both are freed */
             if (item->name == NULL || item->host == NULL) {
                 PyErr_NoMemory();
@@ -522,7 +522,7 @@ done:
 static inline int wasi_apply_option(wasmext_wasi_py *p, wasi_py_options *o, const char *name, PyObject *value) {
     if (strcmp(name, "args") == 0) {
         if (value == Py_None) {  /* none, which is not the name of the program */
-            o->args = (char *)WASI_MALLOC(1);
+            o->args = (char *)FUSEDWASI_P1_MALLOC(1);
             if (o->args == NULL) return (PyErr_NoMemory(), -1);
             o->args_size = 0;
             o->argc = 0;
@@ -576,7 +576,7 @@ static inline int wasi_apply_option(wasmext_wasi_py *p, wasi_py_options *o, cons
 
 /* ---- the state of the extension: what the glue calls --------------------------------------------------------------------- */
 
-static inline int wasmext_wasi_traverse(wasmext_wasi *w, visitproc visit, void *arg) {
+static inline int wasmext_wasi_traverse(fusedwasi_p1_state *w, visitproc visit, void *arg) {
     wasmext_wasi_py *p = WASI_PY(w);
     for (int i = 0; i < 3; i++) Py_VISIT(p->stream[i]);
     Py_VISIT(p->exit_type);
@@ -606,28 +606,28 @@ static inline void wasi_py_clear(wasmext_wasi_py *p) {
     Py_CLEAR(p->stdin_rest);
 }
 
-static inline void wasmext_wasi_clear(wasmext_wasi *w) { wasi_py_clear(WASI_PY(w)); }
+static inline void wasmext_wasi_clear(fusedwasi_p1_state *w) { wasi_py_clear(WASI_PY(w)); }
 
-static inline void wasmext_wasi_free(wasmext_wasi *w) {
+static inline void wasmext_wasi_free(fusedwasi_p1_state *w) {
     if (w == NULL) return;
     wasmext_wasi_py *p = WASI_PY(w);
     wasi_py_clear(p);
-    wasmext_wasi_destroy(w);
-    WASI_FREE(p);
+    fusedwasi_p1_destroy(w);
+    FUSEDWASI_P1_FREE(p);
 }
 
 /* `config` is None or a dict with the keys args, env, stdin, stdout, stderr, clock, random, preopens, readonly; the exceptions are
    those that proc_exit and proc_raise raise; `program` is argv[0] when the config has no args. NULL with an exception set. */
-static inline wasmext_wasi *wasmext_wasi_new(PyObject *config, PyObject *exit_type, PyObject *signal_type, PyObject *ended_type,
+static inline fusedwasi_p1_state *wasmext_wasi_new(PyObject *config, PyObject *exit_type, PyObject *signal_type, PyObject *ended_type,
                                              const char *program) {
-    wasmext_wasi_py *p = (wasmext_wasi_py *)WASI_CALLOC(1, sizeof(wasmext_wasi_py));
+    wasmext_wasi_py *p = (wasmext_wasi_py *)FUSEDWASI_P1_CALLOC(1, sizeof(wasmext_wasi_py));
     if (p == NULL) {
         PyErr_NoMemory();
         return NULL;
     }
     wasi_py_options o;
     memset(&o, 0, sizeof o);
-    wasmext_wasi *w = NULL;
+    fusedwasi_p1_state *w = NULL;
     Py_INCREF(exit_type);
     p->exit_type = exit_type;
     Py_INCREF(signal_type);
@@ -652,7 +652,7 @@ static inline wasmext_wasi *wasmext_wasi_new(PyObject *config, PyObject *exit_ty
         if (rc < 0) goto fail;
     }
     if (wasi_setup_preopens(p, &o) < 0) goto fail;
-    wasmext_wasi_config cfg;
+    fusedwasi_p1_config cfg;
     memset(&cfg, 0, sizeof cfg);
     cfg.args = o.args;
     cfg.args_size = o.args_size;
@@ -672,7 +672,7 @@ static inline wasmext_wasi *wasmext_wasi_new(PyObject *config, PyObject *exit_ty
     cfg.user = p;
     int err = 0;
     size_t bad = (size_t)-1;
-    w = wasmext_wasi_create(&cfg, &err, &bad);
+    w = fusedwasi_p1_create(&cfg, &err, &bad);
     if (w == NULL) {
         errno = err;
         if (bad != (size_t)-1) PyErr_SetFromErrnoWithFilename(PyExc_OSError, o.items[bad].host);
@@ -684,23 +684,23 @@ static inline wasmext_wasi *wasmext_wasi_new(PyObject *config, PyObject *exit_ty
 fail:
     wasi_py_options_free(&o);
     wasi_py_clear(p);
-    WASI_FREE(p);
+    FUSEDWASI_P1_FREE(p);
     return NULL;
 }
 
 /* 0, or -1 with an exception set: the program is over */
-static inline int wasmext_wasi_check(wasmext_wasi *w) {
+static inline int wasmext_wasi_check(fusedwasi_p1_state *w) {
     if (w == NULL || !w->finished) return 0;
     PyObject *ended = WASI_PY(w)->ended_type;
     switch (w->finished) {
-    case WASI_END_EXIT: PyErr_Format(ended, "the program has ended: proc_exit(%u)", (unsigned)w->end_value); break;
-    case WASI_END_SIGNAL: PyErr_Format(ended, "the program has ended: proc_raise(%u)", (unsigned)w->end_value); break;
+    case FUSEDWASI_P1_END_EXIT: PyErr_Format(ended, "the program has ended: proc_exit(%u)", (unsigned)w->end_value); break;
+    case FUSEDWASI_P1_END_SIGNAL: PyErr_Format(ended, "the program has ended: proc_raise(%u)", (unsigned)w->end_value); break;
     default: PyErr_SetString(ended, "the program has ended: it trapped"); break;
     }
     return -1;
 }
 
-#if WASMEXT_WASI_PYTHON_FS
+#if FUSEDWASI_P1_HOST_FS
 
 /* ---- the file system through Python (Windows; elsewhere only to test it): os.stat, os.open, os.listdir --------------------
    A path is resolved by hand below the real path of the directory, and a link that points out of the preopen is refused by
@@ -708,7 +708,7 @@ static inline int wasmext_wasi_check(wasmext_wasi *w) {
    stopped; that is why the other way, below, is used where the system has openat. */
 
 /* whether `real` (a path from realpath) is the preopen `root` or below it */
-static inline int wasi_contained(wasmext_wasi *w, const char *root, const char *real) {
+static inline int wasi_contained(fusedwasi_p1_state *w, const char *root, const char *real) {
     PyObject *os = wasi_module_of(&WASI_PY(w)->os_module, "os");
     PyObject *path = os ? PyObject_GetAttrString(os, "path") : NULL;
     PyObject *a = path ? PyObject_CallMethod(path, "normcase", "y", root) : NULL;
@@ -729,23 +729,23 @@ static inline int wasi_contained(wasmext_wasi *w, const char *root, const char *
 /* The path the program gave, below the directory `dir`: its place in the real file system. 0, with `*full` and `*newrel` in new
    memory (the caller frees them), or an errno of WASI: a name that leaves the directory ("..", an absolute name, a symbolic link
    that points out) is NOTCAPABLE. */
-static inline uint32_t wasi_resolve(wasmext_wasi *w, wasi_entry *dir, uint32_t ptr, uint32_t len, int follow, char **full,
+static inline uint32_t wasi_resolve(fusedwasi_p1_state *w, fusedwasi_p1_entry *dir, uint32_t ptr, uint32_t len, int follow, char **full,
                                     char **newrel) {
     *full = NULL;
     *newrel = NULL;
-    if (dir->kind != WASI_K_DIR) return WASI_E_NOTDIR;
-    if (!wasi_in_memory(w, ptr, len)) return WASI_E_FAULT;
-    const unsigned char *given = w->memory->data + ptr;
-    if (len == 0) return WASI_E_NOENT;
-    if (memchr(given, 0, len) != NULL) return WASI_E_INVAL;
-    if (given[0] == '/') return WASI_E_NOTCAPABLE;
+    if (dir->kind != FUSEDWASI_P1_K_DIR) return FUSEDWASI_P1_E_NOTDIR;
+    if (!fusedwasi_p1_in_memory(w, ptr, len)) return FUSEDWASI_P1_E_FAULT;
+    const unsigned char *given = FUSEDWASI_P1_MEM(w) + ptr;
+    if (len == 0) return FUSEDWASI_P1_E_NOENT;
+    if (memchr(given, 0, len) != NULL) return FUSEDWASI_P1_E_INVAL;
+    if (given[0] == '/') return FUSEDWASI_P1_E_NOTCAPABLE;
     size_t rel_len = strlen(dir->rel);
-    char *joined = (char *)WASI_MALLOC(rel_len + 1 + len + 1);
-    char *out = (char *)WASI_MALLOC(rel_len + 1 + len + 1);
+    char *joined = (char *)FUSEDWASI_P1_MALLOC(rel_len + 1 + len + 1);
+    char *out = (char *)FUSEDWASI_P1_MALLOC(rel_len + 1 + len + 1);
     if (joined == NULL || out == NULL) {
-        WASI_FREE(joined);
-        WASI_FREE(out);
-        return WASI_E_NOMEM;
+        FUSEDWASI_P1_FREE(joined);
+        FUSEDWASI_P1_FREE(out);
+        return FUSEDWASI_P1_E_NOMEM;
     }
     memcpy(joined, dir->rel, rel_len);
     joined[rel_len] = '/';
@@ -766,9 +766,9 @@ static inline uint32_t wasi_resolve(wasmext_wasi *w, wasi_entry *dir, uint32_t p
             if (n > 0) n--;
         } else if (tlen > 0 && !(tlen == 1 && cursor[0] == '.')) {
             if (tlen > 255) {  /* a name of at most 255 bytes, as on POSIX; Windows would answer "invalid name" and the others at the end of a walk */
-                WASI_FREE(joined);
-                WASI_FREE(out);
-                return WASI_E_NAMETOOLONG;
+                FUSEDWASI_P1_FREE(joined);
+                FUSEDWASI_P1_FREE(out);
+                return FUSEDWASI_P1_E_NAMETOOLONG;
             }
             if (n) out[n++] = '/';
             memcpy(out + n, cursor, tlen);
@@ -777,19 +777,19 @@ static inline uint32_t wasi_resolve(wasmext_wasi *w, wasi_entry *dir, uint32_t p
         if (end == NULL) break;
         cursor = end + 1;
     }
-    WASI_FREE(joined);
+    FUSEDWASI_P1_FREE(joined);
     if (outside) {
-        WASI_FREE(out);
-        return WASI_E_NOTCAPABLE;
+        FUSEDWASI_P1_FREE(out);
+        return FUSEDWASI_P1_E_NOTCAPABLE;
     }
     out[n] = '\0';
-    char *path = wasi_join(dir->root, out);
+    char *path = fusedwasi_p1_join(dir->root, out);
     if (path == NULL) {
-        WASI_FREE(out);
-        return WASI_E_NOMEM;
+        FUSEDWASI_P1_FREE(out);
+        return FUSEDWASI_P1_E_NOMEM;
     }
     if (n > 0) {  /* a link in the path may point out of the preopen: the real path of what is used must be inside it */
-        char *check = wasi_copy(path, strlen(path));
+        char *check = fusedwasi_p1_copy(path, strlen(path));
         if (check != NULL && !follow) {  /* the last name is not followed: its directory is what counts */
             char *slash = strrchr(check, '/');
             if (slash != NULL && slash > check + strlen(dir->root) - 1) *slash = '\0';
@@ -803,11 +803,11 @@ static inline uint32_t wasi_resolve(wasmext_wasi *w, wasi_entry *dir, uint32_t p
         if (real != NULL && PyBytes_Check(real)) inside = wasi_contained(w, dir->root, PyBytes_AsString(real));
         PyErr_Clear();
         Py_XDECREF(real);
-        WASI_FREE(check);
+        FUSEDWASI_P1_FREE(check);
         if (!inside) {
-            WASI_FREE(out);
-            WASI_FREE(path);
-            return WASI_E_NOTCAPABLE;
+            FUSEDWASI_P1_FREE(out);
+            FUSEDWASI_P1_FREE(path);
+            return FUSEDWASI_P1_E_NOTCAPABLE;
         }
     }
     if (n > 0 && given[len - 1] == '/' && !follow) {
@@ -821,24 +821,24 @@ static inline uint32_t wasi_resolve(wasmext_wasi *w, wasi_entry *dir, uint32_t p
         Py_XDECREF(ospath);
         PyErr_Clear();
         if (is_link) {
-            WASI_FREE(out);
-            WASI_FREE(path);
-            return WASI_E_NOTDIR;
+            FUSEDWASI_P1_FREE(out);
+            FUSEDWASI_P1_FREE(path);
+            return FUSEDWASI_P1_E_NOTDIR;
         }
     }
     if (n > 0 && given[len - 1] == '/') {  /* the system decides what a slash at the end asks for (a directory) */
-        char *slashed = (char *)WASI_REALLOC(path, strlen(path) + 2);
+        char *slashed = (char *)FUSEDWASI_P1_REALLOC(path, strlen(path) + 2);
         if (slashed == NULL) {
-            WASI_FREE(out);
-            WASI_FREE(path);
-            return WASI_E_NOMEM;
+            FUSEDWASI_P1_FREE(out);
+            FUSEDWASI_P1_FREE(path);
+            return FUSEDWASI_P1_E_NOMEM;
         }
         strcat(slashed, "/");
         path = slashed;
     }
     *full = path;
     *newrel = out;
-    return WASI_E_SUCCESS;
+    return FUSEDWASI_P1_E_SUCCESS;
 }
 
 static inline unsigned long long wasi_attr(PyObject *obj, const char *name, int *ok) {
@@ -852,8 +852,8 @@ static inline unsigned long long wasi_attr(PyObject *obj, const char *name, int 
     return out;
 }
 
-/* a stat_result as a wasi_stat; 0 or a WASI errno (the exception is still set for anything but an OSError) */
-static inline uint32_t wasi_stat_of_result(PyObject *st, wasi_stat *out, int *trapped) {
+/* a stat_result as a fusedwasi_p1_stat; 0 or a WASI errno (the exception is still set for anything but an OSError) */
+static inline uint32_t wasi_stat_of_result(PyObject *st, fusedwasi_p1_stat *out, int *trapped) {
     int ok = 1;
     out->dev = wasi_attr(st, "st_dev", &ok);
     out->ino = wasi_attr(st, "st_ino", &ok);
@@ -863,20 +863,20 @@ static inline uint32_t wasi_stat_of_result(PyObject *st, wasi_stat *out, int *tr
     out->atim = wasi_attr(st, "st_atime_ns", &ok);
     out->mtim = wasi_attr(st, "st_mtime_ns", &ok);
     out->ctim = wasi_attr(st, "st_ctime_ns", &ok);
-    out->filetype = wasi_filetype_of((unsigned long)mode);
-    return ok ? WASI_E_SUCCESS : wasi_python_error(trapped);
+    out->filetype = fusedwasi_p1_filetype_of((unsigned long)mode);
+    return ok ? FUSEDWASI_P1_E_SUCCESS : wasi_python_error(trapped);
 }
 
-static inline uint32_t wasi_be_stat_fd(wasmext_wasi *w, wasi_entry *e, wasi_stat *out, int *trapped) {
+static inline uint32_t fusedwasi_p1_be_stat_fd(fusedwasi_p1_state *w, fusedwasi_p1_entry *e, fusedwasi_p1_stat *out, int *trapped) {
     PyObject *os = wasi_module_of(&WASI_PY(w)->os_module, "os"), *st;
     if (os == NULL) return wasi_python_error(trapped);
-    if (e->kind == WASI_K_FILE) {
+    if (e->kind == FUSEDWASI_P1_K_FILE) {
         st = PyObject_CallMethod(os, "fstat", "i", e->osfd);
     } else {
-        char *path = wasi_join(e->root, e->rel);
-        if (path == NULL) return WASI_E_NOMEM;
+        char *path = fusedwasi_p1_join(e->root, e->rel);
+        if (path == NULL) return FUSEDWASI_P1_E_NOMEM;
         st = PyObject_CallMethod(os, "stat", "y", path);
-        WASI_FREE(path);
+        FUSEDWASI_P1_FREE(path);
     }
     if (st == NULL) return wasi_python_error(trapped);
     uint32_t rc = wasi_stat_of_result(st, out, trapped);
@@ -884,15 +884,15 @@ static inline uint32_t wasi_be_stat_fd(wasmext_wasi *w, wasi_entry *e, wasi_stat
     return rc;
 }
 
-static inline uint32_t wasi_be_stat_path(wasmext_wasi *w, wasi_entry *dir, uint32_t path, uint32_t len, int follow,
-                                         wasi_stat *out, int *trapped) {
+static inline uint32_t fusedwasi_p1_be_stat_path(fusedwasi_p1_state *w, fusedwasi_p1_entry *dir, uint32_t path, uint32_t len, int follow,
+                                         fusedwasi_p1_stat *out, int *trapped) {
     char *full, *rel;
     uint32_t rc = wasi_resolve(w, dir, path, len, follow, &full, &rel);
     if (rc) return rc;
-    WASI_FREE(rel);
+    FUSEDWASI_P1_FREE(rel);
     PyObject *os = wasi_module_of(&WASI_PY(w)->os_module, "os");
     PyObject *st = os ? PyObject_CallMethod(os, follow ? "stat" : "lstat", "y", full) : NULL;
-    WASI_FREE(full);
+    FUSEDWASI_P1_FREE(full);
     if (st == NULL) return wasi_python_error(trapped);
     rc = wasi_stat_of_result(st, out, trapped);
     Py_DECREF(st);
@@ -900,125 +900,125 @@ static inline uint32_t wasi_be_stat_path(wasmext_wasi *w, wasi_entry *dir, uint3
 }
 
 /* opens what the path names, into `e` (a new entry): a file (an operating system descriptor) or a directory (a path) */
-static inline uint32_t wasi_be_open(wasmext_wasi *w, wasi_entry *dir, uint32_t path, uint32_t len, int follow, uint32_t oflags,
-                                    uint64_t base, uint32_t fdflags, wasi_entry *e, int *trapped) {
+static inline uint32_t fusedwasi_p1_be_open(fusedwasi_p1_state *w, fusedwasi_p1_entry *dir, uint32_t path, uint32_t len, int follow, uint32_t oflags,
+                                    uint64_t base, uint32_t fdflags, fusedwasi_p1_entry *e, int *trapped) {
     char *full, *rel;
     uint32_t rc = wasi_resolve(w, dir, path, len, follow, &full, &rel);
     if (rc) return rc;
     PyObject *os = wasi_module_of(&WASI_PY(w)->os_module, "os");
     PyObject *st = os ? PyObject_CallMethod(os, follow ? "stat" : "lstat", "y", full) : NULL;
-    wasi_stat info;
+    fusedwasi_p1_stat info;
     int exists = 1;
     rc = st ? wasi_stat_of_result(st, &info, trapped) : wasi_python_error(trapped);
     Py_XDECREF(st);
-    WASI_FREE(rel);
-    if (rc == WASI_E_NOENT && (oflags & WASI_O_CREAT)) {
+    FUSEDWASI_P1_FREE(rel);
+    if (rc == FUSEDWASI_P1_E_NOENT && (oflags & FUSEDWASI_P1_O_CREAT)) {
         exists = 0;
-        rc = WASI_E_SUCCESS;
+        rc = FUSEDWASI_P1_E_SUCCESS;
     }
     if (rc || *trapped) {
-        WASI_FREE(full);
+        FUSEDWASI_P1_FREE(full);
         return rc;
     }
-    int flags = wasi_open_flags(base, oflags, fdflags);
-    if (exists && !follow && info.filetype == WASI_FT_SYMLINK) {  /* what O_NOFOLLOW says, where there is no O_NOFOLLOW */
-        WASI_FREE(full);
-        return WASI_E_LOOP;
+    int flags = fusedwasi_p1_open_flags(base, oflags, fdflags);
+    if (exists && !follow && info.filetype == FUSEDWASI_P1_FT_SYMLINK) {  /* what O_NOFOLLOW says, where there is no O_NOFOLLOW */
+        FUSEDWASI_P1_FREE(full);
+        return FUSEDWASI_P1_E_LOOP;
     }
-    if (exists && (oflags & WASI_O_CREAT) && (oflags & WASI_O_EXCL)) {
-        WASI_FREE(full);
-        return WASI_E_EXIST;
+    if (exists && (oflags & FUSEDWASI_P1_O_CREAT) && (oflags & FUSEDWASI_P1_O_EXCL)) {
+        FUSEDWASI_P1_FREE(full);
+        return FUSEDWASI_P1_E_EXIST;
     }
-    if (exists && info.filetype == WASI_FT_DIR) {  /* a directory is its own root: it cannot reach what is above it, as with openat */
-        int as_directory = (base & WASI_R_OF_DIRECTORY) != 0 && !(oflags & (WASI_O_CREAT | WASI_O_TRUNC));
-        if (!as_directory && ((flags & (O_WRONLY | O_RDWR | O_TRUNC)) != 0 || (oflags & WASI_O_CREAT))) {
-            WASI_FREE(full);
-            return WASI_E_ISDIR;
+    if (exists && info.filetype == FUSEDWASI_P1_FT_DIR) {  /* a directory is its own root: it cannot reach what is above it, as with openat */
+        int as_directory = (base & FUSEDWASI_P1_R_OF_DIRECTORY) != 0 && !(oflags & (FUSEDWASI_P1_O_CREAT | FUSEDWASI_P1_O_TRUNC));
+        if (!as_directory && ((flags & (O_WRONLY | O_RDWR | O_TRUNC)) != 0 || (oflags & FUSEDWASI_P1_O_CREAT))) {
+            FUSEDWASI_P1_FREE(full);
+            return FUSEDWASI_P1_E_ISDIR;
         }
-        e->kind = WASI_K_DIR;
-        e->filetype = WASI_FT_DIR;
+        e->kind = FUSEDWASI_P1_K_DIR;
+        e->filetype = FUSEDWASI_P1_FT_DIR;
         e->root = full;
-        e->rel = wasi_copy("", 0);
-        return e->rel == NULL ? WASI_E_NOMEM : WASI_E_SUCCESS;
+        e->rel = fusedwasi_p1_copy("", 0);
+        return e->rel == NULL ? FUSEDWASI_P1_E_NOMEM : FUSEDWASI_P1_E_SUCCESS;
     }
-    if (oflags & WASI_O_DIRECTORY) {
-        WASI_FREE(full);
-        return WASI_E_NOTDIR;
+    if (oflags & FUSEDWASI_P1_O_DIRECTORY) {
+        FUSEDWASI_P1_FREE(full);
+        return FUSEDWASI_P1_E_NOTDIR;
     }
 #ifdef O_NOFOLLOW
     if (!follow) flags |= O_NOFOLLOW;
 #endif
     PyObject *opened = PyObject_CallMethod(os, "open", "yii", full, flags, 0666);
     if (opened == NULL) {
-        WASI_FREE(full);
+        FUSEDWASI_P1_FREE(full);
         return wasi_python_error(trapped);
     }
     long osfd = PyLong_AsLong(opened);
     Py_DECREF(opened);
     e->root = full;  /* the path stays with the file: Windows cannot set the times of a descriptor */
-    e->kind = WASI_K_FILE;
+    e->kind = FUSEDWASI_P1_K_FILE;
     e->osfd = (int)osfd;
     e->owns_fd = 1;
-    e->filetype = exists ? info.filetype : WASI_FT_REGULAR;
-    return WASI_E_SUCCESS;
+    e->filetype = exists ? info.filetype : FUSEDWASI_P1_FT_REGULAR;
+    return FUSEDWASI_P1_E_SUCCESS;
 }
 
 /* A name below `dir` for a call that changes the directory: its path, to free. NULL, with `*rc` the errno, for what cannot be
    the object of the call (the directory itself). */
-static inline char *wasi_be_name(wasmext_wasi *w, wasi_entry *dir, uint32_t path, uint32_t len, int follow, uint32_t *rc) {
+static inline char *wasi_be_name(fusedwasi_p1_state *w, fusedwasi_p1_entry *dir, uint32_t path, uint32_t len, int follow, uint32_t *rc) {
     char *full, *rel;
     *rc = wasi_resolve(w, dir, path, len, follow, &full, &rel);
     if (*rc) return NULL;
     int itself = rel[0] == '\0';
-    WASI_FREE(rel);
+    FUSEDWASI_P1_FREE(rel);
     if (itself) {
-        WASI_FREE(full);
-        *rc = WASI_E_INVAL;
+        FUSEDWASI_P1_FREE(full);
+        *rc = FUSEDWASI_P1_E_INVAL;
         return NULL;
     }
     return full;
 }
 
-static inline uint32_t wasi_be_call(wasmext_wasi *w, const char *function, char *full, int *trapped) {
+static inline uint32_t wasi_be_call(fusedwasi_p1_state *w, const char *function, char *full, int *trapped) {
     PyObject *os = wasi_module_of(&WASI_PY(w)->os_module, "os");
     PyObject *result = os ? PyObject_CallMethod(os, function, "y", full) : NULL;
-    WASI_FREE(full);
+    FUSEDWASI_P1_FREE(full);
     if (result == NULL) return wasi_python_error(trapped);
     Py_DECREF(result);
-    return WASI_E_SUCCESS;
+    return FUSEDWASI_P1_E_SUCCESS;
 }
 
-static inline uint32_t wasi_be_mkdir(wasmext_wasi *w, wasi_entry *dir, uint32_t path, uint32_t len, int *trapped) {
+static inline uint32_t fusedwasi_p1_be_mkdir(fusedwasi_p1_state *w, fusedwasi_p1_entry *dir, uint32_t path, uint32_t len, int *trapped) {
     uint32_t rc;
     char *full = wasi_be_name(w, dir, path, len, 0, &rc);
-    if (full == NULL) return rc == WASI_E_INVAL ? WASI_E_EXIST : rc;
+    if (full == NULL) return rc == FUSEDWASI_P1_E_INVAL ? FUSEDWASI_P1_E_EXIST : rc;
     return wasi_be_call(w, "mkdir", full, trapped);
 }
 
-static inline uint32_t wasi_be_remove(wasmext_wasi *w, wasi_entry *dir, uint32_t path, uint32_t len, int isdir, int *trapped) {
+static inline uint32_t fusedwasi_p1_be_remove(fusedwasi_p1_state *w, fusedwasi_p1_entry *dir, uint32_t path, uint32_t len, int isdir, int *trapped) {
     uint32_t rc;
     char *full = wasi_be_name(w, dir, path, len, 0, &rc);
     if (full == NULL) return rc;
     if (!isdir) {  /* the systems differ in what unlink says to a directory */
         PyObject *os = wasi_module_of(&WASI_PY(w)->os_module, "os");
         PyObject *st = os ? PyObject_CallMethod(os, "lstat", "y", full) : NULL;
-        wasi_stat info;
+        fusedwasi_p1_stat info;
         rc = st ? wasi_stat_of_result(st, &info, trapped) : wasi_python_error(trapped);
         Py_XDECREF(st);
         if (rc || *trapped) {
-            WASI_FREE(full);
+            FUSEDWASI_P1_FREE(full);
             return rc;
         }
-        if (info.filetype == WASI_FT_DIR) {
-            WASI_FREE(full);
-            return WASI_E_ISDIR;
+        if (info.filetype == FUSEDWASI_P1_FT_DIR) {
+            FUSEDWASI_P1_FREE(full);
+            return FUSEDWASI_P1_E_ISDIR;
         }
     }
     return wasi_be_call(w, isdir ? "rmdir" : "unlink", full, trapped);
 }
 
 /* the times of a path or an open file (`target`: bytes or an int) as os.utime wants them, with what is not set left as it is */
-static inline uint32_t wasi_py_times(wasmext_wasi *w, PyObject *target, int follow, uint64_t atim, uint64_t mtim, uint32_t flags,
+static inline uint32_t wasi_py_times(fusedwasi_p1_state *w, PyObject *target, int follow, uint64_t atim, uint64_t mtim, uint32_t flags,
                                      int *trapped) {
     PyObject *os = wasi_module_of(&WASI_PY(w)->os_module, "os");
     if (os == NULL) return wasi_python_error(trapped);
@@ -1026,7 +1026,7 @@ static inline uint32_t wasi_py_times(wasmext_wasi *w, PyObject *target, int foll
     static const char *const names[2] = {"st_atime_ns", "st_mtime_ns"};
     PyObject *current = NULL;
     for (int i = 0; i < 2; i++) {
-        uint32_t set = i == 0 ? WASI_T_ATIM : WASI_T_MTIM, now = i == 0 ? WASI_T_ATIM_NOW : WASI_T_MTIM_NOW;
+        uint32_t set = i == 0 ? FUSEDWASI_P1_T_ATIM : FUSEDWASI_P1_T_MTIM, now = i == 0 ? FUSEDWASI_P1_T_ATIM_NOW : FUSEDWASI_P1_T_MTIM_NOW;
         if (flags & set) continue;
         if (flags & now) {
             PyObject *clock = wasi_module_of(&WASI_PY(w)->time_module, "time");
@@ -1067,25 +1067,25 @@ static inline uint32_t wasi_py_times(wasmext_wasi *w, PyObject *target, int foll
     if (result == NULL) {
         if (PyErr_ExceptionMatches(PyExc_NotImplementedError)) {  /* this system cannot do it to an open file */
             PyErr_Clear();
-            return WASI_E_NOSYS;
+            return FUSEDWASI_P1_E_NOSYS;
         }
         return wasi_python_error(trapped);
     }
     Py_DECREF(result);
-    return WASI_E_SUCCESS;
+    return FUSEDWASI_P1_E_SUCCESS;
 }
 
-static inline uint32_t wasi_be_times_fd(wasmext_wasi *w, wasi_entry *e, uint64_t atim, uint64_t mtim, uint32_t flags, int *trapped) {
+static inline uint32_t fusedwasi_p1_be_times_fd(fusedwasi_p1_state *w, fusedwasi_p1_entry *e, uint64_t atim, uint64_t mtim, uint32_t flags, int *trapped) {
     PyObject *target;
-    if (e->kind == WASI_K_FILE && e->root == NULL) {
+    if (e->kind == FUSEDWASI_P1_K_FILE && e->root == NULL) {
         target = PyLong_FromLong(e->osfd);
-    } else if (e->kind == WASI_K_FILE) {
+    } else if (e->kind == FUSEDWASI_P1_K_FILE) {
         target = PyBytes_FromString(e->root);
     } else {
-        char *path = wasi_join(e->root, e->rel);
-        if (path == NULL) return WASI_E_NOMEM;
+        char *path = fusedwasi_p1_join(e->root, e->rel);
+        if (path == NULL) return FUSEDWASI_P1_E_NOMEM;
         target = PyBytes_FromString(path);
-        WASI_FREE(path);
+        FUSEDWASI_P1_FREE(path);
     }
     if (target == NULL) return wasi_python_error(trapped);
     uint32_t rc = wasi_py_times(w, target, 1, atim, mtim, flags, trapped);
@@ -1093,24 +1093,24 @@ static inline uint32_t wasi_be_times_fd(wasmext_wasi *w, wasi_entry *e, uint64_t
     return rc;
 }
 
-static inline uint32_t wasi_be_times_path(wasmext_wasi *w, wasi_entry *dir, uint32_t path, uint32_t len, int follow, uint64_t atim,
+static inline uint32_t fusedwasi_p1_be_times_path(fusedwasi_p1_state *w, fusedwasi_p1_entry *dir, uint32_t path, uint32_t len, int follow, uint64_t atim,
                                           uint64_t mtim, uint32_t flags, int *trapped) {
     char *full, *rel;
     uint32_t rc = wasi_resolve(w, dir, path, len, follow, &full, &rel);
     if (rc) return rc;
-    WASI_FREE(rel);
+    FUSEDWASI_P1_FREE(rel);
     if (!follow) {  /* only a link itself needs "do not follow" (Windows before Python 3.13 cannot): for anything else it is the same */
         PyObject *os = wasi_module_of(&WASI_PY(w)->os_module, "os");
         PyObject *st = os ? PyObject_CallMethod(os, "lstat", "y", full) : NULL;
-        wasi_stat info;
-        info.filetype = WASI_FT_UNKNOWN;
+        fusedwasi_p1_stat info;
+        info.filetype = FUSEDWASI_P1_FT_UNKNOWN;
         if (st != NULL) wasi_stat_of_result(st, &info, trapped);
         Py_XDECREF(st);
         PyErr_Clear();
-        if (info.filetype != WASI_FT_SYMLINK) follow = 1;
+        if (info.filetype != FUSEDWASI_P1_FT_SYMLINK) follow = 1;
     }
     PyObject *target = PyBytes_FromString(full);
-    WASI_FREE(full);
+    FUSEDWASI_P1_FREE(full);
     if (target == NULL) return wasi_python_error(trapped);
     rc = wasi_py_times(w, target, follow, atim, mtim, flags, trapped);
     Py_DECREF(target);
@@ -1119,75 +1119,75 @@ static inline uint32_t wasi_be_times_path(wasmext_wasi *w, wasi_entry *dir, uint
 
 /* A name that ends with a slash and is to be made (a link): there is nothing to make it a directory of. EEXIST when a directory is
    there, ENOTDIR when a file is, else ENOENT, whatever the system says to it. `full` is the path with that slash. */
-static inline uint32_t wasi_dest_with_slash(wasmext_wasi *w, const char *full, int *trapped) {
-    char *bare = wasi_copy(full, strlen(full));
-    if (bare == NULL) return WASI_E_NOMEM;
+static inline uint32_t wasi_dest_with_slash(fusedwasi_p1_state *w, const char *full, int *trapped) {
+    char *bare = fusedwasi_p1_copy(full, strlen(full));
+    if (bare == NULL) return FUSEDWASI_P1_E_NOMEM;
     size_t n = strlen(bare);
     while (n > 1 && bare[n - 1] == '/') bare[--n] = '\0';
     PyObject *os = wasi_module_of(&WASI_PY(w)->os_module, "os");
     PyObject *st = os ? PyObject_CallMethod(os, "lstat", "y", bare) : NULL;
-    WASI_FREE(bare);
+    FUSEDWASI_P1_FREE(bare);
     if (st != NULL) {
-        wasi_stat info;
+        fusedwasi_p1_stat info;
         uint32_t rc = wasi_stat_of_result(st, &info, trapped);
         Py_DECREF(st);
         if (rc || *trapped) return rc;
-        return info.filetype == WASI_FT_DIR ? WASI_E_EXIST : WASI_E_NOTDIR;  /* what a file with a slash after it is */
+        return info.filetype == FUSEDWASI_P1_FT_DIR ? FUSEDWASI_P1_E_EXIST : FUSEDWASI_P1_E_NOTDIR;  /* what a file with a slash after it is */
     }
     uint32_t rc = wasi_python_error(trapped);
-    return rc ? rc : WASI_E_NOENT;
+    return rc ? rc : FUSEDWASI_P1_E_NOENT;
 }
 
-static inline uint32_t wasi_be_call2(wasmext_wasi *w, const char *function, char *first, char *second, int *trapped) {
+static inline uint32_t wasi_be_call2(fusedwasi_p1_state *w, const char *function, char *first, char *second, int *trapped) {
     PyObject *os = wasi_module_of(&WASI_PY(w)->os_module, "os");
     PyObject *result = os ? PyObject_CallMethod(os, function, "yy", first, second) : NULL;
-    WASI_FREE(first);
-    WASI_FREE(second);
+    FUSEDWASI_P1_FREE(first);
+    FUSEDWASI_P1_FREE(second);
     if (result == NULL) return wasi_python_error(trapped);
     Py_DECREF(result);
-    return WASI_E_SUCCESS;
+    return FUSEDWASI_P1_E_SUCCESS;
 }
 
 /* two names below two directories for a call that links them: both paths, to free */
-static inline uint32_t wasi_be_two_names(wasmext_wasi *w, wasi_entry *d1, uint32_t p1, uint32_t l1, int follow1, wasi_entry *d2,
+static inline uint32_t wasi_be_two_names(fusedwasi_p1_state *w, fusedwasi_p1_entry *d1, uint32_t p1, uint32_t l1, int follow1, fusedwasi_p1_entry *d2,
                                          uint32_t p2, uint32_t l2, char **first, char **second) {
     uint32_t rc;
     *first = wasi_be_name(w, d1, p1, l1, follow1, &rc);
     if (*first == NULL) return rc;
     *second = wasi_be_name(w, d2, p2, l2, 0, &rc);
     if (*second == NULL) {
-        WASI_FREE(*first);
+        FUSEDWASI_P1_FREE(*first);
         return rc;
     }
-    return WASI_E_SUCCESS;
+    return FUSEDWASI_P1_E_SUCCESS;
 }
 
-static inline uint32_t wasi_be_rename(wasmext_wasi *w, wasi_entry *d1, uint32_t p1, uint32_t l1, wasi_entry *d2, uint32_t p2,
+static inline uint32_t fusedwasi_p1_be_rename(fusedwasi_p1_state *w, fusedwasi_p1_entry *d1, uint32_t p1, uint32_t l1, fusedwasi_p1_entry *d2, uint32_t p2,
                                       uint32_t l2, int *trapped) {
     char *first = NULL, *second = NULL;
     uint32_t rc = wasi_be_two_names(w, d1, p1, l1, 0, d2, p2, l2, &first, &second);
     return rc ? rc : wasi_be_call2(w, "replace", first, second, trapped);  /* replace: a file in the way goes, as on POSIX */
 }
 
-static inline uint32_t wasi_be_link(wasmext_wasi *w, wasi_entry *d1, uint32_t p1, uint32_t l1, int follow, wasi_entry *d2,
+static inline uint32_t fusedwasi_p1_be_link(fusedwasi_p1_state *w, fusedwasi_p1_entry *d1, uint32_t p1, uint32_t l1, int follow, fusedwasi_p1_entry *d2,
                                     uint32_t p2, uint32_t l2, int *trapped) {
     char *first = NULL, *second = NULL;
     uint32_t rc = wasi_be_two_names(w, d1, p1, l1, follow, d2, p2, l2, &first, &second);
-    if (rc == WASI_E_SUCCESS && follow) {  /* a link at the end is followed: it has to lead somewhere (os.link may not follow it) */
+    if (rc == FUSEDWASI_P1_E_SUCCESS && follow) {  /* a link at the end is followed: it has to lead somewhere (os.link may not follow it) */
         PyObject *os = wasi_module_of(&WASI_PY(w)->os_module, "os");
         PyObject *st = os ? PyObject_CallMethod(os, "stat", "y", first) : NULL;
         if (st == NULL) {
-            WASI_FREE(first);
-            WASI_FREE(second);
+            FUSEDWASI_P1_FREE(first);
+            FUSEDWASI_P1_FREE(second);
             return wasi_python_error(trapped);
         }
         Py_DECREF(st);
     }
-    if (rc == WASI_E_SUCCESS && l2 && w->memory->data[p2 + l2 - 1] == '/') {
+    if (rc == FUSEDWASI_P1_E_SUCCESS && l2 && FUSEDWASI_P1_MEM(w)[p2 + l2 - 1] == '/') {
         rc = wasi_dest_with_slash(w, second, trapped);
         if (rc || *trapped) {
-            WASI_FREE(first);
-            WASI_FREE(second);
+            FUSEDWASI_P1_FREE(first);
+            FUSEDWASI_P1_FREE(second);
             return rc;
         }
     }
@@ -1195,15 +1195,15 @@ static inline uint32_t wasi_be_link(wasmext_wasi *w, wasi_entry *d1, uint32_t p1
 }
 
 /* a symbolic link `new` that holds `target` (the text, never looked at) */
-static inline uint32_t wasi_be_symlink(wasmext_wasi *w, const unsigned char *target, uint32_t tlen, wasi_entry *dir, uint32_t path,
+static inline uint32_t fusedwasi_p1_be_symlink(fusedwasi_p1_state *w, const unsigned char *target, uint32_t tlen, fusedwasi_p1_entry *dir, uint32_t path,
                                        uint32_t len, int *trapped) {
     uint32_t rc;
     char *full = wasi_be_name(w, dir, path, len, 0, &rc);
-    if (full == NULL) return rc == WASI_E_INVAL ? WASI_E_EXIST : rc;
-    if (len && w->memory->data[path + len - 1] == '/') {
+    if (full == NULL) return rc == FUSEDWASI_P1_E_INVAL ? FUSEDWASI_P1_E_EXIST : rc;
+    if (len && FUSEDWASI_P1_MEM(w)[path + len - 1] == '/') {
         rc = wasi_dest_with_slash(w, full, trapped);
         if (rc || *trapped) {
-            WASI_FREE(full);
+            FUSEDWASI_P1_FREE(full);
             return rc;
         }
     }
@@ -1212,15 +1212,15 @@ static inline uint32_t wasi_be_symlink(wasmext_wasi *w, const unsigned char *tar
         PyObject *st = os ? PyObject_CallMethod(os, "lstat", "y", full) : NULL;
         if (st != NULL) {
             Py_DECREF(st);
-            WASI_FREE(full);
-            return WASI_E_EXIST;
+            FUSEDWASI_P1_FREE(full);
+            return FUSEDWASI_P1_E_EXIST;
         }
         PyErr_Clear();
     }
-    char *text = wasi_copy((const char *)target, tlen);
+    char *text = fusedwasi_p1_copy((const char *)target, tlen);
     if (text == NULL) {
-        WASI_FREE(full);
-        return WASI_E_NOMEM;
+        FUSEDWASI_P1_FREE(full);
+        return FUSEDWASI_P1_E_NOMEM;
     }
 #ifdef _WIN32
     for (char *c = text; *c; c++) {
@@ -1231,14 +1231,14 @@ static inline uint32_t wasi_be_symlink(wasmext_wasi *w, const unsigned char *tar
 }
 
 /* what a symbolic link holds, at most `cap` bytes of it */
-static inline uint32_t wasi_be_readlink(wasmext_wasi *w, wasi_entry *dir, uint32_t path, uint32_t len, char *out, size_t cap,
+static inline uint32_t fusedwasi_p1_be_readlink(fusedwasi_p1_state *w, fusedwasi_p1_entry *dir, uint32_t path, uint32_t len, char *out, size_t cap,
                                         size_t *used, int *trapped) {
     uint32_t rc;
     char *full = wasi_be_name(w, dir, path, len, 0, &rc);
     if (full == NULL) return rc;
     PyObject *os = wasi_module_of(&WASI_PY(w)->os_module, "os");
     PyObject *text = os ? PyObject_CallMethod(os, "readlink", "y", full) : NULL;
-    WASI_FREE(full);
+    FUSEDWASI_P1_FREE(full);
     if (text == NULL) return wasi_python_error(trapped);
     char *data;
     Py_ssize_t n;
@@ -1254,53 +1254,53 @@ static inline uint32_t wasi_be_readlink(wasmext_wasi *w, wasi_entry *dir, uint32
         if (out[i] == '\\') out[i] = '/';
     }
 #endif
-    return WASI_E_SUCCESS;
+    return FUSEDWASI_P1_E_SUCCESS;
 }
 
 /* the entries of a directory */
-static inline uint32_t wasi_be_list(wasmext_wasi *w, wasi_entry *e, wasi_dirlist *list, int *trapped) {
+static inline uint32_t fusedwasi_p1_be_list(fusedwasi_p1_state *w, fusedwasi_p1_entry *e, fusedwasi_p1_dirlist *list, int *trapped) {
     PyObject *os = wasi_module_of(&WASI_PY(w)->os_module, "os");
-    char *path = wasi_join(e->root, e->rel);
-    if (path == NULL) return WASI_E_NOMEM;
+    char *path = fusedwasi_p1_join(e->root, e->rel);
+    if (path == NULL) return FUSEDWASI_P1_E_NOMEM;
     PyObject *names = os ? PyObject_CallMethod(os, "listdir", "y", path) : NULL;
     if (names == NULL) {
-        WASI_FREE(path);
+        FUSEDWASI_P1_FREE(path);
         return wasi_python_error(trapped);
     }
-    uint32_t rc = WASI_E_SUCCESS;
+    uint32_t rc = FUSEDWASI_P1_E_SUCCESS;
     uint64_t ino_here = 0, ino_up = 0;  /* of "." and ".." (what fd_filestat_get says of the directory and of the one above it) */
     for (int k = 0; k < 2 && os != NULL; k++) {
-        char *which = wasi_join(path, k ? ".." : ".");
+        char *which = fusedwasi_p1_join(path, k ? ".." : ".");
         PyObject *st = which ? PyObject_CallMethod(os, "stat", "y", which) : NULL;
-        WASI_FREE(which);
-        wasi_stat info;
-        if (st != NULL && wasi_stat_of_result(st, &info, trapped) == WASI_E_SUCCESS) {
+        FUSEDWASI_P1_FREE(which);
+        fusedwasi_p1_stat info;
+        if (st != NULL && wasi_stat_of_result(st, &info, trapped) == FUSEDWASI_P1_E_SUCCESS) {
             if (k) ino_up = info.ino;
             else ino_here = info.ino;
         }
         Py_XDECREF(st);
         PyErr_Clear();
     }
-    if (wasi_dirlist_add(list, ".", ino_here, WASI_FT_DIR) < 0 || wasi_dirlist_add(list, "..", ino_up, WASI_FT_DIR) < 0) rc = WASI_E_NOMEM;
+    if (fusedwasi_p1_dirlist_add(list, ".", ino_here, FUSEDWASI_P1_FT_DIR) < 0 || fusedwasi_p1_dirlist_add(list, "..", ino_up, FUSEDWASI_P1_FT_DIR) < 0) rc = FUSEDWASI_P1_E_NOMEM;
     Py_ssize_t count = PyList_Size(names);
-    for (Py_ssize_t i = 0; rc == WASI_E_SUCCESS && i < count; i++) {
+    for (Py_ssize_t i = 0; rc == FUSEDWASI_P1_E_SUCCESS && i < count; i++) {
         PyObject *name = PyList_GetItem(names, i);  /* borrowed */
-        char *full = wasi_join(path, PyBytes_AsString(name));
+        char *full = fusedwasi_p1_join(path, PyBytes_AsString(name));
         PyObject *st = full ? PyObject_CallMethod(os, "lstat", "y", full) : NULL;
-        WASI_FREE(full);
+        FUSEDWASI_P1_FREE(full);
         if (st == NULL) {  /* gone since the listing was made */
-            if (full == NULL) rc = WASI_E_NOMEM;
+            if (full == NULL) rc = FUSEDWASI_P1_E_NOMEM;
             else if (PyErr_ExceptionMatches(PyExc_OSError)) PyErr_Clear();
             else rc = wasi_python_error(trapped);
             continue;
         }
-        wasi_stat info;
+        fusedwasi_p1_stat info;
         rc = wasi_stat_of_result(st, &info, trapped);
         Py_DECREF(st);
-        if (rc == WASI_E_SUCCESS && wasi_dirlist_add(list, PyBytes_AsString(name), info.ino, info.filetype) < 0) rc = WASI_E_NOMEM;
+        if (rc == FUSEDWASI_P1_E_SUCCESS && fusedwasi_p1_dirlist_add(list, PyBytes_AsString(name), info.ino, info.filetype) < 0) rc = FUSEDWASI_P1_E_NOMEM;
     }
     Py_DECREF(names);
-    WASI_FREE(path);
+    FUSEDWASI_P1_FREE(path);
     return rc;
 }
 

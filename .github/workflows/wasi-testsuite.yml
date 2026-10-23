@@ -45,7 +45,7 @@ jobs:
           - { os: ubuntu-latest }
           - { os: macos-latest }
           - { os: windows-latest }
-          # ... and through Python (os.stat, os.open ...): the way Windows had before the native one (wasi_files_win32.h)
+          # ... and through Python (os.stat, os.open ...): the way Windows had before the native one (wasi_p1_files_win32.h)
           - { os: ubuntu-latest, python_fs: true }
           - { os: windows-latest, python_fs: true }
           # ... and as native executables with no Python in them (wasmext._exe: the C of the module, its glue and the core of WASI): check (b) of the plan
@@ -81,7 +81,7 @@ jobs:
       - name: Build the programs
         env:
           WASMEXT_TESTSUITE_CACHE: ${{ runner.temp }}/wasmext-testsuite
-          WASMEXT_TESTSUITE_CFLAGS: ${{ matrix.python_fs && '-DWASMEXT_WASI_PYTHON_FS=1' || '' }}
+          WASMEXT_TESTSUITE_CFLAGS: ${{ matrix.python_fs && '-DFUSEDWASI_P1_HOST_FS=1' || '' }}
           WASMEXT_TESTSUITE_EXE: ${{ matrix.exe && '1' || '' }}
         run: |
           WORK="$GITHUB_WORKSPACE"
@@ -92,7 +92,7 @@ jobs:
       - name: Run the tests
         env:
           WASMEXT_TESTSUITE_CACHE: ${{ runner.temp }}/wasmext-testsuite
-          WASMEXT_TESTSUITE_CFLAGS: ${{ matrix.python_fs && '-DWASMEXT_WASI_PYTHON_FS=1' || '' }}
+          WASMEXT_TESTSUITE_CFLAGS: ${{ matrix.python_fs && '-DFUSEDWASI_P1_HOST_FS=1' || '' }}
           WASMEXT_TESTSUITE_EXE: ${{ matrix.exe && '1' || '' }}
         run: |
           # paths in the form of the system (GITHUB_WORKSPACE has C:\ on Windows, $PWD in bash has /c/)

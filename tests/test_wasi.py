@@ -1,4 +1,4 @@
-"""WASI, `wasi_snapshot_preview1`, compiled into the module (src/wasmext/c/wasi_preview1.h): the module gets it by itself."""
+"""WASI, `wasi_snapshot_preview1`, compiled into the module (wasi_p1.h of fusedwasi): the module gets it by itself."""
 
 from __future__ import annotations
 
@@ -8,6 +8,8 @@ from types import ModuleType
 from typing import Any
 
 import pytest
+
+from wasmext._natify import shared_header
 
 DATA = Path(__file__).parent / "data"
 Builder = Callable[..., ModuleType]
@@ -233,10 +235,10 @@ def test_the_header_has_a_function_for_each_call_of_the_specification() -> None:
 
     from wasmext._gen import _WASI_PREVIEW1_SIGNATURES  # pyright: ignore[reportPrivateUsage]
 
-    header = (Path(__file__).parent.parent / "src" / "wasmext" / "c" / "wasi_core.h").read_text("utf-8")
-    defined = set(re.findall(r"static inline (?:uint32_t|void) wasi_(\w+)\(", header))
+    header = shared_header("wasi_p1_core.h").read_text("utf-8")
+    defined = set(re.findall(r"static inline (?:uint32_t|void) fusedwasi_p1_(\w+)\(", header))
     defined &= set(_WASI_PREVIEW1_SIGNATURES)  # the helpers that also begin with wasi_ are not calls
-    defined |= set(re.findall(r"^WASI_(?:NOT_PROVIDED|SOCKET)\((\w+),", header, re.MULTILINE))
+    defined |= set(re.findall(r"^FUSEDWASI_P1_(?:NOT_PROVIDED|SOCKET)\((\w+),", header, re.MULTILINE))
     assert defined == set(_WASI_PREVIEW1_SIGNATURES)
     assert len(_WASI_PREVIEW1_SIGNATURES) == 46
 
@@ -450,13 +452,16 @@ def test_the_glue_of_a_module_compiles_with_no_python(source: str, wabt: Path, t
         wasm.write_bytes((DATA / source).read_bytes())
     glue = generate(parse(wasm.read_bytes()), "m")
     (tmp_path / "m_glue.h").write_text(glue.header, encoding="utf-8")
-    c_dir = Path(__file__).parent.parent / "src" / "wasmext" / "c"
     shared = [
         "wasmext_glue.h",
-        *(("wasi_core.h", "wasi_files_win32.h", "wasi_python.h", *glue.wasi_headers) if glue.wasi_headers else ()),
+        *(
+            ("wasi_p1_core.h", "wasi_p1_files_win32.h", "wasi_python.h", *glue.wasi_headers)
+            if glue.wasi_headers
+            else ()
+        ),
     ]
     for name in shared:
-        (tmp_path / name).write_bytes((c_dir / name).read_bytes())
+        (tmp_path / name).write_bytes(shared_header(name).read_bytes())
     subprocess.run([wabt / "bin" / "wasm2c", wasm, "-o", tmp_path / "m_w2c.c", "--module-name=m"], check=True)
     (tmp_path / "check.c").write_text('#include "m_glue.h"\nint main(void) { return 0; }\n', encoding="utf-8")
     compiled = subprocess.run(

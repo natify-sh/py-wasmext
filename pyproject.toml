@@ -36,6 +36,8 @@ dependencies = [
     # natify(), the command and the import hook all build through setuptools and the distutils it provides (the compiler, the flags of
     # the platform), whichever backend a project has; the lower bound is the version the suite runs with (uv.lock)
     "setuptools>=84",
+    # the WASI 0.1 (and 0.2) of the modules: its C headers are copied beside the C of a module (fusedwasi.get_include())
+    "fusedwasi",
 ]
 dynamic = ["version"]
 
@@ -86,7 +88,6 @@ typeCheckingMode = "strict"
 
 [dependency-groups]
 dev = [
-    "fusedwasi",  # the host of WASI 0.2 (C headers and the Python twin); not used by wasmext itself yet
     "pytest>=9.1.1",
     "pytest-cov>=6",
     "pyright>=1.1.400",
@@ -100,5 +101,5 @@ wasm = [
 ]
 
 [tool.uv.sources]
-# not released yet (0.0.0 on PyPI is a placeholder): the branch with the host of WASI 0.2
+# not released yet (0.0.0 on PyPI is a placeholder): the branch with the WASI 0.1 and 0.2 that wasmext is built with
 fusedwasi = { git = "https://github.com/natify-sh/fusedwasi", branch = "wasi-p2" }

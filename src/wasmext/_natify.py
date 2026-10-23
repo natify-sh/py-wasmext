@@ -46,11 +46,23 @@ GENERATED = "WASMEXT_GENERATED_"  # the prefix of the macros at the head of the 
 # the C of wasmext that a module is built with when it needs it (WASI): copied beside the C of the module
 GLUE_SHARED = ("wasmext_glue.h",)  # the glue that is the same for every module
 WASI_SHARED = (
-    "wasi_core.h",
-    "wasi_files_win32.h",
+    "wasi_p1_core.h",
+    "wasi_p1_files_win32.h",
     "wasi_python.h",
-)  # what both snapshots share: the core of WASI, its file backend for Windows, and its host, Python
+)  # what both snapshots share: the core of WASI and its file backend for Windows (both are those of fusedwasi), and its host, Python (wasmext's)
 C_DIR = Path(__file__).parent / "c"
+
+
+def shared_header(name: str) -> Path:
+    """Where a header that a module is built with comes from: the C of wasmext, or the WASI 0.1 of the package fusedwasi (`fusedwasi/p1/`)."""
+    own = C_DIR / name
+    if own.is_file():
+        return own
+    from fusedwasi import get_include
+
+    return Path(get_include()) / "fusedwasi" / "p1" / name
+
+
 # A big module is split into files that gcc and the others compile at the same time: one file of 3 million lines was not compiled
 # in 33 minutes (FEATURES.md, "Build time of a large module"), 16 files of it were, on 4 cores, in 3. Splitting costs speed of the
 # code (a call from one file to another is not inlined), so a small module stays whole.
@@ -649,7 +661,7 @@ def _prepare(
     out_dir.mkdir(parents=True, exist_ok=True)
     _write_if_changed(out_dir / f"{last}_glue.h", glue.header.encode("utf-8"))
     for c_name in _shared_headers(glue):
-        _write_if_changed(out_dir / c_name, (C_DIR / c_name).read_bytes())
+        _write_if_changed(out_dir / c_name, shared_header(c_name).read_bytes())
 
     # As cythonize() does, but by the content of the .wasm and not by its time (a cache, a copy or an archive does not keep the times): the C is made
     # again when it is missing, was made by another wasmext (or WABT) or from another .wasm, or when forced (`force`, or WASMEXT_FORCE_REGEN=1 for build systems). A tree that has the C in a

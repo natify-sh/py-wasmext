@@ -165,7 +165,7 @@ run on it in CI (Linux both ways, macOS, Windows):
 | direct | `args_*`, `environ_*`, `sched_yield`, `fd_prestat_*`, the bookkeeping of descriptors, `fd_seek`/`fd_tell`, `fd_read`/`fd_write` on the descriptors it opened | data of the instance, or the same call on both |
 | plain C (was through Python until the decision on `wasi=`) | `random_get`, `clock_*`, the sleep of `poll_oneoff` | the source differs between systems and none of it needs the interpreter: `/dev/urandom` (`arc4random_buf` on macOS, `BCryptGenRandom` on Windows), `clock_gettime` (`QueryPerformanceCounter`, `GetSystemTimePreciseAsFileTime`, `GetProcessTimes`, `GetThreadTimes` on Windows), `nanosleep` (`Sleep`) in slices of 100 ms with the interpreter released, so that Ctrl+C is seen. A function the caller gives (`clock`, `random`) replaces them |
 | directly, where the system has `openat` (decided on a measurement, see below) | `path_open`, `path_filestat_get`, `fd_filestat_get`, `fd_readdir` | a directory is an open descriptor and a path is walked from it one name at a time; no interpreter |
-| through Python (Windows; and anywhere with `-DWASMEXT_WASI_PYTHON_FS=1`, for the tests) | the same calls, and the ones of the later stages | Windows has no `openat`; it cannot open a directory with `open`, has its own `stat` (no inode), `FindFirstFile` for a listing, other rules for renaming over a file; symbolic links need a privilege |
+| through Python (Windows; and anywhere with `-DFUSEDWASI_P1_HOST_FS=1`, for the tests) | the same calls, and the ones of the later stages | Windows has no `openat`; it cannot open a directory with `open`, has its own `stat` (no inode), `FindFirstFile` for a listing, other rules for renaming over a file; symbolic links need a privilege |
 | through Python (decided) | `fd_read`/`fd_write` on the standard streams | direct writes to descriptors 1 and 2 bypass the buffer of `sys.stdout` (the order against Python's `print`, a capture in a notebook or a test), so by default they go to `sys.stdout.buffer` after a flush of `sys.stdout` |
 
 **What it covers.** The 46 functions of the specification (`wasi_snapshot_preview1.witx`, the branch `wasi-0.1` of WebAssembly/WASI;
@@ -277,7 +277,7 @@ Python" came from a rough search; the groups below are what the reading found an
 | Sleep | `wasi_sleep_ns` | releases the interpreter and checks `PyErr_CheckSignals` between slices | hook `sleep`; the default (slices of 100 ms, `nanosleep`/`Sleep`) stays in the core |
 | End of the program | `wasi_proc_exit`, `wasi_proc_raise`, `wasmext_wasi_finish`, `wasmext_wasi_check` | builds `WasiExit`, `WasiSignal` and raises them in the call | the core records the end (`finished`, `end_value`) and reports a trap; the front end makes the exception from that record when the call returns (`wasmext_wasi_check` is already there) |
 | Errors of Python | `wasi_python_error` and every `return wasi_python_error(trapped)` | an `OSError` becomes a WASI errno, anything else a trap | disappears from the core; becomes the protocol of hooks (below) |
-| Files of Windows | the block `#if WASMEXT_WASI_PYTHON_FS` of `wasi_common.h`, lines 1349–1930 (about 580 lines; the whole `#if … #else … #endif` with the POSIX half is 1005 lines) | `os.stat`, `os.open`, `os.listdir`, `normcase`, times through `os.utime` | stage 3: replaced by a native backend; until then a backend of `wasi_python.h` |
+| Files of Windows | the block `#if FUSEDWASI_P1_HOST_FS` of `wasi_common.h`, lines 1349–1930 (about 580 lines; the whole `#if … #else … #endif` with the POSIX half is 1005 lines) | `os.stat`, `os.open`, `os.listdir`, `normcase`, times through `os.utime` | stage 3: replaced by a native backend; until then a backend of `wasi_python.h` |
 | Two small `#if` | `wasi_fill_preopen`, `wasi_sync_entry` | the same switch | go with the backend |
 
 Everything else in the file (memory access, rights, descriptors, the walk of a path, `openat` and its kin, the translation of errno)
@@ -395,7 +395,7 @@ What differs from the table of stage 1:
   of the thread and returns `WASI_HOOK_TRAP`; an `OSError` becomes an errno of WASI (`wasi_python_status`).
 - **The file backend kept its form** (guest pointers and `trapped` in the `wasi_be_*` functions). Cleaning that up is left to stage 3,
   where a second backend shows what the interface needs; for now the core declares the twelve functions and either its own POSIX half
-  or the Python half of `wasi_python.h` defines them (`WASMEXT_WASI_PYTHON_FS`, which is the default on Windows).
+  or the Python half of `wasi_python.h` defines them (`FUSEDWASI_P1_HOST_FS`, which is the default on Windows).
 - **Memory** is `malloc`/`free` (macros `WASI_MALLOC`…), not `PyMem_*`, so a host without Python links nothing else.
 - **Without hooks** the core reads descriptor 0 and writes 1 and 2 itself, sleeps in slices of 100 ms, and uses the system's clock and
   random source; that is what the executable of stage 7 will run on.
@@ -406,7 +406,7 @@ What differs from the table of stage 1:
 ### Stage 3a, as built
 
 `wasi_files_win32.h` (about 880 lines, Win32 only, no Python, no POSIX layer) is the file backend of the core on Windows; it is chosen by
-`_WIN32` and replaced by the backend of Python with `-DWASMEXT_WASI_PYTHON_FS=1`. It has the twelve `wasi_be_*` functions of the interface
+`_WIN32` and replaced by the backend of Python with `-DFUSEDWASI_P1_HOST_FS=1`. It has the twelve `wasi_be_*` functions of the interface
 and keeps the model of the Python backend (a directory is a path; a file is a descriptor of the C library made with `_open_osfhandle`, with its
 path kept), so `fd_read`, `fd_write`, seek, truncate and sync of the core are the same code on every system. The calls are the documented
 wide-character ones: `CreateFileW` (with the same sharing as the C library, read and write), `GetFileInformationByHandle` and `...Ex`
@@ -550,7 +550,7 @@ functions for the clock and the random bytes, so 6b needs them); exported global
 had never built the library at that time (cross-built by `zig cc` as a MinGW dll, it exported and linked, and ran under wine up to the missing `wasm_rt_init`; MSVC has built and run it since, see above); the proof is two tests and one host.
 
 **Plan deviations not written down before**: the file backend kept its form (guest pointers and `trapped` in the `wasi_be_*` functions; the plan wanted `const char *`, no `trapped`, a handle); the selection by
-`WASMEXT_WASI_FILES=posix|win32|nt|python` and the files `wasi_files_posix.h`, `wasi_files_nt.h`, `wasi_files_python.h` do not exist (it is `_WIN32` and `WASMEXT_WASI_PYTHON_FS`); the file of `main` is
+`WASMEXT_WASI_FILES=posix|win32|nt|python` and the files `wasi_files_posix.h`, `wasi_files_nt.h`, `wasi_files_python.h` do not exist (it is `_WIN32` and `FUSEDWASI_P1_HOST_FS`); the file of `main` is
 `<name>_main.c`, not `<name>_exe.c`, and `wasmext-run` is not a command; stage 3b (`nt`) is not started; hooks as pointers or `static inline` was never measured. Check (a) in CI
 (`core-without-python.yml`) did not compile `wasmext_glue.h`, `<name>_glue.h` or `<name>_api.h` when this was written (it compiles them now with gcc, clang, MSVC and `zig cc`/MinGW; a test of pytest does it too). The plan said the
 official tests were checked on Windows x64, ARM64 and x86: the suite, the native backend and the executable run in CI on x64 only (ARM64 and x86 build the example wheels).

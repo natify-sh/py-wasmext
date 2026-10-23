@@ -847,7 +847,7 @@ for module, given in ((pkg.big, a.memory), (pkg.small, a.memory), (pkg.wide, a.m
 
 
 def test_a_wasi_module_is_built_with_the_wasi_header_of_wasmext(tmp_path: Path, wabt: Path) -> None:
-    """The whole path (`wasmext natify -i`, which runs on every platform of CI): wasi_preview1.h is copied beside the C of the module (in build/wasmext/)
+    """The whole path (`wasmext natify -i`, which runs on every platform of CI): wasi_p1.h is copied beside the C of the module (in build/wasmext/)
     and included by its glue, and the module gets WASI without being given imports."""
     package = tmp_path / "pkg"
     package.mkdir()
@@ -856,7 +856,7 @@ def test_a_wasi_module_is_built_with_the_wasi_header_of_wasmext(tmp_path: Path, 
     subprocess.run([wabt / "bin" / "wat2wasm", "m.wat", "-o", "m.wasm"], cwd=package, check=True)
     built = wasmext(tmp_path, wabt, "natify", "-i", "-q", "pkg/m.wasm")
     assert built.returncode == 0, built.stderr[-800:]
-    assert (tmp_path / "build" / "wasmext" / "pkg.m" / "wasi_preview1.h").is_file()
+    assert (tmp_path / "build" / "wasmext" / "pkg.m" / "wasi_p1.h").is_file()
     code = (
         "import pkg.m\n"
         "i = pkg.m.Instance(wasi={'stdout': lambda b: print(repr(bytes(b)))})\n"

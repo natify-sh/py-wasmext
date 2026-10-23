@@ -24,7 +24,7 @@ if sys.platform == "win32":
     # and without it the tests take any of the errors of the systems)
     PLATFORM = (
         {"NO_RENAME_DIR_TO_EMPTY_DIR": "1"}
-        if "WASMEXT_WASI_PYTHON_FS=1" in os.environ.get("WASMEXT_TESTSUITE_CFLAGS", "")
+        if "FUSEDWASI_P1_HOST_FS=1" in os.environ.get("WASMEXT_TESTSUITE_CFLAGS", "")
         else {}
     )
 elif sys.platform == "darwin":

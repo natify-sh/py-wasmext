@@ -75,7 +75,7 @@ class Glue:
     stub: str = ""  # the .pyi of the extension module
     wasi_headers: tuple[
         str, ...
-    ] = ()  # the headers of wasmext for WASI that the glue includes (and those they share: wasi_core.h, wasi_files_win32.h and wasi_python.h): copied beside it
+    ] = ()  # the headers of wasmext for WASI that the glue includes (and those they share: wasi_p1_core.h, wasi_p1_files_win32.h and wasi_python.h): copied beside it
     api_header: str = ""  # the public header of the C API of the shared library (<name>_api.h), no Python in it
     shared: str = ""  # the C of the shared library (<name>_shared.c); both are empty when `shared_unsupported` says why
     shared_unsupported: str = ""
@@ -178,8 +178,8 @@ def _ident(name: str) -> str:
 # the modules a WASI program imports its system calls from; wasmext gives them (the headers of src/wasmext/c) unless the caller does
 _WASI_PREVIEW1 = "wasi_snapshot_preview1"
 _WASI_UNSTABLE = "wasi_unstable"  # the first snapshot
-_WASI_HEADERS = {_WASI_PREVIEW1: "wasi_preview1.h", _WASI_UNSTABLE: "wasi_unstable.h"}
-# the 46 calls of WASI 0.1 and their signatures (the witx files of the wasi-0.1 branch of WebAssembly/WASI): wasi_preview1.h has a
+_WASI_HEADERS = {_WASI_PREVIEW1: "wasi_p1.h", _WASI_UNSTABLE: "wasi_p1_unstable.h"}
+# the 46 calls of WASI 0.1 and their signatures (the witx files of the wasi-0.1 branch of WebAssembly/WASI): wasi_p1.h has a
 # function for each, and a module that imports one with another signature is refused when the glue is made
 _WASI_PREVIEW1_SIGNATURES = {
     "args_get": "ii>i",
@@ -967,7 +967,7 @@ def generate(module: Module, name: str, *, version: str | None = None, share_tab
     hadd("    int instantiated;")
     hadd("    int initialized;  /* the `_initialize` of a reactor has run */")
     if uses_wasi:
-        hadd("    wasmext_wasi *wasi;")
+        hadd("    fusedwasi_p1_state *wasi;")
     for i, host in enumerate(hosts):
         hadd(f"    struct w2c_{mangle(host, module=True)} host{i};")
     hadd(
@@ -1348,7 +1348,9 @@ def generate(module: Module, name: str, *, version: str | None = None, share_tab
             f"    self->core.wasi = wasmext_wasi_new(wasi, WasiExitError, WasiSignalError, WasiTerminatedError, {_c_string(last)});"
         )
         add("    if (self->core.wasi == NULL) { Py_DECREF(self); return NULL; }")
-        add(f"    wasmext_wasi_bind(self->core.wasi, w2c_{prefix}_{mangle('memory')}(&self->core.inst));")
+        add(
+            f"    {{ wasm_rt_memory_t *m_ = w2c_{prefix}_{mangle('memory')}(&self->core.inst); fusedwasi_p1_bind(self->core.wasi, &m_->data, &m_->size); }}"
+        )
     if has_imports:
         if needs_imports:
             add("    if (imports == Py_None) {")
@@ -1376,7 +1378,9 @@ def generate(module: Module, name: str, *, version: str | None = None, share_tab
                 add("        }")
                 add("        if (v == NULL) {")
                 own = imp.module == _WASI_UNSTABLE and imp.field in _WASI_UNSTABLE_OWN
-                add(f"            {host}.fn[{imp.slot}] = (void *)wasi_{'unstable_' if own else ''}{imp.field};")
+                add(
+                    f"            {host}.fn[{imp.slot}] = (void *)fusedwasi_p1_{'unstable_' if own else ''}{imp.field};"
+                )
                 add(f"            {host}.user[{imp.slot}] = self->core.wasi;")
                 add("        } else {")
             else:
@@ -1605,7 +1609,7 @@ def generate(module: Module, name: str, *, version: str | None = None, share_tab
     # ---- the exports, as typed C functions of the glue (no Python): `result f(void *instance, parameters..., int *trapped)` ----
     # A WASI program is over when it calls proc_exit or proc_raise; a command (it exports _start) is over after a trap too
     is_command = any(exp_name == "_start" for exp_name, _ in funcs)
-    finish_on_trap = "wasmext_wasi_finish(self->wasi, WASI_END_TRAP, 0); " if uses_wasi and is_command else ""
+    finish_on_trap = "fusedwasi_p1_finish(self->wasi, FUSEDWASI_P1_END_TRAP, 0); " if uses_wasi and is_command else ""
     hadd("/* instantiation: 0, or the code of the trap of the start function */")
     hadd(f"static inline int {last}_glue_instantiate({last}_instance *self) {{")
     # The runtime of wasm2c does not check the allocation of a table (1.0.42: a NULL that the first use trips over; later releases: abort()). The same
@@ -1643,7 +1647,9 @@ def generate(module: Module, name: str, *, version: str | None = None, share_tab
         for imp in imports:
             if imp.module in _WASI_HEADERS:
                 own = imp.module == _WASI_UNSTABLE and imp.field in _WASI_UNSTABLE_OWN
-                hadd(f"    self->host{imp.host}.fn[{imp.slot}] = (void *)wasi_{'unstable_' if own else ''}{imp.field};")
+                hadd(
+                    f"    self->host{imp.host}.fn[{imp.slot}] = (void *)fusedwasi_p1_{'unstable_' if own else ''}{imp.field};"
+                )
                 hadd(f"    self->host{imp.host}.user[{imp.slot}] = self->wasi;")
         hadd("    return 0;")
         hadd("}")

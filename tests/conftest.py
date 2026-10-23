@@ -27,6 +27,7 @@ from wasmext._natify import (
     _repair_imported_elements,  # pyright: ignore[reportPrivateUsage]
     _repair_tail_calls,  # pyright: ignore[reportPrivateUsage]
     _stack_limit_prologue,  # pyright: ignore[reportPrivateUsage]
+    shared_header,
 )
 
 # the free-threaded build has no abi3 (3.15 has abi3t, which wasmext does not build: cibuildwheel does not tag it yet): there the extension is native
@@ -104,9 +105,13 @@ def build_extension(wabt: Path, tmp_path_factory: pytest.TempPathFactory) -> Cal
         (out / f"{name}_glue.h").write_text(glue.header, encoding="utf-8")
         for c_name in (
             "wasmext_glue.h",
-            *(("wasi_core.h", "wasi_files_win32.h", "wasi_python.h", *glue.wasi_headers) if glue.wasi_headers else ()),
+            *(
+                ("wasi_p1_core.h", "wasi_p1_files_win32.h", "wasi_python.h", *glue.wasi_headers)
+                if glue.wasi_headers
+                else ()
+            ),
         ):  # beside the glue, which includes them
-            (out / c_name).write_bytes((WASMEXT_C / c_name).read_bytes())
+            (out / c_name).write_bytes(shared_header(c_name).read_bytes())
         subprocess.run(
             [wabt / "bin" / "wasm2c", wasm, "-o", out / f"{name}_w2c.c", f"--module-name={name}"], check=True
         )

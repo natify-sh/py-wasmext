@@ -54,3 +54,23 @@ Status: **a plan, nothing is built.** The concept and the reasons are in [wasi_t
 ## Order and dependencies
 
 0 → 1 → 2 → 3; 4 needs 0 and 2; 5 needs 4; 6 needs 2; 7 is independent after 1. The import resolver and the model are **not built** until the user decides on stage 0's results.
+
+## The agreed list (the numbers used above)
+
+Problem. 1. WASI 0.1, WASI 0.2 and the user's imports are one thing but handled in three ways. 2. Binding goes by the look of the module (names, signatures), which proves nothing; the file does not say the host. 3. WASI 0.2 needs an import and an export (`cabi_realloc`); its arguments, environment and streams come through imports.
+
+Host. 4. `host` is `wasm32` (alias `wasm32-unknown-unknown`), `wasm32-wasip1` or `wasm32-wasip2`. 5. Default `wasm32`, no `auto`. 6. For `wasm32` with `wasi_snapshot_preview1` names the build only prints a note. 7. The check of signatures stays as a check of what was said (an error with `wasip1`, nothing with `wasm32`). 8. The host is recorded in the artifact. 9. It is given to `wasmext natify`, to `[tool.wasmext]` and to the extension. 10. A host is the name space of the imports, not the kind of the file; for `wasip2` the core module after `unbundle`/`meld`. 11. `wasm32-wasip3` is not supported. 12. `wasm32-wasip1-threads` is not decided.
+
+Chain. 13. What the caller gave in `imports=`. 14. What the host binds, by (module without its version, name). 15. The rest is required.
+
+Imports. 16. Exact full signatures, replaceable by the caller. 17. Required or not is decided per import of the module: what the host gives is `NotRequired`, what it cannot give is required. 18. Names of the parameters from the specification (witx, WIT). 19. The original is a reference to the import taken from the instance by `__getitem__` (no tables); it is new, `Function` exists today only as `Table.get(i)`. 20. Adapters `lift`/`lower` in fusedwasi (with `attach(instance)`) are not decided; p1 has no `lift` through the raw original (no realloc).
+
+`wasi=`. 21. Stays for simple hooks: `args`, `env`, `preopens`, `readonly`, `stdin`, `stdout`, `stderr`, `clock`, `random`. 22. Each key feeds its imports. 23. Only for hosts with a built-in implementation; none for `wasm32`. 24. If both an import and a hook are given for one function, the import wins. 25. Whether it is for p2, and its keys: open.
+
+Stubs. 26. Every import module is named, none numbered; `wasi_snapshot_preview1` and `wasi_unstable` get a type. 27. A named `TypedDict` per WASI module with only the functions the module imports; the key is the exact module name. 28. The container is a `TypedDict` with `NotRequired` (a `Protocol` cannot say a member may be absent); the value is a `Callable` now, a `Protocol` with names later. 29. An absent key is the default of the host, an explicit `None` is `None`; what the module sees for it is open. 30. The same types in the extension and in the ctypes wrapper. 31. The standard definitions live in fusedwasi; the generator writes the needed ones into the stub, so the stub does not import fusedwasi. 32. Stable names that follow from the module name, not from the place in the import section. 33. For `wasm32` nothing of this is generated.
+
+WASI 0.2. 34. `cabi_realloc` is a required export; its absence is an error of the build. 35. Arguments, environment and streams through hooks of `wasi=` or replaced imports. 36. The host of 0.2 is not in the ABI of wasmext; stub and Python path first, C path later.
+
+Mixed. 37. `wasi_snapshot_preview1` + `wasi:*` in one module is not supported (an error of the build): a component fused through the component model is already P2.
+
+Open. 38. The name of the constant and of the key in `[tool.wasmext]`. 39. The shape and the cost of the reference to the original (to measure). 40. How `lift`/`lower` work. 41. The keys of `wasi=` for p2. 42. What `host` means for wasmhost. 43. What the module sees for `None`. 44. The order of the work (this plan). 45. The check of the extracted p2 names against a real module.

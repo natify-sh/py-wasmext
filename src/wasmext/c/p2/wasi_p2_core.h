@@ -12,6 +12,9 @@
 #include <stdlib.h>
 #include <string.h>
 #ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN /* without winsock.h, which winsock2.h (wasi_p2_net.h) does not go with */
+#endif
 #include <windows.h>
 #ifdef _MSC_VER
 #pragma comment(lib, "bcrypt") /* elsewhere: -lbcrypt */

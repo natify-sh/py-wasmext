@@ -22,11 +22,12 @@ from wasmext.p2 import wasi_p2_http as H
 from wasmext.p2 import wasi_p2_io as io
 from wasmext.p2.wasi_p2_core import Host, Trap, load_u32, store_u32
 
-pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="the default transport of the C host is POSIX only")
-
 C_P2 = Path(wasmext.__file__).parent / "c" / "p2"
 DRIVER = Path(__file__).parent / "data" / "wasi_p2_http_driver.c"
 CC = shutil.which("cc") or shutil.which("gcc") or shutil.which("clang")
+LIBS: list[str] = (
+    ["-lws2_32", "-lbcrypt"] if sys.platform == "win32" else []
+)  # Winsock and the random bytes of the core
 
 SCENARIOS = [
     "main",
@@ -86,6 +87,11 @@ def describe(ec: H.ErrorCode | None) -> str:
     if ec is None:
         return "none"
     return f"{ec.tag}/{int(ec.present)}/" + "/".join("-" if v is None else str(v) for v in ec.values)
+
+
+def quoted(text: str | None) -> str:
+    """What the driver prints for a text that may be missing (not `repr`: it would escape what C prints as it is)."""
+    return "None" if text is None else f"'{text}'"
 
 
 def check_authority(scheme: str, authority: str) -> bool:
@@ -407,18 +413,20 @@ def python_output(scenario: str, port: int, dead: int) -> str:
 
             text("method", H.wasi_http_types_outgoing_request_method)
             for m in ("POST", "PATCH", "get", "bad method", "", "PROPFIND"):
-                pr(f"set-method {m!r} {H.wasi_http_types_outgoing_request_set_method(host, 0, req, *method_args(m))}\n")
+                pr(
+                    f"set-method {quoted(m)} {H.wasi_http_types_outgoing_request_set_method(host, 0, req, *method_args(m))}\n"
+                )
                 text("method", H.wasi_http_types_outgoing_request_method)
             for sch in (None, "http", "https", "x-y.z+1", "1x", "a b", ""):
                 pr(
-                    f"set-scheme {sch!r} {H.wasi_http_types_outgoing_request_set_scheme(host, 0, req, *scheme_args(sch))}\n"
+                    f"set-scheme {quoted(sch)} {H.wasi_http_types_outgoing_request_set_scheme(host, 0, req, *scheme_args(sch))}\n"
                 )
                 clear()
                 H.wasi_http_types_outgoing_request_scheme(host, 0, req, R)
                 pr(f"scheme: {bytes(memory[R : R + 16]).hex()}\n")
-            for path in ("/a?b=c", "*", "a", "/a b", "/é".encode("latin-1").decode("latin-1"), "", None):
+            for path in ("/a?b=c", "*", "a", "/a b", "/\x7f", "", None):
                 pr(
-                    f"set-path {path!r} {H.wasi_http_types_outgoing_request_set_path_with_query(host, 0, req, *opt_text(path))}\n"
+                    f"set-path {quoted(path)} {H.wasi_http_types_outgoing_request_set_path_with_query(host, 0, req, *opt_text(path))}\n"
                 )
                 text("path", H.wasi_http_types_outgoing_request_path_with_query)
             for auth in (
@@ -439,7 +447,7 @@ def python_output(scenario: str, port: int, dead: int) -> str:
                 None,
             ):
                 pr(
-                    f"set-authority {auth!r} {H.wasi_http_types_outgoing_request_set_authority(host, 0, req, *opt_text(auth))}\n"
+                    f"set-authority {quoted(auth)} {H.wasi_http_types_outgoing_request_set_authority(host, 0, req, *opt_text(auth))}\n"
                 )
                 text("authority", H.wasi_http_types_outgoing_request_authority)
             clear()
@@ -710,9 +718,10 @@ def dead_port() -> int:
 def driver(tmp_path_factory: pytest.TempPathFactory) -> Path:
     if CC is None:
         pytest.skip("no C compiler")
-    binary = tmp_path_factory.mktemp("p2http") / "driver"
+    binary = tmp_path_factory.mktemp("p2http") / ("driver.exe" if sys.platform == "win32" else "driver")
     subprocess.run(
-        [CC, "-std=gnu11", "-Wall", "-Wextra", "-Werror", "-I", str(C_P2), str(DRIVER), "-o", str(binary)], check=True
+        [CC, "-std=gnu11", "-Wall", "-Wextra", "-Werror", "-I", str(C_P2), str(DRIVER), "-o", str(binary), *LIBS],
+        check=True,
     )
     return binary
 

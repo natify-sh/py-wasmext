@@ -2,21 +2,13 @@
  * export of a component, not an import.
  *
  * An outgoing request is refused (`HTTP-request-denied`) unless `s->http_check` says yes. The transport of the host is a small HTTP/1.1 client over a socket (`Connection: close`);
- * POSIX only, plain `http` only: `https` is `internal-error` unless the caller sets `s->http_send` (the transport is then the caller's, with TLS if it likes). The answer is read
+ * plain `http` only (BSD sockets, or Winsock on Windows): `https` is `internal-error` unless the caller sets `s->http_send` (the transport is then the caller's, with TLS if it likes). The answer is read
  * whole before the guest sees it, and a request is sent when the guest first asks for the answer. Objects that are shared (fields, bodies, responses, the answer to a future) are
  * counted; the embedder of a server side (`wasi_p2_http_incoming_request_new`, `wasi_p2_http_outparam_new`) holds references of its own and releases them. */
 #ifndef WASI_P2_HTTP_H
 #define WASI_P2_HTTP_H
 
-#ifndef _WIN32
-#include <arpa/inet.h>
-#include <errno.h>
-#include <fcntl.h>
-#include <netdb.h>
-#include <poll.h>
-#include <sys/socket.h>
-#include <unistd.h>
-#endif
+#include "wasi_p2_net.h"
 #include <limits.h>
 
 #include "wasi_p2_io.h"
@@ -1138,7 +1130,6 @@ typedef struct wasi_p2_http_response {
     wasi_p2_http_fields *trailers; /* NULL: none */
 } wasi_p2_http_response;
 
-#ifndef _WIN32
 
 WASI_P2_FN int wasi_p2_http_ms(const wasi_p2_http_request *req, int which) {
     uint64_t ns = req->has_timeout[which] ? req->timeout_ns[which] : WASI_P2_HTTP_DEFAULT_TIMEOUT_NS;
@@ -1177,8 +1168,8 @@ WASI_P2_FN int wasi_p2_http_dns_error(wasi_p2_http_error *err, int rc) {
 WASI_P2_FN int wasi_p2_http_wait_fd(int fd, short events, int ms) {
     struct pollfd p = {fd, events, 0};
     for (;;) {
-        int r = poll(&p, 1, ms);
-        if (r < 0 && errno == EINTR) continue;
+        int r = WASI_P2_POLL(&p, 1, ms);
+        if (r < 0 && wasi_p2_errno() == EINTR) continue;
         return r;
     }
 }
@@ -1190,6 +1181,7 @@ WASI_P2_FN int wasi_p2_http_connect(const char *host, int port, int ms, wasi_p2_
     memset(&hints, 0, sizeof hints);
     hints.ai_socktype = SOCK_STREAM;
     snprintf(service, sizeof service, "%d", port);
+    wasi_p2_net_start();
     int rc = getaddrinfo(host, service, &hints, &list);
     if (rc != 0) {
         wasi_p2_http_dns_error(err, rc);
@@ -1197,38 +1189,39 @@ WASI_P2_FN int wasi_p2_http_connect(const char *host, int port, int ms, wasi_p2_
     }
     int have_error = 0;
     for (struct addrinfo *a = list; a; a = a->ai_next) {
-        int fd = socket(a->ai_family, a->ai_socktype, a->ai_protocol);
+        int fd = (int)socket(a->ai_family, a->ai_socktype, a->ai_protocol);
         if (fd < 0) {
-            wasi_p2_http_connect_error(err, errno);
+            wasi_p2_http_connect_error(err, wasi_p2_errno());
             have_error = 1;
             continue;
         }
-        fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
+        wasi_p2_set_blocking(fd, 0);
         int failed = 0, code = 0;
         if (connect(fd, a->ai_addr, a->ai_addrlen) != 0) {
-            if (errno != EINPROGRESS) {
+            if (wasi_p2_errno() != EINPROGRESS && wasi_p2_errno() != EWOULDBLOCK) {
                 failed = 1;
-                code = errno;
+                code = wasi_p2_errno();
             } else {
                 int w = wasi_p2_http_wait_fd(fd, POLLOUT, ms);
                 if (w == 0) {
                     failed = 2;
                 } else if (w < 0) {
                     failed = 1;
-                    code = errno;
+                    code = wasi_p2_errno();
                 } else {
                     socklen_t n = sizeof code;
-                    getsockopt(fd, SOL_SOCKET, SO_ERROR, &code, &n);
+                    WASI_P2_GETSOCKOPT(fd, SOL_SOCKET, SO_ERROR, &code, &n);
+                    code = wasi_p2_sockerr(code);
                     if (code) failed = 1;
                 }
             }
         }
         if (!failed) {
-            fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) & ~O_NONBLOCK);
+            wasi_p2_set_blocking(fd, 1);
             freeaddrinfo(list);
             return fd;
         }
-        close(fd);
+        WASI_P2_CLOSE(fd);
         if (failed == 2)
             wasi_p2_http_fail(err, WASI_P2_HTTP_CONNECTION_TIMEOUT);
         else
@@ -1262,8 +1255,8 @@ WASI_P2_FN int wasi_p2_http_more(wasi_p2_http_reader *r, wasi_p2_http_error *err
     if (w == 0) return wasi_p2_http_fail(err, WASI_P2_HTTP_CONNECTION_READ_TIMEOUT), -1;
     if (w < 0) return wasi_p2_http_fail(err, WASI_P2_HTTP_CONNECTION_TERMINATED), -1;
     ssize_t n;
-    do n = recv(r->fd, r->buf + r->len, 65536, 0);
-    while (n < 0 && errno == EINTR);
+    do n = WASI_P2_RECV(r->fd, r->buf + r->len, 65536, 0);
+    while (n < 0 && wasi_p2_errno() == EINTR);
     if (n < 0) return wasi_p2_http_fail(err, WASI_P2_HTTP_CONNECTION_TERMINATED), -1;
     r->first = 0;
     r->len += (size_t)n;
@@ -1610,8 +1603,8 @@ WASI_P2_FN int wasi_p2_http_default_send(wasi_p2_state *s, const wasi_p2_http_re
             wasi_p2_http_fail(err, WASI_P2_HTTP_CONNECTION_WRITE_TIMEOUT);
             goto done;
         }
-        ssize_t k = w < 0 ? -1 : send(fd, bytes + sent, n - sent, 0);
-        if (k < 0 && errno == EINTR) continue;
+        ssize_t k = w < 0 ? -1 : WASI_P2_SEND(fd, bytes + sent, n - sent, 0);
+        if (k < 0 && wasi_p2_errno() == EINTR) continue;
         if (k < 0) {
             wasi_p2_http_fail(err, WASI_P2_HTTP_CONNECTION_TERMINATED);
             goto done;
@@ -1644,7 +1637,7 @@ WASI_P2_FN int wasi_p2_http_default_send(wasi_p2_state *s, const wasi_p2_http_re
     trailers = NULL;
     rc = 0;
 done:
-    close(fd);
+    WASI_P2_CLOSE(fd);
     free(bytes);
     free(r.buf);
     free(body);
@@ -1653,16 +1646,7 @@ done:
     return rc;
 }
 
-#else /* _WIN32 */
 
-WASI_P2_FN int wasi_p2_http_default_send(wasi_p2_state *s, const wasi_p2_http_request *req, wasi_p2_http_response *out, wasi_p2_http_error *err) {
-    (void)s;
-    (void)req;
-    (void)out;
-    return wasi_p2_http_fail_str(err, WASI_P2_HTTP_INTERNAL_ERROR, 0, "the default transport of wasi:http is POSIX only: set s->http_send");
-}
-
-#endif /* _WIN32 */
 
 /* the answer */
 

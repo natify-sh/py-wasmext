@@ -508,7 +508,7 @@ int main(int argc, char **argv) {
             printf(" %u\n", wasi_http_types_outgoing_request_set_scheme(&s, 0, req, a[0], a[1], a[2], a[3]));
             scheme_of(req);
         }
-        const char *paths[] = {"/a?b=c", "*", "a", "/a b", "/\xc3\xa9", "", NULL};
+        const char *paths[] = {"/a?b=c", "*", "a", "/a b", "/\x7f", "", NULL};
         for (int i = 0; i < 7; i++) {
             opt_text(paths[i], a);
             printf("set-path "), quoted(paths[i]);

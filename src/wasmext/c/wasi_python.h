@@ -810,6 +810,22 @@ static inline uint32_t wasi_resolve(wasmext_wasi *w, wasi_entry *dir, uint32_t p
             return WASI_E_NOTCAPABLE;
         }
     }
+    if (n > 0 && given[len - 1] == '/' && !follow) {
+        /* A slash after a name makes the system follow a link there, and the check above looked at the directory of that name only: a link with a
+           slash and no symlink_follow is not a directory (found by comparing with uvwasi). */
+        PyObject *os = wasi_module_of(&WASI_PY(w)->os_module, "os");
+        PyObject *ospath = os ? PyObject_GetAttrString(os, "path") : NULL;
+        PyObject *islink = ospath ? PyObject_CallMethod(ospath, "islink", "y", path) : NULL;
+        int is_link = islink != NULL && PyObject_IsTrue(islink) == 1;
+        Py_XDECREF(islink);
+        Py_XDECREF(ospath);
+        PyErr_Clear();
+        if (is_link) {
+            WASI_FREE(out);
+            WASI_FREE(path);
+            return WASI_E_NOTDIR;
+        }
+    }
     if (n > 0 && given[len - 1] == '/') {  /* the system decides what a slash at the end asks for (a directory) */
         char *slashed = (char *)WASI_REALLOC(path, strlen(path) + 2);
         if (slashed == NULL) {

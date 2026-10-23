@@ -181,6 +181,14 @@ def _walk(base: int, path: bytes, follow: bool) -> tuple[int, bytes, list[int]]:
                 continue
             if last:
                 if not follow:
+                    if slash:
+                        # a slash after a name makes the kernel follow a link there whatever O_NOFOLLOW says: such a name is not a directory
+                        try:
+                            os.readlink(name, dir_fd=stack[-1])
+                        except OSError:
+                            pass  # not a link
+                        else:
+                            raise FsError("not-directory")
                     leaf = name + (b"/" if slash else b"")
                     break
                 # a link at the end is read before it is used (below)

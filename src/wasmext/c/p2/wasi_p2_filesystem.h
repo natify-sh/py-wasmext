@@ -226,6 +226,12 @@ WASI_P2_FN int wasi_p2_walk_path(wasi_p2_walk *w, int base, const uint8_t *path,
         }
         if (last) {
             if (!follow) {
+                /* a slash after a name makes the kernel follow a link there whatever O_NOFOLLOW says: such a name is not a directory */
+                char probe[1];
+                if (slash && readlinkat(w->fds[w->depth], name, probe, sizeof probe) >= 0) {
+                    rc = WASI_P2_E_NOT_DIRECTORY;
+                    goto done;
+                }
                 strcpy(w->leaf, name);
                 if (slash) strcat(w->leaf, "/");
                 break;

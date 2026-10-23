@@ -187,6 +187,27 @@ def test_a_program_cannot_leave_the_directory_it_was_given(probe: Any, world: Pa
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="symbolic links need a privilege on Windows")
+def test_a_slash_after_a_link_does_not_lead_out(probe: Any, world: Path, tmp_path: Path) -> None:
+    """`link/` with a slash makes the kernel follow the link even under O_NOFOLLOW; the walk must not hand such a name over (found by comparing with uvwasi)."""
+    (tmp_path / "outdir").mkdir()
+    (tmp_path / "outdir" / "secret").write_text("x", encoding="utf-8")
+    os.symlink(tmp_path / "outdir", world / "lk_out")
+    os.symlink("sub", world / "lk_in")
+    fs = Fs(probe, world)
+    for name in ("lk_out/", "lk_in/"):
+        # no symlink_follow: a link is not entered, with the slash or without
+        code, _ = fs.open(name, flags=0, oflags=2)  # open-flags directory
+        assert code == E_NOTDIR, name
+        assert fs.inst.path_filestat_get(3, 0, *fs.path(name), 120) == E_NOTDIR, name
+        assert fs.inst.path_readlink(3, *fs.path(name), 4000, 100, 120) in (E_NOTDIR, E_INVAL), name
+    # the link itself is still there to see, and with symlink_follow a link that leads out is refused
+    assert fs.inst.path_filestat_get(3, 0, *fs.path("lk_out"), 120) == 0 and fs.mem[120 + 16] == 7  # symbolic link
+    assert fs.open("lk_out/", flags=1, oflags=2)[0] == E_NOTCAPABLE
+    assert fs.open("lk_out/secret", flags=1)[0] == E_NOTCAPABLE
+    assert fs.open("lk_in/", flags=1, oflags=2, rights=DIR_RIGHTS)[0] == 0  # a link inside is followed with the flag
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="symbolic links need a privilege on Windows")
 def test_a_symbolic_link_that_points_out_is_not_followed(probe: Any, world: Path, tmp_path: Path) -> None:
     os.symlink(tmp_path / "outside.txt", world / "link_out.txt")
     os.symlink("hello.txt", world / "link_in.txt")

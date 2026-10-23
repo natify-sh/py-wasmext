@@ -49,7 +49,7 @@ static void read_all(const char *label, uint32_t h, uint64_t len, uint64_t off) 
 static void stat_paths(uint32_t hd) {
     static const struct { const char *p; uint32_t flags; } cases[] = {
         {"sub/f", 1}, {"ln/f", 1}, {"abs/passwd", 1}, {"up", 1}, {"../x", 1}, {"sub/../sub/f", 1}, {"/etc", 1}, {"loop1", 1}, {"deep/f", 1},
-        {"nope", 1}, {"sub/f/x", 1}, {"", 1}, {"sub/", 1}, {"sub/f/", 1}, {"ln", 0}, {"ln", 1}, {"ln/", 0}, {"sub/..", 1}, {"sub/../..", 1},
+        {"nope", 1}, {"sub/f/x", 1}, {"", 1}, {"sub/", 1}, {"sub/f/", 1}, {"ln", 0}, {"ln", 1}, {"ln/", 0}, {"sub/..", 1}, {"sub/../..", 1}, {"lkout/", 0}, {"lkout", 0}, {"lkout/.", 1},
     };
     for (size_t i = 0; i < sizeof cases / sizeof *cases; i++) {
         uint32_t n = path(cases[i].p, strlen(cases[i].p));
@@ -87,6 +87,9 @@ int main(int argc, char **argv) {
         printf("handles %u %u\n", hd, ro);
         stat_paths(hd);
         uint32_t n;
+        /* a link that leads out, with a slash and without symlink-follow, must not be entered */
+        n = path("lkout/", 6);
+        FS(descriptor_open_at, hd, 0, 1000, n, 2, 1, 200), show("open lkout/ without follow", 200, 8);
         /* open, read */
         n = path("sub/f", 5);
         FS(descriptor_open_at, hd, 1, 1000, n, 0, 1, 200), show("open", 200, 8);

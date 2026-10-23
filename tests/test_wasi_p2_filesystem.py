@@ -35,6 +35,8 @@ def make_tree(root: Path) -> None:
     os.symlink("loop2", root / "loop1")
     os.symlink("loop1", root / "loop2")
     os.symlink("sub/../sub", root / "deep")
+    (root.parent / "outdir").mkdir(exist_ok=True)  # beside the root: a link that leads out of it
+    os.symlink("../outdir", root / "lkout")
 
 
 class Run:
@@ -120,7 +122,7 @@ def python_output(scenario: str, root: Path) -> str:
             cases = [
                 (b"sub/f", 1), (b"ln/f", 1), (b"abs/passwd", 1), (b"up", 1), (b"../x", 1), (b"sub/../sub/f", 1), (b"/etc", 1), (b"loop1", 1),
                 (b"deep/f", 1), (b"nope", 1), (b"sub/f/x", 1), (b"", 1), (b"sub/", 1), (b"sub/f/", 1), (b"ln", 0), (b"ln", 1), (b"ln/", 0),
-                (b"sub/..", 1), (b"sub/../..", 1),
+                (b"sub/..", 1), (b"sub/../..", 1), (b"lkout/", 0), (b"lkout", 0), (b"lkout/.", 1),
             ]  # fmt: skip
             for text, flags in cases:
                 n = r.path(text)
@@ -131,6 +133,9 @@ def python_output(scenario: str, root: Path) -> str:
             r.clear(200, 120)
             fsc("descriptor_stat_at", hd, 1, 1000, n, 200)
             r.lines.append("[long] " + _stat(r, 200, "[long] stat"))
+            # a link that leads out, with a slash and without symlink-follow, must not be entered
+            n = r.path(b"lkout/")
+            fsc("descriptor_open_at", hd, 0, 1000, n, 2, 1, 200), r.show("open lkout/ without follow", 200, 8)
             # open, read
             n = r.path(b"sub/f")
             fsc("descriptor_open_at", hd, 1, 1000, n, 0, 1, 200)
@@ -370,6 +375,12 @@ def test_values(tmp_path: Path) -> None:
     assert got["[loop1]"] == f"stat err {fs.ERROR_CODES.index('loop')}"
     assert got["[nope]"] == f"stat err {fs.ERROR_CODES.index('no-entry')}"
     assert got["[sub/f/x]"] == f"stat err {fs.ERROR_CODES.index('not-directory')}"
+    nd = f"stat err {fs.ERROR_CODES.index('not-directory')}"
+    assert got["[lkout/]"] == nd and got["[ln/]"] == nd  # a link with a slash and no symlink-follow is not a directory
+    assert got["[lkout]"].startswith("stat type 5")  # the link itself is there to see
+    assert (
+        got["[lkout/.]"] == f"stat err {fs.ERROR_CODES.index('not-permitted')}"
+    )  # with the flag a link that leads out is refused
     assert got["[long]"] == f"stat err {fs.ERROR_CODES.index('name-too-long')}"
     code = fs.ERROR_CODES.index
 
@@ -381,6 +392,9 @@ def test_values(tmp_path: Path) -> None:
         return data[at]
 
     assert result("unlink of a directory", 620) == code("is-directory")
+    assert result("open lkout/ without follow", 200, 4) == code(
+        "not-directory"
+    )  # not a descriptor of a directory outside the tree
     assert result("symlink to an absolute path", 610) == code("not-permitted")
     assert result("symlink on a read-only preopen", 612) == code("read-only")
     assert result("readlink of an absolute link", 600, 4) == code("not-permitted")

@@ -1127,6 +1127,13 @@ static inline uint32_t wasi_walk(int base, const unsigned char *given, uint32_t 
         int expand = 0;
         if (last) {
             if (!follow) {
+                /* A slash after a name makes the kernel follow a link there whatever O_NOFOLLOW says, and the walk would hand over a way out of the
+                   preopen: a link with a slash and no symlink_follow is not a directory (found by comparing with uvwasi). */
+                char probe[1];
+                if (slash && readlinkat(fds[depth], name, probe, sizeof probe) >= 0) {
+                    rc = WASI_E_NOTDIR;
+                    goto done;
+                }
                 strcpy(leaf, name);
                 if (slash) strcat(leaf, "/");
                 break;

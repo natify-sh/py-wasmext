@@ -78,6 +78,12 @@
 #include <poll.h>
 #include <sys/ioctl.h>
 #include <sys/stat.h>
+#if defined(__has_include) && !defined(__APPLE__)
+#if __has_include(<sys/random.h>)
+#include <sys/random.h>
+#define WASI_HAVE_GETRANDOM 1
+#endif
+#endif
 #define WASI_NATIVE_POLL 1
 #else
 #define WASI_NATIVE_POLL 0
@@ -141,6 +147,7 @@ enum { WASI_T_ATIM = 1, WASI_T_ATIM_NOW = 2, WASI_T_MTIM = 4, WASI_T_MTIM_NOW = 
 #define WASI_R_FD_FILESTAT_SET_SIZE WASI_R(22)
 #define WASI_R_FD_FILESTAT_SET_TIMES WASI_R(23)
 #define WASI_R_POLL_FD_READWRITE WASI_R(27)
+#define WASI_R_FD_ADVISE WASI_R(7)
 #define WASI_R_PATH_REMOVE_DIRECTORY WASI_R(25)
 #define WASI_R_PATH_UNLINK_FILE WASI_R(26)
 #define WASI_R_ALL ((UINT64_C(1) << 30) - 1)
@@ -761,6 +768,18 @@ static inline int wasi_random_system(unsigned char *buf, size_t size) {
     arc4random_buf(buf, size);
     return 0;
 #else
+#ifdef WASI_HAVE_GETRANDOM
+    {  /* the system call needs no file: /dev/urandom fails in a chroot, without /dev, or when the process has no descriptors left */
+        size_t got = 0;
+        while (got < size) {
+            ssize_t n = getrandom(buf + got, size - got, 0);
+            if (n < 0 && errno == EINTR) continue;
+            if (n <= 0) break;
+            got += (size_t)n;
+        }
+        if (got == size) return 0;
+    }
+#endif
     int fd = open("/dev/urandom", O_RDONLY | O_CLOEXEC);
     if (fd < 0) return -1;
     size_t done = 0;
@@ -861,8 +880,24 @@ static inline char *wasi_join(const char *root, const char *rel) {
 
 /* ---- the standard streams (the hooks of the host; without them descriptors 0, 1 and 2) --------------------------------- */
 
-static inline uint32_t wasi_write_std(wasmext_wasi *w, uint32_t fd, uint32_t iovs, uint32_t count, uint32_t nwritten, int *trapped) {
+/* All the buffers of a call are looked at before any of them is used: a bad one in the middle must not leave the data before it already written (or read)
+   with an error and no count (found by comparing with uvwasi). */
+static inline uint32_t wasi_iovs_valid(wasmext_wasi *w, uint32_t iovs, uint32_t count) {
     if (!wasi_in_memory(w, iovs, (uint64_t)count * 8)) return WASI_E_FAULT;
+    for (uint32_t i = 0; i < count; i++) {
+        uint32_t base = 0, len = 0;
+        wasi_get_u32(w, iovs + 8 * i, &base);
+        wasi_get_u32(w, iovs + 8 * i + 4, &len);
+        if (!wasi_in_memory(w, base, len)) return WASI_E_FAULT;
+    }
+    return WASI_E_SUCCESS;
+}
+
+static inline uint32_t wasi_write_std(wasmext_wasi *w, uint32_t fd, uint32_t iovs, uint32_t count, uint32_t nwritten, int *trapped) {
+    {
+        uint32_t bad = wasi_iovs_valid(w, iovs, count);
+        if (bad) return bad;
+    }
     uint64_t total = 0;
     for (uint32_t i = 0; i < count; i++) {
         uint32_t base = 0, len = 0;
@@ -872,16 +907,27 @@ static inline uint32_t wasi_write_std(wasmext_wasi *w, uint32_t fd, uint32_t iov
         if (len == 0) continue;
         if (w->hooks.stdout_write != NULL) {
             int rc = w->hooks.stdout_write(w->user, (int)fd, w->memory->data + base, len);
-            if (rc) return wasi_hook_status(rc, trapped);
+            if (rc) {  /* what was written is reported (a short write); the error comes with the next call. A trap is a trap. */
+                uint32_t status = wasi_hook_status(rc, trapped);
+                if (*trapped || total == 0) return status;
+                break;
+            }
         } else {
             long long done = 0;
+            int failed = 0;
             while (done < (long long)len) {  /* all of it: a short write of a pipe is not the end of the iovec */
                 long long n = WASI_WRITE((int)fd, w->memory->data + base + done, len - done);
                 if (n < 0) {
                     if (errno == EINTR) continue;
-                    return wasi_errno(errno);
+                    if (total + (uint64_t)done == 0) return wasi_errno(errno);
+                    failed = 1;
+                    break;
                 }
                 done += n;
+            }
+            if (failed) {
+                total += (uint64_t)done;
+                break;
             }
         }
         total += len;
@@ -890,7 +936,10 @@ static inline uint32_t wasi_write_std(wasmext_wasi *w, uint32_t fd, uint32_t iov
 }
 
 static inline uint32_t wasi_read_std(wasmext_wasi *w, uint32_t iovs, uint32_t count, uint32_t nread, int *trapped) {
-    if (!wasi_in_memory(w, iovs, (uint64_t)count * 8)) return WASI_E_FAULT;
+    {
+        uint32_t bad = wasi_iovs_valid(w, iovs, count);
+        if (bad) return bad;
+    }
     uint32_t base = 0, len = 0;
     for (uint32_t i = 0; i < count; i++) {  /* the first buffer that is not empty: a short read is allowed */
         wasi_get_u32(w, iovs + 8 * i, &base);
@@ -923,7 +972,10 @@ static inline uint32_t wasi_fd_write(void *s, uint32_t fd, uint32_t iovs, uint32
     if (e == NULL || e->kind == WASI_K_DIR) return e == NULL ? WASI_E_BADF : WASI_E_ISDIR;
     if (e->kind == WASI_K_STD) return e->osfd == 0 ? WASI_E_BADF : wasi_write_std(w, (uint32_t)e->osfd, iovs, count, nwritten, trapped);
     if (!(e->rights & WASI_R_FD_WRITE)) return WASI_E_NOTCAPABLE;
-    if (!wasi_in_memory(w, iovs, (uint64_t)count * 8)) return WASI_E_FAULT;
+    {
+        uint32_t bad = wasi_iovs_valid(w, iovs, count);
+        if (bad) return bad;
+    }
     uint64_t total = 0;
     for (uint32_t i = 0; i < count; i++) {
         uint32_t base = 0, len = 0;
@@ -952,7 +1004,10 @@ static inline uint32_t wasi_fd_read(void *s, uint32_t fd, uint32_t iovs, uint32_
     if (e->kind == WASI_K_STD) return e->osfd == 0 ? wasi_read_std(w, iovs, count, nread, trapped) : WASI_E_BADF;
     if (e->kind == WASI_K_DIR) return WASI_E_ISDIR;
     if (!(e->rights & WASI_R_FD_READ)) return WASI_E_NOTCAPABLE;
-    if (!wasi_in_memory(w, iovs, (uint64_t)count * 8)) return WASI_E_FAULT;
+    {
+        uint32_t bad = wasi_iovs_valid(w, iovs, count);
+        if (bad) return bad;
+    }
     uint64_t total = 0;
     for (uint32_t i = 0; i < count; i++) {
         uint32_t base = 0, len = 0;
@@ -1010,7 +1065,10 @@ static inline uint32_t wasi_fd_close(void *s, uint32_t fd, int *trapped) {
     (void)trapped;
     wasi_entry *e = wasi_entry_of(w, fd);
     if (e == NULL) return WASI_E_BADF;
-    if (e->kind == WASI_K_STD) return WASI_E_SUCCESS;  /* the standard streams stay */
+    if (e->kind == WASI_K_STD) {  /* the stream of the host stays open, but the program has let go of it: the number is free and a write to it is BADF */
+        memset(e, 0, sizeof *e);
+        return WASI_E_SUCCESS;
+    }
     return wasi_release(e) == 0 ? WASI_E_SUCCESS : wasi_errno(errno);
 }
 
@@ -1030,10 +1088,12 @@ static inline uint32_t wasi_fd_advise(void *s, uint32_t fd, uint64_t offset, uin
     WASI_STATE(s);
     (void)offset;
     (void)length;
-    (void)advice;
     (void)trapped;
     wasi_entry *e = wasi_entry_of(w, fd);
-    return e != NULL && e->kind == WASI_K_FILE ? WASI_E_SUCCESS : WASI_E_BADF;  /* a hint: nothing is done with it */
+    if (e == NULL || e->kind != WASI_K_FILE) return WASI_E_BADF;
+    if (!(e->rights & WASI_R_FD_ADVISE)) return WASI_E_NOTCAPABLE;
+    if (advice > 5) return WASI_E_INVAL;  /* the advice is one of six */
+    return WASI_E_SUCCESS;  /* a hint: nothing is done with it */
 }
 
 static inline int wasi_std_is_real(wasmext_wasi *w, wasi_entry *e);
@@ -1192,7 +1252,9 @@ static inline int wasi_native_fdflags(uint32_t fdflags) {
 
 /* the flags of open(2) that a path_open asks for */
 static inline int wasi_open_flags(uint64_t base, uint32_t oflags, uint32_t fdflags) {
-    int writable = (base & WASI_R_FD_WRITE) != 0 || (oflags & WASI_O_TRUNC) != 0, readable = (base & WASI_R_FD_READ) != 0;
+    /* writing is what the rights say: to write, to sync the data, to allocate, to set the size (uvwasi; wasi-libc leaves these out of a read-only open) */
+    int writable = (base & (WASI_R_FD_WRITE | WASI_R_FD_DATASYNC | WASI_R_FD_ALLOCATE | WASI_R_FD_FILESTAT_SET_SIZE)) != 0 || (oflags & WASI_O_TRUNC) != 0,
+        readable = (base & WASI_R_FD_READ) != 0;
     int flags = writable ? (readable ? O_RDWR : O_WRONLY) : O_RDONLY;
     if (oflags & WASI_O_CREAT) flags |= O_CREAT;
     if (oflags & WASI_O_EXCL) flags |= O_EXCL;
@@ -1862,6 +1924,13 @@ static inline uint32_t wasi_fd_allocate(void *s, uint32_t fd, uint64_t offset, u
     if (e->kind == WASI_K_DIR) return WASI_E_ISDIR;
     if (e->kind != WASI_K_FILE) return WASI_E_BADF;
     if (offset > (uint64_t)INT64_MAX || length > (uint64_t)INT64_MAX - offset) return WASI_E_FBIG;
+#if WASI_NATIVE_POLL && (defined(__linux__) || defined(__FreeBSD__))
+    {  /* space is really reserved (and can run out: NOSPC), and a descriptor that is not a file says so (SPIPE) */
+        int err = posix_fallocate(e->osfd, (off_t)offset, (off_t)length);
+        if (err == 0) return WASI_E_SUCCESS;
+        if (err != EINVAL && err != EOPNOTSUPP && err != ENODEV) return wasi_errno(err);  /* a file system that cannot do it gets the old way */
+    }
+#endif
     wasi_stat st;
     memset(&st, 0, sizeof st);
     rc = wasi_be_stat_fd(w, e, &st, trapped);
@@ -1919,7 +1988,10 @@ static inline uint32_t wasi_fd_fdstat_set_rights(void *s, uint32_t fd, uint64_t 
     (void)trapped;
     wasi_entry *e = wasi_entry_of(w, fd);
     if (e == NULL) return WASI_E_BADF;
-    if (e->kind == WASI_K_STD) return WASI_E_NOTCAPABLE;
+    if (e->kind == WASI_K_STD) {  /* the rights of a standard stream are fixed: giving some up (or none) is fine, getting more is not (the narrowing is not kept) */
+        uint64_t have = e->osfd == 0 ? WASI_RIGHTS_STDIN : WASI_RIGHTS_STDOUT;
+        return (base & ~have) != 0 || inheriting != 0 ? WASI_E_NOTCAPABLE : WASI_E_SUCCESS;
+    }
     if ((base & ~e->rights) != 0 || (inheriting & ~e->inheriting) != 0) return WASI_E_NOTCAPABLE;
     e->rights = base;
     e->inheriting = inheriting;
@@ -1975,7 +2047,10 @@ static inline uint32_t wasi_fd_at(void *s, uint32_t fd, uint32_t iovs, uint32_t 
     uint64_t needed = writing ? WASI_R_FD_WRITE : WASI_R_FD_READ;
     if (!(e->rights & needed)) return WASI_E_NOTCAPABLE;
     if (offset > (uint64_t)INT64_MAX) return WASI_E_INVAL;
-    if (!wasi_in_memory(w, iovs, (uint64_t)count * 8)) return WASI_E_FAULT;
+    {
+        uint32_t bad = wasi_iovs_valid(w, iovs, count);
+        if (bad) return bad;
+    }
     uint64_t total = 0;
     for (uint32_t i = 0; i < count; i++) {
         uint32_t base = 0, len = 0;

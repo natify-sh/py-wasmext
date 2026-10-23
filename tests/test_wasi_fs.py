@@ -22,6 +22,8 @@ FILE_RIGHTS = (1 << 1) | (1 << 2) | (1 << 5) | (1 << 21)  # fd_read, fd_seek, fd
 # fd_datasync, fd_fdstat_set_flags, fd_sync, fd_write, fd_allocate, fd_filestat_set_size, fd_filestat_set_times
 WRITE_RIGHTS = FILE_RIGHTS | (1 << 0) | (1 << 3) | (1 << 4) | (1 << 6) | (1 << 8) | (1 << 22) | (1 << 23)
 POLL_RIGHT = 1 << 27  # poll_fd_readwrite
+ADVISE_RIGHT = 1 << 7  # fd_advise
+SET_SIZE_RIGHT = 1 << 22  # fd_filestat_set_size
 DIR_RIGHTS = (1 << 13) | (1 << 14) | (1 << 18) | (1 << 21)  # path_open, fd_readdir, path_filestat_get, fd_filestat_get
 
 
@@ -122,7 +124,7 @@ def test_a_file_is_read_in_pieces_and_sought(probe: Any, world: Path) -> None:
     assert fs.read(fd, 100) == (0, b"")  # the end
     assert fs.inst.fd_seek(fd, (-6) & (2**64 - 1), 2, 100) == 0 and fs.u64(100) == 7  # end
     assert fs.inst.fd_seek(fd, 0, 7, 100) == 28  # EINVAL: no such whence
-    assert fs.inst.fd_advise(fd, 0, 0, 0) == 0
+    assert fs.inst.fd_advise(fd, 0, 0, 0) == E_NOTCAPABLE  # the right to advise was not asked for
     assert fs.inst.fd_close(fd) == 0
     assert fs.inst.fd_close(fd) == E_BADF
     assert fs.read(fd, 1)[0] == E_BADF
@@ -259,6 +261,79 @@ def test_descriptors_are_renumbered(probe: Any, world: Path) -> None:
     assert (
         fs.inst.fd_fdstat_get(1, 80) == E_BADF and fs.inst.fd_fdstat_get(c, 80) == 0 and fs.mem[80] == 2
     )  # a character device
+
+
+def test_fd_advise_needs_its_right_and_a_known_advice(probe: Any, world: Path) -> None:
+    fs = Fs(probe, world)
+    _, fd = fs.open("hello.txt", rights=FILE_RIGHTS | ADVISE_RIGHT)
+    assert fs.inst.fd_advise(fd, 0, 0, 5) == 0  # no-reuse, the last of six
+    assert fs.inst.fd_advise(fd, 0, 0, 6) == E_INVAL
+    assert fs.inst.fd_advise(fd, 0, 0, 99) == E_INVAL
+
+
+def test_a_file_opened_only_to_set_its_size_is_opened_for_writing(probe: Any, world: Path) -> None:
+    """The mode follows the rights that need it (write, sync the data, allocate, set the size), as in uvwasi."""
+    fs = Fs(probe, world)
+    code, fd = fs.open("hello.txt", rights=FILE_RIGHTS | SET_SIZE_RIGHT)
+    assert code == 0
+    assert fs.inst.fd_filestat_set_size(fd, 3) == 0
+    assert (world / "hello.txt").read_bytes() == b"hel"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="a FIFO is POSIX")
+def test_space_is_allocated_for_a_file_and_not_for_a_pipe(probe: Any, world: Path) -> None:
+    fs = Fs(probe, world)
+    _, fd = fs.open("hello.txt", rights=FILE_RIGHTS | (1 << 8) | (1 << 21))  # fd_allocate
+    assert fs.inst.fd_allocate(fd, 0, 100) == 0
+    assert (world / "hello.txt").stat().st_size == 100
+    assert fs.inst.fd_allocate(fd, 0, 10) == 0  # inside: the file is not made shorter
+    assert (world / "hello.txt").stat().st_size == 100
+    os.mkfifo(world / "fifo")
+    writer = os.open(world / "fifo", os.O_RDWR | os.O_NONBLOCK)
+    try:
+        code, pipe = fs.open("fifo", rights=FILE_RIGHTS | (1 << 8), fdflags=4)
+        assert code == 0
+        assert fs.inst.fd_allocate(pipe, 0, 10) == E_SPIPE  # it was EINVAL from a truncate
+    finally:
+        os.close(writer)
+
+
+def test_the_standard_streams_can_be_let_go_and_give_up_rights_but_not_gain_them(probe: Any, world: Path) -> None:
+    import io
+
+    out = io.BytesIO()
+    fs = Fs(probe, world, stdout=out)
+    assert fs.write(1, b"x") == (0, 1)
+    assert fs.inst.fd_fdstat_get(1, 100) == 0
+    rights = fs.u64(100 + 8)
+    assert fs.inst.fd_fdstat_set_rights(1, rights, 0) == 0  # the same: nothing changes
+    assert fs.inst.fd_fdstat_set_rights(1, 0, 0) == 0  # all given up
+    assert fs.inst.fd_fdstat_set_rights(1, rights | (1 << 1), 0) == E_NOTCAPABLE  # fd_read is more than a stdout has
+    assert fs.inst.fd_close(1) == 0
+    assert fs.write(1, b"y")[0] == E_BADF  # the number is free (the stream of the host was not closed)
+    assert out.getvalue() == b"x"
+    assert not out.closed
+
+
+def test_a_bad_buffer_in_the_middle_leaves_nothing_written(probe: Any, world: Path) -> None:
+    """The buffers are all looked at before any is used: EFAULT with data already out and no count was found by comparing with uvwasi."""
+    import io
+
+    out = io.BytesIO()
+    fs = Fs(probe, world, stdout=out)
+    fs.put(3000, b"ab")
+    iovs = (
+        (3000).to_bytes(4, "little")
+        + (2).to_bytes(4, "little")
+        + (0xFFFFFFF0).to_bytes(4, "little")
+        + (8).to_bytes(4, "little")
+    )
+    fs.put(0, iovs)
+    assert fs.inst.fd_write(1, 0, 2, 100) == 21  # EFAULT
+    assert out.getvalue() == b""
+    _, fd = fs.open("hello.txt", rights=FILE_RIGHTS | (1 << 6))
+    assert fs.inst.fd_read(fd, 0, 2, 100) == 21
+    assert fs.inst.fd_write(fd, 0, 2, 100) == 21
 
 
 def test_the_first_snapshot_reads_with_its_own_whence_and_filestat(

@@ -135,7 +135,8 @@ def python_output(scenario: str, root: Path) -> str:
             r.lines.append("[long] " + _stat(r, 200, "[long] stat"))
             # a link that leads out, with a slash and without symlink-follow, must not be entered
             n = r.path(b"lkout/")
-            fsc("descriptor_open_at", hd, 0, 1000, n, 2, 1, 200), r.show("open lkout/ without follow", 200, 8)
+            fsc("descriptor_open_at", hd, 0, 1000, n, 2, 1, 200)
+            r.show("open lkout/ without follow", 200, 8)
             # open, read
             n = r.path(b"sub/f")
             fsc("descriptor_open_at", hd, 1, 1000, n, 0, 1, 200)

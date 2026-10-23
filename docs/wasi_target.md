@@ -39,7 +39,8 @@ Whatever the target, an import is answered in this order:
 
 What this changes in the stub:
 
-- `wasi=` exists only for the targets that have a host, and has the keys of the target: the arguments, the environment, the preopens, the streams, the clocks and the random bytes are common; WASI 0.2 adds what its world has (which sockets are allowed, `http`). A type checker refuses a key that the target does not know.
+- **Two layers.** The imports are the *behaviour* (a function the module calls; bound by the target, each one replaceable). `wasi=` is the *state of the built-in host* that the bound imports work from: data and hooks that are not imports. Without it a caller who only wants to give the arguments would have to write `fd_write` and `args_get`. So `wasi=` exists for the targets that have a built-in host (`wasm32-wasip1`, `wasm32-wasip2`), and not for `wasm32`.
+- **One core of keys, plus what only 0.2 has.** `args`, `env`, `preopens`, `readonly`, `stdin`, `stdout`, `stderr`, `clock` and `random` are the same for both; WASI 0.2 adds what its world has (which sockets are allowed, `http`). A type checker refuses a key the target does not know. Each key feeds imports (`args` feeds `args_get` and `args_sizes_get` in 0.1 and `wasi:cli/environment.get-arguments` in 0.2); `clock` and `random` are hooks at the level of the value (id to nanoseconds), not replacements of the raw call, so they need no access to the memory of the module. In 0.2 the arguments are still only an import that the host answers: a host of the caller's may replace that import instead of giving `args`.
 - The WASI modules of the imports are **optional replacements** (`NotRequired`, and each function in them too); only the modules that are not bound by the target are required. A replacement of `fd_write` (0.1) and of `[method]output-stream.write` (0.2) then looks the same.
 
 ## Where the types of WASI live

@@ -614,7 +614,7 @@ What meld takes and gives, as the second report put it:
 - **`--emit-manifest`** gives, for each export, the WIT signature, the core signature, the memory, the realloc, the post-return and the layout of the return area, which is enough to generate a typed layer for Python
   without a WIT parser of our own (the module then carries `meld.signature-manifest`).
 - **Because meld has a bug, an independent check is useful**: the same component on Wasmtime or through the plan of `wasmtime-environ`.
-- Not checked: meld on components with WASI 0.3 and async (`--explain` shows `async-lift`); how it handles the async built-in functions (most likely they stay imports for the host, as in `p3host.c`).
+- **meld 0.65 on WASI 0.3 and async: partial, and in places wrong** (a subagent's run, not repeated by hand). A single p3 component fuses to a valid core module, but the `[async-lower]` imports are renamed or replaced by meld-private imports (`actual`, `pulseengine:async`), so they do not stay the canonical names a p3 host looks up. `sock.c` is refused; `--component` refuses async components; fusing two async components leaves a dangling import. So any p3 support in fusedwasi that goes through meld is **partial** until meld keeps the async ABI; waiting for meld, not building around it. A draft of the upstream issue is kept apart from the repository.
 
 ### `wasmtime-environ` as a build library **[reported]**, the kinds **[again]**
 
@@ -1259,7 +1259,7 @@ the rule of the project that a built module needs nothing of `wasmext` when it r
 - `-Wl,--import-memory` instead of rewriting the guest's WAT.
 - A generator of C wiring from the plan of `wasmtime-environ`; an end-to-end run of the graph of jco through wasmext with built-in functions in C or Python (the simple component was done by hand in C by the reporter);
   nested components deeper than one level, exporting a resource outward, UTF-16 and Latin-1.
-- meld on components with WASI 0.3 and async (`--explain` shows `async-lift`); the WASI path of a meld-fused module in wasmext from Python (no WASI import was called in the reporter's run); the products `--shared` and `--exe`
+- meld on components with WASI 0.3 and async: checked only partly (see "`meld fuse`": renamed async imports, dangling import on two components, `--component` refuses); the WASI path of a meld-fused module in wasmext from Python (no WASI import was called in the reporter's run); the products `--shared` and `--exe`
   on a module with two memories.
 - A build of the Wasmtime runtime for aarch64, i686 and armv7 (`rustup` did not install the targets in the sandbox of the reporter).
 - WAMR with the component model (a build of it), w2c2, and `wac` on real components.

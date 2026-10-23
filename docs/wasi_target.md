@@ -65,21 +65,10 @@ Today a module of WASI 0.1 has `imports: None = None` in its stub, in the extens
   Imports = TypedDict('Imports', {'wasi_snapshot_preview1': NotRequired[WasiSnapshotPreview1], **the modules that are the caller's: required})
   ```
   For 0.1 the result is the errno (`int`); for 0.2 what the core signature has (`None`, or a handle as `int`), with the pointer of the result among the parameters. The names of the parameters, for the later `Protocol`, are extractable (0.1 from `fusedwasi.p1` with `inspect`, cross-checked with witx; 0.2 from the core signatures with `host`/`comp` dropped; the check against a real module is still to do).
-  ```python
-  class Fd_write(Protocol):
-      def __call__(self, fd: int, iovs: int, iovs_len: int, nwritten: int, /) -> int: ...   # the errno
-
-  class WasiSnapshotPreview1(TypedDict, total=False):
-      fd_write: Fd_write
-      args_get: Args_get
-      ...
-  Imports = TypedDict('Imports', {'wasi_snapshot_preview1': NotRequired[WasiSnapshotPreview1], **the modules that are the caller's: required})
-  ```
-  For 0.1 the result is the errno (`int`); for 0.2 what the core signature has (`None`, or a handle as `int`), with the pointer of the result among the parameters.
 - **The same types in the stub of the extension and in the wrapper for ctypes** (the wrapper has `imports: Any` today): `Instance.__init__(self, imports: Imports | None = None, *, wasi: Wasi | None = None)` in both.
 - **The definitions of the standard types move to fusedwasi, and the generator puts them into the stub.** What describes a standard module of WASI (the `TypedDict` of the module, the type of each function) is made once, from the same tables as the implementation (witx for 0.1, WIT for 0.2), and lives in fusedwasi. The generator takes them from there **when it makes a stub and writes into the stub the ones the module imports**, so a stub does not import fusedwasi at all: neither the type checker nor the run time needs it to read the stub. What the generator writes is plain `typing` (a `TypedDict` for the dictionary of a module; for the function a `Callable` now, a `Protocol` later, see above).
-- **A missing key is the default, an explicit `None` is `None`.** In `imports` and in `wasi=` alike: a key that is absent means "the built-in host gives it" (hence `NotRequired`, never a default value that hides the difference); a key set to `None` means the caller says explicitly that nothing is given (no `stdin`, no such import), and it is not turned into the default. So the value types are `Fd_write | None` where nothing-given is meaningful. What the module sees for a `None` import (a trap, ENOSYS) is not decided.
-- **The original** (`Instance.original(module, name)`) is typed with the same `Protocol`, so a wrapper has the signature in front of it.
+- **A missing key is the default, an explicit `None` is `None`.** In `imports` and in `wasi=` alike: a key that is absent means "the built-in host gives it" (hence `NotRequired`, never a default value that hides the difference); a key set to `None` means the caller says explicitly that nothing is given (no `stdin`, no such import), and it is not turned into the default. So the value types are `Callable[...] | None` where nothing-given is meaningful. What the module sees for a `None` import (a trap, ENOSYS) is not decided.
+- **The original** (`Instance.original(module, name)`) is typed with the same function type, so a wrapper has the signature in front of it.
 - For `host = "wasm32"` nothing of this is made: every import is generated as it is today (with the stable name).
 
 ## Where the types of WASI live

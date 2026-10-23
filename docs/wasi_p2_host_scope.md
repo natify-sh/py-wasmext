@@ -1,3 +1,5 @@
+> **Moved (2026-10-23): the host of WASI 0.2 is in [natify-sh/fusedwasi](https://github.com/natify-sh/fusedwasi)** (branch `wasi-p2`): the C in `src/fusedwasi/include/fusedwasi/p2/`, the Python in `src/fusedwasi/p2/`, the tests, `tools/wasi_p2_audit` and `tools/wasi_p2_conformance`. wasmext has it as a dev dependency (`uv.sources`). The paths below are those of before the move (`src/wasmext/c/p2/`, `src/wasmext/p2/`, `tests/test_wasi_p2_*.py`, `docs/experiments/wasi_p2_*`).
+
 # The size of a host of WASI 0.2
 
 Status: **a count, 2026-10-22; the tables below are of that day, and since then all 200 imports have a function in Python and in C (`audit_sigs.py`: 0 differences), the 5 stubs of the filesystem do the work, and sockets, filesystem and http run on Windows.** See the lines of the packages at the end for what each does and does not do. How a fact is known: **[read]** the WIT of the tag `v0.2.12` of `WebAssembly/WASI` (the repository also has the branch `wasi-0.2`), parsed with `wasm-tools component wit --json`;

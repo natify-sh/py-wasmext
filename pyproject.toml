@@ -53,11 +53,11 @@ wasmext = "wasmext._setuptools:finalize_distribution_options"
 
 [tool.setuptools]
 package-dir = { "" = "src" }
-packages = ["wasmext", "wasmext.p2"]
+packages = ["wasmext"]
 py-modules = ["wasmimport"]
 
 [tool.setuptools.package-data]
-wasmext = ["py.typed", "c/*.h", "c/p2/*.h"]
+wasmext = ["py.typed", "c/*.h"]
 
 [tool.setuptools_scm]
 root = "."
@@ -86,6 +86,7 @@ typeCheckingMode = "strict"
 
 [dependency-groups]
 dev = [
+    "fusedwasi",  # the host of WASI 0.2 (C headers and the Python twin); not used by wasmext itself yet
     "pytest>=9.1.1",
     "pytest-cov>=6",
     "pyright>=1.1.400",
@@ -97,3 +98,7 @@ dev = [
 wasm = [
     "ziglang>=0.17.0",
 ]
+
+[tool.uv.sources]
+# not released yet (0.0.0 on PyPI is a placeholder): the branch with the host of WASI 0.2
+fusedwasi = { git = "https://github.com/natify-sh/fusedwasi", branch = "wasi-p2" }

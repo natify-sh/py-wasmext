@@ -1,5 +1,5 @@
 version = 1
-revision = 5
+revision = 3
 requires-python = ">=3.11"
 resolution-markers = [
     "sys_platform == 'win32'",
@@ -133,6 +133,11 @@ wheels = [
 toml = [
     { name = "tomli", marker = "python_full_version <= '3.11'" },
 ]
+
+[[package]]
+name = "fusedwasi"
+version = "0.0.0"
+source = { git = "https://github.com/natify-sh/fusedwasi?branch=wasi-p2#f7436d84e292d46b63a70f0a2994c74184fc4890" }
 
 [[package]]
 name = "iniconfig"
@@ -401,6 +406,7 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "fusedwasi" },
     { name = "pyright" },
     { name = "pytest" },
     { name = "pytest-cov" },
@@ -420,6 +426,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "fusedwasi", git = "https://github.com/natify-sh/fusedwasi?branch=wasi-p2" },
     { name = "pyright", specifier = ">=1.1.400" },
     { name = "pytest", specifier = ">=9.1.1" },
     { name = "pytest-cov", specifier = ">=6" },

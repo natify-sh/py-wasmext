@@ -27,6 +27,10 @@
 4. **Security as a public duty.** The confinement of paths and the policy of sockets and http become promises to other people: fuzzing, a policy for reports, and the tests of the WASI testsuite for 0.1 and a comparison with Wasmtime for 0.2.
 5. **Versions.** A public library means semantic versions; while it is alpha it can say that it is unstable.
 
+## What it does to the check of the ABI (the owner, 2026-10-23)
+
+The fingerprint of the ABI reads every file directly in `src/wasmext/c/`, and the WASI of 0.1 is there (`wasi_core.h`, the back ends), so each fix inside WASI renewed the fingerprint without touching the ABI (it happened three times on 2026-10-23: the escape by a slash, the comparison with uvwasi, `fd_allocate` on macOS). With WASI in `fusedwasi` the fingerprint covers what is the ABI (the record, the capsule, the glue), and a change of WASI is a version of `fusedwasi`, which wasmext pins. The border that stays to be kept is the one between the two: the slot of an import `(fn, user)` and the state that is passed (`wasi_p2_state`, the state of 0.1) are the contract, so a change of their shape is a change of the major version of `fusedwasi` and of the ABI of wasmext both. `c/p2/` is out of the fingerprint already; the 0.1 part must first lose its `wasm_rt_memory_t` (see the table above) to be able to leave.
+
 ## Open
 
 * **The name is chosen (the owner, 2026-10-23): `fusedwasi`** (free everywhere; first written `fuzedwasi` by a slip; the name that is reserved is `fusedwasi`). **Reserved: the repository <https://github.com/natify-sh/fusedwasi> and the project <https://pypi.org/project/fusedwasi> on PyPI** (both empty; nothing is moved yet).

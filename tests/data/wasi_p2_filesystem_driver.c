@@ -189,7 +189,7 @@ int main(int argc, char **argv) {
         printf("hash a==b %d a==c %d a==at %d\n", !memcmp(memory + 408, memory + 438, 16), !memcmp(memory + 408, memory + 468, 16),
                !memcmp(memory + 408, memory + 498, 16));
         /* times */
-        FS(descriptor_set_times_at, hd, 1, 1000, n, 2, 1000, 0, 2, 2000, 5, 520), show("set_times_at", 520, 2);
+        FS(descriptor_set_times_at, hd, 1, 1000, n, 2, 1000, 0, 2, 2000, 500, 520), show("set_times_at", 520, 2);
         clear(530, 120);
         FS(descriptor_stat_at, hd, 1, 1000, n, 530), times("times", 530);
         FS(descriptor_set_times, a, 0, 0, 0, 1, 0, 0, 540), show("set_times on a read-only file", 540, 2);

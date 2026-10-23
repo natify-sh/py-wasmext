@@ -347,7 +347,7 @@ WASI_P2_FN int wasi_p2_target_is_dir(const char *dir, const char *target) {
         }
         p = e;
     }
-    char full[WASI_P2_PATH_MAX];
+    char full[WASI_P2_PATH_MAX + 8];  /* the prefix and what is in `out` */
     snprintf(full, sizeof full, "\\\\?\\%s", out);
     wchar_t *w = wasi_p2_wide(full);
     DWORD attrs = w ? GetFileAttributesW(w) : INVALID_FILE_ATTRIBUTES;

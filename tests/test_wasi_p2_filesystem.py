@@ -280,7 +280,7 @@ def python_output(scenario: str, root: Path) -> str:
                 f"hash a==b {int(m[408:424] == m[438:454])} a==c {int(m[408:424] == m[468:484])} a==at {int(m[408:424] == m[498:514])}"
             )
             # times
-            fsc("descriptor_set_times_at", hd, 1, 1000, n, 2, 1000, 0, 2, 2000, 5, 520)
+            fsc("descriptor_set_times_at", hd, 1, 1000, n, 2, 1000, 0, 2, 2000, 500, 520)
             r.show("set_times_at", 520, 2)
             r.clear(530, 120)
             fsc("descriptor_stat_at", hd, 1, 1000, n, 530)
@@ -407,7 +407,7 @@ def test_values(tmp_path: Path) -> None:
     )
     assert ro_write[0] == 1 and ro_write[4] == code("read-only")
     assert "same 1 0" in lines and "hash a==b 1 a==c 0 a==at 1" in lines
-    assert any(line.startswith("times atime 1000.0 mtime 2000.5") for line in lines)
+    assert any(line.startswith("times atime 1000.0 mtime 2000.500") for line in lines)
     assert any(line.startswith("no-change, now atime 1000.0 mtime 1700000000.123456789") for line in lines)
     assert any(line.startswith("error code") and line.endswith("010e") for line in lines)  # some(is-directory)
     assert (

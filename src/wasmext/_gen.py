@@ -24,6 +24,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from ._wasi_p2_table import FUNCS as _P2_FUNCS
+from ._wasi_p2_table import INCLUDES as _P2_INCLUDES
 from ._wasm import FuncType, GlobalType, Import, Limits, Module, TableType, ValType
 
 __all__ = ["GenError", "Glue", "generate", "mangle"]
@@ -194,6 +196,35 @@ def check_host(host: str) -> str:
         extra = " (WASI 0.3 is not supported)" if host == "wasm32-wasip3" else ""
         raise GenError(f"host {host!r} is not one of {', '.join(HOSTS)}{extra}")
     return host
+
+
+def _p2_cname(module: str, name: str) -> str:
+    """The name of the function of fusedwasi for an import of WASI 0.2: the module without its version and the name, every character that is not a letter or
+    a digit turned into `_` (`wasi:io/streams@0.2.12` `[method]output-stream.write` is `fusedwasi_wasi_io_streams_output_stream_write`)."""
+    base = module.split("@")[0].replace(":", "/")
+    if name.startswith("[resource-drop]"):
+        name = name[len("[resource-drop]") :] + "-drop"
+    elif name.startswith("[constructor]"):
+        name = name[len("[constructor]") :] + "-new"
+    name = re.sub(r"^\[(method|static)\]", "", name).replace(".", "-")
+    return "fusedwasi_" + re.sub(r"[^0-9A-Za-z]+", "_", f"{base}/{name}").strip("_")
+
+
+def _p2_headers(calls: dict[tuple[str, str], str]) -> list[str]:
+    """The headers of fusedwasi for the functions in `calls`, with the ones they include, the core and the streams that wasmext's own host needs (dependencies first)."""
+    wanted = ["wasi_p2_core.h", "wasi_p2_io.h"] + [_P2_FUNCS[c][0] for c in calls.values()]
+    order: list[str] = []
+
+    def visit(header: str) -> None:
+        if header in order:
+            return
+        for dep in _P2_INCLUDES.get(header, ()):
+            visit(dep)
+        order.append(header)
+
+    for header in wanted:
+        visit(header)
+    return order
 
 
 # the 46 calls of WASI 0.1 and their signatures (the witx files of the wasi-0.1 branch of WebAssembly/WASI): wasi_p1.h has a
@@ -463,7 +494,15 @@ def generate(
     wasmext, goes into the header of the stub. `host` says who stands on the other side of the imports (see HOSTS): only with
     `wasm32-wasip1` are the imports of `wasi_snapshot_preview1` and `wasi_unstable` answered by wasmext; with `wasm32` all of them are the caller's."""
     host = check_host(host)
-    wasi_headers = _WASI_HEADERS if host == "wasm32-wasip1" else {}
+    wasi2 = host == "wasm32-wasip2"
+    wasi_headers: dict[str, str] = dict(_WASI_HEADERS) if host == "wasm32-wasip1" else {}
+    if wasi2:  # the imports of WASI 0.2 (any 0.2.x: the patch releases are compatible) are answered by the host
+        wasi_headers = {
+            imp.module: ""
+            for imp in module.imports
+            if imp.kind == "func" and imp.module.startswith("wasi:") and "@0.2." in imp.module
+        }
+    p2_calls: dict[tuple[str, str], str] = {}  # (module, field): the function of fusedwasi
     host_name = host
     last = _ident(name)
     prefix = mangle(last, module=True)
@@ -489,7 +528,20 @@ def generate(
             )  # a funcref in the signature of an import is not supported
             if reason:
                 raise GenError(f"import {imp.module}.{imp.name} {reason}: not supported yet")
-            if imp.module in wasi_headers:
+            if imp.module in wasi_headers and wasi2:
+                cname = _p2_cname(imp.module, imp.name)
+                entry = _P2_FUNCS.get(cname)
+                if entry is None:
+                    raise GenError(f"import {imp.module}.{imp.name} is not a function of WASI 0.2 that fusedwasi has")
+                _, _, ptypes, rtype = entry
+                if tuple(str(t) for t in imp.type.params) != ptypes or tuple(str(t) for t in imp.type.results) != (
+                    (rtype,) if rtype else ()
+                ):
+                    raise GenError(
+                        f"import {imp.module}.{imp.name} is {_signature_code(imp.type)}, fusedwasi says ({', '.join(ptypes)}) -> ({rtype})"
+                    )
+                p2_calls[(imp.module, imp.name)] = cname
+            elif imp.module in wasi_headers:
                 wanted = _WASI_SIGNATURES[imp.module].get(imp.name)
                 if wanted is None:
                     raise GenError(f"import {imp.module}.{imp.name} is not a function of {imp.module}")
@@ -626,6 +678,10 @@ def generate(
     )
     if uses_wasi and "memory" not in memories:
         raise GenError(f"the module imports {wasi_modules[0]} but does not export its memory as 'memory'")
+    if wasi2 and uses_wasi and "cabi_realloc" not in {n for n, _ in funcs}:
+        raise GenError(
+            f"the module imports {wasi_modules[0]} but does not export 'cabi_realloc' (a component's allocator: the host needs it for strings and lists)"
+        )
     w: list[str] = []  # the Python layer (<name>_py.c)
     add = w.append
     h: list[str] = []  # the glue of the module (<name>_glue.h): typed C, no Python.h
@@ -640,8 +696,12 @@ def generate(
     hadd(f"#define {guard}")
     hadd(f'#include "{last}_w2c.h"')
     hadd('#include "wasmext_glue.h"')
-    for module_name in wasi_modules:
-        hadd(f'#include "{wasi_headers[module_name]}"')
+    if wasi2 and uses_wasi:
+        for header in _p2_headers(p2_calls):
+            hadd(f'#include "{header}"')
+    else:
+        for module_name in wasi_modules:
+            hadd(f'#include "{wasi_headers[module_name]}"')
     tags = module.tags
     notes: list[str] = []
     for tag_index, tag in enumerate(tags):
@@ -657,13 +717,34 @@ def generate(
             f"the module imports {', '.join(wasi_names)}; with host {host_name!r} they are yours to give in imports "
             "(if this is a WASI program, say host 'wasm32-wasip1')"
         )
+    wasi02 = sorted(
+        {
+            imp.module
+            for imp in module.imports
+            if imp.kind == "func" and imp.module.startswith("wasi:") and "@0.2." in imp.module
+        }
+    )
+    if wasi02 and host_name == "wasm32":
+        notes.append(
+            f"the module imports {', '.join(wasi02)} (WASI 0.2); with host 'wasm32' they are yours to give in imports "
+            "(if this is a WASI 0.2 program, say host 'wasm32-wasip2')"
+        )
     other_wasi = sorted({imp.module for imp in module.imports if imp.kind == "func" and imp.module.startswith("wasi:")})
     if other_wasi and host_name == "wasm32-wasip1":
         notes.append(
             f"the module also imports {', '.join(other_wasi)}, which host 'wasm32-wasip1' does not answer: they are yours to give in imports"
         )
-    if host_name == "wasm32-wasip2":
-        notes.append("host 'wasm32-wasip2': wasmext does not answer the imports of WASI 0.2 yet; give them in imports")
+    other_wasi3 = sorted(
+        {
+            imp.module
+            for imp in module.imports
+            if imp.kind == "func" and imp.module.startswith("wasi:") and "@0.2." not in imp.module
+        }
+    )
+    if other_wasi3 and host_name == "wasm32-wasip2":
+        notes.append(
+            f"the module also imports {', '.join(other_wasi3)}, which host 'wasm32-wasip2' does not answer (only WASI 0.2): they are yours to give in imports"
+        )
     if tags:
         hadd(
             "/* The tags of the module: their identities (a table that wasmext adds to the C of wasm2c, in the order of the tags) and the"
@@ -894,7 +975,9 @@ def generate(
     add("    Py_DECREF(capsule);")
     add("}")
     if wasi_modules:
-        add('#include "wasi_python.h"')  # the host of the core of WASI: after the glue, whose WASI headers it needs
+        add(
+            '#include "wasi2_python.h"' if wasi2 else '#include "wasi_python.h"'
+        )  # the host of the core of WASI: after the glue, whose WASI headers it needs
     add("")
     if shares_tables:
         add("#ifndef WASMEXT_TRAP_HANDLER")
@@ -944,7 +1027,9 @@ def generate(
         add("static PyObject *UncaughtExceptionError;")
     if uses_wasi:
         add("static PyObject *WasiExitError, *WasiSignalError, *WasiTerminatedError;")
+    if uses_wasi and not wasi2:
         add("static PyTypeObject *HostType;")
+    if uses_wasi:
         add(
             "/* A call of WASI that the caller gave as None: nothing is given. A call that answers with an errno answers ENOSYS (52), the other is a trap. */"
         )
@@ -1018,7 +1103,13 @@ def generate(
     hadd(f"    w2c_{prefix} inst;")
     hadd("    int instantiated;")
     hadd("    int initialized;  /* the `_initialize` of a reactor has run */")
-    if uses_wasi:
+    if uses_wasi and wasi2:
+        hadd(
+            "    fusedwasi_p2_state wasi2;  /* the host of WASI 0.2 (fusedwasi, p2/): made by the glue, its Python side is `wasi2_py` */"
+        )
+        hadd("    void *wasi2_py;")
+        hadd("    char p2_message[160];  /* why the host trapped, when it did not say with an exception */")
+    elif uses_wasi:
         hadd("    fusedwasi_p1_state *wasi;")
     for i, host in enumerate(hosts):
         hadd(f"    struct w2c_{mangle(host, module=True)} host{i};")
@@ -1125,6 +1216,13 @@ def generate(
     add("    (void)self;")
     add("    if (code == (int)WASMEXT_TRAP_HOST) {")
     add("        if (PyErr_Occurred()) return;")
+    if uses_wasi and wasi2:
+        add(
+            "        if (self->core.wasi2.exited) { wasmext_wasi2_raise_exit((wasmext_wasi2_py *)self->core.wasi2_py, self->core.wasi2.exit_code); return; }"
+        )
+        add(
+            "        if (self->core.p2_message[0]) { PyErr_SetString(TrapError, self->core.p2_message); self->core.p2_message[0] = 0; return; }"
+        )
     add(
         "        /* a function of another instance that this one calls through a link failed in its own host function: if that instance keeps the exception"
     )
@@ -1148,7 +1246,15 @@ def generate(
     add('        PyErr_SetString(TrapError, "a host function of the WebAssembly module failed");')
     add("        return;")
     add("    }")
-    if uses_wasi:
+    if uses_wasi and wasi2:
+        add("    if (code == (int)WASMEXT_TRAP_ENDED) {")
+        add(
+            "        if (self->core.wasi2.exited) wasmext_wasi2_ended((wasmext_wasi2_py *)self->core.wasi2_py, self->core.wasi2.exit_code);"
+        )
+        add('        else PyErr_SetString(TrapError, "the WebAssembly program of a linked instance has ended");')
+        add("        return;")
+        add("    }")
+    elif uses_wasi:
         add("    if (code == (int)WASMEXT_TRAP_ENDED) {")
         add("        if (self->core.wasi != NULL && self->core.wasi->finished) wasmext_wasi_check(self->core.wasi);")
         add('        else PyErr_SetString(TrapError, "the WebAssembly program of a linked instance has ended");')
@@ -1293,7 +1399,9 @@ def generate(
     for i, host in enumerate(hosts):
         add(f"    for (int k = 0; k < {slots.get(host, 0)}; k++) Py_VISIT(self->hold{i}.fn[k]);")
         add(f"    for (int k = 0; k < {slots.get(host, 0)}; k++) Py_VISIT(self->hold{i}.lo[k]);")
-    if uses_wasi:
+    if uses_wasi and wasi2:
+        add("    wasmext_wasi2_traverse((wasmext_wasi2_py *)self->core.wasi2_py, visit, arg);")
+    elif uses_wasi:
         add("    if (self->core.wasi != NULL) wasmext_wasi_traverse(self->core.wasi, visit, arg);")
     for g in global_imports:
         add(f"    Py_VISIT(self->hold{g.host}.go{g.slot});")
@@ -1312,7 +1420,9 @@ def generate(
     for i, host in enumerate(hosts):
         add(f"    for (int k = 0; k < {slots.get(host, 0)}; k++) Py_CLEAR(self->hold{i}.fn[k]);")
         add(f"    for (int k = 0; k < {slots.get(host, 0)}; k++) Py_CLEAR(self->hold{i}.lo[k]);")
-    if uses_wasi:
+    if uses_wasi and wasi2:
+        add("    wasmext_wasi2_clear((wasmext_wasi2_py *)self->core.wasi2_py);")
+    elif uses_wasi:
         add("    if (self->core.wasi != NULL) wasmext_wasi_clear(self->core.wasi);")
     for g in global_imports:
         add(f"    Py_CLEAR(self->hold{g.host}.go{g.slot});")
@@ -1333,7 +1443,10 @@ def generate(
     add("    if (self->weakreflist != NULL) PyObject_ClearWeakRefs((PyObject *)self);")
     add(f"    {last}_glue_free(&self->core);")
     add("    Instance_clear(self);")
-    if uses_wasi:
+    if uses_wasi and wasi2:
+        add("    fusedwasi_p2_free(&self->core.wasi2);")
+        add("    wasmext_wasi2_free((wasmext_wasi2_py *)self->core.wasi2_py);")
+    elif uses_wasi:
         add("    wasmext_wasi_free(self->core.wasi);")
     add("    ((freefunc)PyType_GetSlot(tp, Py_tp_free))((PyObject *)self);")
     add("    Py_DECREF(tp);")
@@ -1395,7 +1508,13 @@ def generate(
     if funcref_args:
         add("    self->refs = PyList_New(0);")
         add("    if (self->refs == NULL) { Py_DECREF(self); return NULL; }")
-    if uses_wasi:
+    if uses_wasi and wasi2:
+        add(f"    {last}_p2_init(&self->core);")
+        add(
+            f"    self->core.wasi2_py = wasmext_wasi2_new(&self->core.wasi2, &self->core, wasi, WasiExitError, WasiSignalError, WasiTerminatedError, {_c_string(last)});"
+        )
+        add("    if (self->core.wasi2_py == NULL) { Py_DECREF(self); return NULL; }")
+    elif uses_wasi:
         add(
             f"    self->core.wasi = wasmext_wasi_new(wasi, WasiExitError, WasiSignalError, WasiTerminatedError, {_c_string(last)});"
         )
@@ -1428,7 +1547,9 @@ def generate(
                 )
                 add("            if (v == NULL) PyErr_Clear();")
                 add("        }")
-                nothing = "errno" if [str(t) for t in imp.func.results] == ["i32"] else "trap"
+                nothing = (
+                    "errno" if not wasi2 and [str(t) for t in imp.func.results] == ["i32"] else "trap"
+                )  # 0.2 has no errno to answer with
                 add(
                     "        if (v == Py_None) {  /* given as None: nothing is given, which is not the call of wasmext */"
                 )
@@ -1439,11 +1560,15 @@ def generate(
                 add("            if (v == NULL) { Py_DECREF(self); return NULL; }")
                 add("        }")
                 add("        if (v == NULL) {")
-                own = imp.module == _WASI_UNSTABLE and imp.field in _WASI_UNSTABLE_OWN
-                add(
-                    f"            {host}.fn[{imp.slot}] = (void *)fusedwasi_p1_{'unstable_' if own else ''}{imp.field};"
-                )
-                add(f"            {host}.user[{imp.slot}] = self->core.wasi;")
+                if wasi2:
+                    add(f"            {host}.fn[{imp.slot}] = (void *){last}_p2_import{k};")
+                    add(f"            {host}.user[{imp.slot}] = &self->core;")
+                else:
+                    own = imp.module == _WASI_UNSTABLE and imp.field in _WASI_UNSTABLE_OWN
+                    add(
+                        f"            {host}.fn[{imp.slot}] = (void *)fusedwasi_p1_{'unstable_' if own else ''}{imp.field};"
+                    )
+                    add(f"            {host}.user[{imp.slot}] = self->core.wasi;")
                 add("        } else {")
             else:
                 add(
@@ -1671,7 +1796,9 @@ def generate(
     # ---- the exports, as typed C functions of the glue (no Python): `result f(void *instance, parameters..., int *trapped)` ----
     # A WASI program is over when it calls proc_exit or proc_raise; a command (it exports _start) is over after a trap too
     is_command = any(exp_name == "_start" for exp_name, _ in funcs)
-    finish_on_trap = "fusedwasi_p1_finish(self->wasi, FUSEDWASI_P1_END_TRAP, 0); " if uses_wasi and is_command else ""
+    finish_on_trap = (
+        "fusedwasi_p1_finish(self->wasi, FUSEDWASI_P1_END_TRAP, 0); " if uses_wasi and not wasi2 and is_command else ""
+    )
     hadd("/* instantiation: 0, or the code of the trap of the start function */")
     hadd(f"static inline int {last}_glue_instantiate({last}_instance *self) {{")
     # The runtime of wasm2c does not check the allocation of a table (1.0.42: a NULL that the first use trips over; later releases: abort()). The same
@@ -1703,7 +1830,62 @@ def generate(
     start = next((i for i, (n_, f_) in enumerate(funcs) if n_ == "_start" and not f_.params and not f_.results), None)
     if start is not None:
         hadd(f"#define {last.upper()}_START {last}_call{start}")
-    if uses_wasi:
+    if uses_wasi and wasi2:
+        hadd(
+            "/* WASI 0.2: the host of fusedwasi over the imports. Its state is `self->wasi2`; the memory is set again before each call (it moves when it grows). */"
+        )
+        hadd(f"static inline void {last}_p2_refresh({last}_instance *self) {{")
+        hadd(f"    wasm_rt_memory_t *m_ = w2c_{prefix}_{mangle('memory')}(&self->inst);")
+        hadd("    fusedwasi_p2_set_memory(&self->wasi2, 0, m_->data, m_->size);")
+        hadd("}")
+        hadd(
+            f"static uint32_t {last}_p2_realloc(fusedwasi_p2_state *s, uint32_t comp, uint32_t old_ptr, uint32_t old_size, uint32_t align, uint32_t new_size) {{"
+        )
+        hadd("    (void)comp;")
+        hadd(
+            f"    {last}_instance *self = *({last}_instance **)s->user;  /* the first member of what `user` points to */"
+        )
+        hadd(
+            f"    uint32_t r = w2c_{prefix}_{mangle('cabi_realloc')}(&self->inst, old_ptr, old_size, align, new_size);"
+        )
+        hadd(f"    {last}_p2_refresh(self);")
+        hadd("    return r;")
+        hadd("}")
+        hadd(f"static void {last}_p2_trap(fusedwasi_p2_state *s, const char *message) {{")
+        hadd(f"    {last}_instance *self = *({last}_instance **)s->user;")
+        hadd('    snprintf(self->p2_message, sizeof self->p2_message, "%s", message);')
+        hadd("    wasm_rt_trap(WASMEXT_TRAP_HOST);")
+        hadd("}")
+        hadd(f"static inline void {last}_p2_init({last}_instance *self) {{")
+        hadd("    fusedwasi_p2_init(&self->wasi2);")
+        hadd(f"    self->wasi2.trap = {last}_p2_trap;")
+        hadd(f"    self->wasi2.realloc = {last}_p2_realloc;")
+        hadd("}")
+        for k, imp in enumerate(imports):
+            if imp.module not in wasi_headers:
+                continue
+            cname = p2_calls[(imp.module, imp.field)]
+            has_comp = _P2_FUNCS[cname][1]
+            params = "".join(f", {_CTYPE[t]} a{j}" for j, t in enumerate(imp.func.params))
+            ret = _CTYPE[imp.func.results[0]] if imp.func.results else "void"
+            args = "".join(f", a{j}" for j in range(len(imp.func.params)))
+            hadd(f"/* {_cc(imp.module)}.{_cc(imp.field)}{_signature(imp.func)} */")
+            hadd(f"static {ret} {last}_p2_import{k}(void *user{params}, int *trapped) {{")
+            hadd(f"    {last}_instance *self = ({last}_instance *)user;")
+            hadd("    (void)trapped;")
+            hadd(f"    {last}_p2_refresh(self);")
+            hadd(f"    {'return ' if imp.func.results else ''}{cname}(&self->wasi2{', 0' if has_comp else ''}{args});")
+            hadd("}")
+        hadd(f"static inline int {last}_wasi_bind({last}_instance *self) {{")
+        hadd(f"    {last}_p2_init(self);")
+        for k, imp in enumerate(imports):
+            if imp.module in wasi_headers:
+                hadd(f"    self->host{imp.host}.fn[{imp.slot}] = (void *){last}_p2_import{k};")
+                hadd(f"    self->host{imp.host}.user[{imp.slot}] = self;")
+        hadd("    return 0;")
+        hadd("}")
+        hadd("")
+    elif uses_wasi:
         hadd("/* the imports of WASI over the functions of the core, with the state `self->wasi` (made first): 0 */")
         hadd(f"static inline int {last}_wasi_bind({last}_instance *self) {{")
         for imp in imports:
@@ -1739,7 +1921,9 @@ def generate(
             hadd(f"    {ret} zero;")
             hadd("    memset(&zero, 0, sizeof zero);")
         hadd(f"    {last}_instance *self = ({last}_instance *)((char *)inst - offsetof({last}_instance, inst));")
-        if uses_wasi:
+        if uses_wasi and wasi2:
+            hadd(f"    if (self->wasi2.exited) {{ *trapped = (int)WASMEXT_TRAP_ENDED; {give} }}")
+        elif uses_wasi:
             hadd(
                 f"    if (self->wasi != NULL && self->wasi->finished) {{ *trapped = (int)WASMEXT_TRAP_ENDED; {give} }}"
             )
@@ -2102,7 +2286,7 @@ def generate(
             add("}")
         add("")
     host_calls = [(k, imp) for k, imp in enumerate(imports) if imp.module in wasi_headers]
-    if uses_wasi:
+    if uses_wasi and not wasi2:
         add(
             "/* ---- the Host: what answers the imports of WASI (wasm32-wasip1) and the originals of its calls, for Python ---- */"
         )
@@ -2207,7 +2391,7 @@ def generate(
     add(
         '    {"__exports__", (getter)Instance_exports, NULL, "{name: a reference to the export}: what another instance can take as an import", NULL},'
     )
-    if uses_wasi:
+    if uses_wasi and not wasi2:
         add(
             '    {"__host__", (getter)Instance_host, NULL, "the Host: what answers the imports of WASI, and the originals of its calls", NULL},'
         )
@@ -2320,7 +2504,7 @@ def generate(
             f'    UncaughtExceptionError = PyErr_NewExceptionWithDoc({_c_string(name + ".UncaughtException")}, "An exception of WebAssembly that nothing caught (.tag, .values)", TrapError, NULL);'
         )
     add("    InstanceType = (PyTypeObject *)PyType_FromSpec(&instance_spec);")
-    if uses_wasi:
+    if uses_wasi and not wasi2:
         add("    HostType = (PyTypeObject *)PyType_FromSpec(&host_spec);")
     if memories:
         add("    MemoryType = (PyTypeObject *)PyType_FromSpec(&memory_spec);")
@@ -2329,7 +2513,8 @@ def generate(
         add("    FunctionType = (PyTypeObject *)PyType_FromSpec(&function_spec);")
     add(
         "    if (!TrapError || !LinkError || !InstanceType"
-        + (" || !WasiTerminatedError || !WasiExitError || !WasiSignalError || !HostType" if uses_wasi else "")
+        + (" || !WasiTerminatedError || !WasiExitError || !WasiSignalError" if uses_wasi else "")
+        + (" || !HostType" if uses_wasi and not wasi2 else "")
         + (" || !MemoryType" if memories else "")
         + (" || !TableType || !FunctionType" if shares_tables else "")
         + (" || !UncaughtExceptionError" if tags else "")
@@ -2339,6 +2524,7 @@ def generate(
         add('    if (PyModule_AddObjectRef(m, "WasiTerminated", WasiTerminatedError) < 0) goto fail;')
         add('    if (PyModule_AddObjectRef(m, "WasiExit", WasiExitError) < 0) goto fail;')
         add('    if (PyModule_AddObjectRef(m, "WasiSignal", WasiSignalError) < 0) goto fail;')
+    if uses_wasi and not wasi2:
         add('    if (PyModule_AddObjectRef(m, "Host", (PyObject *)HostType) < 0) goto fail;')
     add('    if (PyModule_AddObjectRef(m, "Trap", TrapError) < 0) goto fail;')
     if tags:
@@ -2363,6 +2549,8 @@ def generate(
         memory_imports=bool(memory_imports),
         table_imports=bool(table_imports),
     )
+    if wasi2 and uses_wasi:
+        reason = "the library does not answer the imports of WASI 0.2 yet (host 'wasm32-wasip2' is built into the extension only)"
     api_header = shared = ""
     api_model = None
     if reason is None:
@@ -2403,8 +2591,13 @@ def generate(
             tables,
             host_name,
             frozenset(wasi_modules),
+            wasi2,
         ),
-        tuple(wasi_headers[m] for m in wasi_modules),
+        (
+            ("wasi2_python.h", *_p2_headers(p2_calls))
+            if wasi2 and uses_wasi
+            else tuple(wasi_headers[m] for m in wasi_modules)
+        ),
         api_header=api_header,
         shared=shared,
         shared_unsupported=reason or "",
@@ -3236,6 +3429,7 @@ def _stub(
     tables: list[str] | None = None,
     host: str = "wasm32",
     bound: frozenset[str] = frozenset(),
+    wasi2: bool = False,
 ) -> str:
     """The `.pyi` for the extension module: what a type checker and an editor can know of an extension."""
     # The formatter and the linter of the project the stub lands in leave a generated file alone (the second noqa is
@@ -3280,7 +3474,11 @@ def _stub(
             "    name: str",
             "",
         ]
-        lines += _WASI_STUB
+        lines += (
+            [line.replace("WasiP1", "WasiP2").replace("wasm32-wasip1", "wasm32-wasip2") for line in _WASI_STUB]
+            if wasi2
+            else _WASI_STUB
+        )
     lines.append("")
     by_module: dict[str, list[Import]] = {}
     for imp in imports:
@@ -3300,7 +3498,7 @@ def _stub(
             f"{_py_string(m)}: {f'NotRequired[{type_names[m]}]' if m in bound else type_names[m]}" for m in by_module
         )
         lines += [f"Imports = TypedDict('Imports', {{{fields}}})", ""]
-    if wasi:  # the host answers some imports: its originals, as the calls of wasmext have them
+    if wasi and not wasi2:  # the host answers some imports: its originals, as the calls of wasmext have them
         host_names = {m: f"_Host{type_names[m]}" for m in by_module if m in bound}
         for module_name, type_name in host_names.items():
             items = ", ".join(f"{_py_string(m.name)}: {_import_type(m.type)}" for m in by_module[module_name])
@@ -3337,7 +3535,7 @@ def _stub(
             else "    def __init__(self) -> None: ..."
         )
     lines += ["    @property", "    def __exports__(self) -> dict[str, object]: ..."]
-    if wasi:
+    if wasi and not wasi2:
         lines += ["    @property", "    def __host__(self) -> Host: ..."]
     if names:  # the table that instance['name'] gives is a Table
         for n in names:

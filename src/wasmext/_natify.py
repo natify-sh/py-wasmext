@@ -54,13 +54,14 @@ C_DIR = Path(__file__).parent / "c"
 
 
 def shared_header(name: str) -> Path:
-    """Where a header that a module is built with comes from: the C of wasmext, or the WASI 0.1 of the package fusedwasi (`fusedwasi/p1/`)."""
+    """Where a header that a module is built with comes from: the C of wasmext, or the WASI of the package fusedwasi (`fusedwasi/p1/` for 0.1, `fusedwasi/p2/` for 0.2)."""
     own = C_DIR / name
     if own.is_file():
         return own
     from fusedwasi import get_include
 
-    return Path(get_include()) / "fusedwasi" / "p1" / name
+    p1 = Path(get_include()) / "fusedwasi" / "p1" / name
+    return p1 if p1.is_file() else Path(get_include()) / "fusedwasi" / "p2" / name
 
 
 # A big module is split into files that gcc and the others compile at the same time: one file of 3 million lines was not compiled
@@ -836,7 +837,7 @@ def natify(
 
     `host` says who stands on the other side of the imports of the modules: `"wasm32"` (the default; every import is yours to give in `imports`),
     `"wasm32-wasip1"` (the imports of `wasi_snapshot_preview1` and `wasi_unstable` are answered by wasmext, and `wasi=` configures them) or
-    `"wasm32-wasip2"` (named, but wasmext answers none of the imports of WASI 0.2 yet). It is not guessed from the names of the imports. It is
+    `"wasm32-wasip2"` (the imports of `wasi:*@0.2.x` are answered by wasmext, with the C host of fusedwasi, in the extension; `wasi=` configures them; the module must export `cabi_realloc`; not yet in the library or the wrapper for ctypes). It is not guessed from the names of the imports. It is
     an input of the C and is told by the module as `__host__`. `"wasm32-unknown-unknown"` is another name for `"wasm32"`. See docs/wasi_target.md.
 
     `product` is what is made of each module: `"extension"` (the default, a Python extension), `"shared"` (a shared library with a C API, and

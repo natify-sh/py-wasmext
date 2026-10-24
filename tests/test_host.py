@@ -74,8 +74,8 @@ def test_imports_that_do_not_belong_to_the_host_are_plain_imports_with_a_note() 
     assert glue.wasi_headers == ("wasi_p1.h",)
     assert any("wasi:cli/environment@0.2.12" in note and "yours to give" in note for note in glue.notes)
     assert "wasi:cli/environment@0.2.12" in glue.stub  # typed as the caller's
-    p2 = generate(parse(both), "m", host="wasm32-wasip2")
-    assert not p2.wasi_headers and any("does not answer the imports of WASI 0.2" in n for n in p2.notes)
+    only_p1 = generate(parse(_wasm((WASI, "proc_exit"))), "m", host="wasm32-wasip2")
+    assert not only_p1.wasi_headers and any(WASI in n and "yours to give" in n for n in only_p1.notes)
 
 
 def test_a_module_built_with_the_default_host_asks_for_its_wasi_imports(build_extension: Builder) -> None:

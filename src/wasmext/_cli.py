@@ -104,7 +104,7 @@ def _parser() -> argparse.ArgumentParser:
         default="wasm32",
         choices=[*HOSTS, *HOST_ALIASES],
         help="who stands on the other side of the imports: wasm32 (the default; every import is yours to give), wasm32-wasip1 (wasmext answers "
-        "the imports of wasi_snapshot_preview1 and wasi_unstable; a program needs it) or wasm32-wasip2 (named; the imports of WASI 0.2 are yours for now)",
+        "the imports of wasi_snapshot_preview1 and wasi_unstable; a program needs it) or wasm32-wasip2 (wasmext answers the imports of wasi:*@0.2 of the extension: wasi:cli, clocks, io, random, ...; wasi= configures them)",
     )
     what = parser.add_mutually_exclusive_group()
     what.add_argument(

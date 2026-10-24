@@ -30,7 +30,7 @@ def main(out: Path) -> int:
         name = Path(source).stem
         wasm = out / f"{name}.wasm"
         subprocess.run([wabt / "bin" / "wat2wasm", DATA / source, "-o", wasm], check=True)
-        glue = generate(parse(wasm.read_bytes()), name)
+        glue = generate(parse(wasm.read_bytes()), name, host="wasm32-wasip1")  # the command is a WASI program
         (out / f"{name}_glue.h").write_text(glue.header, encoding="utf-8")
         subprocess.run(
             [wabt / "bin" / "wasm2c", wasm, "-o", out / f"{name}_w2c.c", f"--module-name={name}"], check=True

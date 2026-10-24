@@ -188,3 +188,36 @@ def test_an_import_of_the_caller_given_as_none_is_not_linked(
     with pytest.raises(mod.LinkError):
         mod.Instance({"env": {"f": None}})
     assert mod.Instance({"env": {"f": lambda: 7}}).g() == 7
+
+
+def test_an_import_wins_over_the_hook_of_wasi_in_both_front_ends(build_front_end: Builder, front_end: str) -> None:
+    """The hook `wasi={'stdout': ...}` feeds `fd_write`; if the caller also gives `fd_write` as an import, the import wins."""
+    mod = build_front_end(DATA / "wasi_hello.wat", f"host_wins_{front_end}", host="wasm32-wasip1")
+    hooked: list[bytes] = []
+    imported: list[tuple[int, ...]] = []
+
+    def fd_write(*args: int) -> int:
+        imported.append(args)
+        return 0
+
+    with pytest.raises(mod.WasiExit):
+        mod.Instance({WASI: {"fd_write": fd_write}}, wasi={"stdout": hooked.append})._start()  # pyright: ignore[reportPrivateUsage]
+    assert hooked == [] and len(imported) == 1
+
+
+def test_wasi_is_only_for_a_host_that_has_it(build_front_end: Builder, front_end: str, tmp_path: Path) -> None:
+    """A module of host wasm32 has no `wasi=` (its stub has none), in the extension and in the wrapper for ctypes alike."""
+    wat = tmp_path / "plain_env.wat"
+    wat.write_text(
+        '(module (import "env" "f" (func (result i32))) (func (export "g") (result i32) (call 0)))', encoding="utf-8"
+    )
+    mod = build_front_end(wat, f"host_nowasi_{front_end}")
+    with pytest.raises(TypeError):
+        mod.Instance({"env": {"f": lambda: 1}}, wasi={})
+
+
+def test_the_stub_names_the_configuration_by_its_host() -> None:
+    stub = generate(parse(_wasm((WASI, "proc_exit"))), "m", host="wasm32-wasip1").stub
+    assert "class WasiP1(TypedDict):" in stub and "Wasi = WasiP1" in stub and "wasi: Wasi | None = None" in stub
+    p2 = generate(parse(_wasm((WASI, "proc_exit"))), "m", host="wasm32-wasip2").stub
+    assert "class Wasi" not in p2 and "wasi:" not in p2  # nothing is built in for it yet

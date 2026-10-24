@@ -3061,7 +3061,7 @@ def _callable_type(func: FuncType) -> str:
 # `wasi=` as the stub shows it: the same for every module that uses WASI. A key that is absent has its default (worked out by the
 # extension when it is used); None is nothing.
 _WASI_STUB = [
-    "class Wasi(TypedDict):",
+    "class WasiP1(TypedDict):",
     "    args: NotRequired[Sequence[str] | None]",
     '    """absent: [the name of the program]. None: no arguments."""',
     "    env: NotRequired[Mapping[str, str] | None]",
@@ -3080,6 +3080,8 @@ _WASI_STUB = [
     '    """absent: the clocks of the system. A function (id of the clock: 0 real time, 1 monotonic, 2 process, 3 thread) -> nanoseconds."""',
     "    random: NotRequired[Callable[[int], bytes]]",
     '    """absent: the random bytes of the system. A function (how many) -> that many bytes."""',
+    "",
+    "Wasi = WasiP1  # the configuration of the host of this module (wasm32-wasip1)",
     "",
 ]
 

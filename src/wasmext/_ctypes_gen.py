@@ -298,6 +298,8 @@ class Instance:
     """An instance of the module @NAME@ (the library makes the state, this object owns it)."""
 
     def __init__(self, imports: Any = None, *, wasi: Any = None) -> None:
+        if wasi is not None and not _WASI:  # as the extension: a module whose host has no WASI built in takes no `wasi=`
+            raise TypeError("Instance() got an unexpected keyword argument 'wasi'")
         lib = _library()
         self._lib = lib
         self._callbacks: list[Any] = []

@@ -19,7 +19,7 @@ class WasiSignal(WasiTerminated):
     signal: int
     name: str
 
-class Wasi(TypedDict):
+class WasiP1(TypedDict):
     args: NotRequired[Sequence[str] | None]
     """absent: [the name of the program]. None: no arguments."""
     env: NotRequired[Mapping[str, str] | None]
@@ -38,6 +38,8 @@ class Wasi(TypedDict):
     """absent: the clocks of the system. A function (id of the clock: 0 real time, 1 monotonic, 2 process, 3 thread) -> nanoseconds."""
     random: NotRequired[Callable[[int], bytes]]
     """absent: the random bytes of the system. A function (how many) -> that many bytes."""
+
+Wasi = WasiP1  # the configuration of the host of this module (wasm32-wasip1)
 
 
 _Imports_wasi_unstable = TypedDict('_Imports_wasi_unstable', {'fd_prestat_get': NotRequired[Callable[[int, int], int] | None], 'fd_prestat_dir_name': NotRequired[Callable[[int, int, int], int] | None], 'clock_time_get': NotRequired[Callable[[int, int, int], int] | None], 'proc_exit': NotRequired[Callable[[int], None] | None], 'fd_fdstat_get': NotRequired[Callable[[int, int], int] | None], 'path_open': NotRequired[Callable[[int, int, int, int, int, int, int, int, int], int] | None], 'path_rename': NotRequired[Callable[[int, int, int, int, int, int], int] | None], 'fd_close': NotRequired[Callable[[int], int] | None], 'args_sizes_get': NotRequired[Callable[[int, int], int] | None], 'args_get': NotRequired[Callable[[int, int], int] | None], 'path_remove_directory': NotRequired[Callable[[int, int, int], int] | None], 'path_unlink_file': NotRequired[Callable[[int, int, int], int] | None], 'environ_sizes_get': NotRequired[Callable[[int, int], int] | None], 'environ_get': NotRequired[Callable[[int, int], int] | None], 'fd_fdstat_set_flags': NotRequired[Callable[[int, int], int] | None], 'fd_seek': NotRequired[Callable[[int, int, int, int], int] | None], 'fd_write': NotRequired[Callable[[int, int, int, int], int] | None], 'fd_read': NotRequired[Callable[[int, int, int, int], int] | None], 'fd_renumber': NotRequired[Callable[[int, int], int] | None]})

@@ -6,6 +6,9 @@ from _typeshed import SupportsRead, SupportsWrite
 from collections.abc import Callable, Mapping, Sequence
 from os import PathLike
 from typing import NotRequired, TypedDict
+from typing import Literal
+
+__host__: Literal['wasm32-wasip1']
 
 class Trap(RuntimeError): ...
 class LinkError(Exception): ...
@@ -37,8 +40,11 @@ class Wasi(TypedDict):
     """absent: the random bytes of the system. A function (how many) -> that many bytes."""
 
 
+_Imports_wasi_snapshot_preview1 = TypedDict('_Imports_wasi_snapshot_preview1', {'args_get': NotRequired[Callable[[int, int], int]], 'args_sizes_get': NotRequired[Callable[[int, int], int]], 'environ_get': NotRequired[Callable[[int, int], int]], 'environ_sizes_get': NotRequired[Callable[[int, int], int]], 'clock_time_get': NotRequired[Callable[[int, int, int], int]], 'fd_fdstat_get': NotRequired[Callable[[int, int], int]], 'fd_fdstat_set_flags': NotRequired[Callable[[int, int], int]], 'fd_prestat_get': NotRequired[Callable[[int, int], int]], 'fd_prestat_dir_name': NotRequired[Callable[[int, int, int], int]], 'fd_read': NotRequired[Callable[[int, int, int, int], int]], 'fd_readdir': NotRequired[Callable[[int, int, int, int, int], int]], 'fd_seek': NotRequired[Callable[[int, int, int, int], int]], 'fd_write': NotRequired[Callable[[int, int, int, int], int]], 'path_create_directory': NotRequired[Callable[[int, int, int], int]], 'path_filestat_get': NotRequired[Callable[[int, int, int, int, int], int]], 'path_filestat_set_times': NotRequired[Callable[[int, int, int, int, int, int, int], int]], 'path_open': NotRequired[Callable[[int, int, int, int, int, int, int, int, int], int]], 'path_remove_directory': NotRequired[Callable[[int, int, int], int]], 'path_rename': NotRequired[Callable[[int, int, int, int, int, int], int]], 'path_unlink_file': NotRequired[Callable[[int, int, int], int]], 'poll_oneoff': NotRequired[Callable[[int, int, int, int], int]], 'proc_exit': NotRequired[Callable[[int], None]], 'fd_close': NotRequired[Callable[[int], int]]})
+Imports = TypedDict('Imports', {'wasi_snapshot_preview1': NotRequired[_Imports_wasi_snapshot_preview1]})
+
 class Instance:
-    def __init__(self, imports: None = None, *, wasi: Wasi | None = None) -> None: ...
+    def __init__(self, imports: Imports | None = None, *, wasi: Wasi | None = None) -> None: ...
     @property
     def __exports__(self) -> dict[str, object]: ...
     def __getitem__(self, name: str, /) -> object: ...

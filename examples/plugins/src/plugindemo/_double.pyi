@@ -4,12 +4,15 @@
 # fmt: off
 from collections.abc import Callable
 from typing import TypedDict
+from typing import Literal
+
+__host__: Literal['wasm32']
 
 class Trap(RuntimeError): ...
 class LinkError(Exception): ...
 
-_Imports0 = TypedDict('_Imports0', {'table': object})
-Imports = TypedDict('Imports', {'env': _Imports0})
+_Imports_env = TypedDict('_Imports_env', {'table': object})
+Imports = TypedDict('Imports', {'env': _Imports_env})
 
 class Function:
     """A function that a table holds. It is called if its type is one this module declares (signature is not None); equal to another of the same function and instance."""

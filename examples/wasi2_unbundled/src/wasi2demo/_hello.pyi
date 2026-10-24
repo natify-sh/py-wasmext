@@ -4,24 +4,27 @@
 # fmt: off
 from collections.abc import Callable
 from typing import TypedDict
+from typing import Literal
+
+__host__: Literal['wasm32']
 
 class Trap(RuntimeError): ...
 class LinkError(Exception): ...
 
-_Imports0 = TypedDict('_Imports0', {'[resource-drop]error': Callable[[int], None]})
-_Imports1 = TypedDict('_Imports1', {'[resource-drop]pollable': Callable[[int], None], '[method]pollable.block': Callable[[int], None], 'poll': Callable[[int, int, int], None]})
-_Imports2 = TypedDict('_Imports2', {'[resource-drop]input-stream': Callable[[int], None], '[resource-drop]output-stream': Callable[[int], None], '[method]output-stream.check-write': Callable[[int, int], None], '[method]output-stream.write': Callable[[int, int, int, int], None], '[method]output-stream.blocking-flush': Callable[[int, int], None], '[method]output-stream.subscribe': Callable[[int], int]})
-_Imports3 = TypedDict('_Imports3', {'[resource-drop]terminal-input': Callable[[int], None]})
-_Imports4 = TypedDict('_Imports4', {'[resource-drop]terminal-output': Callable[[int], None]})
-_Imports5 = TypedDict('_Imports5', {'get-stdin': Callable[[], int]})
-_Imports6 = TypedDict('_Imports6', {'get-stdout': Callable[[], int]})
-_Imports7 = TypedDict('_Imports7', {'get-stderr': Callable[[], int]})
-_Imports8 = TypedDict('_Imports8', {'get-terminal-stdin': Callable[[int], None]})
-_Imports9 = TypedDict('_Imports9', {'get-terminal-stdout': Callable[[int], None]})
-_Imports10 = TypedDict('_Imports10', {'get-terminal-stderr': Callable[[int], None]})
-_Imports11 = TypedDict('_Imports11', {'now': Callable[[], int], 'subscribe-duration': Callable[[int], int]})
-_Imports12 = TypedDict('_Imports12', {'now': Callable[[int], None]})
-Imports = TypedDict('Imports', {'wasi:io/error@0.2.12': _Imports0, 'wasi:io/poll@0.2.12': _Imports1, 'wasi:io/streams@0.2.12': _Imports2, 'wasi:cli/terminal-input@0.2.12': _Imports3, 'wasi:cli/terminal-output@0.2.12': _Imports4, 'wasi:cli/stdin@0.2.12': _Imports5, 'wasi:cli/stdout@0.2.12': _Imports6, 'wasi:cli/stderr@0.2.12': _Imports7, 'wasi:cli/terminal-stdin@0.2.12': _Imports8, 'wasi:cli/terminal-stdout@0.2.12': _Imports9, 'wasi:cli/terminal-stderr@0.2.12': _Imports10, 'wasi:clocks/monotonic-clock@0.2.12': _Imports11, 'wasi:clocks/wall-clock@0.2.12': _Imports12})
+_Imports_wasi_io_error_0_2_12 = TypedDict('_Imports_wasi_io_error_0_2_12', {'[resource-drop]error': Callable[[int], None]})
+_Imports_wasi_io_poll_0_2_12 = TypedDict('_Imports_wasi_io_poll_0_2_12', {'[resource-drop]pollable': Callable[[int], None], '[method]pollable.block': Callable[[int], None], 'poll': Callable[[int, int, int], None]})
+_Imports_wasi_io_streams_0_2_12 = TypedDict('_Imports_wasi_io_streams_0_2_12', {'[resource-drop]input-stream': Callable[[int], None], '[resource-drop]output-stream': Callable[[int], None], '[method]output-stream.check-write': Callable[[int, int], None], '[method]output-stream.write': Callable[[int, int, int, int], None], '[method]output-stream.blocking-flush': Callable[[int, int], None], '[method]output-stream.subscribe': Callable[[int], int]})
+_Imports_wasi_cli_terminal_input_0_2_12 = TypedDict('_Imports_wasi_cli_terminal_input_0_2_12', {'[resource-drop]terminal-input': Callable[[int], None]})
+_Imports_wasi_cli_terminal_output_0_2_12 = TypedDict('_Imports_wasi_cli_terminal_output_0_2_12', {'[resource-drop]terminal-output': Callable[[int], None]})
+_Imports_wasi_cli_stdin_0_2_12 = TypedDict('_Imports_wasi_cli_stdin_0_2_12', {'get-stdin': Callable[[], int]})
+_Imports_wasi_cli_stdout_0_2_12 = TypedDict('_Imports_wasi_cli_stdout_0_2_12', {'get-stdout': Callable[[], int]})
+_Imports_wasi_cli_stderr_0_2_12 = TypedDict('_Imports_wasi_cli_stderr_0_2_12', {'get-stderr': Callable[[], int]})
+_Imports_wasi_cli_terminal_stdin_0_2_12 = TypedDict('_Imports_wasi_cli_terminal_stdin_0_2_12', {'get-terminal-stdin': Callable[[int], None]})
+_Imports_wasi_cli_terminal_stdout_0_2_12 = TypedDict('_Imports_wasi_cli_terminal_stdout_0_2_12', {'get-terminal-stdout': Callable[[int], None]})
+_Imports_wasi_cli_terminal_stderr_0_2_12 = TypedDict('_Imports_wasi_cli_terminal_stderr_0_2_12', {'get-terminal-stderr': Callable[[int], None]})
+_Imports_wasi_clocks_monotonic_clock_0_2_12 = TypedDict('_Imports_wasi_clocks_monotonic_clock_0_2_12', {'now': Callable[[], int], 'subscribe-duration': Callable[[int], int]})
+_Imports_wasi_clocks_wall_clock_0_2_12 = TypedDict('_Imports_wasi_clocks_wall_clock_0_2_12', {'now': Callable[[int], None]})
+Imports = TypedDict('Imports', {'wasi:io/error@0.2.12': _Imports_wasi_io_error_0_2_12, 'wasi:io/poll@0.2.12': _Imports_wasi_io_poll_0_2_12, 'wasi:io/streams@0.2.12': _Imports_wasi_io_streams_0_2_12, 'wasi:cli/terminal-input@0.2.12': _Imports_wasi_cli_terminal_input_0_2_12, 'wasi:cli/terminal-output@0.2.12': _Imports_wasi_cli_terminal_output_0_2_12, 'wasi:cli/stdin@0.2.12': _Imports_wasi_cli_stdin_0_2_12, 'wasi:cli/stdout@0.2.12': _Imports_wasi_cli_stdout_0_2_12, 'wasi:cli/stderr@0.2.12': _Imports_wasi_cli_stderr_0_2_12, 'wasi:cli/terminal-stdin@0.2.12': _Imports_wasi_cli_terminal_stdin_0_2_12, 'wasi:cli/terminal-stdout@0.2.12': _Imports_wasi_cli_terminal_stdout_0_2_12, 'wasi:cli/terminal-stderr@0.2.12': _Imports_wasi_cli_terminal_stderr_0_2_12, 'wasi:clocks/monotonic-clock@0.2.12': _Imports_wasi_clocks_monotonic_clock_0_2_12, 'wasi:clocks/wall-clock@0.2.12': _Imports_wasi_clocks_wall_clock_0_2_12})
 
 class Instance:
     def __init__(self, imports: Imports) -> None: ...

@@ -2,6 +2,9 @@
 # ruff: noqa
 # ruff: noqa: PGH004
 # fmt: off
+from typing import Literal
+
+__host__: Literal['wasm32']
 
 class Trap(RuntimeError): ...
 class LinkError(Exception): ...

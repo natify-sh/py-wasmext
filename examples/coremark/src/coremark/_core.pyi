@@ -4,12 +4,15 @@
 # fmt: off
 from collections.abc import Callable
 from typing import TypedDict
+from typing import Literal
+
+__host__: Literal['wasm32']
 
 class Trap(RuntimeError): ...
 class LinkError(Exception): ...
 
-_Imports0 = TypedDict('_Imports0', {'millis': Callable[[], int], 'print': Callable[[int, int], None]})
-Imports = TypedDict('Imports', {'wiring': _Imports0})
+_Imports_wiring = TypedDict('_Imports_wiring', {'millis': Callable[[], int], 'print': Callable[[int, int], None]})
+Imports = TypedDict('Imports', {'wiring': _Imports_wiring})
 
 class Instance:
     def __init__(self, imports: Imports) -> None: ...

@@ -5,6 +5,8 @@
 from collections.abc import Callable
 from typing import Literal, overload
 
+__host__: Literal['wasm32']
+
 class Trap(RuntimeError): ...
 class LinkError(Exception): ...
 

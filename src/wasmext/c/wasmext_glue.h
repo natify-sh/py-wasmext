@@ -83,7 +83,7 @@ WASMEXT_LAYOUT(funcref_types,
 #define WASMEXT_ABI_X 0
 #define WASMEXT_ABI_Y 0
 #define WASMEXT_ABI_Z 1
-#define WASMEXT_ABI_LS 0xA2
+#define WASMEXT_ABI_LS 0xA3
 #define WASMEXT_ABI ((uint32_t)(((uint32_t)WASMEXT_ABI_X << 24) | ((uint32_t)WASMEXT_ABI_Y << 16) | ((uint32_t)WASMEXT_ABI_Z << 8) | WASMEXT_ABI_LS))
 #define WASMEXT_VERSION_X(V) ((uint32_t)(V) >> 24)
 #define WASMEXT_VERSION_Y(V) (((uint32_t)(V) >> 16) & 0xFFu)

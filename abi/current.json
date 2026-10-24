@@ -239,7 +239,7 @@
   "glue": {
     "constants": {
       "WASMEXT_ABI": "((uint32_t)(((uint32_t)WASMEXT_ABI_X << 24) | ((uint32_t)WASMEXT_ABI_Y << 16) | ((uint32_t)WASMEXT_ABI_Z << 8) | WASMEXT_ABI_LS))",
-      "WASMEXT_ABI_LS": "0xA2",
+      "WASMEXT_ABI_LS": "0xA3",
       "WASMEXT_ABI_X": "0",
       "WASMEXT_ABI_Y": "0",
       "WASMEXT_ABI_Z": "1",
@@ -311,6 +311,6 @@
     "typedefs": {}
   },
   "version": {
-    "WASMEXT_ABI": "0x000001A2"
+    "WASMEXT_ABI": "0x000001A3"
   }
 }

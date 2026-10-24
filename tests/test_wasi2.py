@@ -260,3 +260,38 @@ def test_a_directory_that_is_read_only_cannot_be_changed_and_a_path_cannot_leave
     assert not ok and not (inside / "new.txt").exists()
     ok, _code = fs.open(root, "../secret.txt")
     assert not ok  # a name cannot leave the directory it was given
+
+
+def test_every_function_of_the_table_compiles_with_the_headers_the_glue_includes(tmp_path: Path) -> None:
+    """All 201 functions of WASI 0.2 that fusedwasi has, taken by address in one file with the headers the glue includes (the sockets, http and files too), strictly:
+    a module that imports only a few of them includes only a few headers, so this is where a typo in one of the others would show."""
+    import platform
+    import shutil
+    import subprocess
+
+    from wasmext._gen import _p2_headers  # pyright: ignore[reportPrivateUsage]
+    from wasmext._natify import shared_header  # pyright: ignore[reportPrivateUsage]
+    from wasmext._wasi_p2_table import FUNCS
+
+    if platform.system() == "Windows":
+        pytest.skip(
+            "compiled by the examples of the files on Windows; the compiler of setuptools is not the one used here"
+        )
+    cc = shutil.which(__import__("os").environ.get("CC", "cc")) or shutil.which("gcc") or shutil.which("clang")
+    if cc is None:
+        pytest.skip("no C compiler of the cc kind")
+    calls = {("wasi:test", name): name for name in FUNCS}
+    for header in _p2_headers(calls):
+        (tmp_path / header).write_bytes(shared_header(header).read_bytes())
+    source = tmp_path / "all.c"
+    includes = "".join(f'#include "{h}"\n' for h in _p2_headers(calls, include=True))
+    table = ",\n".join(f"    (void *){name}" for name in sorted(FUNCS))
+    source.write_text(
+        f"#define _GNU_SOURCE\n{includes}\nvoid *const all_functions[] = {{\n{table}}};\n", encoding="utf-8"
+    )
+    done = subprocess.run(
+        [cc, "-std=gnu11", "-Wall", "-Wextra", "-Wno-unused-parameter", "-Werror=incompatible-pointer-types",
+         "-Werror=implicit-function-declaration", "-Werror=int-conversion", "-c", str(source), "-o", str(tmp_path / "all.o")],
+        capture_output=True, text=True, check=False, cwd=tmp_path,
+    )  # fmt: skip
+    assert done.returncode == 0, done.stderr[-2000:]

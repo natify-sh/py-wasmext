@@ -197,3 +197,16 @@ For a context to run an instance of a module that is not its own, the compiled m
 - **A mismatch is an explicit error, never a silent fall-back**: a runtime of another layout (the fingerprint), another ABI, or a module that imports a function the host of the context does not have, is refused when the instance is bound (`LinkError`, saying which). A module runs on its own runtime only when no context was given.
 - Therefore a context's host may be **minimal** (only what its own module needs, as now) or **full** (a build option; +35 KB for WASI 0.1 and +114 KB for 0.2 in the artifact): the link table says what a module imports, so a minimal host refuses a module that needs more, with the name of the import, and nothing is guessed.
 - Open: how a context is made (a class of each module: `a_mod.Context()`, or one in a common place), and the lifetime of the artifact that owns the runtime while instances of others run on it.
+
+### The comparison with an embedded wasmtime (the owner, 2026-10-24)
+
+The idea is that of an embedded `libwasmtime`, with a `Context` where wasmtime has a `Store` (the word *store* stays unused here, see the top of the page). What is the same: everything that talks to each other lives in one context (as in one `Store`), and across contexts nothing is shared but what the host language passes. What is different, and is the whole point: **there is no engine library to install; every module carries a copy of everything** (the runtime, the host, the context code), and **several instances of several modules run inside a context that any one of them allocated**.
+
+| wasmtime | here |
+| --- | --- |
+| `Engine` (compiles, shared) | nothing shared: the compilation is `wasm2c` plus a C compiler, at build time |
+| `Store` (the data of instances, the host state) | `Context`: one runtime, one host; made by any artifact |
+| `Linker` (names to host functions and to exports) | the link table of a module and the imports given by the language that launches it |
+| `Module` | the compiled artifact and its link table |
+| `Instance` | an instance on a context |
+| the engine is one library for all | a copy in each artifact; contexts of different artifacts interoperate only if the ABI and the layout of the runtime agree (an explicit error otherwise) |

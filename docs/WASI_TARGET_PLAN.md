@@ -117,6 +117,8 @@ The original of an import is a reference to the call that the host answers (for 
 def fd_write(*args):
     log(args)
     return inst.__host__.__imports__["wasi_snapshot_preview1"]["fd_write"](*args)
+
+
 inst = mod.Instance({"wasi_snapshot_preview1": {"fd_write": fd_write}})
 ```
 

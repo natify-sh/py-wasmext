@@ -944,6 +944,19 @@ def generate(
         add("static PyObject *UncaughtExceptionError;")
     if uses_wasi:
         add("static PyObject *WasiExitError, *WasiSignalError, *WasiTerminatedError;")
+        add(
+            "/* A call of WASI that the caller gave as None: nothing is given. A call that answers with an errno answers ENOSYS (52), the other is a trap. */"
+        )
+        add(
+            "static PyObject *wasmext_nothing_errno(PyObject *name, PyObject *args) { (void)name; (void)args; return PyLong_FromLong(52); }"
+        )
+        add("static PyObject *wasmext_nothing_trap(PyObject *name, PyObject *args) {")
+        add("    (void)args;")
+        add('    PyErr_Format(TrapError, "%U was given as None: nothing to call", name);')
+        add("    return NULL;")
+        add("}")
+        add('static PyMethodDef wasmext_nothing_errno_def = {"nothing", wasmext_nothing_errno, METH_VARARGS, NULL};')
+        add('static PyMethodDef wasmext_nothing_trap_def = {"nothing", wasmext_nothing_trap, METH_VARARGS, NULL};')
     add("static PyTypeObject *InstanceType;")
     if memories:
         add("static PyTypeObject *MemoryType;")
@@ -1413,6 +1426,16 @@ def generate(
                     "            if (v == NULL && !PyErr_ExceptionMatches(LinkError)) { Py_DECREF(self); return NULL; }"
                 )
                 add("            if (v == NULL) PyErr_Clear();")
+                add("        }")
+                nothing = "errno" if [str(t) for t in imp.func.results] == ["i32"] else "trap"
+                add(
+                    "        if (v == Py_None) {  /* given as None: nothing is given, which is not the call of wasmext */"
+                )
+                add("            Py_DECREF(v);")
+                add(f"            PyObject *label = PyUnicode_FromString({_c_string(where)});")
+                add(f"            v = label != NULL ? PyCFunction_New(&wasmext_nothing_{nothing}_def, label) : NULL;")
+                add("            Py_XDECREF(label);")
+                add("            if (v == NULL) { Py_DECREF(self); return NULL; }")
                 add("        }")
                 add("        if (v == NULL) {")
                 own = imp.module == _WASI_UNSTABLE and imp.field in _WASI_UNSTABLE_OWN
@@ -3153,7 +3176,7 @@ def _stub(
     for module_name, members in by_module.items():
         type_name = type_names[module_name]
         if module_name in bound:  # the host answers these: each is a replacement, none is asked for
-            items = ", ".join(f"{_py_string(m.name)}: NotRequired[{_import_type(m.type)}]" for m in members)
+            items = ", ".join(f"{_py_string(m.name)}: NotRequired[{_import_type(m.type)} | None]" for m in members)
             lines.append(f"{type_name} = TypedDict('{type_name}', {{{items}}})")
         else:
             items = ", ".join(f"{_py_string(m.name)}: {_import_type(m.type)}" for m in members)

@@ -322,8 +322,10 @@ class Instance:
         for k, module, field, params, results, wasi_call in _IMPORTS:
             if wasi_call:  # a call of WASI is the library's own unless the caller gives another
                 function = _find_import(imports, module, field, required=False)
-                if function is None:
+                if function is _ABSENT:
                     continue
+                if function is None:  # given as None: nothing is given (an extension does the same)
+                    function = _nothing(module, field, results)
             else:
                 function = _find_import(imports, module, field)
             function = self._function_import(k, module, field, function, params, results)
@@ -599,12 +601,26 @@ class Instance:
         _function(cname, None, [_c.c_void_p, _CTYPE[type_]])(self._h, _CONVERT[type_](value))
 @WASI_METHODS@
 
+_ABSENT: Any = object()  # a key that is not there; a key that is None is nothing given
+
+
+def _nothing(module: str, field: str, results: tuple[str, ...]) -> Callable[..., Any]:
+    """What a call of WASI that was given as None does: it answers ENOSYS (52) if it answers with an errno, else it is a trap."""
+    if results == ("i32",):
+        return lambda *args: 52
+
+    def trap(*args: Any) -> None:
+        raise Trap(f"{module}.{field} was given as None: nothing to call")
+
+    return trap
+
+
 def _find_import(imports: Any, module: str, field: str, *, required: bool = True, check: bool = True) -> Any:
     try:
         shelf = imports[module]
     except (KeyError, TypeError, IndexError):
         if not required:
-            return None
+            return _ABSENT
         raise LinkError(f"missing import module '{module}'") from None
     exports = getattr(shelf, "__exports__", None)  # a shelf that is an instance of a wasmext module gives its exports
     if exports is not None:
@@ -613,7 +629,7 @@ def _find_import(imports: Any, module: str, field: str, *, required: bool = True
         function = shelf[field]
     except (KeyError, TypeError, IndexError):
         if not required:
-            return None
+            return _ABSENT
         raise LinkError(f"missing import '{module}.{field}'") from None
     return function
 

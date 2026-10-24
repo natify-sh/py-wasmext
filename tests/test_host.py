@@ -151,3 +151,40 @@ def test_the_stub_types_every_module_of_the_imports_by_its_name() -> None:
     assert (
         "_Imports_a_b = " in twin and "_Imports_a_b_2 = " in twin
     )  # told apart by a number, in the order of the section
+
+
+def test_a_call_of_wasi_given_as_none_is_nothing_given_in_both_front_ends(
+    build_front_end: Builder, front_end: str
+) -> None:
+    """None for a function is "nothing is given" (an absent key is the default): the call answers ENOSYS if it answers with an errno, else it is a trap.
+    The extension and the wrapper for ctypes do the same."""
+    mod = build_front_end(DATA / "wasi_hello.wat", f"host_none_{front_end}", host="wasm32-wasip1")
+    written: list[bytes] = []
+
+    def stdout(data: bytes) -> int:
+        written.append(bytes(data))
+        return len(data)
+
+    with pytest.raises(
+        mod.WasiExit
+    ) as raised:  # fd_write is None: ENOSYS, nothing is written; the program goes on to proc_exit(3)
+        mod.Instance({WASI: {"fd_write": None}}, wasi={"stdout": stdout})._start()  # pyright: ignore[reportPrivateUsage]
+    assert raised.value.code == 3 and written == []
+    with pytest.raises(mod.WasiExit):  # the key is absent: the call of wasmext
+        mod.Instance({WASI: {}}, wasi={"stdout": stdout})._start()  # pyright: ignore[reportPrivateUsage]
+    assert b"".join(written) == b"hello, wasi\n"
+    with pytest.raises(mod.Trap, match="proc_exit was given as None"):  # no errno to answer with
+        mod.Instance({WASI: {"proc_exit": None}})._start()  # pyright: ignore[reportPrivateUsage]
+
+
+def test_an_import_of_the_caller_given_as_none_is_not_linked(
+    build_front_end: Builder, front_end: str, tmp_path: Path
+) -> None:
+    wat = tmp_path / "needs_env.wat"
+    wat.write_text(
+        '(module (import "env" "f" (func (result i32))) (func (export "g") (result i32) (call 0)))', encoding="utf-8"
+    )
+    mod = build_front_end(wat, f"host_none_env_{front_end}")
+    with pytest.raises(mod.LinkError):
+        mod.Instance({"env": {"f": None}})
+    assert mod.Instance({"env": {"f": lambda: 7}}).g() == 7

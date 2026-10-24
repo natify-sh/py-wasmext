@@ -1058,7 +1058,9 @@ The decorator only **writes a mark** on the function. `HostBase._registry()` wal
 - *Against section 2:* the mark is next to the code it describes (better for a host with many methods); but the registry is hidden state, and a misspelt string is as silent as in any table. The two can stand together: `map_wasi()` as the written-out form, `@wasi` as the sugar that builds it.
 - *Later:* the calls of WASI 0.1 that wasmext answers in C could be written as such methods in a Python host for the ABIs to come (`@wasi("wasi_snapshot_preview1", "fd_write")`), so that the replacement of one call (today through `imports`, or `clock`/`random` in `wasi=`) has one form. That needs the stub to type the replacements (a `NotRequired` dictionary of the functions of `wasi_snapshot_preview1`), which is a change of the interface and not planned.
 
-### 4. `__imports__`
+### 4. `__imports__` (a list of what the instance needs) — dropped 2026-10-24
+
+*Dropped: the stub already lists the imports of a module with their signatures (`Imports`, one `TypedDict` for each module), and a host that has to know them at run time can read them from the `.wasm`. Not built, and the name `__imports__` is left free for the originals of the imports that the host answers (WASI_TARGET_PLAN.md, stage 4).*
 
 A constant of the module that says what the instance needs, so that a host does not need `_imports.py` or `wasm-objdump`:
 

@@ -135,3 +135,16 @@ The functions of WASI 0.2 **are written already**, in C in fusedwasi (`p2/wasi_p
 ### Order of the work (decided 2026-10-24)
 
 Stage 6 (the host of WASI 0.2 built in, a private host of the module) is finished **as planned, with no change of direction**, even though the context idea (context_concept.md: one runtime and one host per context, several modules on it) bears on it. The shared runtime and the context are **the next step after it**; the host of 0.2 keeps its state free of the module (memory by number) so that it can move under a context.
+
+### Stage 6: what the C host of fusedwasi asks of the binding (reconnaissance, 2026-10-24)
+
+Read in `p2/wasi_p2_core.h` and `wasi_p2_io.h`; the host is made to be embedded:
+- **State and life:** `fusedwasi_p2_state` (a table of handles, up to 8 memories, args, env, preopens, the standard streams, clocks, random, the policies of sockets and http), `fusedwasi_p2_init(s)` and `fusedwasi_p2_free(s)`. No global and no thread-local.
+- **Functions:** one per import, `fusedwasi_wasi_<interface>_<name>(state, comp, parameters..., retptr)`, with `comp` the number of the memory. They have **no `trapped` out-parameter**: a trap is the callback `s->trap(s, message)`, which must not return (in a module it is `wasm_rt_trap`). The glue therefore needs one trampoline for each import (the host function of wasm2c is `result f(void *user, parameters..., int *trapped)`), which also sets the memory.
+- **Memory** is a copy `{base, size}` (`fusedwasi_p2_set_memory`), not a pointer to the field as in p1: it must be set again before each call, since the memory moves when it grows.
+- **`cabi_realloc`** is the callback `s->realloc(s, comp, old_ptr, old_size, align, new_size)`: in a module a call of its export `cabi_realloc` from the host function (a call inside a call; no new entry is needed).
+- **The end:** `s->exit(s, code)` records `exited` and `exit_code` and traps; the glue turns it into `WasiExit(code)`.
+- **Streams** are `fusedwasi_p2_stream` with `read`, `check_write`, `write`, `flush`, `ready`, `destroy`; the standard streams are `std[0..2]` (NULL: the descriptors of the process). A Python object behind a stream is a layer of ours (the twin of `wasi_python.h` for 0.2).
+- **Policies** (`socket_addr_check`, `allow_ip_name_lookup`, `http_check`, `http_send`): refuse everything unless set.
+
+Sub-stages: **6a** the extension, WASI 0.2 command (`wasi:cli`, `clocks`, `io`, `random`) with `wasi=` (`args`, `env`, `stdin`, `stdout`, `stderr`, `clock`, `random`), `examples/wasi2_unbundled/_hello` runs with no Python host; **6b** filesystem (`preopens`, `readonly`); **6c** sockets and http (policies); **6d** the library and the wrapper for ctypes. The table from the import to the C function and its core signature is made once from the headers of fusedwasi (a data file in wasmext), so a name the host does not have is a `GenError`, as for 0.1.

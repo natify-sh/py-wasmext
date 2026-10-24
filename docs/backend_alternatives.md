@@ -84,3 +84,11 @@ The question was whether to give up `wasm2c` as the middle step and translate We
 ## The interpreter of WABT (a note, 2026-10-22)
 
 `wasm-interp` is in `wabt-package`. **Measured: about 0.6% of native on CoreMark (131 iterations a second against 21,700), 160 times slower than the extension that wasmext makes**, and 40 to 70 times slower on a loop of calls; it is a reference interpreter, not an engine ([experiments/wabt_interp/](experiments/wabt_interp/README.md), with what is not clean in the measurement).
+
+## WAMR (`iwasm`, `wamrc`) and wasm3 (a note, 2026-10-24): not an option for now
+
+Measured and read in [wamr_evaluation.md](wamr_evaluation.md) (CoreMark; the table, the sizes, the WASI support of each and the follow-up on AOT, platforms and the replacement of `wasm2c` are there). In short, **decided not to pursue now; the results are kept for later**:
+- **Speed:** wasmext, WAMR with the LLVM JIT and WAMR AOT are all within the noise of native code (about 0.9 to 0.95 of it on the first pass); the fast JIT is about half; wasm3 about a tenth and the interpreters of WAMR a tenth to a thirtieth.
+- **Autonomy:** a `.aot` is a data file for the WAMR loader, so it is an engine in every artifact; the object format of `wamrc` does not run without the instance layout and the loader of WAMR; `wamrc` needs LLVM on the build machine, where `wasm2c` needs a C compiler. No Emscripten/Pyodide port and no ppc64 or s390x target for `wamrc`; no exceptions and no multi-memory in AOT.
+- **WASI:** full `wasi_snapshot_preview1` and `wasi_unstable` (wasm3: the first only); no WASI 0.2 in the upstream main (a component is refused) and no 0.3.
+- Where it could still help: a second backend for targets with no C compiler or where an interpreter is wanted.

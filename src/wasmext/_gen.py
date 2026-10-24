@@ -19,6 +19,7 @@ Not yet: reference types, imported memories/tables and mutable globals, exported
 from __future__ import annotations
 
 import keyword
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -2220,7 +2221,7 @@ def generate(
     add("    Py_DECREF(m);")
     add("    return NULL;")
     add("}")
-    stub_imports = [imp for imp in module.imports if imp.module not in wasi_headers]
+    stub_imports = list(module.imports)  # those of a bound module are replacements the stub still shows (NotRequired)
     from ._shared import generate_shared, unsupported
 
     reason = unsupported(
@@ -2267,6 +2268,7 @@ def generate(
             shares_tables,
             tables,
             host_name,
+            frozenset(wasi_modules),
         ),
         tuple(wasi_headers[m] for m in wasi_modules),
         api_header=api_header,
@@ -3097,6 +3099,7 @@ def _stub(
     table: bool = False,
     tables: list[str] | None = None,
     host: str = "wasm32",
+    bound: frozenset[str] = frozenset(),
 ) -> str:
     """The `.pyi` for the extension module: what a type checker and an editor can know of an extension."""
     # The formatter and the linter of the project the stub lands in leave a generated file alone (the second noqa is
@@ -3146,21 +3149,38 @@ def _stub(
     by_module: dict[str, list[Import]] = {}
     for imp in imports:
         by_module.setdefault(imp.module, []).append(imp)
-    for i, (_module, members) in enumerate(by_module.items()):
-        items = ", ".join(f"{_py_string(m.name)}: {_import_type(m.type)}" for m in members)
-        lines.append(f"_Imports{i} = TypedDict('_Imports{i}', {{{items}}})")
+    type_names = _imports_type_names(list(by_module))
+    for module_name, members in by_module.items():
+        type_name = type_names[module_name]
+        if module_name in bound:  # the host answers these: each is a replacement, none is asked for
+            items = ", ".join(f"{_py_string(m.name)}: NotRequired[{_import_type(m.type)}]" for m in members)
+            lines.append(f"{type_name} = TypedDict('{type_name}', {{{items}}})")
+        else:
+            items = ", ".join(f"{_py_string(m.name)}: {_import_type(m.type)}" for m in members)
+            lines.append(f"{type_name} = TypedDict('{type_name}', {{{items}}})")
+    asked = any(m not in bound for m in by_module)  # a module of the caller's makes `imports` required
     if by_module:
-        fields = ", ".join(f"{_py_string(m)}: _Imports{i}" for i, m in enumerate(by_module))
+        fields = ", ".join(
+            f"{_py_string(m)}: {f'NotRequired[{type_names[m]}]' if m in bound else type_names[m]}" for m in by_module
+        )
         lines += [f"Imports = TypedDict('Imports', {{{fields}}})", ""]
     if table:
         lines += _TABLE_STUB
     lines.append("class Instance:")
     if wasi:
-        required = "imports: Imports, " if by_module else "imports: None = None, "
+        required = (
+            "imports: Imports, "
+            if asked
+            else "imports: Imports | None = None, "
+            if by_module
+            else "imports: None = None, "
+        )
         lines.append(f"    def __init__(self, {required}*, wasi: Wasi | None = None) -> None: ...")
     else:
         lines.append(
             "    def __init__(self, imports: Imports) -> None: ..."
+            if asked
+            else "    def __init__(self, imports: Imports | None = None) -> None: ..."
             if by_module
             else "    def __init__(self) -> None: ..."
         )
@@ -3193,6 +3213,23 @@ def _stub(
         else:
             lines.append(_not_a_name("memory ", name))
     return "\n".join(lines) + "\n"
+
+
+def _imports_type_names(modules: list[str]) -> dict[str, str]:
+    """The name of the `TypedDict` of each module of the imports: `_Imports_` and the name of the module with every character that is not a
+    letter or a digit turned into `_` (`_Imports_wasi_snapshot_preview1`, `_Imports_wasi_io_streams_0_2_12`). It follows from the module, not from its place in
+    the import section, so a stub does not change all over when a module is added. Two modules that give one name (`a-b`, `a_b`) are told apart by a
+    number on the second, in the order of the section."""
+    names: dict[str, str] = {}
+    taken: set[str] = set()
+    for module in modules:
+        base = "_Imports_" + re.sub(r"[^0-9A-Za-z]+", "_", module).strip("_")
+        name, n = base, 2
+        while name in taken:
+            name, n = f"{base}_{n}", n + 1
+        taken.add(name)
+        names[module] = name
+    return names
 
 
 def _param_names(func: FuncType, wanted: tuple[str | None, ...]) -> list[str]:

@@ -997,6 +997,8 @@ Written down after the host in [`examples/wasi2_unbundled`](../examples/wasi2_un
 
 ### What is true today
 
+*(Updated 2026-10-24: the stub now names the `TypedDict`s by the module, `_Imports_wasi_io_streams_0_2_12`, and types `wasi_snapshot_preview1` as `NotRequired` replacements with `host="wasm32-wasip1"`; see WASI_TARGET_PLAN.md. The text below describes the state before.)*
+
 - The stub of a module has one `TypedDict` for each module of the imports, `_Imports0`, `_Imports1`, … (`_gen.py`, `by_module`), numbered **by the order in which the modules first appear in the import section** of the `.wasm`. The numbers are not stable: another compiler or another version of `wasm-tools` can reorder the section, a program that starts to use one more interface moves every number after it, and `_hello` and `_sock` number the same modules differently. Nobody writes `_ImportsN`: it is a private name for the editor and `pyright`. The public name is `Imports`, whose keys are strings (`"wasi:io/streams@0.2.12"` and the name of the function).
 - At run time nothing says which imports an instance needs: `dir(module)` is `Instance`, `LinkError`, `Trap`, and `Instance({})` fails with `LinkError: missing import module '…'` for one module at a time. The example takes the list from `_imports.py`, which `build_wasm.py` writes from `wasm-objdump`.
 - A WASI 0.1 module has no `Imports` in the stub (`imports: None = None`): its WASI calls are in C in the module. `wasi=` holds the configuration (data), and also `clock` and `random`, which are functions, while the other calls can be replaced through `imports` ("what the caller gives as an import wins", DESIGN.md) without the stub saying so.

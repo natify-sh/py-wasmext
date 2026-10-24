@@ -113,3 +113,41 @@ def test_the_host_is_a_key_of_pyproject(tmp_path: Path) -> None:
     )
     with pytest.raises(ValueError, match="host must be one of"):
         pyproject_calls(tmp_path)
+
+
+def test_a_call_of_wasi_is_replaced_through_imports_in_both_front_ends(
+    build_front_end: Builder, front_end: str
+) -> None:
+    """The stub is one text for the extension and for the wrapper for ctypes (`Imports` keyed by the exact module, each call `NotRequired`), and
+    both take the same dictionary: what the caller gives wins over the call that wasmext has."""
+    mod = build_front_end(DATA / "wasi_hello.wat", f"host_replace_{front_end}", host="wasm32-wasip1")
+    seen: list[tuple[int, ...]] = []
+
+    def fd_write(*args: int) -> int:
+        seen.append(args)
+        return 0
+
+    with pytest.raises(mod.WasiExit) as raised:
+        mod.Instance({WASI: {"fd_write": fd_write}})._start()  # pyright: ignore[reportPrivateUsage]
+    assert raised.value.code == 3 and len(seen) == 1 and seen[0][0] == 1  # fd 1; the real call did not write
+
+
+def test_the_stub_types_every_module_of_the_imports_by_its_name() -> None:
+    both = _wasm((WASI, "proc_exit"), ("env", "f"), ("wasi:cli/environment@0.2.12", "get-arguments"))
+    stub = generate(parse(both), "m", host="wasm32-wasip1").stub
+    assert (
+        "_Imports_wasi_snapshot_preview1 = TypedDict('_Imports_wasi_snapshot_preview1', {'proc_exit': NotRequired["
+        in stub
+    )
+    assert "_Imports_env = TypedDict('_Imports_env', {'f': Callable" in stub  # the caller's: required
+    assert "_Imports_wasi_cli_environment_0_2_12 = TypedDict(" in stub
+    assert "'wasi_snapshot_preview1': NotRequired[_Imports_wasi_snapshot_preview1]" in stub
+    assert "'env': _Imports_env" in stub and "def __init__(self, imports: Imports, *, wasi" in stub  # env is asked for
+    assert "_Imports0" not in stub
+    compile(stub, "m.pyi", "exec")
+    only = generate(parse(_wasm((WASI, "proc_exit"))), "m", host="wasm32-wasip1").stub
+    assert "imports: Imports | None = None, *, wasi: Wasi | None = None" in only  # a WASI program asks for nothing
+    twin = generate(parse(_wasm(("a-b", "f"), ("a_b", "g"))), "m").stub
+    assert (
+        "_Imports_a_b = " in twin and "_Imports_a_b_2 = " in twin
+    )  # told apart by a number, in the order of the section

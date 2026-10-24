@@ -207,6 +207,6 @@ The idea is that of an embedded `libwasmtime`, with a `Context` where wasmtime h
 | `Engine` (compiles, shared) | nothing shared: the compilation is `wasm2c` plus a C compiler, at build time |
 | `Store` (the data of instances, the host state) | `Context`: one runtime, one host; made by any artifact |
 | `Linker` (names to host functions and to exports) | the link table of a module and the imports given by the language that launches it |
-| `Module` | the compiled artifact and its link table |
+| `Module` (or a precompiled `.cwasm`) | not bare wasm but **AOT**: native code already in the artifact (a `.so` / `.pyd` / library), with its link table; nothing is validated, compiled or deserialized at load |
 | `Instance` | an instance on a context |
 | the engine is one library for all | a copy in each artifact; contexts of different artifacts interoperate only if the ABI and the layout of the runtime agree (an explicit error otherwise) |

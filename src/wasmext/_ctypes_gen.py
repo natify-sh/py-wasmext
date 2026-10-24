@@ -169,6 +169,7 @@ _SHARES_TABLES = @SHARES_TABLES@
 _REF_TYPES: list[tuple[int, str, tuple[str, ...], tuple[str, ...]]] = @REF_TYPES@  # k, the C function that calls a function of that type, the parameters, the results
 _WASI = @USES_WASI@
 _HOST = @HOST@  # the name of the host of the module
+__host__ = _HOST
 _TAGS = @HAS_TAGS@
 
 
@@ -608,8 +609,8 @@ _ABSENT: Any = object()  # a key that is not there; a key that is None is nothin
 
 
 def _nothing(module: str, field: str, results: tuple[str, ...]) -> Callable[..., Any]:
-    """What a call of WASI that was given as None does: it answers ENOSYS (52) if it answers with an errno, else it is a trap."""
-    if results == ("i32",):
+    """What a call of WASI that was given as None does: with wasm32-wasip1 it answers ENOSYS (52) if it answers with an errno; else, and always with wasm32-wasip2, it is a trap."""
+    if results == ("i32",) and _HOST == "wasm32-wasip1":
         return lambda *args: 52
 
     def trap(*args: Any) -> None:
@@ -759,14 +760,14 @@ class _Config(_c.Structure):
         ("stdin_read", _c.c_void_p), ("stdout_write", _c.c_void_p),
         ("clock", _c.c_void_p), ("random", _c.c_void_p), ("sleep", _c.c_void_p),
         ("user", _c.c_void_p),
-    ]
+@CONFIG_EXTRA@    ]
 
 
 _STDIN = _c.CFUNCTYPE(_c.c_int, _c.c_void_p, _c.c_void_p, _c.c_size_t, _c.POINTER(_c.c_size_t))
 _STDOUT = _c.CFUNCTYPE(_c.c_int, _c.c_void_p, _c.c_int, _c.c_void_p, _c.c_size_t)
 _CLOCK = _c.CFUNCTYPE(_c.c_int, _c.c_void_p, _c.c_uint32, _c.POINTER(_c.c_uint64))
 _RANDOM = _c.CFUNCTYPE(_c.c_int, _c.c_void_p, _c.c_void_p, _c.c_size_t)
-
+@NET_TYPES@
 
 def _strings(items: Any) -> Any:
     if isinstance(items, (str, bytes, bytearray)):  # a string is a sequence of characters: not the list of arguments
@@ -864,7 +865,7 @@ class _Streams:
 def _wasi_config(self_ref: Any, wasi: Any) -> tuple[Any, list[Any]]:
     """The configuration of the library from the `wasi=` of the caller: the structure, and what has to stay alive with it."""
     wasi = dict(wasi or {})
-    unknown = sorted(set(wasi) - {"args", "env", "stdin", "stdout", "stderr", "preopens", "readonly", "clock", "random"})
+    unknown = sorted(set(wasi) - {"args", "env", "stdin", "stdout", "stderr", "preopens", "readonly", "clock", "random"@NET_KEYS@})
     if unknown:
         raise TypeError(f"wasi: unknown option '{unknown[0]}'")
     for key in ("clock", "random"):
@@ -974,7 +975,7 @@ def _wasi_config(self_ref: Any, wasi: Any) -> tuple[Any, list[Any]]:
 
         config_hooks.append(_RANDOM(random))
         config.random = _c.cast(config_hooks[-1], _c.c_void_p).value
-    keep.append(config_hooks)
+@NET_CONFIG@    keep.append(config_hooks)
     return config, keep
 '''
 
@@ -1227,11 +1228,69 @@ def _original(instance: Any, k: int, field: str, params: tuple[str, ...], result
     return call
 """
 
-_WASI_METHODS = """
+_NET_TYPES_P2 = """\
+_SOCKETS = _c.CFUNCTYPE(_c.c_int, _c.c_void_p, _c.c_char_p, _c.c_uint16, _c.c_uint32)
+_HTTP = _c.CFUNCTYPE(_c.c_int, _c.c_void_p, _c.c_char_p, _c.c_char_p)
+_USES = ("tcp-bind", "tcp-connect", "udp-bind", "udp-connect", "udp-outgoing")
+"""
+
+_CONFIG_EXTRA_P2 = """\
+        ("sockets", _c.c_void_p), ("sockets_all", _c.c_int), ("no_tcp", _c.c_int), ("no_udp", _c.c_int), ("dns", _c.c_int),
+        ("http", _c.c_void_p), ("http_all", _c.c_int),
+"""
+
+_NET_CONFIG_P2 = """\
+    for key in ("tcp", "udp", "dns"):  # a bool; the key left out is the default (TCP and UDP on, names off), None is off
+        if key in wasi and wasi[key] is not None and not isinstance(wasi[key], bool):
+            raise TypeError(f"wasi: '{key}' must be a bool")
+    config.no_tcp = 1 if "tcp" in wasi and not wasi["tcp"] else 0
+    config.no_udp = 1 if "udp" in wasi and not wasi["udp"] else 0
+    config.dns = 1 if wasi.get("dns") else 0
+    for key in ("sockets", "http"):
+        value = wasi.get(key)
+        if value is not None and not isinstance(value, bool) and not callable(value):
+            raise TypeError(f"wasi: '{key}' must be True, False, None or a callable")
+    if wasi.get("sockets") is True:
+        config.sockets_all = 1
+    elif callable(wasi.get("sockets")):
+        policy = wasi["sockets"]
+
+        def sockets(_user: Any, ip: bytes, port: int, use: int) -> int:
+            try:
+                return 1 if policy(ip.decode(), port, _USES[use]) else 0
+            except BaseException as exc:
+                owner = self_ref()
+                if owner is not None:
+                    owner._pending = exc
+                return -1
+
+        config_hooks.append(_SOCKETS(sockets))
+        config.sockets = _c.cast(config_hooks[-1], _c.c_void_p).value
+    if wasi.get("http") is True:
+        config.http_all = 1
+    elif callable(wasi.get("http")):
+        http_policy = wasi["http"]
+
+        def http(_user: Any, scheme: bytes, authority: bytes) -> int:
+            try:
+                return 1 if http_policy(scheme.decode(), authority.decode()) else 0
+            except BaseException as exc:
+                owner = self_ref()
+                if owner is not None:
+                    owner._pending = exc
+                return -1
+
+        config_hooks.append(_HTTP(http))
+        config.http = _c.cast(config_hooks[-1], _c.c_void_p).value
+"""
+
+_WASI_METHODS_HOST = """
     @property
     def __host__(self) -> Host:
         return Host(self)
+"""
 
+_WASI_METHODS = """
     def _ended(self) -> BaseException:
         value = _c.c_uint32(0)
         how = self._lib.@NAME@_wasi_end(self._h, _c.byref(value))
@@ -1253,6 +1312,7 @@ def generate_ctypes(model: ApiModel, *, library_file: str, version: str | None =
     """The text of `<name>_ctypes.py` for the module of `model`; `library_file` is the name of the shared library beside it."""
     name = model.last
     uses_wasi = model.uses_wasi
+    wasi2 = uses_wasi and model.host == "wasm32-wasip2"
     exports = [(n, c, tuple(f.params), tuple(f.results)) for n, c, f in model.exports]
     imports = [
         (k, module, field, tuple(f.params), tuple(f.results), wasi_call)
@@ -1267,8 +1327,13 @@ def generate_ctypes(model: ApiModel, *, library_file: str, version: str | None =
         "@WASI_EXCEPTIONS@": wasi_exceptions,
         "@EXCEPTION_SETUP@": _UNCAUGHT_SETUP if model.has_tags else "",
         "@UNCAUGHT_ERROR@": _UNCAUGHT_ERROR if model.has_tags else "",
-        "@WASI_RUNTIME@": (_WASI_RUNTIME + _WASI_HOST_CLASS) if uses_wasi else "",
-        "@WASI_METHODS@": (_WASI_METHODS if uses_wasi else "") + (_UNCAUGHT_METHOD if model.has_tags else ""),
+        "@WASI_RUNTIME@": (_WASI_RUNTIME + ("" if wasi2 else _WASI_HOST_CLASS)) if uses_wasi else "",
+        "@WASI_METHODS@": (("" if wasi2 else _WASI_METHODS_HOST) + _WASI_METHODS if uses_wasi else "")
+        + (_UNCAUGHT_METHOD if model.has_tags else ""),
+        "@NET_TYPES@": _NET_TYPES_P2 if wasi2 else "",
+        "@CONFIG_EXTRA@": _CONFIG_EXTRA_P2 if wasi2 else "",
+        "@NET_KEYS@": ', "sockets", "tcp", "udp", "dns", "http"' if wasi2 else "",
+        "@NET_CONFIG@": _NET_CONFIG_P2 if wasi2 else "",
         "@WASI_CONFIG_CALL@": "_wasi_config(weakref.ref(self), wasi)" if uses_wasi else "(None, [])",
         "@EXPORTS@": _py(exports),
         "@MEMORIES@": _py(list(model.memories)),

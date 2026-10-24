@@ -11,6 +11,7 @@ code of the trap (`<name>_trap_message(code)` is its text); `<name>_free(m)`.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -158,6 +159,199 @@ def _has_v128(func: FuncType) -> bool:
     return "v128" in (*func.params, *func.results)
 
 
+def _p2_helpers(C: Callable[[str], None], last: str, big: str) -> None:
+    """The C of the library that WASI 0.2 needs after `struct <last>_t`: the callbacks of the state (streams, clocks, random bytes, the policies of the network) over the hooks of
+    the configuration, and the release of what the state points into."""
+    lines = f"""
+#define API_M(s) (({last}_t *)*(void **)(s)->user)
+static char *api_dup(const char *text) {{
+    size_t n = strlen(text) + 1;
+    char *copy = (char *)malloc(n);
+    if (copy != NULL) memcpy(copy, text, n);
+    return copy;
+}}
+/* the status of a stream after a hook: a hook that failed on its own traps (the host kept its error), a closed pipe (EPIPE of WASI, 64) closes the stream, the rest fails it */
+static int api_p2_status(fusedwasi_p2_state *s, fusedwasi_p2_stream *st, int rc) {{
+    if (rc == 0) return FUSEDWASI_P2_STREAM_OK;
+    if (rc == {big}_HOOK_TRAP) s->trap(s, "a hook of the host failed");
+    if (rc == 64) return FUSEDWASI_P2_STREAM_CLOSED;
+    st->failure = "i/o error";
+    return FUSEDWASI_P2_STREAM_FAILED;
+}}
+static int api_p2_read(fusedwasi_p2_state *s, fusedwasi_p2_stream *st, uint8_t *buf, uint64_t len, uint64_t *got) {{
+    {last}_t *m = API_M(s);
+    size_t n = 0;
+    *got = 0;
+    if (len == 0) return FUSEDWASI_P2_STREAM_OK;
+    int rc = m->stdin_read(m->user, buf, (size_t)(len < 65536u ? len : 65536u), &n);
+    if (rc != 0) return api_p2_status(s, st, rc);
+    *got = n;
+    return n == 0 ? FUSEDWASI_P2_STREAM_CLOSED : FUSEDWASI_P2_STREAM_OK;  /* nothing at all is the end of the input */
+}}
+static int api_p2_write(fusedwasi_p2_state *s, fusedwasi_p2_stream *st, const uint8_t *data, uint64_t len) {{
+    {last}_t *m = API_M(s);
+    if (len == 0) return FUSEDWASI_P2_STREAM_OK;
+    return api_p2_status(s, st, m->stdout_write(m->user, (int)(st - m->streams), data, (size_t)len));
+}}
+static uint64_t api_p2_check_write(fusedwasi_p2_state *s, fusedwasi_p2_stream *st, int *status) {{
+    (void)s; (void)st;
+    *status = FUSEDWASI_P2_STREAM_OK;
+    return 65536u;
+}}
+static int api_p2_flush(fusedwasi_p2_state *s, fusedwasi_p2_stream *st) {{ (void)s; (void)st; return FUSEDWASI_P2_STREAM_OK; }}
+static int api_p2_ready(fusedwasi_p2_state *s, fusedwasi_p2_stream *st) {{ (void)s; (void)st; return 1; }}
+static uint64_t api_p2_clock(fusedwasi_p2_state *s, uint32_t id) {{
+    {last}_t *m = API_M(s);
+    uint64_t ns = 0;
+    if (m->clock(m->user, id, &ns) != 0) s->trap(s, "the clock of the host failed");
+    return ns;
+}}
+static uint64_t api_p2_wall_ns(fusedwasi_p2_state *s) {{ return api_p2_clock(s, 0); }}
+static uint64_t api_p2_monotonic_ns(fusedwasi_p2_state *s) {{ return api_p2_clock(s, 1); }}
+static int api_p2_random(fusedwasi_p2_state *s, uint8_t *buf, size_t n) {{
+    {last}_t *m = API_M(s);
+    return m->random(m->user, buf, n) != 0;
+}}
+static void api_p2_wait(fusedwasi_p2_state *s) {{
+    {last}_t *m = API_M(s);
+    if (m->sleep(m->user, 1000000u) != 0) s->trap(s, "the sleep of the host failed");
+}}
+static int api_p2_sockets(fusedwasi_p2_state *s, const char *ip, uint16_t port, int use) {{
+    {last}_t *m = API_M(s);
+    if (use >= FUSEDWASI_P2_USE_UDP_BIND ? m->no_udp : m->no_tcp) return 0;
+    if (m->sockets_all) return 1;
+    if (m->sockets == NULL) return 0;
+    int rc = m->sockets(m->user, ip, port, (uint32_t)use);
+    if (rc < 0) s->trap(s, "a policy of the network failed");
+    return rc;
+}}
+static int api_p2_http(fusedwasi_p2_state *s, const char *scheme, const char *authority) {{
+    {last}_t *m = API_M(s);
+    if (m->http_all) return 1;
+    if (m->http == NULL) return 0;
+    int rc = m->http(m->user, scheme, authority);
+    if (rc < 0) s->trap(s, "a policy of the network failed");
+    return rc;
+}}
+static void api_p2_release({last}_t *m) {{
+    for (size_t i = 0; i < m->nargs_v; i++) free(m->args_v[i]);
+    for (size_t i = 0; i < m->nenv_v; i++) {{ free(m->env_n[i]); free(m->env_v[i]); }}
+    for (size_t i = 0; i < m->npreopens; i++) {{ free((void *)m->preopens[i].path); free((void *)m->preopens[i].name); }}
+    free(m->args_v); free(m->env_n); free(m->env_v); free(m->preopens);
+}}
+"""
+    for line in lines.strip("\n").split("\n"):
+        C(line)
+    C("")
+
+
+def _p2_new(C: Callable[[str], None], last: str, big: str, program: str, wasi_imports: list[int]) -> None:
+    """The body of `<last>_new` for WASI 0.2: the state of the glue (made by `<last>_wasi_bind`) filled from the configuration."""
+    body = f"""
+    fusedwasi_p2_state *s;
+    m->p2_core = &m->core;
+    {last}_wasi_bind(&m->core);
+    s = &m->core.wasi2;
+    s->user = &m->p2_core;
+    if (config != NULL) {{
+        m->stdin_read = config->stdin_read;
+        m->stdout_write = config->stdout_write;
+        m->clock = config->clock;
+        m->random = config->random;
+        m->sleep = config->sleep;
+        m->user = config->user;
+        m->sockets = config->sockets;
+        m->sockets_all = config->sockets_all;
+        m->no_tcp = config->no_tcp;
+        m->no_udp = config->no_udp;
+        m->http = config->http;
+        m->http_all = config->http_all;
+        s->allow_ip_name_lookup = config->dns;
+    }}
+    {{
+        /* arguments: NULL is the name of the module; environment: "NAME=value" cut at the first '='; directories: "host::guest" */
+        size_t nargs = config != NULL && config->args != NULL ? config->nargs : 1;
+        size_t nenv = config != NULL ? config->nenv : 0;
+        size_t ndirs = config != NULL ? config->ndirs : 0;
+        m->args_v = (char **)calloc(nargs ? nargs : 1, sizeof(char *));
+        m->env_n = (char **)calloc(nenv ? nenv : 1, sizeof(char *));
+        m->env_v = (char **)calloc(nenv ? nenv : 1, sizeof(char *));
+        m->preopens = (struct fusedwasi_p2_preopen *)calloc(ndirs ? ndirs : 1, sizeof *m->preopens);
+        if (m->args_v == NULL || m->env_n == NULL || m->env_v == NULL || m->preopens == NULL) goto nomem;
+        for (size_t i = 0; i < nargs; i++) {{
+            m->args_v[i] = api_dup(config != NULL && config->args != NULL ? config->args[i] : {program});
+            if (m->args_v[i] == NULL) goto nomem;
+            m->nargs_v = i + 1;
+        }}
+        for (size_t i = 0; i < nenv; i++) {{
+            const char *item = config->env[i], *eq = strchr(item, '=');
+            size_t name_len = eq != NULL ? (size_t)(eq - item) : strlen(item);
+            m->env_n[i] = (char *)malloc(name_len + 1);
+            if (m->env_n[i] == NULL) goto nomem;
+            memcpy(m->env_n[i], item, name_len);
+            m->env_n[i][name_len] = '\\0';
+            m->env_v[i] = api_dup(eq != NULL ? eq + 1 : "");
+            if (m->env_v[i] == NULL) goto nomem;
+            m->nenv_v = i + 1;
+        }}
+        for (size_t i = 0; i < ndirs; i++) {{
+            const char *item = config->dirs[i], *sep = strstr(item, "::");
+            size_t host_len = sep != NULL ? (size_t)(sep - item) : strlen(item);
+            char *path = (char *)malloc(host_len + 1);
+            if (path == NULL) goto nomem;
+            memcpy(path, item, host_len);
+            path[host_len] = '\\0';
+            m->preopens[i].path = path;
+            m->preopens[i].name = api_dup(sep != NULL && sep[2] != '\\0' ? sep + 2 : "/");
+            m->preopens[i].writable = !(config->dirs_readonly != NULL && config->dirs_readonly[i] != 0);
+            m->npreopens = i + 1;
+            if (m->preopens[i].name == NULL) goto nomem;
+        }}
+        s->args = (const char *const *)m->args_v;
+        s->arg_count = (uint32_t)nargs;
+        s->env_names = (const char *const *)m->env_n;
+        s->env_values = (const char *const *)m->env_v;
+        s->env_count = (uint32_t)nenv;
+        s->preopens = m->preopens;
+        s->preopen_count = (uint32_t)ndirs;
+    }}
+    for (int i = 0; i < 3; i++) {{
+        fusedwasi_p2_stream *st = &m->streams[i];
+        if (i == 0 ? m->stdin_read == NULL : m->stdout_write == NULL) continue;  /* the descriptors of the process */
+        st->failure_network_code = -1;
+        st->ready = api_p2_ready;
+        if (i == 0) {{
+            st->read = api_p2_read;
+        }} else {{
+            st->check_write = api_p2_check_write;
+            st->write = api_p2_write;
+            st->flush = api_p2_flush;
+        }}
+        s->std[i] = st;
+    }}
+    if (m->clock != NULL) {{
+        s->wall_ns = api_p2_wall_ns;
+        s->monotonic_ns = api_p2_monotonic_ns;
+    }}
+    if (m->random != NULL) s->random_bytes = s->insecure_random_bytes = api_p2_random;
+    if (m->sleep != NULL) s->wait = api_p2_wait;
+    s->socket_addr_check = api_p2_sockets;
+    s->http_check = api_p2_http;
+"""
+    for line in body.strip("\n").split("\n"):
+        C(line)
+    for k in wasi_imports:
+        C(f"    m->set[{k}] = 1;")
+    C("    if (0) {")
+    C("nomem:")
+    C("        *error = 12;")
+    C("        fusedwasi_p2_free(&m->core.wasi2);")
+    C("        api_p2_release(m);")
+    C("        free(m);")
+    C("        return NULL;")
+    C("    }")
+
+
 def generate_shared(
     last: str,
     prefix: str,
@@ -178,6 +372,7 @@ def generate_shared(
     trap_handler: str = "",
     ref_types: list[FuncType] | None = None,
     host_name: str = "",
+    wasi2: bool = False,
 ) -> tuple[str, str, ApiModel]:
     """The public header, the C of the library and the model of the API; `funcs` are the exports in the order of the glue (`<name>_call<i>`). A v128 in a signature is 16 bytes behind a pointer
     (`const uint8_t *` in, `uint8_t *` out, little-endian); a global of that type and the link of such a function to another instance are left out."""
@@ -281,6 +476,20 @@ def generate_shared(
     A("    int (*random)(void *user, uint8_t *buf, size_t n);  /* without it the system's source */")
     A("    int (*sleep)(void *user, uint64_t ns);  /* without it the core sleeps in slices of 100 ms */")
     A("    void *user;")
+    if wasi2:
+        A(
+            "    /* WASI 0.2 only: the network is refused unless it is allowed here (as in Wasmtime). `sockets` answers 1 to allow, 0 to refuse, a negative number for a failure (a trap) */"
+        )
+        A(
+            "    int (*sockets)(void *user, const char *ip, uint16_t port, uint32_t use);  /* use: 0 tcp-bind, 1 tcp-connect, 2 udp-bind, 3 udp-connect, 4 udp-outgoing */"
+        )
+        A("    int sockets_all;  /* every bind and connect is allowed (the function is not asked) */")
+        A("    int no_tcp, no_udp;  /* the protocol is refused whatever `sockets` says */")
+        A("    int dns;  /* names may be resolved */")
+        A(
+            "    int (*http)(void *user, const char *scheme, const char *authority);  /* 1, 0 or a negative number, as `sockets` */"
+        )
+        A("    int http_all;")
     A(f"}} {last}_config;")
     A("")
     A("/* A new instance (imports not set, not instantiated); NULL with `*error` (an errno) when it cannot be made. */")
@@ -435,6 +644,18 @@ def generate_shared(
     C("    int (*random)(void *user, uint8_t *buf, size_t n);")
     C("    int (*sleep)(void *user, uint64_t ns);")
     C("    void *user;")
+    if wasi2:
+        C(
+            "    void *p2_core;  /* what the state's `user` points to: the glue reads the instance from it (it is the first member of this structure) */"
+        )
+        C("    int (*sockets)(void *user, const char *ip, uint16_t port, uint32_t use);")
+        C("    int (*http)(void *user, const char *scheme, const char *authority);")
+        C("    int sockets_all, no_tcp, no_udp, http_all;")
+        C("    char **args_v, **env_n, **env_v;")
+        C("    size_t nargs_v, nenv_v;")
+        C("    struct fusedwasi_p2_preopen *preopens;")
+        C("    size_t npreopens;")
+        C("    fusedwasi_p2_stream streams[3];")
     if tags:
         C(
             "    int tag; int nvalues; wasmext_value values["
@@ -442,7 +663,9 @@ def generate_shared(
         )
     C("};")
     C("")
-    if uses_wasi:
+    if uses_wasi and wasi2:
+        _p2_helpers(C, last, big)
+    elif uses_wasi:
         C("static void api_ended(void *user, int how, uint32_t value) {")
         C(f"    {last}_t *m = ({last}_t *)user;")
         C("    m->how = how;")
@@ -487,7 +710,9 @@ def generate_shared(
     C("    if (error == NULL) error = &ignored;")
     C(f"    {last}_t *m = ({last}_t *)calloc(1, sizeof *m);")
     C("    if (m == NULL) { *error = 12; return NULL; }")
-    if uses_wasi:
+    if uses_wasi and wasi2:
+        _p2_new(C, last, big, _c_string(last), [k for k, (_m, _f, _fn, w, _h, _s) in enumerate(imports) if w])
+    elif uses_wasi:
         C("    fusedwasi_p1_config wasi;")
         C("    memset(&wasi, 0, sizeof wasi);")
         C("    char *args = NULL, *env = NULL;")
@@ -558,7 +783,10 @@ def generate_shared(
     C(f"void {last}_free({last}_t *m) {{")
     C("    if (m == NULL) return;")
     C(f"    {last}_glue_free(&m->core);")
-    if uses_wasi:
+    if uses_wasi and wasi2:
+        C("    fusedwasi_p2_free(&m->core.wasi2);")
+        C("    api_p2_release(m);")
+    elif uses_wasi:
         C("    fusedwasi_p1_destroy(m->core.wasi);")
     C("    free(m);")
     C("}")
@@ -600,7 +828,10 @@ def generate_shared(
     C("}")
     C("")
     C(f"int {last}_wasi_end({last}_t *m, uint32_t *value) {{")
-    if uses_wasi:
+    if uses_wasi and wasi2:
+        C("    if (value != NULL) *value = m->core.wasi2.exit_code;")
+        C("    return m->core.wasi2.exited ? 1 : 0;")
+    elif uses_wasi:
         C("    if (value != NULL) *value = m->core.wasi->end_value;")
         C("    return m->core.wasi->finished;")
     else:
@@ -684,7 +915,9 @@ def generate_shared(
         C(f"    m->set[{k}] = function != NULL;")
         C("}")
         C("")
-        if is_wasi:  # the original of the call: wasmext's own, whatever was set above; it answers as an export does (0, or the code of a trap)
+        if (
+            is_wasi and not wasi2
+        ):  # the original of the call: wasmext's own, whatever was set above; it answers as an export does (0, or the code of a trap)
             own = module == _WASI_UNSTABLE and field_ in _WASI_UNSTABLE_OWN
             core = f"fusedwasi_p1_{'unstable_' if own else ''}{field_}"
             res = f", {_API_TYPE[func.results[0]]} *r0" if func.results else ""
@@ -987,7 +1220,9 @@ def generate_shared(
                 f"        m->nvalues = m->tag >= 0 ? {last}_tag_values(m->tag, wasm_rt_exception(), wasm_rt_exception_size(), m->values) : -1;"
             )
             C("    }")
-        if uses_wasi:
+        if uses_wasi and wasi2:
+            C("    if (trapped == (int)WASMEXT_TRAP_HOST && m->core.wasi2.exited) trapped = (int)WASMEXT_TRAP_ENDED;")
+        elif uses_wasi:
             C(
                 "    /* the call in which the program ends (proc_exit, proc_raise) unwound with the code of a host function; it is the end that it answers */"
             )

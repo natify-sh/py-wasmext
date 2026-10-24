@@ -2551,8 +2551,6 @@ def generate(
         memory_imports=bool(memory_imports),
         table_imports=bool(table_imports),
     )
-    if wasi2 and uses_wasi:
-        reason = "the library does not answer the imports of WASI 0.2 yet (host 'wasm32-wasip2' is built into the extension only)"
     api_header = shared = ""
     api_model = None
     if reason is None:
@@ -2574,6 +2572,7 @@ def generate(
             trap_handler,
             ref_types,
             host_name,
+            wasi2 and uses_wasi,
         )
     return Glue(
         "\n".join(w) + "\n",

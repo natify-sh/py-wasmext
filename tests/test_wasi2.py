@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import struct
+import time
 from collections.abc import Callable
 from pathlib import Path
 from types import ModuleType
@@ -31,8 +33,8 @@ def strings(inst: Any, at: int) -> list[str]:
     return out
 
 
-def test_a_command_of_wasi_p2_runs_with_no_host_of_python(build_extension: Builder) -> None:
-    mod = build_extension(HELLO, "wasi2_hello", host=P2)
+def test_a_command_of_wasi_p2_runs_with_no_host_of_python(build_front_end: Builder) -> None:
+    mod = build_front_end(HELLO, "wasi2_hello", host=P2)
     assert mod.__host__ == P2
     out: list[bytes] = []
     inst = mod.Instance(wasi={"stdout": out.append})
@@ -41,15 +43,15 @@ def test_a_command_of_wasi_p2_runs_with_no_host_of_python(build_extension: Build
 
 
 def test_the_standard_output_goes_to_sys_stdout_when_it_is_not_given(
-    build_extension: Builder, capsys: pytest.CaptureFixture[str]
+    build_front_end: Builder, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    mod = build_extension(HELLO, "wasi2_hello_sys", host=P2)
+    mod = build_front_end(HELLO, "wasi2_hello_sys", host=P2)
     getattr(mod.Instance(), RUN)()
     assert capsys.readouterr().out == "hello from wasip2\n"
 
 
-def test_arguments_and_environment(build_extension: Builder) -> None:
-    mod = build_extension(DATA / "wasi2_probe.wat", "wasi2_probe_args", host=P2)
+def test_arguments_and_environment(build_front_end: Builder) -> None:
+    mod = build_front_end(DATA / "wasi2_probe.wat", "wasi2_probe_args", host=P2)
     assert strings_of(mod.Instance(), "args") == ["wasi2_probe_args"]  # the name of the program, when there are none
     assert strings_of(mod.Instance(wasi={"args": ["prog", "-x", "é"]}), "args") == ["prog", "-x", "é"]
     assert strings_of(mod.Instance(wasi={"args": None}), "args") == []
@@ -69,8 +71,8 @@ def strings_of(inst: Any, export: str) -> list[str]:
     return strings(inst, 1000)
 
 
-def test_exit_raises_the_exception_with_the_code(build_extension: Builder) -> None:
-    mod = build_extension(DATA / "wasi2_probe.wat", "wasi2_probe_exit", host=P2)
+def test_exit_raises_the_exception_with_the_code(build_front_end: Builder) -> None:
+    mod = build_front_end(DATA / "wasi2_probe.wat", "wasi2_probe_exit", host=P2)
     inst = mod.Instance()
     with pytest.raises(mod.WasiExit) as raised:
         inst.exit(1)  # the result of wasi:cli/exit is err (1)
@@ -79,8 +81,8 @@ def test_exit_raises_the_exception_with_the_code(build_extension: Builder) -> No
         inst.args(1000)
 
 
-def test_the_clock_and_the_random_bytes_can_be_replaced(build_extension: Builder) -> None:
-    mod = build_extension(DATA / "wasi2_probe.wat", "wasi2_probe_hooks", host=P2)
+def test_the_clock_and_the_random_bytes_can_be_replaced(build_front_end: Builder) -> None:
+    mod = build_front_end(DATA / "wasi2_probe.wat", "wasi2_probe_hooks", host=P2)
     seen: list[int] = []
 
     def clock(clock_id: int) -> int:
@@ -97,8 +99,8 @@ def test_the_clock_and_the_random_bytes_can_be_replaced(build_extension: Builder
     assert real.now() > 0  # the clock of the system
 
 
-def test_an_exception_of_a_hook_comes_out_of_the_call(build_extension: Builder) -> None:
-    mod = build_extension(DATA / "wasi2_probe.wat", "wasi2_probe_raise", host=P2)
+def test_an_exception_of_a_hook_comes_out_of_the_call(build_front_end: Builder) -> None:
+    mod = build_front_end(DATA / "wasi2_probe.wat", "wasi2_probe_raise", host=P2)
 
     def clock(clock_id: int) -> int:
         raise KeyError("no clock")
@@ -107,16 +109,16 @@ def test_an_exception_of_a_hook_comes_out_of_the_call(build_extension: Builder) 
         mod.Instance(wasi={"clock": clock}).now()
 
 
-def test_a_wrong_configuration_is_refused(build_extension: Builder) -> None:
-    mod = build_extension(DATA / "wasi2_probe.wat", "wasi2_probe_config", host=P2)
+def test_a_wrong_configuration_is_refused(build_front_end: Builder) -> None:
+    mod = build_front_end(DATA / "wasi2_probe.wat", "wasi2_probe_config", host=P2)
     with pytest.raises(TypeError, match="unknown option"):
         mod.Instance(wasi={"nope": 1})
     with pytest.raises(TypeError, match="lists of strings"):
         mod.Instance(wasi={"args": "abc"})
 
 
-def test_the_imports_of_wasi_p2_are_replaced_one_by_one(build_extension: Builder) -> None:
-    mod = build_extension(DATA / "wasi2_probe.wat", "wasi2_probe_replace", host=P2)
+def test_the_imports_of_wasi_p2_are_replaced_one_by_one(build_front_end: Builder) -> None:
+    mod = build_front_end(DATA / "wasi2_probe.wat", "wasi2_probe_replace", host=P2)
     inst = mod.Instance({"wasi:clocks/monotonic-clock@0.2.12": {"now": lambda: 7}})
     assert inst.now() == 7
     nothing = mod.Instance(
@@ -221,9 +223,9 @@ class Fs:
 
 
 def test_the_directories_a_program_is_given_are_listed_and_a_file_is_read(
-    build_extension: Builder, tmp_path: Path
+    build_front_end: Builder, tmp_path: Path
 ) -> None:
-    mod = build_extension(DATA / "wasi2_fs.wat", "wasi2_fs_read", host=P2)
+    mod = build_front_end(DATA / "wasi2_fs.wat", "wasi2_fs_read", host=P2)
     (tmp_path / "hello.txt").write_bytes(b"hello, files\n")
     fs = Fs(mod, preopens={"/data": str(tmp_path)})
     [(root, name)] = fs.directories()
@@ -233,8 +235,8 @@ def test_the_directories_a_program_is_given_are_listed_and_a_file_is_read(
     assert not ok and code == 20  # no-entry
 
 
-def test_a_file_is_written_and_a_directory_made_and_removed(build_extension: Builder, tmp_path: Path) -> None:
-    mod = build_extension(DATA / "wasi2_fs.wat", "wasi2_fs_write", host=P2)
+def test_a_file_is_written_and_a_directory_made_and_removed(build_front_end: Builder, tmp_path: Path) -> None:
+    mod = build_front_end(DATA / "wasi2_fs.wat", "wasi2_fs_write", host=P2)
     fs = Fs(mod, preopens={"/data": str(tmp_path)})
     [(root, _)] = fs.directories()
     assert fs.write_file(root, "out.txt", b"written by the guest") == (True, 0)
@@ -248,9 +250,9 @@ def test_a_file_is_written_and_a_directory_made_and_removed(build_extension: Bui
 
 
 def test_a_directory_that_is_read_only_cannot_be_changed_and_a_path_cannot_leave_it(
-    build_extension: Builder, tmp_path: Path
+    build_front_end: Builder, tmp_path: Path
 ) -> None:
-    mod = build_extension(DATA / "wasi2_fs.wat", "wasi2_fs_guard", host=P2)
+    mod = build_front_end(DATA / "wasi2_fs.wat", "wasi2_fs_guard", host=P2)
     inside = tmp_path / "inside"
     inside.mkdir()
     (tmp_path / "secret.txt").write_text("outside")
@@ -277,7 +279,7 @@ def test_every_function_of_the_table_compiles_with_the_headers_the_glue_includes
         pytest.skip(
             "compiled by the examples of the files on Windows; the compiler of setuptools is not the one used here"
         )
-    cc = shutil.which(__import__("os").environ.get("CC", "cc")) or shutil.which("gcc") or shutil.which("clang")
+    cc: str | None = shutil.which(os.environ.get("CC", "cc")) or shutil.which("gcc") or shutil.which("clang")
     if cc is None:
         pytest.skip("no C compiler of the cc kind")
     calls = {("wasi:test", name): name for name in FUNCS}
@@ -306,7 +308,16 @@ def serve_pong(port: int) -> tuple[Any, list[bytes]]:
     import threading
 
     srv = socket.socket()
-    srv.bind(("127.0.0.1", port))
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    for attempt in range(20):  # the port of an earlier connection may need a moment
+        try:
+            srv.bind(("127.0.0.1", port))
+            break
+        except OSError:
+            if attempt == 19:
+                srv.close()
+                raise
+            time.sleep(0.25)
     srv.listen(1)
     got: list[bytes] = []
 
@@ -321,8 +332,8 @@ def serve_pong(port: int) -> tuple[Any, list[bytes]]:
 
 
 @pytest.fixture(scope="module")
-def sock_module(build_extension: Builder) -> ModuleType:
-    return build_extension(SOCK, "wasi2_sock", host=P2)
+def sock_module(build_front_end: Builder) -> ModuleType:
+    return build_front_end(SOCK, "wasi2_sock", host=P2)
 
 
 def test_the_network_is_refused_unless_the_caller_allows_it(sock_module: ModuleType) -> None:
@@ -348,8 +359,8 @@ def test_a_policy_of_sockets_decides_each_use(sock_module: ModuleType) -> None:
 def test_a_program_talks_to_a_server_when_the_policy_allows_it(sock_module: ModuleType) -> None:
     try:
         srv, got = serve_pong(47123)  # sock.c connects to 127.0.0.1:47123
-    except OSError:
-        pytest.skip("port 47123 is busy")
+    except OSError as exc:
+        pytest.skip(f"port 47123 is busy: {exc}")
     with srv:
         out: list[bytes] = []
         getattr(sock_module.Instance(wasi={"stdout": out.append, "sockets": True}), RUN)()

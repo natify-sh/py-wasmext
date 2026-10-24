@@ -64,6 +64,10 @@ class ApiModel:
     table_imports: list[tuple[int, str, str]] = field(
         default_factory=list[tuple[int, str, str]]
     )  # j (the C function is <last>_link_table_import<j>), module, field
+    host: str = ""  # the host of the module (wasm32-wasip1 when the library answers the calls of WASI)
+    host_calls: list[tuple[int, str, str, FuncType]] = field(
+        default_factory=list[tuple[int, str, str, FuncType]]
+    )  # k (the C function is <last>_host_call<k>), module, field, type: the calls of WASI that the library answers, as the Host has them
     shares_tables: bool = False  # the library has <last>_traps and <last>_traps_use (see the header)
     ref_types: list[tuple[int, str, FuncType]] = field(
         default_factory=list[tuple[int, str, FuncType]]
@@ -73,7 +77,7 @@ class ApiModel:
 
 # The names that an export may not take: the functions of the glue and of the C API are named by these patterns.
 _RESERVED_NAMES = re.compile(
-    r"call\d+|set_import\d+|link_\w+|set_global_\w+|memory_\w+|global_\w+|wasi_\w+|glue_\w+|import\d+_fn|instance|traps|traps_use|unlink_tables|table_(?:new|free|size|maximum|grow|export|is_null|is|set|get_ref)|funcref_(?:type|copy|free|export|same|hash|call\d+)"
+    r"call\d+|host_call\d+|set_import\d+|link_\w+|set_global_\w+|memory_\w+|global_\w+|wasi_\w+|glue_\w+|import\d+_fn|instance|traps|traps_use|unlink_tables|table_(?:new|free|size|maximum|grow|export|is_null|is|set|get_ref)|funcref_(?:type|copy|free|export|same|hash|call\d+)"
 )
 
 
@@ -173,6 +177,7 @@ def generate_shared(
     table_imports: list[Any] | None = None,
     trap_handler: str = "",
     ref_types: list[FuncType] | None = None,
+    host_name: str = "",
 ) -> tuple[str, str, ApiModel]:
     """The public header, the C of the library and the model of the API; `funcs` are the exports in the order of the glue (`<name>_call<i>`). A v128 in a signature is 16 bytes behind a pointer
     (`const uint8_t *` in, `uint8_t *` out, little-endian); a global of that type and the link of such a function to another instance are left out."""
@@ -180,6 +185,8 @@ def generate_shared(
         _CTYPE,
         _MULTI_CODE,
         _TYPE_CODE,
+        _WASI_UNSTABLE,
+        _WASI_UNSTABLE_OWN,
         _c_string,
         _cc,
         _signature_code,
@@ -193,6 +200,7 @@ def generate_shared(
         has_tags=bool(tags),
         tables=list(tables or ()),
         shares_tables=bool(trap_handler),
+        host=host_name if uses_wasi else "",
         skipped=[x for x in skipped or () if "is not an attribute" not in x],
     )
     taken: set[str] = set()
@@ -676,6 +684,29 @@ def generate_shared(
         C(f"    m->set[{k}] = function != NULL;")
         C("}")
         C("")
+        if is_wasi:  # the original of the call: wasmext's own, whatever was set above; it answers as an export does (0, or the code of a trap)
+            own = module == _WASI_UNSTABLE and field_ in _WASI_UNSTABLE_OWN
+            core = f"fusedwasi_p1_{'unstable_' if own else ''}{field_}"
+            res = f", {_API_TYPE[func.results[0]]} *r0" if func.results else ""
+            args = "".join(f", {_API_TYPE[t]} a{j}" for j, t in enumerate(func.params))
+            A(
+                f"/* the original of the call of WASI {_cc(module)}.{_cc(field_)}, as wasmext answers it (the Host of the wrapper for ctypes calls it): 0, or the code of a trap */"
+            )
+            A(f"WASMEXT_API int {last}_host_call{k}({last}_t *m{args}{res});")
+            C(f"int {last}_host_call{k}({last}_t *m{args}{res}) {{")
+            C("    int trapped = 0;")
+            call_args = "".join(f", ({_CTYPE[t]})a{j}" for j, t in enumerate(func.params))
+            if func.results:
+                C(f"    {_CTYPE[func.results[0]]} r = {core}(m->core.wasi{call_args}, &trapped);")
+            else:
+                C(f"    {core}(m->core.wasi{call_args}, &trapped);")
+            C("    if (trapped) return m->core.wasi->finished ? (int)WASMEXT_TRAP_ENDED : (int)WASMEXT_TRAP_HOST;")
+            if func.results:
+                C(f"    if (r0 != NULL) *r0 = ({_API_TYPE[func.results[0]]})r;")
+            C("    return 0;")
+            C("}")
+            C("")
+            model.host_calls.append((k, module, field_, func))
     # linking: the imports from the exports of another instance (the checks are those of the glue of the module, the same as the extension's)
     A("")
     for k, (module, field_, func, is_wasi, host, slot) in enumerate(imports):

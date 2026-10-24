@@ -221,3 +221,42 @@ def test_the_stub_names_the_configuration_by_its_host() -> None:
     assert "class WasiP1(TypedDict):" in stub and "Wasi = WasiP1" in stub and "wasi: Wasi | None = None" in stub
     p2 = generate(parse(_wasm((WASI, "proc_exit"))), "m", host="wasm32-wasip2").stub
     assert "class Wasi" not in p2 and "wasi:" not in p2  # nothing is built in for it yet
+
+
+def test_the_host_gives_the_originals_of_its_calls_in_both_front_ends(build_front_end: Builder, front_end: str) -> None:
+    mod = build_front_end(DATA / "wasi_hello.wat", f"host_originals_{front_end}", host="wasm32-wasip1")
+    out: list[bytes] = []
+    inst = mod.Instance(wasi={"stdout": out.append})
+    host = inst.__host__
+    assert host.name == "wasm32-wasip1" and isinstance(host, mod.Host)
+    originals = host.__imports__
+    assert set(originals) == {WASI} and set(originals[WASI]) == {"fd_write", "proc_exit"}
+    # the original works on the memory of this instance: write "hi\n" and the iovec, then call fd_write(1, iovs, 1, nwritten)
+    mem = inst.memory
+    mem[100:103] = b"hi\n"
+    mem[200:208] = (100).to_bytes(4, "little") + (3).to_bytes(4, "little")
+    assert originals[WASI]["fd_write"](1, 200, 1, 300) == 0
+    assert bytes(mem[300:304]) == (3).to_bytes(4, "little") and b"".join(out) == b"hi\n"
+    with pytest.raises(mod.WasiExit) as raised:  # a call that ends the program raises its exception
+        originals[WASI]["proc_exit"](7)
+    assert raised.value.code == 7
+    with pytest.raises(TypeError):
+        originals[WASI]["fd_write"](1)
+
+
+def test_a_wrapper_calls_the_original_of_the_call_it_replaces(build_front_end: Builder, front_end: str) -> None:
+    """The use of it: a call is replaced by a function that looks at the arguments and passes them on to the original."""
+    mod = build_front_end(DATA / "wasi_hello.wat", f"host_wrapper_{front_end}", host="wasm32-wasip1")
+    out: list[bytes] = []
+    seen: list[tuple[int, ...]] = []
+    holder: dict[str, object] = {}
+
+    def fd_write(*args: int) -> int:
+        seen.append(args)
+        original = holder["inst"].__host__.__imports__[WASI]["fd_write"]  # type: ignore[attr-defined]
+        return original(*args)  # type: ignore[no-any-return,operator]
+
+    holder["inst"] = inst = mod.Instance({WASI: {"fd_write": fd_write}}, wasi={"stdout": out.append})
+    with pytest.raises(mod.WasiExit) as raised:
+        inst._start()  # pyright: ignore[reportPrivateUsage]
+    assert raised.value.code == 3 and len(seen) == 1 and b"".join(out) == b"hello, wasi\n"

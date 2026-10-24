@@ -944,6 +944,7 @@ def generate(
         add("static PyObject *UncaughtExceptionError;")
     if uses_wasi:
         add("static PyObject *WasiExitError, *WasiSignalError, *WasiTerminatedError;")
+        add("static PyTypeObject *HostType;")
         add(
             "/* A call of WASI that the caller gave as None: nothing is given. A call that answers with an errno answers ENOSYS (52), the other is a trap. */"
         )
@@ -2100,10 +2101,116 @@ def generate(
             add("    return 0;")
             add("}")
         add("")
+    host_calls = [(k, imp) for k, imp in enumerate(imports) if imp.module in wasi_headers]
+    if uses_wasi:
+        add(
+            "/* ---- the Host: what answers the imports of WASI (wasm32-wasip1) and the originals of its calls, for Python ---- */"
+        )
+        add("typedef struct { PyObject_HEAD InstanceObject *inst; } HostObject;")
+        for k, imp in host_calls:
+            n = len(imp.func.params)
+            own = imp.module == _WASI_UNSTABLE and imp.field in _WASI_UNSTABLE_OWN
+            core = f"fusedwasi_p1_{'unstable_' if own else ''}{imp.field}"
+            add(f"/* the call of wasmext for {_cc(imp.module)}.{_cc(imp.field)}{_signature(imp.func)}, from Python */")
+            add(f"static PyObject *host_call{k}(PyObject *selfobj, PyObject *const *args, Py_ssize_t nargs) {{")
+            add("    InstanceObject *self = (InstanceObject *)selfobj;")
+            add(f"    if (nargs != {n}) {{")
+            add(
+                f'        PyErr_Format(PyExc_TypeError, "%s() takes exactly {n} argument{"" if n == 1 else "s"} (%zd given)", '
+                f"{_c_string(imp.field)}, nargs);"
+            )
+            add("        return NULL;")
+            add("    }")
+            for j, t in enumerate(imp.func.params):
+                add(f"    {_CTYPE[t]} a{j} = {_TO_WASM[t].format(f'args[{j}]')};")
+            if n:
+                add("    if (PyErr_Occurred()) return NULL;")
+            add("    int trapped = 0;")
+            call_args = "".join(f", a{j}" for j in range(n))
+            call = f"{core}(self->core.wasi{call_args}, &trapped)"
+            if imp.func.results:
+                add(f"    {_CTYPE[imp.func.results[0]]} r = {call};")
+                add("    if (trapped) { raise_trap(self, (int)WASMEXT_TRAP_HOST); return NULL; }")
+                add(f"    return {_FROM_WASM[imp.func.results[0]].format('r')};")
+            else:
+                add(f"    {call};")
+                add("    if (trapped) { raise_trap(self, (int)WASMEXT_TRAP_HOST); return NULL; }")
+                add("    Py_RETURN_NONE;")
+            add("}")
+            add(
+                f"static PyMethodDef host_def{k} = {{{_c_string(imp.field)}, (PyCFunction)(void (*)(void))host_call{k}, METH_FASTCALL, NULL}};"
+            )
+        add(
+            "static int host_put(PyObject *all, const char *module, const char *field, PyMethodDef *def, PyObject *inst) {"
+        )
+        add("    PyObject *sub = PyDict_GetItemString(all, module);")
+        add("    if (sub == NULL) {")
+        add("        sub = PyDict_New();")
+        add("        if (sub == NULL) return -1;")
+        add("        int made = PyDict_SetItemString(all, module, sub);")
+        add("        Py_DECREF(sub);")
+        add("        if (made < 0) return -1;")
+        add("        sub = PyDict_GetItemString(all, module);")
+        add("    }")
+        add("    PyObject *fn = PyCFunction_New(def, inst);")
+        add("    if (fn == NULL) return -1;")
+        add("    int r = PyDict_SetItemString(sub, field, fn);")
+        add("    Py_DECREF(fn);")
+        add("    return r;")
+        add("}")
+        add("static PyObject *Host_imports(HostObject *self, void *closure) {")
+        add("    (void)closure;")
+        add("    PyObject *all = PyDict_New();")
+        add("    if (all == NULL) return NULL;")
+        for k, imp in host_calls:
+            add(
+                f"    if (host_put(all, {_c_string(imp.module)}, {_c_string(imp.field)}, &host_def{k}, (PyObject *)self->inst) < 0) {{ Py_DECREF(all); return NULL; }}"
+            )
+        add("    return all;")
+        add("}")
+        add("static PyObject *Host_name(HostObject *self, void *closure) {")
+        add("    (void)self; (void)closure;")
+        add(f"    return PyUnicode_FromString({_c_string(host_name)});")
+        add("}")
+        add("static void Host_dealloc(HostObject *self) {")
+        add("    PyTypeObject *tp = Py_TYPE(self);")
+        add("    Py_XDECREF(self->inst);")
+        add("    ((freefunc)PyType_GetSlot(tp, Py_tp_free))((PyObject *)self);")
+        add("    Py_DECREF(tp);")
+        add("}")
+        add("static PyGetSetDef Host_getset[] = {")
+        add(
+            '    {"__imports__", (getter)Host_imports, NULL, "{module: {name: the call}}: the calls the host answers, as wasmext has them, whatever the caller gave in place of them", NULL},'
+        )
+        add('    {"name", (getter)Host_name, NULL, "the name of the host", NULL},')
+        add("    {NULL, NULL, NULL, NULL, NULL}")
+        add("};")
+        add("static PyType_Slot host_slots[] = {")
+        add("    {Py_tp_dealloc, Host_dealloc},")
+        add("    {Py_tp_getset, Host_getset},")
+        add("    {0, NULL}")
+        add("};")
+        add(
+            f"static PyType_Spec host_spec = {{{_c_string(name + '.Host')}, sizeof(HostObject), 0, "
+            "Py_TPFLAGS_DEFAULT | Py_TPFLAGS_DISALLOW_INSTANTIATION, host_slots};"
+        )
+        add("static PyObject *Instance_host(InstanceObject *self, void *closure) {")
+        add("    (void)closure;")
+        add("    HostObject *h = PyObject_New(HostObject, HostType);")
+        add("    if (h == NULL) return NULL;")
+        add("    Py_INCREF((PyObject *)self);")
+        add("    h->inst = self;")
+        add("    return (PyObject *)h;")
+        add("}")
+        add("")
     add("static PyGetSetDef Instance_getset[] = {")
     add(
         '    {"__exports__", (getter)Instance_exports, NULL, "{name: a reference to the export}: what another instance can take as an import", NULL},'
     )
+    if uses_wasi:
+        add(
+            '    {"__host__", (getter)Instance_host, NULL, "the Host: what answers the imports of WASI, and the originals of its calls", NULL},'
+        )
     for i, (exp_name, glob) in enumerate(globals_):
         if exp_name in no_attribute:
             continue
@@ -2213,6 +2320,8 @@ def generate(
             f'    UncaughtExceptionError = PyErr_NewExceptionWithDoc({_c_string(name + ".UncaughtException")}, "An exception of WebAssembly that nothing caught (.tag, .values)", TrapError, NULL);'
         )
     add("    InstanceType = (PyTypeObject *)PyType_FromSpec(&instance_spec);")
+    if uses_wasi:
+        add("    HostType = (PyTypeObject *)PyType_FromSpec(&host_spec);")
     if memories:
         add("    MemoryType = (PyTypeObject *)PyType_FromSpec(&memory_spec);")
     if shares_tables:
@@ -2220,7 +2329,7 @@ def generate(
         add("    FunctionType = (PyTypeObject *)PyType_FromSpec(&function_spec);")
     add(
         "    if (!TrapError || !LinkError || !InstanceType"
-        + (" || !WasiTerminatedError || !WasiExitError || !WasiSignalError" if uses_wasi else "")
+        + (" || !WasiTerminatedError || !WasiExitError || !WasiSignalError || !HostType" if uses_wasi else "")
         + (" || !MemoryType" if memories else "")
         + (" || !TableType || !FunctionType" if shares_tables else "")
         + (" || !UncaughtExceptionError" if tags else "")
@@ -2230,6 +2339,7 @@ def generate(
         add('    if (PyModule_AddObjectRef(m, "WasiTerminated", WasiTerminatedError) < 0) goto fail;')
         add('    if (PyModule_AddObjectRef(m, "WasiExit", WasiExitError) < 0) goto fail;')
         add('    if (PyModule_AddObjectRef(m, "WasiSignal", WasiSignalError) < 0) goto fail;')
+        add('    if (PyModule_AddObjectRef(m, "Host", (PyObject *)HostType) < 0) goto fail;')
     add('    if (PyModule_AddObjectRef(m, "Trap", TrapError) < 0) goto fail;')
     if tags:
         add('    if (PyModule_AddObjectRef(m, "UncaughtException", UncaughtExceptionError) < 0) goto fail;')
@@ -2273,6 +2383,7 @@ def generate(
             table_imports,
             trap_handler,
             ref_types,
+            host_name,
         )
     return Glue(
         "\n".join(w) + "\n",
@@ -3189,6 +3300,22 @@ def _stub(
             f"{_py_string(m)}: {f'NotRequired[{type_names[m]}]' if m in bound else type_names[m]}" for m in by_module
         )
         lines += [f"Imports = TypedDict('Imports', {{{fields}}})", ""]
+    if wasi:  # the host answers some imports: its originals, as the calls of wasmext have them
+        host_names = {m: f"_Host{type_names[m]}" for m in by_module if m in bound}
+        for module_name, type_name in host_names.items():
+            items = ", ".join(f"{_py_string(m.name)}: {_import_type(m.type)}" for m in by_module[module_name])
+            lines.append(f"{type_name} = TypedDict('{type_name}', {{{items}}})")
+        fields = ", ".join(f"{_py_string(m)}: {t}" for m, t in host_names.items())
+        lines += [
+            f"_HostImports = TypedDict('_HostImports', {{{fields}}})",
+            "",
+            "class Host:",
+            "    @property",
+            "    def name(self) -> str: ...",
+            "    @property",
+            "    def __imports__(self) -> _HostImports: ...",
+            "",
+        ]
     if table:
         lines += _TABLE_STUB
     lines.append("class Instance:")
@@ -3210,6 +3337,8 @@ def _stub(
             else "    def __init__(self) -> None: ..."
         )
     lines += ["    @property", "    def __exports__(self) -> dict[str, object]: ..."]
+    if wasi:
+        lines += ["    @property", "    def __host__(self) -> Host: ..."]
     if names:  # the table that instance['name'] gives is a Table
         for n in names:
             lines += ["    @overload", f"    def __getitem__(self, name: Literal[{_py_string(n)}], /) -> Table: ..."]

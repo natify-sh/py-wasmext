@@ -168,6 +168,7 @@ _TABLE_IMPORTS: list[tuple[int, str, str]] = @TABLE_IMPORTS@  # the C index, the
 _SHARES_TABLES = @SHARES_TABLES@
 _REF_TYPES: list[tuple[int, str, tuple[str, ...], tuple[str, ...]]] = @REF_TYPES@  # k, the C function that calls a function of that type, the parameters, the results
 _WASI = @USES_WASI@
+_HOST = @HOST@  # the name of the host of the module
 _TAGS = @HAS_TAGS@
 
 
@@ -1191,7 +1192,46 @@ class Table:
 
 """
 
+_WASI_HOST_CLASS = """
+
+class Host:
+    \"\"\"What answers the imports of WASI (wasm32-wasip1) in one instance, and the originals of its calls.\"\"\"
+
+    def __init__(self, instance: Any) -> None:
+        self._instance = instance
+
+    @property
+    def name(self) -> str:
+        return _HOST
+
+    @property
+    def __imports__(self) -> dict[str, dict[str, Callable[..., Any]]]:
+        \"\"\"{module: {name: the call}}: the calls the host answers, as wasmext has them, whatever the caller gave in place of them.\"\"\"
+        result: dict[str, dict[str, Callable[..., Any]]] = {}
+        for k, module, field, params, results, wasi_call in _IMPORTS:
+            if wasi_call:
+                result.setdefault(module, {})[field] = _original(self._instance, k, field, params, results)
+        return result
+
+
+def _original(instance: Any, k: int, field: str, params: tuple[str, ...], results: tuple[str, ...]) -> Callable[..., Any]:
+    count = len(params)
+    cname = f"@NAME@_host_call{k}"
+
+    def call(*args: Any) -> Any:
+        if len(args) != count:
+            raise TypeError(f"{field}() takes exactly {count} argument{'' if count == 1 else 's'} ({len(args)} given)")
+        return instance._call(cname, params, results, args)
+
+    call.__name__ = field
+    return call
+"""
+
 _WASI_METHODS = """
+    @property
+    def __host__(self) -> Host:
+        return Host(self)
+
     def _ended(self) -> BaseException:
         value = _c.c_uint32(0)
         how = self._lib.@NAME@_wasi_end(self._h, _c.byref(value))
@@ -1227,7 +1267,7 @@ def generate_ctypes(model: ApiModel, *, library_file: str, version: str | None =
         "@WASI_EXCEPTIONS@": wasi_exceptions,
         "@EXCEPTION_SETUP@": _UNCAUGHT_SETUP if model.has_tags else "",
         "@UNCAUGHT_ERROR@": _UNCAUGHT_ERROR if model.has_tags else "",
-        "@WASI_RUNTIME@": _WASI_RUNTIME if uses_wasi else "",
+        "@WASI_RUNTIME@": (_WASI_RUNTIME + _WASI_HOST_CLASS) if uses_wasi else "",
         "@WASI_METHODS@": (_WASI_METHODS if uses_wasi else "") + (_UNCAUGHT_METHOD if model.has_tags else ""),
         "@WASI_CONFIG_CALL@": "_wasi_config(weakref.ref(self), wasi)" if uses_wasi else "(None, [])",
         "@EXPORTS@": _py(exports),
@@ -1241,6 +1281,7 @@ def generate_ctypes(model: ApiModel, *, library_file: str, version: str | None =
         "@SHARES_TABLES@": _py(model.shares_tables),
         "@REF_TYPES@": _py([(k, c, tuple(f.params), tuple(f.results)) for k, c, f in model.ref_types]),
         "@USES_WASI@": _py(uses_wasi),
+        "@HOST@": _py(model.host),
         "@HAS_TAGS@": _py(model.has_tags),
         "@VERSION@": f" {version}" if version else "",
         "@ABI@": hex(ABI),

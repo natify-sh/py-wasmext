@@ -108,3 +108,16 @@ Not built, and not planned for now. Reason beyond "no user yet": the adapters we
 ### Stage 4: what is settled before it is built (2026-10-24)
 
 The original of an import is a reference to the call that the host answers (for `wasm32-wasip1`, a call of WASI). `__getitem__` of an instance gives references to **exports** only (a `PyCapsule`, for linking instances, not callable from Python), so an import needs its own way in; the name `__imports__` is used for it (the idea of a list of needs under that name is dropped: the stub has the signatures). Open: the shape (nested `{module: {name: ...}}` as `imports=` is, and whether the values are callable objects, as a wrapper needs, or capsules like `__exports__`; unifying `__exports__` with the same callable is a later option).
+
+## Stage 4: built (2026-10-24)
+
+`Instance.__host__` gives a `Host` (for a host that has WASI built in, `wasm32-wasip1`; a module of host `wasm32` has none), with `Host.name` (`'wasm32-wasip1'`) and `Host.__imports__`: `{module: {name: the call}}`, the **originals** of the calls that wasmext answers (only the ones the module imports), **whatever the caller gave in place of them**. Each is a plain callable that does what the call of wasmext does on the memory of this instance and answers as the call does (the errno as an `int`; `proc_exit` and the like raise their exception: `WasiExit`). It is the way for a wrapper to pass a call on:
+
+```python
+def fd_write(*args):
+    log(args)
+    return inst.__host__.__imports__["wasi_snapshot_preview1"]["fd_write"](*args)
+inst = mod.Instance({"wasi_snapshot_preview1": {"fd_write": fd_write}})
+```
+
+Other points as settled in the conversation: `__exports__` is the **current** reference to an export (a capsule, for linking), `__imports__` of the instance (the current binding) is **not built** (nothing needs it yet); the originals belong to the host, so they are under `Host.__imports__`. In the extension `Host` is a small type of the module (not creatable by the user); in the library it is `<name>_host_call<k>(m, parameters..., result*)` of the C API (0, or the code of a trap) and the wrapper for ctypes builds the same `Host` on it; the stub is the same text for both. `Host` is made so that it can later move under a context (context_concept.md): it holds the instance, no state of its own. Not built: a host shared between instances (needs the memory of the caller of each call), and the originals for WASI 0.2.

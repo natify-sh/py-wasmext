@@ -210,8 +210,10 @@ def _p2_cname(module: str, name: str) -> str:
     return "fusedwasi_" + re.sub(r"[^0-9A-Za-z]+", "_", f"{base}/{name}").strip("_")
 
 
-def _p2_headers(calls: dict[tuple[str, str], str]) -> list[str]:
-    """The headers of fusedwasi for the functions in `calls`, with the ones they include, the core and the streams that wasmext's own host needs (dependencies first)."""
+def _p2_headers(calls: dict[tuple[str, str], str], include: bool = False) -> list[str]:
+    """The headers of fusedwasi for the functions in `calls`, with the ones they include, the core and the streams that wasmext's own host needs (dependencies first).
+    With `include`, only the ones the glue includes: the backends of the system (`..._fs_posix.h`, `..._fs_win32.h`) are included by the header of the files, one for each
+    system, so they are copied (the build needs both) and not included."""
     wanted = ["wasi_p2_core.h", "wasi_p2_io.h"] + [_P2_FUNCS[c][0] for c in calls.values()]
     order: list[str] = []
 
@@ -224,7 +226,7 @@ def _p2_headers(calls: dict[tuple[str, str], str]) -> list[str]:
 
     for header in wanted:
         visit(header)
-    return order
+    return [h for h in order if not (include and h.endswith(("_fs_posix.h", "_fs_win32.h")))]
 
 
 # the 46 calls of WASI 0.1 and their signatures (the witx files of the wasi-0.1 branch of WebAssembly/WASI): wasi_p1.h has a
@@ -697,7 +699,7 @@ def generate(
     hadd(f'#include "{last}_w2c.h"')
     hadd('#include "wasmext_glue.h"')
     if wasi2 and uses_wasi:
-        for header in _p2_headers(p2_calls):
+        for header in _p2_headers(p2_calls, include=True):
             hadd(f'#include "{header}"')
     else:
         for module_name in wasi_modules:

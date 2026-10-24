@@ -152,3 +152,111 @@ def test_what_the_generator_refuses() -> None:
             section(7, vec(name("memory") + b"\x02" + leb(0))),
         )
         generate(parse(no_realloc), "m", host=P2)
+
+
+class Fs:
+    """The files of WASI 0.2 at the level of the canonical ABI, through `tests/data/wasi2_fs.wat`: the arguments laid out in the memory, the results read from it."""
+
+    def __init__(self, mod: Any, **wasi: Any) -> None:
+        self.inst = mod.Instance(wasi=wasi)
+        self.mem = self.inst.memory
+
+    def u32(self, at: int) -> int:
+        return struct.unpack("<I", bytes(self.mem[at : at + 4]))[0]
+
+    def text(self, at: int, text: str) -> tuple[int, int]:
+        raw = text.encode()
+        self.mem[at : at + len(raw)] = raw
+        return at, len(raw)
+
+    def directories(self) -> list[tuple[int, str]]:
+        self.inst.dirs(1000)
+        ptr, count = self.u32(1000), self.u32(1004)
+        return [
+            (
+                self.u32(ptr + 12 * i),
+                bytes(
+                    self.mem[self.u32(ptr + 12 * i + 4) : self.u32(ptr + 12 * i + 4) + self.u32(ptr + 12 * i + 8)]
+                ).decode(),
+            )
+            for i in range(count)
+        ]
+
+    def result(self, at: int) -> tuple[bool, int]:
+        """A `result<handle, error-code>` at `at`: (ok, the handle or the code)."""
+        return self.mem[at] == 0, self.u32(at + 4) if self.mem[at] == 0 else self.mem[at + 4]
+
+    def open(self, directory: int, path: str, open_flags: int = 0, descriptor_flags: int = 1) -> tuple[bool, int]:
+        ptr, n = self.text(2000, path)
+        self.inst.open(directory, 1, ptr, n, open_flags, descriptor_flags, 3000)
+        return self.result(3000)
+
+    def read_file(self, directory: int, path: str) -> bytes:
+        ok, fd = self.open(directory, path)
+        assert ok, f"open {path}: error {fd}"
+        self.inst.read_via(fd, 0, 3100)
+        ok, stream = self.result(3100)
+        assert ok
+        self.inst.read(stream, 1000, 3200)
+        assert self.mem[3200] == 0
+        ptr, n = self.u32(3204), self.u32(3208)
+        data = bytes(self.mem[ptr : ptr + n])
+        self.inst.drop_input(stream)
+        self.inst.drop_descriptor(fd)
+        return data
+
+    def write_file(self, directory: int, path: str, data: bytes) -> tuple[bool, int]:
+        ok, fd = self.open(directory, path, open_flags=1 | 8, descriptor_flags=2)  # create, truncate
+        if not ok:
+            return ok, fd
+        self.inst.write_via(fd, 0, 3100)
+        ok, stream = self.result(3100)
+        assert ok
+        self.mem[4000 : 4000 + len(data)] = data
+        self.inst.write(stream, 4000, len(data), 3300)
+        assert self.mem[3300] == 0
+        self.inst.drop_output(stream)
+        self.inst.drop_descriptor(fd)
+        return True, 0
+
+
+def test_the_directories_a_program_is_given_are_listed_and_a_file_is_read(
+    build_extension: Builder, tmp_path: Path
+) -> None:
+    mod = build_extension(DATA / "wasi2_fs.wat", "wasi2_fs_read", host=P2)
+    (tmp_path / "hello.txt").write_bytes(b"hello, files\n")
+    fs = Fs(mod, preopens={"/data": str(tmp_path)})
+    [(root, name)] = fs.directories()
+    assert name == "/data"
+    assert fs.read_file(root, "hello.txt") == b"hello, files\n"
+    ok, code = fs.open(root, "missing.txt")
+    assert not ok and code == 20  # no-entry
+
+
+def test_a_file_is_written_and_a_directory_made_and_removed(build_extension: Builder, tmp_path: Path) -> None:
+    mod = build_extension(DATA / "wasi2_fs.wat", "wasi2_fs_write", host=P2)
+    fs = Fs(mod, preopens={"/data": str(tmp_path)})
+    [(root, _)] = fs.directories()
+    assert fs.write_file(root, "out.txt", b"written by the guest") == (True, 0)
+    assert (tmp_path / "out.txt").read_bytes() == b"written by the guest"
+    ptr, n = fs.text(2000, "sub")
+    fs.inst.mkdir(root, ptr, n, 3000)
+    assert fs.mem[3000] == 0 and (tmp_path / "sub").is_dir()
+    ptr, n = fs.text(2000, "out.txt")
+    fs.inst.unlink(root, ptr, n, 3000)
+    assert fs.mem[3000] == 0 and not (tmp_path / "out.txt").exists()
+
+
+def test_a_directory_that_is_read_only_cannot_be_changed_and_a_path_cannot_leave_it(
+    build_extension: Builder, tmp_path: Path
+) -> None:
+    mod = build_extension(DATA / "wasi2_fs.wat", "wasi2_fs_guard", host=P2)
+    inside = tmp_path / "inside"
+    inside.mkdir()
+    (tmp_path / "secret.txt").write_text("outside")
+    fs = Fs(mod, preopens={"/ro": str(inside)}, readonly=["/ro"])
+    [(root, _)] = fs.directories()
+    ok, _code = fs.write_file(root, "new.txt", b"x")
+    assert not ok and not (inside / "new.txt").exists()
+    ok, _code = fs.open(root, "../secret.txt")
+    assert not ok  # a name cannot leave the directory it was given

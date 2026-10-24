@@ -295,3 +295,88 @@ def test_every_function_of_the_table_compiles_with_the_headers_the_glue_includes
         capture_output=True, text=True, check=False, cwd=tmp_path,
     )  # fmt: skip
     assert done.returncode == 0, done.stderr[-2000:]
+
+
+SOCK = HELLO.with_name("_sock.wasm")
+
+
+def serve_pong(port: int) -> tuple[Any, list[bytes]]:
+    """A TCP server on `port` of 127.0.0.1 that answers `pong` once; the listening socket and the bytes it got."""
+    import socket
+    import threading
+
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", port))
+    srv.listen(1)
+    got: list[bytes] = []
+
+    def run() -> None:
+        conn, _ = srv.accept()
+        with conn:
+            got.append(conn.recv(16))
+            conn.sendall(b"pong")
+
+    threading.Thread(target=run, daemon=True).start()
+    return srv, got
+
+
+@pytest.fixture(scope="module")
+def sock_module(build_extension: Builder) -> ModuleType:
+    return build_extension(SOCK, "wasi2_sock", host=P2)
+
+
+def test_the_network_is_refused_unless_the_caller_allows_it(sock_module: ModuleType) -> None:
+    out: list[bytes] = []
+    inst = sock_module.Instance(wasi={"stdout": out.append})
+    assert getattr(inst, RUN)() == 1  # connect failed: sock.c returned 3
+    assert b"reply" not in b"".join(out)
+
+
+def test_a_policy_of_sockets_decides_each_use(sock_module: ModuleType) -> None:
+    seen: list[tuple[str, int, str]] = []
+
+    def policy(ip: str, port: int, use: str) -> bool:
+        seen.append((ip, port, use))
+        return port == 47123
+
+    out: list[bytes] = []
+    getattr(sock_module.Instance(wasi={"stdout": out.append, "sockets": policy}), RUN)()
+    assert seen == [("127.0.0.1", 47123, "tcp-connect")]
+    assert b"reply" not in b"".join(out)  # allowed, but nothing listens on 47123 (or not our server)
+
+
+def test_a_program_talks_to_a_server_when_the_policy_allows_it(sock_module: ModuleType) -> None:
+    try:
+        srv, got = serve_pong(47123)  # sock.c connects to 127.0.0.1:47123
+    except OSError:
+        pytest.skip("port 47123 is busy")
+    with srv:
+        out: list[bytes] = []
+        getattr(sock_module.Instance(wasi={"stdout": out.append, "sockets": True}), RUN)()
+    assert b"".join(out) == b"reply: pong\n"
+    assert got == [b"ping"]
+
+
+def test_tcp_false_refuses_before_the_policy_is_asked(sock_module: ModuleType) -> None:
+    def policy(ip: str, port: int, use: str) -> bool:
+        raise AssertionError("not asked")
+
+    out: list[bytes] = []
+    inst = sock_module.Instance(wasi={"stdout": out.append, "sockets": policy, "tcp": False})
+    getattr(inst, RUN)()
+    assert b"reply" not in b"".join(out)
+
+
+def test_an_exception_in_a_policy_comes_out_of_the_call(sock_module: ModuleType) -> None:
+    def policy(ip: str, port: int, use: str) -> bool:
+        raise KeyError("policy")
+
+    with pytest.raises(KeyError):
+        getattr(sock_module.Instance(wasi={"sockets": policy}), RUN)()
+
+
+@pytest.mark.parametrize("key", ["sockets", "dns", "http", "tcp", "udp"])
+def test_a_network_key_must_be_a_bool_or_a_callable(sock_module: ModuleType, key: str) -> None:
+    with pytest.raises(TypeError, match=key):
+        sock_module.Instance(wasi={key: "yes"})
+    sock_module.Instance(wasi={key: None})

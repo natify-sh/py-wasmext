@@ -23,6 +23,10 @@ typedef struct wasmext_wasi2_py {
     struct fusedwasi_p2_preopen *preopens;
     fusedwasi_p2_stream streams[3];
     char *program;                 /* argv[0] when the configuration has no arguments */
+    PyObject *sockets_fn;          /* sockets=callable(ip, port, use), or NULL */
+    PyObject *http_fn;             /* http=callable(scheme, authority), or NULL */
+    int sockets_all, http_all;     /* sockets=True, http=True */
+    int tcp, udp;                  /* tcp=, udp=: 1 (the default) lets the policy of sockets decide, 0 refuses the use */
 } wasmext_wasi2_py;
 
 #define WASI2_PY(s) ((wasmext_wasi2_py *)(s)->user)
@@ -112,11 +116,73 @@ static void wasi2_wait(fusedwasi_p2_state *s) {
     if (PyErr_CheckSignals() < 0) s->trap(s, "interrupted");
 }
 
+/* ---- the policies of the network (as in Wasmtime: callables or True, nothing is allowed by default) ------------------------------ */
+
+static const char *const wasi2_uses[] = {"tcp-bind", "tcp-connect", "udp-bind", "udp-connect", "udp-outgoing"};
+
+/* the answer of a policy callable: true allows; an exception of Python traps (it stays set) */
+static int wasi2_policy(fusedwasi_p2_state *s, PyObject *res) {
+    if (res == NULL) s->trap(s, "an exception of Python in a policy of the network");
+    int ok = PyObject_IsTrue(res);
+    Py_DECREF(res);
+    if (ok < 0) s->trap(s, "an exception of Python in a policy of the network");
+    return ok;
+}
+
+static int wasi2_socket_addr_check(fusedwasi_p2_state *s, const char *ip, uint16_t port, int use) {
+    wasmext_wasi2_py *w = WASI2_PY(s);
+    int udp = use >= FUSEDWASI_P2_USE_UDP_BIND;
+    if (udp ? !w->udp : !w->tcp) return 0;
+    if (w->sockets_all) return 1;
+    if (w->sockets_fn == NULL) return 0;
+    return wasi2_policy(s, PyObject_CallFunction(w->sockets_fn, "sis", ip, (int)port, wasi2_uses[use]));
+}
+
+static int wasi2_http_check(fusedwasi_p2_state *s, const char *scheme, const char *authority) {
+    wasmext_wasi2_py *w = WASI2_PY(s);
+    if (w->http_all) return 1;
+    if (w->http_fn == NULL) return 0;
+    return wasi2_policy(s, PyObject_CallFunction(w->http_fn, "ss", scheme, authority));
+}
+
+/* one of the keys sockets, dns, http, tcp, udp: 1 when `name` is one of them (and it is applied), 0 when not, -1 with an exception set */
+static int wasi2_network_option(fusedwasi_p2_state *s, wasmext_wasi2_py *w, const char *name, PyObject *value) {
+    PyObject **fn = NULL;
+    int *all = NULL, *flag = NULL;
+    if (strcmp(name, "sockets") == 0) fn = &w->sockets_fn, all = &w->sockets_all;
+    else if (strcmp(name, "http") == 0) fn = &w->http_fn, all = &w->http_all;
+    else if (strcmp(name, "dns") == 0) flag = &s->allow_ip_name_lookup;
+    else if (strcmp(name, "tcp") == 0) flag = &w->tcp;
+    else if (strcmp(name, "udp") == 0) flag = &w->udp;
+    else return 0;
+    if (value == Py_None) value = Py_False;
+    if (flag != NULL || PyBool_Check(value)) {
+        if (!PyBool_Check(value)) {
+            PyErr_Format(PyExc_TypeError, "wasi: '%s' must be a bool", name);
+            return -1;
+        }
+        int on = value == Py_True;
+        if (flag != NULL) *flag = on;
+        else *all = on;
+        return 1;
+    }
+    if (!PyCallable_Check(value)) {
+        PyErr_Format(PyExc_TypeError, "wasi: '%s' must be True, False, None or a callable", name);
+        return -1;
+    }
+    Py_INCREF(value);
+    Py_XDECREF(*fn);
+    *fn = value;
+    return 1;
+}
+
 /* ---- the state ------------------------------------------------------------------------------------------------------------ */
 
 static inline int wasmext_wasi2_traverse(wasmext_wasi2_py *w, visitproc visit, void *arg) {
     if (w == NULL) return 0;
     wasmext_wasi_py *p = &w->py;
+    Py_VISIT(w->sockets_fn);
+    Py_VISIT(w->http_fn);
     for (int i = 0; i < 3; i++) Py_VISIT(p->stream[i]);
     Py_VISIT(p->exit_type);
     Py_VISIT(p->signal_type);
@@ -132,11 +198,16 @@ static inline int wasmext_wasi2_traverse(wasmext_wasi2_py *w, visitproc visit, v
 }
 
 static inline void wasmext_wasi2_clear(wasmext_wasi2_py *w) {
-    if (w != NULL) wasi_py_clear(&w->py);
+    if (w == NULL) return;
+    Py_CLEAR(w->sockets_fn);
+    Py_CLEAR(w->http_fn);
+    wasi_py_clear(&w->py);
 }
 
 static inline void wasmext_wasi2_free(wasmext_wasi2_py *w) {
     if (w == NULL) return;
+    Py_XDECREF(w->sockets_fn);
+    Py_XDECREF(w->http_fn);
     wasi_py_clear(&w->py);
     wasi_py_options_free(&w->keep);
     free(w->args_v);
@@ -158,6 +229,7 @@ static inline wasmext_wasi2_py *wasmext_wasi2_new(fusedwasi_p2_state *s, void *c
         return NULL;
     }
     w->core = core;
+    w->tcp = w->udp = 1;
     wasmext_wasi_py *p = &w->py;
     Py_INCREF(exit_type);
     p->exit_type = exit_type;
@@ -179,7 +251,9 @@ static inline wasmext_wasi2_py *wasmext_wasi2_new(fusedwasi_p2_state *s, void *c
             if (!PyErr_Occurred()) PyErr_SetString(PyExc_TypeError, "the keys of wasi must be strings");
             goto fail;
         }
-        int rc = wasi_apply_option(p, o, PyBytes_AsString(encoded), value);
+        int rc = wasi2_network_option(s, w, PyBytes_AsString(encoded), value);
+        if (rc == 0) rc = wasi_apply_option(p, o, PyBytes_AsString(encoded), value);
+        else if (rc > 0) rc = 0;
         Py_DECREF(encoded);
         if (rc < 0) goto fail;
     }
@@ -257,6 +331,8 @@ static inline wasmext_wasi2_py *wasmext_wasi2_new(fusedwasi_p2_state *s, void *c
     }
     if (p->random_fn != NULL) s->random_bytes = s->insecure_random_bytes = wasi2_random_bytes;
     s->wait = wasi2_wait;
+    s->socket_addr_check = wasi2_socket_addr_check;
+    s->http_check = wasi2_http_check;
     s->user = w;
     return w;
 nomem:

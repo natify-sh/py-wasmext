@@ -3392,6 +3392,21 @@ _WASI_STUB = [
 ]
 
 
+# what WASI 0.2 adds to the configuration: the network is refused unless the caller allows it (as in Wasmtime)
+_WASI_P2_NETWORK_STUB = [
+    "    sockets: NotRequired[bool | Callable[[str, int, str], bool] | None]",
+    '    """absent or None: every bind and connect is refused. True: all are allowed. A function (ip, port, use) -> bool decides each; use is "tcp-bind", "tcp-connect", "udp-bind", "udp-connect" or "udp-outgoing"."""',
+    "    tcp: NotRequired[bool | None]",
+    '    """False: TCP is refused whatever sockets says. absent: sockets decides."""',
+    "    udp: NotRequired[bool | None]",
+    '    """False: UDP is refused whatever sockets says. absent: sockets decides."""',
+    "    dns: NotRequired[bool | None]",
+    '    """True: names may be resolved (wasi:sockets/ip-name-lookup). absent or None: refused."""',
+    "    http: NotRequired[bool | Callable[[str, str], bool] | None]",
+    '    """absent or None: every outgoing request is refused. True: all are allowed. A function (scheme, authority) -> bool decides each."""',
+]
+
+
 # `Table`, as the stub shows it: the same in the extension and in the wrapper for ctypes (a module that imports or exports a funcref table has it)
 _TABLE_STUB = [
     "class Function:",
@@ -3476,11 +3491,13 @@ def _stub(
             "    name: str",
             "",
         ]
-        lines += (
-            [line.replace("WasiP1", "WasiP2").replace("wasm32-wasip1", "wasm32-wasip2") for line in _WASI_STUB]
-            if wasi2
-            else _WASI_STUB
-        )
+        if wasi2:
+            stub = [line.replace("WasiP1", "WasiP2").replace("wasm32-wasip1", "wasm32-wasip2") for line in _WASI_STUB]
+            at = stub.index("")
+            stub[at:at] = _WASI_P2_NETWORK_STUB
+            lines += stub
+        else:
+            lines += _WASI_STUB
     lines.append("")
     by_module: dict[str, list[Import]] = {}
     for imp in imports:

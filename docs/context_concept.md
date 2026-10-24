@@ -175,7 +175,7 @@ Two ways to read "the context owns the runtime", and only the first is cheap: (1
 
 The host of a module (who answers its imports: for `wasm32-wasip1` the state of WASI, with the descriptors, the arguments and the environment; see WASI_TARGET_PLAN.md) is **a private part of the context**. An instance without a `context` argument has a private context and so a private host, which is what there is today; `Instance.__host__` gives the `Host`, and `Host.__imports__` the originals of the calls the host answers (the instance's `__imports__` is the current binding, `__exports__` its own). A host shared by the instances of one context (one table of descriptors, the same preopens) is a later step, and it needs one thing the state of WASI does not have: the memory of the caller of each call (the state keeps the pointers of one memory today); the context, which knows its members and guards every call, is the place to bind it. The `Host` of the first step is built so that it can move under a context without a change to the code of a user.
 
-## The context carries the runtime and the host; an instance runs on any compatible one (an idea of the owner, 2026-10-24; not built, not decided)
+## The context carries the runtime and the host; an instance runs on any compatible one (an idea of 2026-10-24, **withdrawn the same day**: see "Corrections of the owner" at the end)
 
 Every extension and library carries a **context, a host and a runtime** (as now each carries its own runtime), and these **know nothing of a module or an instance**. An instance is made on a context, **its own module's or any other module's**, and so runs on the host and the runtime of that context (as an instance of wasmtime runs in a `Store`). A context made by one module can serve instances of others; a module that is never given another context uses its own, which is what there is today (autonomy kept: nothing is installed, each artifact still contains everything it needs).
 
@@ -186,6 +186,16 @@ What the experiments and the code say about whether `wasm2c` allows it **[run]/[
 
 What follows for the work in hand: the `Host` of stage 4 is the private host of a private context and stays as built; the host of 0.2 (stage 6) should keep its state free of the module (memory by number, as fusedwasi has it), so that it can move under a context without a change.
 
-### The link table: what a module hands to a context (2026-10-24)
+### The link table: what a module hands to a context (2026-10-24; **withdrawn**: it served the running of an instance on another module's context)
 
 For a context to run an instance of a module that is not its own, the compiled module has to **hand over a description of itself**, a versioned record (a capsule, in the manner of `wasmext_export` and `wasmext_traps`; it grows only at its end): the ABI and the fingerprint of the runtime layout it was built for; the size of its instance and the functions that make, instantiate and free one; for each **import** the module, the name, the signature as letters (`i>i`) and the function that sets the host function in its slot; for each **export** what `wasmext_export` already says (kind, signature, address, the funcref); the memories, tables and globals (with their limits); the tags; the features it needs of the runtime. Today the glue does this by generated C that names the fields of its own instance (`self->host0.fn[slot]`), so the table is the generic form of what is generated: offsets and setters instead of field names, and calls by signature through small trampolines instead of typed functions of the module (the typed call stays inside the module for its own `Instance`). The module's own `Instance` becomes a thin user of the same table on its own context. Cost to measure: an indirect call through the table for each call (the library path was measured at about 23 ns, experiments/context_bench).
+
+## Corrections of the owner (2026-10-24)
+
+These replace the two sections above that let an instance run on the context, the host and the runtime of **another** module (and the link table that served it):
+- **A module runs where it is launched**, on the host and the runtime that are in its own artifact. Nothing runs on another module's runtime.
+- **An incompatibility is an explicit error**, never a silent fall-back to "something that works". A module runs on its own runtime only when nothing else was set explicitly.
+- **A context has one host and one runtime** (`ctx.host`, `ctx.runtime`), one to one. **There is no exchange outside one context.** What crosses is done on the side of the language that loads the `.so` / `.pyd`: overrides and hooks (the functions given as imports, the originals of the host, what `wasi=` takes), not a runtime or a host shared between artifacts.
+- Open: whether a context holds one instance or several (the exchange of tables, memories and globals inside it, as the first part of this page has it).
+
+The first part of the page (a context as a registry that keeps the members alive and refuses a reference from another context) stands as written. The `Host` of stage 4 is the host of the (private) context of its instance, and stays as built.

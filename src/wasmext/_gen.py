@@ -1838,6 +1838,18 @@ def generate(
     start = next((i for i, (n_, f_) in enumerate(funcs) if n_ == "_start" and not f_.params and not f_.results), None)
     if start is not None:
         hadd(f"#define {last.upper()}_START {last}_call{start}")
+    run = next(
+        (
+            i
+            for i, (n_, f_) in enumerate(funcs)
+            if re.fullmatch(r"wasi:cli/run@0\.2\.\d+#run", n_)
+            and not f_.params
+            and [str(r) for r in f_.results] == ["i32"]
+        ),
+        None,
+    )
+    if wasi2 and run is not None:
+        hadd(f"#define {last.upper()}_RUN {last}_call{run}  /* wasi:cli/run#run: 0 for ok, 1 for err */")
     if uses_wasi and wasi2:
         hadd(
             "/* WASI 0.2: the host of fusedwasi over the imports. Its state is `self->wasi2`; the memory is set again before each call (it moves when it grows). */"

@@ -774,11 +774,12 @@ def generate_c(
         put(f"{last}_api.h", glue.api_header)
         shared_c = put(f"{last}_shared.c", glue.shared)
         targets["shared"] = Target([*common, shared_c.as_posix()])
-    problem = program_problem(parsed, check_host(host))
+    checked = check_host(host)
+    problem = program_problem(parsed, checked)
     if problem:
         targets["exe"] = Target([], problem)
     else:
-        main_path = put(f"{last}_main.c", main_c(last, module_prefix(last)))
+        main_path = put(f"{last}_main.c", main_c(last, module_prefix(last), checked))
         targets["exe"] = Target([*common, main_path.as_posix()])
     files = [*prepared.sources, *prepared.depends, *(_rel(p) for p in written)]
     skipped = [item for item in glue.skipped if "is not an attribute" not in item]

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 import struct
+import subprocess
+import sys
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -391,3 +393,55 @@ def test_a_network_key_must_be_a_bool_or_a_callable(sock_module: ModuleType, key
     with pytest.raises(TypeError, match=key):
         sock_module.Instance(wasi={key: "yes"})
     sock_module.Instance(wasi={key: None})
+
+
+def exe(build_dir: Path, wasm: Path, name: str = "prog") -> Path:
+    from wasmext._exe import build  # pyright: ignore[reportPrivateUsage]
+
+    return build(wasm, build_dir / (name + (".exe" if sys.platform == "win32" else "")), optimize=False, host=P2)
+
+
+def run_exe(program: Path, *args: str) -> subprocess.CompletedProcess[bytes]:
+    return subprocess.run([program, *args], capture_output=True, check=False)
+
+
+def test_a_command_of_wasi_p2_is_made_into_a_program(tmp_path: Path) -> None:
+    ran = run_exe(exe(tmp_path, HELLO))
+    assert ran.stdout == b"hello from wasip2\n"
+    assert ran.returncode == 1  # main returned 3, the err of the result of wasi:cli/run
+
+
+def test_the_options_give_a_program_of_wasi_p2_its_arguments_and_environment(wabt: Path, tmp_path: Path) -> None:
+    wasm = tmp_path / "run.wasm"
+    subprocess.run([wabt / "bin" / "wat2wasm", DATA / "wasi2_run.wat", "-o", wasm], check=True)
+    program = exe(tmp_path, wasm)
+    assert run_exe(program).returncode == 1  # no arguments, no environment: err
+    given = run_exe(program, "--env", "A=1", "--env", "B=2", "name", "x", "y")
+    assert given.returncode == 0  # wasi:cli/exit(ok): the name of the program and two arguments, two variables
+
+
+def test_a_program_of_wasi_p2_refuses_the_network_unless_it_is_told(tmp_path: Path) -> None:
+    program = exe(tmp_path, SOCK)
+    try:
+        srv, got = serve_pong(47123)
+    except OSError as exc:
+        pytest.skip(f"port 47123 is busy: {exc}")
+    with srv:
+        refused = run_exe(program)
+        assert b"reply" not in refused.stdout
+        assert refused.returncode != 0
+        allowed = run_exe(program, "--allow-net")
+    assert allowed.stdout == b"reply: pong\n"
+    assert allowed.returncode == 0
+    assert got == [b"ping"]
+
+
+def test_a_module_that_is_not_a_command_of_wasi_p2_is_not_made_into_a_program(wabt: Path, tmp_path: Path) -> None:
+    from wasmext._exe import build  # pyright: ignore[reportPrivateUsage]
+
+    wasm = tmp_path / "probe.wasm"
+    subprocess.run([wabt / "bin" / "wat2wasm", DATA / "wasi2_probe.wat", "-o", wasm], check=True)
+    with pytest.raises(GenError, match="does not export it"):  # no wasi:cli/run#run
+        build(wasm, tmp_path / "x", optimize=False, host=P2)
+    with pytest.raises(GenError, match="say host"):  # the host of a program is a WASI one
+        build(HELLO, tmp_path / "y", optimize=False, host="wasm32")

@@ -147,7 +147,7 @@ Read in `p2/wasi_p2_core.h` and `wasi_p2_io.h`; the host is made to be embedded:
 - **Streams** are `fusedwasi_p2_stream` with `read`, `check_write`, `write`, `flush`, `ready`, `destroy`; the standard streams are `std[0..2]` (NULL: the descriptors of the process). A Python object behind a stream is a layer of ours (the twin of `wasi_python.h` for 0.2).
 - **Policies** (`socket_addr_check`, `allow_ip_name_lookup`, `http_check`, `http_send`): refuse everything unless set.
 
-Sub-stages: **6a** the extension, WASI 0.2 command (`wasi:cli`, `clocks`, `io`, `random`) with `wasi=` (`args`, `env`, `stdin`, `stdout`, `stderr`, `clock`, `random`), `examples/wasi2_unbundled/_hello` runs with no Python host; **6b** filesystem (`preopens`, `readonly`); **6c** sockets and http (policies; built, see below); **6d** the library and the wrapper for ctypes (built, see below). The table from the import to the C function and its core signature is made once from the headers of fusedwasi (a data file in wasmext), so a name the host does not have is a `GenError`, as for 0.1.
+Sub-stages: **6a** the extension, WASI 0.2 command (`wasi:cli`, `clocks`, `io`, `random`) with `wasi=` (`args`, `env`, `stdin`, `stdout`, `stderr`, `clock`, `random`), `examples/wasi2_unbundled/_hello` runs with no Python host; **6b** filesystem (`preopens`, `readonly`); **6c** sockets and http (policies; built, see below); **6d** the library and the wrapper for ctypes (built, see below); **6e** the default wasip2 (a plain wasip2 command runs as it comes, on both platforms; see below), which is what closes stage 6. The table from the import to the C function and its core signature is made once from the headers of fusedwasi (a data file in wasmext), so a name the host does not have is a `GenError`, as for 0.1.
 
 ## Stage 6a: built (2026-10-24)
 
@@ -168,6 +168,18 @@ The network is refused unless the caller allows it, as in Wasmtime, and the poli
 ### Stage 6d: built
 
 The shared library and the wrapper for ctypes answer WASI 0.2 as the extension does (`host = "wasm32-wasip2"`), with the same `wasi=` and the same tests (`tests/test_wasi2.py` runs on both front ends). The glue is the same (no Python); what the extension does with `wasi2_python.h`, the library does in C over the hooks of `<name>_config`: `args`, `env`, `dirs` (+ `dirs_readonly`), `stdin_read`, `stdout_write`, `clock`, `random`, `sleep` (the wait of a blocking call), and for 0.2 the policies `sockets` (a function, or `sockets_all`), `no_tcp`, `no_udp`, `dns`, `http` (a function, or `http_all`). A hook answers 0, an errno of WASI (64, the closed pipe, closes the stream; the rest fails it) or `HOOK_TRAP`; a policy answers 1, 0 or a negative number (a trap, the exception of the host stays in the wrapper). `<name>_wasi_end` answers 1 and the code after `wasi:cli/exit`. The wrapper has `__host__` (also for 0.1, where it was missing). Not here, for 0.2: the originals of the calls (`Host`, `<name>_host_call<k>`) and the `Host` class; a call given as `None` is always a trap.
+
+### Stage 6e: the default wasip2 (closes stage 6)
+
+Stage 6 is done when a plain wasip2 command, as a toolchain makes it, runs as it comes, as the runtimes run one (as an executable), on Linux, macOS and Windows. What 6a-6d have proved: hello, arguments and environment, exit, clock and random, files (three tests), a TCP client (`_sock.wasm`), the policies of the network, on the extension and on the wrapper for ctypes; and that all 201 functions of the table compile with the glue headers. What is missing, in this order:
+
+1. **CI green, Windows included.** The p2 host is built there only by CI (it failed once on `winsock.h` / `winsock2.h`, fixed by `WIN32_LEAN_AND_MEAN` before `Python.h`).
+2. **The executable for p2.** `program_problem` refuses any host but `wasm32-wasip1`. A `main.c` that takes `argv` and `environ` of the process, calls `wasi:cli/run@0.2.x#run`, answers 0 for `ok` and 1 for `err`, and ends the process with the code of `wasi:cli/exit`; the standard streams are the descriptors of the process (the default of fusedwasi). The test: `_hello.wasm` as a program.
+3. **Real programs**, not only our two: a C program with files, `printf` and stdin (wasi-sdk for p2), a Rust program with `std` (`wasm32-wasip2`), unbundled as in `examples/wasi2_unbundled`. To find out first: whether the toolchains can be had in this environment and in CI.
+4. **The interfaces that are bound and compiled, but not run by our tests:** stdin, a TCP server (`bind`, `listen`, `accept`), UDP, name lookup, `wasi:http`, the rest of `wasi:filesystem`. Their behaviour in C is tested by fusedwasi; what is ours (the state, the streams, the policies) is not run for them.
+5. **https.** The client of fusedwasi is plain http; Wasmtime goes over TLS. Decide whether the default needs it (`http_send` of the state is where a transport would be given).
+
+After 6e: the context and the one shape of the host (below).
 
 ### After stage 6: one shape of the host
 

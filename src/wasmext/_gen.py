@@ -1578,11 +1578,8 @@ def generate(
                     add(f"            {host}.fn[{imp.slot}] = (void *){last}_p2_import{k};")
                     add(f"            {host}.user[{imp.slot}] = &self->core;")
                 else:
-                    own = imp.module == _WASI_UNSTABLE and imp.field in _WASI_UNSTABLE_OWN
-                    add(
-                        f"            {host}.fn[{imp.slot}] = (void *)fusedwasi_p1_{'unstable_' if own else ''}{imp.field};"
-                    )
-                    add(f"            {host}.user[{imp.slot}] = self->core.wasi;")
+                    add(f"            {host}.fn[{imp.slot}] = (void *){last}_p1_import{k};")
+                    add(f"            {host}.user[{imp.slot}] = &self->core;")
                 add("        } else {")
             else:
                 add(
@@ -1912,15 +1909,29 @@ def generate(
         hadd("}")
         hadd("")
     elif uses_wasi:
-        hadd("/* the imports of WASI over the functions of the core, with the state `self->wasi` (made first): 0 */")
+        hadd(
+            "/* WASI 0.1: a trampoline for each import, as for 0.2: the slot is (function, instance), and the function calls the one of fusedwasi with the state `self->wasi` (made first). */"
+        )
+        for k, imp in enumerate(imports):
+            if imp.module not in wasi_headers:
+                continue
+            own = imp.module == _WASI_UNSTABLE and imp.field in _WASI_UNSTABLE_OWN
+            params = "".join(f", {_CTYPE[t]} a{j}" for j, t in enumerate(imp.func.params))
+            ret = _CTYPE[imp.func.results[0]] if imp.func.results else "void"
+            args = "".join(f", a{j}" for j in range(len(imp.func.params)))
+            hadd(f"/* {_cc(imp.module)}.{_cc(imp.field)}{_signature(imp.func)} */")
+            hadd(f"static {ret} {last}_p1_import{k}(void *user{params}, int *trapped) {{")
+            hadd(f"    {last}_instance *self = ({last}_instance *)user;")
+            hadd(
+                f"    {'return ' if imp.func.results else ''}fusedwasi_p1_{'unstable_' if own else ''}{imp.field}(self->wasi{args}, trapped);"
+            )
+            hadd("}")
+        hadd("/* the imports of WASI over the trampolines: 0 */")
         hadd(f"static inline int {last}_wasi_bind({last}_instance *self) {{")
-        for imp in imports:
+        for k, imp in enumerate(imports):
             if imp.module in wasi_headers:
-                own = imp.module == _WASI_UNSTABLE and imp.field in _WASI_UNSTABLE_OWN
-                hadd(
-                    f"    self->host{imp.host}.fn[{imp.slot}] = (void *)fusedwasi_p1_{'unstable_' if own else ''}{imp.field};"
-                )
-                hadd(f"    self->host{imp.host}.user[{imp.slot}] = self->wasi;")
+                hadd(f"    self->host{imp.host}.fn[{imp.slot}] = (void *){last}_p1_import{k};")
+                hadd(f"    self->host{imp.host}.user[{imp.slot}] = self;")
         hadd("    return 0;")
         hadd("}")
         hadd("")

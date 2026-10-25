@@ -696,6 +696,12 @@ def generate(
     )
     hadd(f"#ifndef {guard}")
     hadd(f"#define {guard}")
+    if (
+        wasi2 and uses_wasi
+    ):  # wasm-rt.h includes windows.h, whose winsock.h clashes with the winsock2.h of the sockets of WASI 0.2
+        hadd("#if defined(_WIN32) && !defined(WIN32_LEAN_AND_MEAN)")
+        hadd("#define WIN32_LEAN_AND_MEAN")
+        hadd("#endif")
     hadd(f'#include "{last}_w2c.h"')
     hadd('#include "wasmext_glue.h"')
     if wasi2 and uses_wasi:

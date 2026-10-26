@@ -456,11 +456,7 @@ def test_the_glue_of_a_module_compiles_with_no_python(source: str, wabt: Path, t
     (tmp_path / "m_glue.h").write_text(glue.header, encoding="utf-8")
     shared = [
         "wasmext_glue.h",
-        *(
-            ("wasi_p1_core.h", "wasi_python.h", *glue.wasi_headers)
-            if glue.wasi_headers
-            else ()
-        ),
+        *(("wasi_p1_core.h", "wasi_python.h", *glue.wasi_headers) if glue.wasi_headers else ()),
     ]
     for name in shared:
         (tmp_path / name).write_bytes(shared_header(name).read_bytes())

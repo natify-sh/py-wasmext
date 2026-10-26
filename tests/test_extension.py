@@ -74,6 +74,27 @@ def test_integers_wrap_as_webassembly_does(ext: Any) -> None:
     assert inst.mul64(-1, 3) == -3
 
 
+def test_integers_wrap_at_the_edges_of_their_types(ext: Any) -> None:
+    inst = make(ext)
+    assert inst.add(2**31, 0) == -(2**31)  # the first number that does not fit
+    assert inst.add(-(2**31), 0) == -(2**31)
+    assert inst.add(-(2**31) - 1, 0) == 2**31 - 1
+    assert inst.mul64(2**63, 1) == -(2**63)
+    assert inst.mul64(-(2**63) - 1, 1) == 2**63 - 1
+    assert inst.mul64(2**63 - 1, 1) == 2**63 - 1
+
+
+def test_the_result_of_an_import_that_is_a_number_is_checked_and_wrapped(ext: Any) -> None:
+    assert make(ext, twice=lambda x: 7).dbl(1.0) == 7.0  # an int is accepted where a float is wanted
+    assert make(ext, twice=lambda x: True).dbl(1.0) == 1.0
+    with pytest.raises(
+        TypeError
+    ):  # (the text differs between the front ends; test_an_import_that_returns_the_wrong_thing has each)
+        make(ext, twice=_text).dbl(1.0)
+    with pytest.raises(TypeError):
+        make(ext, twice=lambda x: None).dbl(1.0)
+
+
 def test_several_results_come_back_as_a_tuple(ext: Any) -> None:
     assert make(ext).pair() == (1, 2)
 

@@ -535,7 +535,31 @@ class Instance:
                 trapped[0] = 1
                 return 0 if returns is not None else None
 
-        thunk = prototype(callback)
+        result_type = results[0] if results else None
+        bounds = _RANGE.get(result_type) if result_type else None
+
+        def fast_callback(_user: Any, *args: Any) -> Any:
+            """The callback of an import whose parameters and result are numbers: nothing to unpack, and a result of the right type goes back as it is."""
+            trapped = args[-1]
+            try:
+                value = function(*args[:-1])
+                if result_type is None:
+                    return None
+                if bounds is not None:
+                    if value.__class__ is int and bounds[0] <= value <= bounds[1]:
+                        return value
+                elif value.__class__ is float:
+                    return value
+                return checked(value, result_type)
+            except BaseException as exc:  # nothing crosses the C frames: the status goes back and the call raises this object
+                owner = weak()
+                if owner is not None:
+                    owner._pending = exc
+                trapped[0] = 1
+                return 0 if returns is not None else None
+
+        simple = not several and len(results) <= 1 and all(t in _SIMPLE for t in (*params, *results))
+        thunk = prototype(fast_callback if simple else callback)
         self._callbacks.append(thunk)
         setter = getattr(self._lib, f"@NAME@_set_import{k}")
         setter.restype = None
@@ -638,7 +662,54 @@ def _find_import(imports: Any, module: str, field: str, *, required: bool = True
     return function
 
 
+_SIMPLE = ("i32", "i64", "f32", "f64")  # the types with nothing but a number to convert: a call with these only has a path made for its signature
+_RANGE = {"i32": (-(1 << 31), (1 << 31) - 1), "i64": (-(1 << 63), (1 << 63) - 1)}
+
+
+def _fast_method(name: str, cname: str, params: tuple[str, ...], results: tuple[str, ...]) -> Callable[..., Any]:
+    """The method of an export whose parameters and result are numbers (at most one result): written once for its signature, so a call does not build its types,
+    its conversions or its loops again. The checks and the conversions are those of `Instance._call`."""
+    count = len(params)
+    argtypes = [_c.c_void_p, *[_ARG[t] for t in params], *[_c.POINTER(_CTYPE[t]) for t in results]]
+    cache: list[Any] = []
+
+    def resolve() -> Any:
+        function = _function(cname, _c.c_int, argtypes)
+        cache.append(function)
+        return function
+
+    names = [f"a{i}" for i in range(count)]
+    lines = ["def method(self, *args):", f"    if len(args) != {count}: raise TypeError(_msg % len(args))"]
+    if count:
+        lines.append(f"    {', '.join(names)}, = args")
+    lines += ["    try: function = _cache[0]", "    except IndexError: function = _resolve()"]
+    call = ["self._h", *[f"_convert{i}({n})" for i, n in enumerate(names)]]
+    if results:
+        lines.append("    out = _out()")
+        call.append("_byref(out)")
+    lines.append(f"    code = function({', '.join(call)})")
+    lines.append("    if code: raise self._error(code)")
+    lines.append("    return out.value" if results else "    return None")
+    namespace: dict[str, Any] = {
+        "_cache": cache,
+        "_resolve": resolve,
+        "_byref": _c.byref,
+        "_msg": f"{name.replace('%', '%%')}() takes exactly {count} argument{'' if count == 1 else 's'} (%d given)",
+    }
+    for i, t in enumerate(params):
+        namespace[f"_convert{i}"] = _CONVERT[t]
+    if results:
+        namespace["_out"] = _CTYPE[results[0]]
+    exec("\n".join(lines), namespace)  # noqa: S102 -- the text is made here from the types of the module, never from the user's data
+    method = namespace["method"]
+    method.__name__ = method.__qualname__ = name
+    method.__doc__ = _signature(name, params, results)
+    return method  # type: ignore[no-any-return]
+
+
 def _method(name: str, cname: str, params: tuple[str, ...], results: tuple[str, ...]) -> Callable[..., Any]:
+    if len(results) <= 1 and all(t in _SIMPLE for t in (*params, *results)):
+        return _fast_method(name, cname, params, results)
     count = len(params)
 
     def method(self: Instance, *args: Any) -> Any:

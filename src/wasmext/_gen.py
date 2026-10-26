@@ -1113,10 +1113,13 @@ def generate(
         # fn, user: the function to call for an import, `result f(void *user, parameters..., int *trapped)`, and its first argument
         hadd(f"struct w2c_{mangle(host, module=True)} {{ void *fn[{n}]; void *user[{n}];{values}{memory_fields} }};")
     hadd("")
+    hadd(
+        "/* The context of an instance: it owns the host (who answers the imports of WASI) and, in time, the runtime. An instance has one of its own (`own`, private) and uses it"
+    )
+    hadd(
+        "   through `ctx`; a context made for several instances is the same structure (see docs/context_concept.md). */"
+    )
     hadd("typedef struct {")
-    hadd(f"    w2c_{prefix} inst;")
-    hadd("    int instantiated;")
-    hadd("    int initialized;  /* the `_initialize` of a reactor has run */")
     if uses_wasi and wasi2:
         hadd(
             "    fusedwasi_p2_state wasi2;  /* the host of WASI 0.2 (fusedwasi, p2/): made by the glue, its Python side is `wasi2_py` */"
@@ -1125,12 +1128,26 @@ def generate(
         hadd("    char p2_message[160];  /* why the host trapped, when it did not say with an exception */")
     elif uses_wasi:
         hadd("    fusedwasi_p1_state *wasi;")
+    else:
+        hadd("    char unused_;  /* a module with no WASI has no host yet */")
+    hadd(f"}} {last}_context;")
+    hadd("")
+    hadd("typedef struct {")
+    hadd(f"    w2c_{prefix} inst;")
+    hadd("    int instantiated;")
+    hadd("    int initialized;  /* the `_initialize` of a reactor has run */")
+    hadd(f"    {last}_context own;  /* the private context */")
+    hadd(f"    {last}_context *ctx;  /* the context in use: `&own` unless the instance was given another */")
     for i, host in enumerate(hosts):
         hadd(f"    struct w2c_{mangle(host, module=True)} host{i};")
     hadd(
         f"    wasm_rt_funcref_t exp_ref[{max(len(funcs), 1)}];  /* the exported functions as a table holds them: see {last}_glue_funcref */"
     )
     hadd(f"}} {last}_instance;")
+    hadd(
+        "/* every front end calls this once, when the instance is made and before anything else: it uses the private context */"
+    )
+    hadd(f"static inline void {last}_glue_context_init({last}_instance *self) {{ self->ctx = &self->own; }}")
     hadd("")
     _emit_funcrefs(hadd, last, prefix, funcs)
     _emit_links(hadd, last, imports, global_imports, memory_imports, hosts, table_imports)
@@ -1232,10 +1249,10 @@ def generate(
     add("        if (PyErr_Occurred()) return;")
     if uses_wasi and wasi2:
         add(
-            "        if (self->core.wasi2.exited) { wasmext_wasi2_raise_exit((wasmext_wasi2_py *)self->core.wasi2_py, self->core.wasi2.exit_code); return; }"
+            "        if (self->core.ctx->wasi2.exited) { wasmext_wasi2_raise_exit((wasmext_wasi2_py *)self->core.ctx->wasi2_py, self->core.ctx->wasi2.exit_code); return; }"
         )
         add(
-            "        if (self->core.p2_message[0]) { PyErr_SetString(TrapError, self->core.p2_message); self->core.p2_message[0] = 0; return; }"
+            "        if (self->core.ctx->p2_message[0]) { PyErr_SetString(TrapError, self->core.ctx->p2_message); self->core.ctx->p2_message[0] = 0; return; }"
         )
     add(
         "        /* a function of another instance that this one calls through a link failed in its own host function: if that instance keeps the exception"
@@ -1263,14 +1280,16 @@ def generate(
     if uses_wasi and wasi2:
         add("    if (code == (int)WASMEXT_TRAP_ENDED) {")
         add(
-            "        if (self->core.wasi2.exited) wasmext_wasi2_ended((wasmext_wasi2_py *)self->core.wasi2_py, self->core.wasi2.exit_code);"
+            "        if (self->core.ctx->wasi2.exited) wasmext_wasi2_ended((wasmext_wasi2_py *)self->core.ctx->wasi2_py, self->core.ctx->wasi2.exit_code);"
         )
         add('        else PyErr_SetString(TrapError, "the WebAssembly program of a linked instance has ended");')
         add("        return;")
         add("    }")
     elif uses_wasi:
         add("    if (code == (int)WASMEXT_TRAP_ENDED) {")
-        add("        if (self->core.wasi != NULL && self->core.wasi->finished) wasmext_wasi_check(self->core.wasi);")
+        add(
+            "        if (self->core.ctx->wasi != NULL && self->core.ctx->wasi->finished) wasmext_wasi_check(self->core.ctx->wasi);"
+        )
         add('        else PyErr_SetString(TrapError, "the WebAssembly program of a linked instance has ended");')
         add("        return;")
         add("    }")
@@ -1414,9 +1433,9 @@ def generate(
         add(f"    for (int k = 0; k < {slots.get(host, 0)}; k++) Py_VISIT(self->hold{i}.fn[k]);")
         add(f"    for (int k = 0; k < {slots.get(host, 0)}; k++) Py_VISIT(self->hold{i}.lo[k]);")
     if uses_wasi and wasi2:
-        add("    wasmext_wasi2_traverse((wasmext_wasi2_py *)self->core.wasi2_py, visit, arg);")
+        add("    wasmext_wasi2_traverse((wasmext_wasi2_py *)self->core.ctx->wasi2_py, visit, arg);")
     elif uses_wasi:
-        add("    if (self->core.wasi != NULL) wasmext_wasi_traverse(self->core.wasi, visit, arg);")
+        add("    if (self->core.ctx->wasi != NULL) wasmext_wasi_traverse(self->core.ctx->wasi, visit, arg);")
     for g in global_imports:
         add(f"    Py_VISIT(self->hold{g.host}.go{g.slot});")
     for m in memory_imports:
@@ -1435,9 +1454,9 @@ def generate(
         add(f"    for (int k = 0; k < {slots.get(host, 0)}; k++) Py_CLEAR(self->hold{i}.fn[k]);")
         add(f"    for (int k = 0; k < {slots.get(host, 0)}; k++) Py_CLEAR(self->hold{i}.lo[k]);")
     if uses_wasi and wasi2:
-        add("    wasmext_wasi2_clear((wasmext_wasi2_py *)self->core.wasi2_py);")
+        add("    wasmext_wasi2_clear((wasmext_wasi2_py *)self->core.ctx->wasi2_py);")
     elif uses_wasi:
-        add("    if (self->core.wasi != NULL) wasmext_wasi_clear(self->core.wasi);")
+        add("    if (self->core.ctx->wasi != NULL) wasmext_wasi_clear(self->core.ctx->wasi);")
     for g in global_imports:
         add(f"    Py_CLEAR(self->hold{g.host}.go{g.slot});")
     for m in memory_imports:
@@ -1458,10 +1477,10 @@ def generate(
     add(f"    {last}_glue_free(&self->core);")
     add("    Instance_clear(self);")
     if uses_wasi and wasi2:
-        add("    fusedwasi_p2_free(&self->core.wasi2);")
-        add("    wasmext_wasi2_free((wasmext_wasi2_py *)self->core.wasi2_py);")
+        add("    fusedwasi_p2_free(&self->core.ctx->wasi2);")
+        add("    wasmext_wasi2_free((wasmext_wasi2_py *)self->core.ctx->wasi2_py);")
     elif uses_wasi:
-        add("    wasmext_wasi_free(self->core.wasi);")
+        add("    wasmext_wasi_free(self->core.ctx->wasi);")
     add("    ((freefunc)PyType_GetSlot(tp, Py_tp_free))((PyObject *)self);")
     add("    Py_DECREF(tp);")
     add("}")
@@ -1516,6 +1535,7 @@ def generate(
         add('    if (!PyArg_ParseTupleAndKeywords(args, kwds, ":Instance", kwlist)) return NULL;')
     add("    InstanceObject *self = (InstanceObject *)PyType_GenericAlloc(type, 0);")
     add("    if (self == NULL) return NULL;")
+    add(f"    {last}_glue_context_init(&self->core);")
     if tables:
         add("    self->writers = PyList_New(0);")
         add("    if (self->writers == NULL) { Py_DECREF(self); return NULL; }")
@@ -1525,16 +1545,16 @@ def generate(
     if uses_wasi and wasi2:
         add(f"    {last}_p2_init(&self->core);")
         add(
-            f"    self->core.wasi2_py = wasmext_wasi2_new(&self->core.wasi2, &self->core, wasi, WasiExitError, WasiSignalError, WasiTerminatedError, {_c_string(last)});"
+            f"    self->core.ctx->wasi2_py = wasmext_wasi2_new(&self->core.ctx->wasi2, &self->core, wasi, WasiExitError, WasiSignalError, WasiTerminatedError, {_c_string(last)});"
         )
-        add("    if (self->core.wasi2_py == NULL) { Py_DECREF(self); return NULL; }")
+        add("    if (self->core.ctx->wasi2_py == NULL) { Py_DECREF(self); return NULL; }")
     elif uses_wasi:
         add(
-            f"    self->core.wasi = wasmext_wasi_new(wasi, WasiExitError, WasiSignalError, WasiTerminatedError, {_c_string(last)});"
+            f"    self->core.ctx->wasi = wasmext_wasi_new(wasi, WasiExitError, WasiSignalError, WasiTerminatedError, {_c_string(last)});"
         )
-        add("    if (self->core.wasi == NULL) { Py_DECREF(self); return NULL; }")
+        add("    if (self->core.ctx->wasi == NULL) { Py_DECREF(self); return NULL; }")
         add(
-            f"    {{ wasm_rt_memory_t *m_ = w2c_{prefix}_{mangle('memory')}(&self->core.inst); fusedwasi_p1_bind(self->core.wasi, &m_->data, &m_->size); }}"
+            f"    {{ wasm_rt_memory_t *m_ = w2c_{prefix}_{mangle('memory')}(&self->core.inst); fusedwasi_p1_bind(self->core.ctx->wasi, &m_->data, &m_->size); }}"
         )
     if has_imports:
         if needs_imports:
@@ -1808,7 +1828,9 @@ def generate(
     # A WASI program is over when it calls proc_exit or proc_raise; a command (it exports _start) is over after a trap too
     is_command = any(exp_name == "_start" for exp_name, _ in funcs)
     finish_on_trap = (
-        "fusedwasi_p1_finish(self->wasi, FUSEDWASI_P1_END_TRAP, 0); " if uses_wasi and not wasi2 and is_command else ""
+        "fusedwasi_p1_finish(self->ctx->wasi, FUSEDWASI_P1_END_TRAP, 0); "
+        if uses_wasi and not wasi2 and is_command
+        else ""
     )
     hadd("/* instantiation: 0, or the code of the trap of the start function */")
     hadd(f"static inline int {last}_glue_instantiate({last}_instance *self) {{")
@@ -1855,11 +1877,11 @@ def generate(
         hadd(f"#define {last.upper()}_RUN {last}_call{run}  /* wasi:cli/run#run: 0 for ok, 1 for err */")
     if uses_wasi and wasi2:
         hadd(
-            "/* WASI 0.2: the host of fusedwasi over the imports. Its state is `self->wasi2`; the memory is set again before each call (it moves when it grows). */"
+            "/* WASI 0.2: the host of fusedwasi over the imports. Its state is `self->ctx->wasi2`; the memory is set again before each call (it moves when it grows). */"
         )
         hadd(f"static inline void {last}_p2_refresh({last}_instance *self) {{")
         hadd(f"    wasm_rt_memory_t *m_ = w2c_{prefix}_{mangle('memory')}(&self->inst);")
-        hadd("    fusedwasi_p2_set_memory(&self->wasi2, 0, m_->data, m_->size);")
+        hadd("    fusedwasi_p2_set_memory(&self->ctx->wasi2, 0, m_->data, m_->size);")
         hadd("}")
         hadd(
             f"static uint32_t {last}_p2_realloc(fusedwasi_p2_state *s, uint32_t comp, uint32_t old_ptr, uint32_t old_size, uint32_t align, uint32_t new_size) {{"
@@ -1876,13 +1898,13 @@ def generate(
         hadd("}")
         hadd(f"static void {last}_p2_trap(fusedwasi_p2_state *s, const char *message) {{")
         hadd(f"    {last}_instance *self = *({last}_instance **)s->user;")
-        hadd('    snprintf(self->p2_message, sizeof self->p2_message, "%s", message);')
+        hadd('    snprintf(self->ctx->p2_message, sizeof self->ctx->p2_message, "%s", message);')
         hadd("    wasm_rt_trap(WASMEXT_TRAP_HOST);")
         hadd("}")
         hadd(f"static inline void {last}_p2_init({last}_instance *self) {{")
-        hadd("    fusedwasi_p2_init(&self->wasi2);")
-        hadd(f"    self->wasi2.trap = {last}_p2_trap;")
-        hadd(f"    self->wasi2.realloc = {last}_p2_realloc;")
+        hadd("    fusedwasi_p2_init(&self->ctx->wasi2);")
+        hadd(f"    self->ctx->wasi2.trap = {last}_p2_trap;")
+        hadd(f"    self->ctx->wasi2.realloc = {last}_p2_realloc;")
         hadd("}")
         for k, imp in enumerate(imports):
             if imp.module not in wasi_headers:
@@ -1897,7 +1919,9 @@ def generate(
             hadd(f"    {last}_instance *self = ({last}_instance *)user;")
             hadd("    (void)trapped;")
             hadd(f"    {last}_p2_refresh(self);")
-            hadd(f"    {'return ' if imp.func.results else ''}{cname}(&self->wasi2{', 0' if has_comp else ''}{args});")
+            hadd(
+                f"    {'return ' if imp.func.results else ''}{cname}(&self->ctx->wasi2{', 0' if has_comp else ''}{args});"
+            )
             hadd("}")
         hadd(f"static inline int {last}_wasi_bind({last}_instance *self) {{")
         hadd(f"    {last}_p2_init(self);")
@@ -1910,7 +1934,7 @@ def generate(
         hadd("")
     elif uses_wasi:
         hadd(
-            "/* WASI 0.1: a trampoline for each import, as for 0.2: the slot is (function, instance), and the function calls the one of fusedwasi with the state `self->wasi` (made first). */"
+            "/* WASI 0.1: a trampoline for each import, as for 0.2: the slot is (function, instance), and the function calls the one of fusedwasi with the state `self->ctx->wasi` (made first). */"
         )
         for k, imp in enumerate(imports):
             if imp.module not in wasi_headers:
@@ -1923,7 +1947,7 @@ def generate(
             hadd(f"static {ret} {last}_p1_import{k}(void *user{params}, int *trapped) {{")
             hadd(f"    {last}_instance *self = ({last}_instance *)user;")
             hadd(
-                f"    {'return ' if imp.func.results else ''}fusedwasi_p1_{'unstable_' if own else ''}{imp.field}(self->wasi{args}, trapped);"
+                f"    {'return ' if imp.func.results else ''}fusedwasi_p1_{'unstable_' if own else ''}{imp.field}(self->ctx->wasi{args}, trapped);"
             )
             hadd("}")
         hadd("/* the imports of WASI over the trampolines: 0 */")
@@ -1959,10 +1983,10 @@ def generate(
             hadd("    memset(&zero, 0, sizeof zero);")
         hadd(f"    {last}_instance *self = ({last}_instance *)((char *)inst - offsetof({last}_instance, inst));")
         if uses_wasi and wasi2:
-            hadd(f"    if (self->wasi2.exited) {{ *trapped = (int)WASMEXT_TRAP_ENDED; {give} }}")
+            hadd(f"    if (self->ctx->wasi2.exited) {{ *trapped = (int)WASMEXT_TRAP_ENDED; {give} }}")
         elif uses_wasi:
             hadd(
-                f"    if (self->wasi != NULL && self->wasi->finished) {{ *trapped = (int)WASMEXT_TRAP_ENDED; {give} }}"
+                f"    if (self->ctx->wasi != NULL && self->ctx->wasi->finished) {{ *trapped = (int)WASMEXT_TRAP_ENDED; {give} }}"
             )
         else:
             hadd("    (void)self;")
@@ -2348,7 +2372,7 @@ def generate(
                 add("    if (PyErr_Occurred()) return NULL;")
             add("    int trapped = 0;")
             call_args = "".join(f", a{j}" for j in range(n))
-            call = f"{core}(self->core.wasi{call_args}, &trapped)"
+            call = f"{core}(self->core.ctx->wasi{call_args}, &trapped)"
             if imp.func.results:
                 add(f"    {_CTYPE[imp.func.results[0]]} r = {call};")
                 add("    if (trapped) { raise_trap(self, (int)WASMEXT_TRAP_HOST); return NULL; }")

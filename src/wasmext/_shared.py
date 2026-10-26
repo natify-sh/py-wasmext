@@ -251,7 +251,7 @@ def _p2_new(C: Callable[[str], None], last: str, big: str, program: str, wasi_im
     fusedwasi_p2_state *s;
     m->p2_core = &m->core;
     {last}_wasi_bind(&m->core);
-    s = &m->core.wasi2;
+    s = &m->core.ctx->wasi2;
     s->user = &m->p2_core;
     if (config != NULL) {{
         m->stdin_read = config->stdin_read;
@@ -345,7 +345,7 @@ def _p2_new(C: Callable[[str], None], last: str, big: str, program: str, wasi_im
     C("    if (0) {")
     C("nomem:")
     C("        *error = 12;")
-    C("        fusedwasi_p2_free(&m->core.wasi2);")
+    C("        fusedwasi_p2_free(&m->core.ctx->wasi2);")
     C("        api_p2_release(m);")
     C("        free(m);")
     C("        return NULL;")
@@ -710,6 +710,7 @@ def generate_shared(
     C("    if (error == NULL) error = &ignored;")
     C(f"    {last}_t *m = ({last}_t *)calloc(1, sizeof *m);")
     C("    if (m == NULL) { *error = 12; return NULL; }")
+    C(f"    {last}_glue_context_init(&m->core);")
     if uses_wasi and wasi2:
         _p2_new(C, last, big, _c_string(last), [k for k, (_m, _f, _fn, w, _h, _s) in enumerate(imports) if w])
     elif uses_wasi:
@@ -763,12 +764,12 @@ def generate_shared(
         C("    wasi.user = m;")
         C("    size_t bad;")
         C("    int err = 0;")
-        C("    m->core.wasi = fusedwasi_p1_create(&wasi, &err, &bad);")
+        C("    m->core.ctx->wasi = fusedwasi_p1_create(&wasi, &err, &bad);")
         C("    free(args); free(env); free(preopens);")
         C("    if (hosts != NULL) { for (size_t i = 0; i < ndirs; i++) free(hosts[i]); free(hosts); }")
-        C("    if (m->core.wasi == NULL) { *error = err; free(m); return NULL; }")
+        C("    if (m->core.ctx->wasi == NULL) { *error = err; free(m); return NULL; }")
         C(
-            f"    {{ wasm_rt_memory_t *m_ = w2c_{prefix}_memory(&m->core.inst); fusedwasi_p1_bind(m->core.wasi, &m_->data, &m_->size); }}"
+            f"    {{ wasm_rt_memory_t *m_ = w2c_{prefix}_memory(&m->core.inst); fusedwasi_p1_bind(m->core.ctx->wasi, &m_->data, &m_->size); }}"
         )
         C(f"    {last}_wasi_bind(&m->core);")
         for k, (_module, _field, _func, is_wasi, _host, _slot) in enumerate(imports):
@@ -784,10 +785,10 @@ def generate_shared(
     C("    if (m == NULL) return;")
     C(f"    {last}_glue_free(&m->core);")
     if uses_wasi and wasi2:
-        C("    fusedwasi_p2_free(&m->core.wasi2);")
+        C("    fusedwasi_p2_free(&m->core.ctx->wasi2);")
         C("    api_p2_release(m);")
     elif uses_wasi:
-        C("    fusedwasi_p1_destroy(m->core.wasi);")
+        C("    fusedwasi_p1_destroy(m->core.ctx->wasi);")
     C("    free(m);")
     C("}")
     C("")
@@ -829,11 +830,11 @@ def generate_shared(
     C("")
     C(f"int {last}_wasi_end({last}_t *m, uint32_t *value) {{")
     if uses_wasi and wasi2:
-        C("    if (value != NULL) *value = m->core.wasi2.exit_code;")
-        C("    return m->core.wasi2.exited ? 1 : 0;")
+        C("    if (value != NULL) *value = m->core.ctx->wasi2.exit_code;")
+        C("    return m->core.ctx->wasi2.exited ? 1 : 0;")
     elif uses_wasi:
-        C("    if (value != NULL) *value = m->core.wasi->end_value;")
-        C("    return m->core.wasi->finished;")
+        C("    if (value != NULL) *value = m->core.ctx->wasi->end_value;")
+        C("    return m->core.ctx->wasi->finished;")
     else:
         C("    (void)m; (void)value;")
         C("    return 0;")
@@ -930,10 +931,10 @@ def generate_shared(
             C("    int trapped = 0;")
             call_args = "".join(f", ({_CTYPE[t]})a{j}" for j, t in enumerate(func.params))
             if func.results:
-                C(f"    {_CTYPE[func.results[0]]} r = {core}(m->core.wasi{call_args}, &trapped);")
+                C(f"    {_CTYPE[func.results[0]]} r = {core}(m->core.ctx->wasi{call_args}, &trapped);")
             else:
-                C(f"    {core}(m->core.wasi{call_args}, &trapped);")
-            C("    if (trapped) return m->core.wasi->finished ? (int)WASMEXT_TRAP_ENDED : (int)WASMEXT_TRAP_HOST;")
+                C(f"    {core}(m->core.ctx->wasi{call_args}, &trapped);")
+            C("    if (trapped) return m->core.ctx->wasi->finished ? (int)WASMEXT_TRAP_ENDED : (int)WASMEXT_TRAP_HOST;")
             if func.results:
                 C(f"    if (r0 != NULL) *r0 = ({_API_TYPE[func.results[0]]})r;")
             C("    return 0;")
@@ -1221,13 +1222,15 @@ def generate_shared(
             )
             C("    }")
         if uses_wasi and wasi2:
-            C("    if (trapped == (int)WASMEXT_TRAP_HOST && m->core.wasi2.exited) trapped = (int)WASMEXT_TRAP_ENDED;")
+            C(
+                "    if (trapped == (int)WASMEXT_TRAP_HOST && m->core.ctx->wasi2.exited) trapped = (int)WASMEXT_TRAP_ENDED;"
+            )
         elif uses_wasi:
             C(
                 "    /* the call in which the program ends (proc_exit, proc_raise) unwound with the code of a host function; it is the end that it answers */"
             )
             C(
-                "    if (trapped == (int)WASMEXT_TRAP_HOST && m->core.wasi != NULL && (m->core.wasi->finished == FUSEDWASI_P1_END_EXIT || m->core.wasi->finished == FUSEDWASI_P1_END_SIGNAL))"
+                "    if (trapped == (int)WASMEXT_TRAP_HOST && m->core.ctx->wasi != NULL && (m->core.ctx->wasi->finished == FUSEDWASI_P1_END_EXIT || m->core.ctx->wasi->finished == FUSEDWASI_P1_END_SIGNAL))"
             )
             C("        trapped = (int)WASMEXT_TRAP_ENDED;")
         C("    if (trapped) return trapped;")

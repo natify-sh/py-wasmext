@@ -791,7 +791,9 @@ def generate_shared(
         C("    if (value != NULL) *value = m->core.store->wasi2.exit_code;")
         C("    return m->core.store->wasi2.exited ? 1 : 0;")
     elif uses_wasi:
-        C("    if (m->core.store->wasi2.exited) { if (value != NULL) *value = m->core.store->wasi2.exit_code; return FUSEDWASI_P1_END_EXIT; }")
+        C(
+            "    if (m->core.store->wasi2.exited) { if (value != NULL) *value = m->core.store->wasi2.exit_code; return FUSEDWASI_P1_END_EXIT; }"
+        )
         C("    if (value != NULL) *value = m->core.store->wasi->end_value;")
         C("    return m->core.store->wasi->finished;")
     else:

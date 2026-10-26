@@ -1,7 +1,7 @@
 """Two instances in one store (C2a): the host is shared, the memory is the instance's own.
 
 The module of WASI 0.1 gets the memory of the instance that calls (the trampoline binds it before each call), so a host shared by several instances serves each. These tests are written
-before the public `Store` exists (`WASI_TARGET_PLAN.md`, "The structure"): they are expected to fail with `AttributeError` until C2a, and `strict` makes the mark go with it.
+before the public `Store` existed (`WASI_TARGET_PLAN.md`, "The structure"). The extension has it; the wrapper for ctypes is expected to fail with `AttributeError` until its step, and `strict` makes the mark go with it.
 """
 
 from __future__ import annotations
@@ -17,10 +17,12 @@ import pytest
 DATA = Path(__file__).parent / "data"
 Builder = Callable[..., ModuleType]
 
-not_yet = pytest.mark.xfail(strict=True, raises=AttributeError, reason="C2a: the public Store is not made yet")
+ctypes_not_yet = pytest.mark.xfail(
+    strict=True, raises=AttributeError, reason="C2a: the Store of the wrapper for ctypes is not made yet"
+)
 
 
-@pytest.fixture(params=["extension", "ctypes"])
+@pytest.fixture(params=["extension", pytest.param("ctypes", marks=ctypes_not_yet)])
 def build(request: pytest.FixtureRequest) -> Builder:
     builder: Builder = request.getfixturevalue("build_extension" if request.param == "extension" else "build_ctypes")
     return functools.partial(builder, host="wasm32-wasip1")
@@ -35,7 +37,6 @@ def write(inst: Any, at: int, data: bytes) -> int:
     return int.from_bytes(mem[32:36], "little")
 
 
-@not_yet
 def test_each_instance_of_a_store_is_served_from_its_own_memory(build: Builder) -> None:
     mod: Any = build(DATA / "wasi_probe.wat", "wasi_probe")
     out: list[bytes] = []
@@ -49,7 +50,6 @@ def test_each_instance_of_a_store_is_served_from_its_own_memory(build: Builder) 
     assert bytes(a.memory[100:107]) == b"again a" and bytes(b.memory[100:107]) == b"from b!"
 
 
-@not_yet
 def test_the_table_of_descriptors_is_the_stores(build: Builder) -> None:
     mod: Any = build(DATA / "wasi_probe.wat", "wasi_probe")
     out: list[bytes] = []
@@ -62,7 +62,6 @@ def test_the_table_of_descriptors_is_the_stores(build: Builder) -> None:
     assert b.fd_write(1, 0, 1, 32) == 8 and out == []
 
 
-@not_yet
 def test_the_end_of_one_instance_does_not_touch_the_other(build: Builder) -> None:
     mod: Any = build(DATA / "wasi_probe.wat", "wasi_probe")
     out: list[bytes] = []
@@ -76,7 +75,6 @@ def test_the_end_of_one_instance_does_not_touch_the_other(build: Builder) -> Non
     assert out == [b"alive", b"so is a"]
 
 
-@not_yet
 def test_a_store_of_its_own_shares_nothing(build: Builder) -> None:
     mod: Any = build(DATA / "wasi_probe.wat", "wasi_probe")
     out1: list[bytes] = []

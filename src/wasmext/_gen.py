@@ -1424,13 +1424,73 @@ def generate(
         add("    return f;")
         add("}")
         add("")
+    add(
+        "/* The store: the host (who answers the imports of WASI) with its state, shared by the instances made in it. The instance that the host serves is the one in call: the trampolines say so before each call. */"
+    )
+    add("static StoreObject *store_make(PyTypeObject *type, PyObject *wasi) {")
+    add("    StoreObject *self = (StoreObject *)PyType_GenericAlloc(type, 0);")
+    add("    if (self == NULL) return NULL;")
+    if uses_wasi:
+        add(f"    {last}_p2_store_init(&self->st);")
+        add(
+            f"    self->st.wasi2_py = wasmext_wasi2_new(&self->st.wasi2, NULL, wasi, WasiExitError, WasiSignalError, {_c_string(last)});"
+        )
+        add("    if (self->st.wasi2_py == NULL) { Py_DECREF((PyObject *)self); return NULL; }")
+        if not wasi2:
+            add("    self->st.wasi = wasmext_wasi_over((wasmext_wasi2_py *)self->st.wasi2_py, &self->st.wasi2);")
+            add("    if (self->st.wasi == NULL) { Py_DECREF((PyObject *)self); return NULL; }")
+    else:
+        add("    (void)wasi;")
+    add("    return self;")
+    add("}")
+    add("")
+    add("static PyObject *Store_new(PyTypeObject *type, PyObject *args, PyObject *kwds) {")
+    if uses_wasi:
+        add('    static char *kwlist[] = {"wasi", NULL};')
+        add("    PyObject *wasi = Py_None;")
+        add('    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|O:Store", kwlist, &wasi)) return NULL;')
+    else:
+        add("    static char *kwlist[] = {NULL};")
+        add('    if (!PyArg_ParseTupleAndKeywords(args, kwds, ":Store", kwlist)) return NULL;')
+        add("    PyObject *wasi = Py_None;")
+    add("    return (PyObject *)store_make(type, wasi);")
+    add("}")
+    add("")
+    add("static int Store_traverse(StoreObject *self, visitproc visit, void *arg) {")
+    add("    Py_VISIT(Py_TYPE((PyObject *)self));")
+    if uses_wasi:
+        add("    wasmext_wasi2_traverse((wasmext_wasi2_py *)self->st.wasi2_py, visit, arg);")
+    add("    return 0;")
+    add("}")
+    add("")
+    add("static int Store_clear(StoreObject *self) {")
+    if uses_wasi:
+        add("    wasmext_wasi2_clear((wasmext_wasi2_py *)self->st.wasi2_py);")
+    else:
+        add("    (void)self;")
+    add("    return 0;")
+    add("}")
+    add("")
+    add("static void Store_dealloc(StoreObject *self) {")
+    add("    PyTypeObject *tp = Py_TYPE((PyObject *)self);")
+    add("    PyObject_GC_UnTrack(self);")
+    add("    if (self->weakreflist != NULL) PyObject_ClearWeakRefs((PyObject *)self);")
+    add("    Store_clear(self);")
+    if uses_wasi and not wasi2:
+        add("    fusedwasi_p1_destroy(self->st.wasi);")
+    if uses_wasi:
+        add("    fusedwasi_p2_free(&self->st.wasi2);")
+        add("    wasmext_wasi2_free((wasmext_wasi2_py *)self->st.wasi2_py);")
+    add("    ((freefunc)PyType_GetSlot(tp, Py_tp_free))((PyObject *)self);")
+    add("    Py_DECREF(tp);")
+    add("}")
+    add("")
     add("static int Instance_traverse(InstanceObject *self, visitproc visit, void *arg) {")
     add("    Py_VISIT(Py_TYPE((PyObject *)self));")
+    add("    Py_VISIT((PyObject *)self->store_obj);")
     for i, host in enumerate(hosts):
         add(f"    for (int k = 0; k < {slots.get(host, 0)}; k++) Py_VISIT(self->hold{i}.fn[k]);")
         add(f"    for (int k = 0; k < {slots.get(host, 0)}; k++) Py_VISIT(self->hold{i}.lo[k]);")
-    if uses_wasi:
-        add("    wasmext_wasi2_traverse((wasmext_wasi2_py *)self->core.store->wasi2_py, visit, arg);")
     for g in global_imports:
         add(f"    Py_VISIT(self->hold{g.host}.go{g.slot});")
     for m in memory_imports:
@@ -1448,8 +1508,6 @@ def generate(
     for i, host in enumerate(hosts):
         add(f"    for (int k = 0; k < {slots.get(host, 0)}; k++) Py_CLEAR(self->hold{i}.fn[k]);")
         add(f"    for (int k = 0; k < {slots.get(host, 0)}; k++) Py_CLEAR(self->hold{i}.lo[k]);")
-    if uses_wasi:
-        add("    wasmext_wasi2_clear((wasmext_wasi2_py *)self->core.store->wasi2_py);")
     for g in global_imports:
         add(f"    Py_CLEAR(self->hold{g.host}.go{g.slot});")
     for m in memory_imports:
@@ -1469,11 +1527,7 @@ def generate(
     add("    if (self->weakreflist != NULL) PyObject_ClearWeakRefs((PyObject *)self);")
     add(f"    {last}_glue_free(&self->core);")
     add("    Instance_clear(self);")
-    if uses_wasi and not wasi2:
-        add("    fusedwasi_p1_destroy(self->core.store->wasi);")
-    if uses_wasi:
-        add("    fusedwasi_p2_free(&self->core.store->wasi2);")
-        add("    wasmext_wasi2_free((wasmext_wasi2_py *)self->core.store->wasi2_py);")
+    add("    Py_XDECREF((PyObject *)self->store_obj);  /* the last one to leave frees the host */")
     add("    ((freefunc)PyType_GetSlot(tp, Py_tp_free))((PyObject *)self);")
     add("    Py_DECREF(tp);")
     add("}")
@@ -1515,37 +1569,75 @@ def generate(
         add("}")
         add("")
     add("static PyObject *Instance_new(PyTypeObject *type, PyObject *args, PyObject *kwds) {")
+    # `Instance(store, imports=..., wasi=...)`. Until the calls are rewritten (C2e) a first argument that is not a Store is what it was, the imports; an instance with no store
+    # makes a private one (from `wasi=`).
     if uses_wasi:
-        add('    static char *kwlist[] = {"imports", "wasi", NULL};')
-        add("    PyObject *imports = Py_None, *wasi = Py_None;")
-        add('    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|O$O:Instance", kwlist, &imports, &wasi)) return NULL;')
+        add('    static char *kwlist[] = {"store", "imports", "wasi", NULL};')
+        add("    PyObject *store = Py_None, *imports = Py_None, *wasi = Py_None;")
+        add(
+            '    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|OO$O:Instance", kwlist, &store, &imports, &wasi)) return NULL;'
+        )
     elif has_imports:
-        add('    static char *kwlist[] = {"imports", NULL};')
-        add("    PyObject *imports = Py_None;")
-        add('    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|O:Instance", kwlist, &imports)) return NULL;')
+        add('    static char *kwlist[] = {"store", "imports", NULL};')
+        add("    PyObject *store = Py_None, *imports = Py_None;")
+        add('    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|OO:Instance", kwlist, &store, &imports)) return NULL;')
     else:
-        add("    static char *kwlist[] = {NULL};")
-        add('    if (!PyArg_ParseTupleAndKeywords(args, kwds, ":Instance", kwlist)) return NULL;')
+        add('    static char *kwlist[] = {"store", NULL};')
+        add("    PyObject *store = Py_None;")
+        add('    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|O:Instance", kwlist, &store)) return NULL;')
+    add("    if (store != Py_None && !PyObject_TypeCheck(store, StoreType)) {")
+    if has_imports or uses_wasi:
+        add(
+            '        PyObject *tn_ = PyObject_GetAttrString((PyObject *)Py_TYPE(store), "__name__");  /* the limited API has no tp_name */'
+        )
+        add(
+            '        int is_store_ = tn_ != NULL && PyUnicode_Check(tn_) && PyUnicode_CompareWithASCIIString(tn_, "Store") == 0;'
+        )
+        add("        Py_XDECREF(tn_);")
+        add("        PyErr_Clear();")
+        add("        if (imports != Py_None || is_store_) {")
+        add(
+            f'            PyErr_SetString(PyExc_TypeError, "store must be a Store of this module ({_c_string(name)[1:-1]}.Store); a store of another module is a different host");'
+        )
+        add("            return NULL;")
+        add("        }")
+        add("        imports = store;  /* before the stores, the first argument was the imports */")
+        add("        store = Py_None;")
+    else:
+        add(
+            f'        PyErr_SetString(PyExc_TypeError, "store must be a Store of this module ({_c_string(name)[1:-1]}.Store)");'
+        )
+        add("        return NULL;")
+    add("    }")
+    if uses_wasi:
+        add("    if (store != Py_None && wasi != Py_None) {")
+        add(
+            '        PyErr_SetString(PyExc_TypeError, "wasi= belongs to the Store: a different configuration is a different store");'
+        )
+        add("        return NULL;")
+        add("    }")
+    add("    StoreObject *store_obj;")
+    add("    if (store == Py_None) {")
+    add(f"        store_obj = store_make(StoreType, {'wasi' if uses_wasi else 'Py_None'});")
+    add("        if (store_obj == NULL) return NULL;")
+    add("    } else {")
+    add("        store_obj = (StoreObject *)store;")
+    add("        Py_INCREF((PyObject *)store_obj);")
+    add("    }")
     add("    InstanceObject *self = (InstanceObject *)PyType_GenericAlloc(type, 0);")
-    add("    if (self == NULL) return NULL;")
-    add(f"    {last}_glue_store_init(&self->core);")
+    add("    if (self == NULL) {")
+    add("        Py_DECREF((PyObject *)store_obj);")
+    add("        return NULL;")
+    add("    }")
+    add("    self->store_obj = store_obj;")
+    add("    self->core.store = &store_obj->st;")
     if tables:
         add("    self->writers = PyList_New(0);")
         add("    if (self->writers == NULL) { Py_DECREF(self); return NULL; }")
     if funcref_args:
         add("    self->refs = PyList_New(0);")
         add("    if (self->refs == NULL) { Py_DECREF(self); return NULL; }")
-    if uses_wasi:
-        add(f"    {last}_p2_init(&self->core);")
-        add(
-            f"    self->core.store->wasi2_py = wasmext_wasi2_new(&self->core.store->wasi2, &self->core, wasi, WasiExitError, WasiSignalError, {_c_string(last)});"
-        )
-        add("    if (self->core.store->wasi2_py == NULL) { Py_DECREF(self); return NULL; }")
     if uses_wasi and not wasi2:
-        add(
-            "    self->core.store->wasi = wasmext_wasi_over((wasmext_wasi2_py *)self->core.store->wasi2_py, &self->core.store->wasi2);"
-        )
-        add("    if (self->core.store->wasi == NULL) { Py_DECREF(self); return NULL; }")
         add(
             f"    {{ wasm_rt_memory_t *m_ = w2c_{prefix}_{mangle('memory')}(&self->core.inst); fusedwasi_p1_bind(self->core.store->wasi, &m_->data, &m_->size); }}"
         )
@@ -2486,6 +2578,27 @@ def generate(
     add("    {NULL, 0, 0, 0, NULL}")
     add("};")
     add("")
+    add("static PyMemberDef Store_members[] = {")
+    add('    {"__weaklistoffset__", T_PYSSIZET, offsetof(StoreObject, weakreflist), READONLY, NULL},')
+    add("    {NULL, 0, 0, 0, NULL}")
+    add("};")
+    add("")
+    add("static PyType_Slot store_slots[] = {")
+    add("    {Py_tp_new, Store_new},")
+    add("    {Py_tp_dealloc, Store_dealloc},")
+    add("    {Py_tp_traverse, Store_traverse},")
+    add("    {Py_tp_clear, Store_clear},")
+    add("    {Py_tp_members, Store_members},")
+    add(
+        f"    {{Py_tp_doc, (void *){_c_string('The host of the instances made in it (who answers the imports of WASI), with its configuration `wasi=`')}}},"
+    )
+    add("    {0, NULL}")
+    add("};")
+    add(
+        f"static PyType_Spec store_spec = {{{_c_string(name + '.Store')}, sizeof(StoreObject), 0, "
+        "Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC, store_slots};"
+    )
+    add("")
     add("static PyType_Slot instance_slots[] = {")
     add("    {Py_tp_new, Instance_new},")
     add("    {Py_tp_dealloc, Instance_dealloc},")
@@ -2569,6 +2682,7 @@ def generate(
         add(
             f'    UncaughtExceptionError = PyErr_NewExceptionWithDoc({_c_string(name + ".UncaughtException")}, "An exception of WebAssembly that nothing caught (.tag, .values)", TrapError, NULL);'
         )
+    add("    StoreType = (PyTypeObject *)PyType_FromSpec(&store_spec);")
     add("    InstanceType = (PyTypeObject *)PyType_FromSpec(&instance_spec);")
     if uses_wasi and not wasi2:
         add("    HostType = (PyTypeObject *)PyType_FromSpec(&host_spec);")
@@ -2578,7 +2692,7 @@ def generate(
         add("    TableType = (PyTypeObject *)PyType_FromSpec(&table_spec);")
         add("    FunctionType = (PyTypeObject *)PyType_FromSpec(&function_spec);")
     add(
-        "    if (!TrapError || !LinkError || !InstanceType"
+        "    if (!TrapError || !LinkError || !StoreType || !InstanceType"
         + (" || !WasiTerminatedError || !WasiExitError || !WasiSignalError" if uses_wasi else "")
         + (" || !HostType" if uses_wasi and not wasi2 else "")
         + (" || !MemoryType" if memories else "")
@@ -2597,6 +2711,7 @@ def generate(
         add('    if (PyModule_AddObjectRef(m, "UncaughtException", UncaughtExceptionError) < 0) goto fail;')
     add('    if (PyModule_AddObjectRef(m, "LinkError", LinkError) < 0) goto fail;')
     add(f'    if (PyModule_AddStringConstant(m, "__host__", {_c_string(host_name)}) < 0) goto fail;')
+    add('    if (PyModule_AddObjectRef(m, "Store", (PyObject *)StoreType) < 0) goto fail;')
     add('    if (PyModule_AddObjectRef(m, "Instance", (PyObject *)InstanceType) < 0) goto fail;')
     if shares_tables:
         add('    if (PyModule_AddObjectRef(m, "Table", (PyObject *)TableType) < 0) goto fail;')

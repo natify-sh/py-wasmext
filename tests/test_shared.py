@@ -104,8 +104,8 @@ _OOB_HOST = r"""
 #include "m_api.h"
 static m_t *m;
 static void report(void) {
-    int32_t v = 0;
-    int rc = m_oob(m, &v);
+    m_oob(m);
+    int rc = m_status(m);
     printf("thread oob: %d (%s)\n", rc, m_trap_message(rc));
 }
 #ifdef _WIN32
@@ -118,9 +118,11 @@ int main(void) {
     int32_t v = 0;
     m = m_new(NULL, &e);
     m_instantiate(m);
-    rc = m_oob(m, &v);
+    m_oob(m);
+    rc = m_status(m);
     printf("oob: %d (%s)\n", rc, m_trap_message(rc));
-    rc = m_ok(m, &v);
+    v = m_ok(m);
+    rc = m_status(m);
     printf("ok after: %d %d\n", rc, v);
 #ifdef _WIN32
     HANDLE t = CreateThread(NULL, 0, other, NULL, 0, NULL);
@@ -130,7 +132,8 @@ int main(void) {
     pthread_create(&t, NULL, other, NULL);
     pthread_join(t, NULL);
 #endif
-    rc = m_ok(m, &v);
+    v = m_ok(m);
+    rc = m_status(m);
     printf("ok after thread: %d %d\n", rc, v);
     m_free(m);
     return 0;
@@ -241,13 +244,13 @@ int main(void) {
     m_instantiate(m);
     int64_t t = 0;
     int32_t r = 0, errno_of_wasi = -1;
-    m_now(m, 0, &t);
+    t = m_now(m, 0);
     printf("clock 0: %lld\n", (long long)t);
-    m_now(m, 1, &t);
+    t = m_now(m, 1);
     printf("clock 1: %lld\n", (long long)t);
-    m_rnd(m, &r);
+    r = m_rnd(m);
     printf("random: %x\n", (unsigned)r);
-    m_nap(m, &errno_of_wasi);
+    errno_of_wasi = m_nap(m);
     printf("sleep: errno %d, slept %llu\n", errno_of_wasi, (unsigned long long)slept);
     m_free(m);
     return 0;
@@ -283,13 +286,13 @@ int main(void) {
     m_t *m = m_new(NULL, &e);
     int rc = m_instantiate(m);
     int32_t v = 0;
-    m_peek(m, &v);
+    v = m_peek(m);
     printf("instantiate %d, peek %d (the _initialize was run)\n", rc, v);
     printf("version %d, counter %lld, ratio %g\n", m_global_version(m), (long long)m_global_counter(m), m_global_ratio(m));
     m_set_global_counter(m, 100);
     m_set_global_ratio(m, 2.5);
     int64_t r = 0;
-    m_counter_plus(m, 1, &r);
+    r = m_counter_plus(m, 1);
     printf("after the set: counter %lld, plus 1 is %lld, ratio %g\n", (long long)m_global_counter(m), (long long)r, m_global_ratio(m));
     m_free(m);
     return 0;
@@ -356,21 +359,23 @@ int main(void) {
     b_set_global_import1(b, 5);  /* the immutable global as a number: it is its value */
     printf("instantiate: %d\n", b_instantiate(b));
     int32_t v = 0;
-    b_tick(b, &v);
+    v = b_tick(b);
     printf("tick: %d\n", v);
-    b_peek(b, &v);
+    v = b_peek(b);
     printf("peek (the memory of a, written by a): %d\n", v);
-    b_count(b, &v);
+    v = b_count(b);
     printf("count (the global of a): %d\n", v);
-    b_version(b, &v);
+    v = b_version(b);
     printf("version (a number): %d\n", v);
     a_set_global_counter(a, 3);  /* a writes the variable that b reads */
-    b_count(b, &v);
+    v = b_count(b);
     printf("count after a wrote it: %d\n", v);
-    rc = b_tick(b, &v);  /* bump of a traps at 3: the trap goes through the link as it is */
+    v = b_tick(b);  /* bump of a traps at 3: the trap goes through the link as it is */
+    rc = b_status(b);
     printf("tick traps: %d (%s)\n", rc != 0, b_trap_message(rc));
     a_set_global_counter(a, 4);
-    rc = b_tick(b, &v);
+    v = b_tick(b);
+    rc = b_status(b);
     printf("tick again: %d %d\n", rc, v);
     b_free(b);
     a_free(a);
@@ -545,12 +550,13 @@ int main(int argc, char **argv) {
     b_t *b = b_new(NULL, &e);
     a_instantiate(a);
     b_instantiate(b);
-    a_ok(a, &v);  /* both runtimes are set up before any fault: the handler of the signals is then the one of b, unless they chain */
-    b_ok(b, &v);
+    v = a_ok(a);  /* both runtimes are set up before any fault: the handler of the signals is then the one of b, unless they chain */
+    v = b_ok(b);
     int a_first = argc > 1 && strcmp(argv[1], "a") == 0;
     for (int i = 0; i < 2; i++) {  /* the library whose first call is later has its handler first in the chain */
         int use_a = (i == 0) == a_first;
-        int rc = use_a ? a_oob(a, &v) : b_oob(b, &v);
+        v = use_a ? a_oob(a) : b_oob(b);
+        int rc = use_a ? a_status(a) : b_status(b);
         printf("%s oob: %s\n", use_a ? "a" : "b", rc != 0 ? "trap" : "no trap");
     }
     printf("alive\n");

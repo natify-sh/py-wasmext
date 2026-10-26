@@ -341,15 +341,15 @@ int main(void) {
     if (tb_link_table_import0(b, (const tb_export *)&rec, msg, sizeof msg)) { printf("link: %s\n", msg); return 1; }
     printf("instantiate: %d\n", tb_instantiate(b));
     int32_t r = -1; int t;
-    t = tb_call(b, 0, &r); printf("b slot 0: %d %d\n", t, r);
-    t = tb_call(b, 3, &r); printf("b slot 3: %d %d\n", t, r);
-    t = ta_call(a, 3, &r); printf("a slot 3: %d %d\n", t, r);
-    t = tb_call(b, 1, &r); printf("b slot 1: %d (%s)\n", t, t ? tb_trap_message(t) : "");
-    t = tb_call(b, 0, &r); printf("b slot 0 again: %d %d\n", t, r);
+    r = tb_call(b, 0); t = tb_status(b); printf("b slot 0: %d %d\n", t, r);
+    r = tb_call(b, 3); t = tb_status(b); printf("b slot 3: %d %d\n", t, r);
+    r = ta_call(a, 3); t = ta_status(a); printf("a slot 3: %d %d\n", t, r);
+    r = tb_call(b, 1); t = tb_status(b); printf("b slot 1: %d (%s)\n", t, t ? tb_trap_message(t) : "");
+    r = tb_call(b, 0); t = tb_status(b); printf("b slot 0 again: %d %d\n", t, r);
     tb_unlink_tables(b);
-    t = ta_call(a, 3, &r); printf("a slot 3 after the unlink: %d (%s)\n", t, t ? ta_trap_message(t) : "");
+    r = ta_call(a, 3); t = ta_status(a); printf("a slot 3 after the unlink: %d (%s)\n", t, t ? ta_trap_message(t) : "");
     tb_free(b);
-    t = ta_call(a, 0, &r); printf("a slot 0: %d %d\n", t, r);
+    r = ta_call(a, 0); t = ta_status(a); printf("a slot 0: %d %d\n", t, r);
     ta_free(a);
     return 0;
 }

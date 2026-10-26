@@ -16,6 +16,16 @@ What was wrong before this was built (kept as the reason for it):
 - if the fingerprint was renewed after the compatibility was checked, a module built before the renewal still refused, because the old reader compared for equality;
 - the convention of the call of a function of wasm2c (the instance first, `struct wasm_multi_<codes>` for several results) is in no check (still true).
 
+## Alpha does not keep the ABI (decided 2026-10-26)
+
+**While the package is an alpha (`L` = `0xA`), the ABI is not kept strictly.** Everything below (the number, the `floor`, the declaration, the tests, the capsules) is the mechanism for the policy of the later versions; it is built and checked now so that it works on the day the library becomes stable (a beta at the earliest, `L` = `0xB`), but nothing in the alpha is frozen: the library changes all the time, and a stable ABI cannot be fixed while it does. In an alpha:
+
+- a change of the public surface (the C API of a module, the record, the constants, the stub) **may break** what was built before; it does not need a new `x`, `y` or even a new serial;
+- the **declaration** `abi/current.json` is still kept equal to the code: the change is made, the declaration is renewed with `python -m tests.abi_surface --update`, and `tests/test_abi_declaration.py` passes again; the file shows in a diff what the alpha changed;
+- the **fingerprint** of `src/wasmext/c/` (`_abi.py`) is renewed when those files change, as before;
+- the number `WASMEXT_ABI` is raised when a release is made or when two alphas must not link (a serial), not for each change;
+- the rules of the next section ("What the ABI is", the table of the version) are what applies **from the first beta**; the tests of the rule (`required_bump`) keep checking that the rule itself is right.
+
 ## What the ABI is (decided)
 
 The ABI is the **public contract between modules built apart**, and only that:

@@ -26,17 +26,22 @@ int main(void) {
     mod_set_import0(m, host_log, &state);
     rc = mod_instantiate(m);
     printf("instantiate: %d\n", rc);
-    rc = mod_add(m, 2, 3, &r0);
+    r0 = mod_add(m, 2, 3);
+    rc = mod_status(m);
     printf("add: %d %d\n", rc, r0);
     rc = mod_twice(m, 7, &r0, &r1);
     printf("twice: %d %d %d\n", rc, r0, r1);
-    rc = mod_call_log(m, 1, &r0);
+    r0 = mod_call_log(m, 1);
+    rc = mod_status(m);
     printf("call_log: %d %d\n", rc, r0);
-    rc = mod_call_log(m, 2, &r0);
+    r0 = mod_call_log(m, 2);
+    rc = mod_status(m);
     printf("call_log again: %d %d\n", rc, r0);
-    rc = mod_call_log(m, 3, &r0);  /* the third call of the host function fails */
+    r0 = mod_call_log(m, 3);  /* the third call of the host function fails */
+    rc = mod_status(m);
     printf("call_log failing: %s, host calls %d\n", rc == MOD_TRAP_HOST ? "TRAP_HOST" : "other", state.calls);
-    rc = mod_add(m, 40, 2, &r0);
+    r0 = mod_add(m, 40, 2);
+    rc = mod_status(m);
     printf("add after the failure: %d %d\n", rc, r0);
     rc = mod_trap(m);
     printf("trap: %d (%s)\n", rc != 0, mod_trap_message(rc));

@@ -57,8 +57,9 @@ def test_the_declaration_is_the_code(declared: Surface, now: Surface) -> None:
         "the public surface of the ABI is not the one that abi/current.json declares. What differs "
         f"(the version it needs: x if something was removed or changed, y if only something was added):\n\n{describe(declared, now)}\n\n"
         f"By the rule that is a change that needs: {required_bump(declared, now)!r} (none: z or a serial of a pre-release).\n"
-        "Check by hand that modules built before still link and work (docs/abi_policy.md), update the declaration with "
-        "`python -m tests.abi_surface --update`, and set the version that fits the change."
+        "In an alpha the ABI is not kept strictly (docs/abi_policy.md, 'Alpha does not keep the ABI'): update the declaration with "
+        "`python -m tests.abi_surface --update`. From the first beta, check by hand that modules built before still link and work, "
+        "and set the version that fits the change."
     )
 
 

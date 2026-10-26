@@ -96,6 +96,8 @@ def _library() -> Any:
             _share_traps(_lib)
         _lib.@NAME@_new.restype = _c.c_void_p
         _lib.@NAME@_new.argtypes = [_c.c_void_p, _c.POINTER(_c.c_int)]
+        _lib.@NAME@_status_ptr.restype = _c.c_void_p
+        _lib.@NAME@_status_ptr.argtypes = [_c.c_void_p]
         _lib.@NAME@_free.restype = None
         _lib.@NAME@_free.argtypes = [_c.c_void_p]
         _lib.@NAME@_instantiate.restype = _c.c_int
@@ -318,6 +320,7 @@ class Instance:
         if not handle:
             raise OSError(error.value, os.strerror(error.value))
         self._h = handle
+        self._status = _c.c_int.from_address(lib.@NAME@_status_ptr(handle))  # the code of the last call of an export, where the library keeps it (alive as long as the handle is)
         self._finalizer = weakref.finalize(self, _free, handle, lib)
         self._owners: list[Any] = []  # the instances whose memory, globals or code this one uses: they stay alive with it
         self._writers: list[Any] = []  # the instances that imported a table of this one and may have put functions of their own in it: they live as long as this one
@@ -566,7 +569,13 @@ class Instance:
         setter.argtypes = [_c.c_void_p, prototype, _c.c_void_p]
         setter(self._h, thunk, None)
 
-    def _call(self, cname: str, params: tuple[str, ...], results: tuple[str, ...], args: tuple[Any, ...]) -> Any:
+    def _call(self, cname: str, params: tuple[str, ...], results: tuple[str, ...], args: tuple[Any, ...], direct: bool = False) -> Any:
+        if direct and len(results) == 1 and results[0] in _SIMPLE:  # an export with a number as its result answers the number, and its code is in `self._status`
+            values = [self._funcref_arg(a) if t == "funcref" else _CONVERT[t](a) for t, a in zip(params, args)]
+            value = _function(cname, _CTYPE[results[0]], [_c.c_void_p, *[_ARG[t] for t in params]])(self._h, *values)
+            if self._status.value:
+                raise self._error(self._status.value)
+            return value
         function = _function(
             cname,
             _c.c_int,
@@ -670,11 +679,12 @@ def _fast_method(name: str, cname: str, params: tuple[str, ...], results: tuple[
     """The method of an export whose parameters and result are numbers (at most one result): written once for its signature, so a call does not build its types,
     its conversions or its loops again. The checks and the conversions are those of `Instance._call`."""
     count = len(params)
-    argtypes = [_c.c_void_p, *[_ARG[t] for t in params], *[_c.POINTER(_CTYPE[t]) for t in results]]
+    argtypes = [_c.c_void_p, *[_ARG[t] for t in params]]
+    restype = _CTYPE[results[0]] if results else _c.c_int  # an export with a number as its result answers the number; its code is `self._status`
     cache: list[Any] = []
 
     def resolve() -> Any:
-        function = _function(cname, _c.c_int, argtypes)
+        function = _function(cname, restype, argtypes)
         cache.append(function)
         return function
 
@@ -685,21 +695,21 @@ def _fast_method(name: str, cname: str, params: tuple[str, ...], results: tuple[
     lines += ["    try: function = _cache[0]", "    except IndexError: function = _resolve()"]
     call = ["self._h", *[f"_convert{i}({n})" for i, n in enumerate(names)]]
     if results:
-        lines.append("    out = _out()")
-        call.append("_byref(out)")
-    lines.append(f"    code = function({', '.join(call)})")
-    lines.append("    if code: raise self._error(code)")
-    lines.append("    return out.value" if results else "    return None")
+        lines.append(f"    value = function({', '.join(call)})")
+        lines.append("    code = self._status.value")
+        lines.append("    if code: raise self._error(code)")
+        lines.append("    return value")
+    else:
+        lines.append(f"    code = function({', '.join(call)})")
+        lines.append("    if code: raise self._error(code)")
+        lines.append("    return None")
     namespace: dict[str, Any] = {
         "_cache": cache,
         "_resolve": resolve,
-        "_byref": _c.byref,
         "_msg": f"{name.replace('%', '%%')}() takes exactly {count} argument{'' if count == 1 else 's'} (%d given)",
     }
     for i, t in enumerate(params):
         namespace[f"_convert{i}"] = _CONVERT[t]
-    if results:
-        namespace["_out"] = _CTYPE[results[0]]
     exec("\n".join(lines), namespace)  # noqa: S102 -- the text is made here from the types of the module, never from the user's data
     method = namespace["method"]
     method.__name__ = method.__qualname__ = name
@@ -715,7 +725,7 @@ def _method(name: str, cname: str, params: tuple[str, ...], results: tuple[str, 
     def method(self: Instance, *args: Any) -> Any:
         if len(args) != count:
             raise TypeError(f"{name}() takes exactly {count} argument{'' if count == 1 else 's'} ({len(args)} given)")
-        return self._call(cname, params, results, args)
+        return self._call(cname, params, results, args, True)
 
     method.__name__ = method.__qualname__ = name
     method.__doc__ = _signature(name, params, results)

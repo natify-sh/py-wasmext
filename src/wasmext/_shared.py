@@ -4,8 +4,9 @@ exports it, `<name>_shared.c`, on the typed functions of `<name>_glue.h`. No Pyt
 
 The life of an instance: `<name>_new(&config, &error)` (WASI is made and bound there), `<name>_set_import<k>(m, function, user)` for each import that is not WASI's
 (a host function is `result f(void *user, parameters..., int *trapped)`: it answers through `trapped`, nonzero when it failed, and keeps its error itself, as the
-protocol of errors says), `<name>_instantiate(m)` (0, or the code of a trap), then the exports as `int <name>_<export>(m, parameters..., results...)`, which answer 0 or the
-code of the trap (`<name>_trap_message(code)` is its text); `<name>_free(m)`.
+protocol of errors says), `<name>_instantiate(m)` (0, or the code of a trap), then the exports: `int <name>_<export>(m, parameters..., results...)` answers 0 or the code of the trap (`<name>_trap_message(code)` is its
+text), except an export with one number as its result, `T <name>_<export>(m, parameters...)`, which answers the number (0 if the call trapped); the code of the last call of
+any export is `<name>_status(m)` (and the int itself, for a wrapper that reads it without a call, `<name>_status_ptr(m)`); `<name>_free(m)`.
 """
 
 from __future__ import annotations
@@ -25,6 +26,8 @@ _RESERVED = {
     "instantiate",
     "trap_message",
     "wasi_end",
+    "status",
+    "status_ptr",
     "exception",
     "config",
     "t",
@@ -581,6 +584,11 @@ def generate_shared(
         "/* How the WASI program ended: 0 not yet, 1 proc_exit (`*value` is the code), 2 proc_raise (the signal), 3 a trap of a command. */"
     )
     A(f"WASMEXT_API int {last}_wasi_end({last}_t *m, uint32_t *value);")
+    A(
+        "/* The code of the last call of an export of this instance: 0, or the trap. An export with one number as its result answers the number, so this is where it says it failed; the pointer is the same int (valid as long as the instance is). */"
+    )
+    A(f"WASMEXT_API int {last}_status(const {last}_t *m);")
+    A(f"WASMEXT_API const int *{last}_status_ptr(const {last}_t *m);")
     for item in skipped or ():
         if "is not an attribute" not in item:  # that is about the names of Instance
             A(f"/* not here: {_cc(item)} */")
@@ -713,6 +721,7 @@ def generate_shared(
         C("    struct fusedwasi_p2_preopen *preopens;")
         C("    size_t npreopens;")
         C("    fusedwasi_p2_stream streams[3];")
+    C("    int status;  /* the code of the last call of an export: 0, or the trap (see `status`) */")
     if tags:
         C(
             "    int tag; int nvalues; wasmext_value values["
@@ -784,6 +793,14 @@ def generate_shared(
     C("")
     C(f"int {last}_trap_is_exception(int code) {{")
     C("    return code == (int)WASM_RT_TRAP_UNCAUGHT_EXCEPTION;")
+    C("}")
+    C("")
+    C(f"int {last}_status(const {last}_t *m) {{")
+    C("    return m->status;")
+    C("}")
+    C("")
+    C(f"const int *{last}_status_ptr(const {last}_t *m) {{")
+    C("    return &m->status;")
     C("}")
     C("")
     C(f"int {last}_wasi_end({last}_t *m, uint32_t *value) {{")
@@ -1158,15 +1175,24 @@ def generate_shared(
     for i, (name, func) in enumerate(funcs):
         ident = _ident(name, taken)
         params = "".join(f", {_in(t, f'a{j}')}" for j, t in enumerate(func.params))
-        results = "".join(f", {_out(t, f'r{k}')}" for k, t in enumerate(func.results))
+        direct = len(func.results) == 1 and func.results[0] in ("i32", "i64", "f32", "f64")
+        results = "" if direct else "".join(f", {_out(t, f'r{k}')}" for k, t in enumerate(func.results))
+        returns = _API_TYPE[func.results[0]] if direct else "int"
         sig = f"{name}({', '.join(func.params)}) -> {', '.join(func.results) or 'nothing'}"
-        A(f"/* {_cc(sig)}: 0, or the code of the trap */")
+        if direct:
+            A(
+                f"/* {_cc(sig)}: the result; whether the call trapped is `{last}_status` (0, or the code of the trap), and the result is 0 then */"
+            )
+        else:
+            A(f"/* {_cc(sig)}: 0, or the code of the trap (also in `{last}_status`) */")
         model.exports.append((name, f"{last}_{ident}", func))
-        A(f"WASMEXT_API int {last}_{ident}({last}_t *m{params}{results});")
-        C(f"int {last}_{ident}({last}_t *m{params}{results}) {{")
+        A(f"WASMEXT_API {returns} {last}_{ident}({last}_t *m{params}{results});")
+        C(f"{returns} {last}_{ident}({last}_t *m{params}{results}) {{")
         C("    api_enter();")
         if i == reactor_init:
-            C("    if (m->core.initialized) return 0;  /* the reactor was initialized when the instance was made */")
+            C(
+                "    if (m->core.initialized) { m->status = 0; return 0; }  /* the reactor was initialized when the instance was made */"
+            )
         C("    int trapped = 0;")
         args = "".join(f", {_arg_expr(t, f'a{j}', _CTYPE[t])}" for j, t in enumerate(func.params))
         call = f"{last}_call{i}(&m->core.inst{args}, &trapped)"
@@ -1196,13 +1222,14 @@ def generate_shared(
                 "    if (trapped == (int)WASMEXT_TRAP_HOST && m->core.store->wasi != NULL && (m->core.store->wasi->finished == FUSEDWASI_P1_END_EXIT || m->core.store->wasi->finished == FUSEDWASI_P1_END_SIGNAL))"
             )
             C("        trapped = (int)WASMEXT_TRAP_ENDED;")
-        C("    if (trapped) return trapped;")
+        C("    m->status = trapped;")
+        C(f"    if (trapped) return {'0' if direct else 'trapped'};")
         if len(func.results) > 1:
             for k, t in enumerate(func.results):
                 C(_store_result(t, f"r{k}", f"r.{_MULTI_CODE[t]}{k}", _API_TYPE.get(t, "")))
-        elif func.results:
+        elif func.results and not direct:
             C(_store_result(func.results[0], "r0", "r", _API_TYPE.get(func.results[0], "")))
-        C("    return 0;")
+        C(f"    return {f'({returns})r' if direct else '0'};")
         C("}")
         C("")
     # the exported memories

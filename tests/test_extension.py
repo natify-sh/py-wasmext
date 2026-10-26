@@ -122,19 +122,19 @@ def test_a_call_through_the_wrapper_for_ctypes_costs_little_more_than_the_raw_ca
     nop.restype, nop.argtypes = ctypes.c_int, [ctypes.c_void_p]
     add = getattr(library, cnames["add"])
     add.restype, add.argtypes = (
-        ctypes.c_int,
-        [ctypes.c_void_p, ctypes.c_int32, ctypes.c_int32, ctypes.POINTER(ctypes.c_int32)],
-    )
-    handle, out = inst._h, ctypes.c_int32()  # pyright: ignore[reportPrivateUsage]
+        ctypes.c_int32,
+        [ctypes.c_void_p, ctypes.c_int32, ctypes.c_int32],
+    )  # the result is the value of the call
+    handle = inst._h  # pyright: ignore[reportPrivateUsage]
 
     def best(function: Callable[[], Any]) -> float:
         function()
         return min(timeit.repeat(function, number=5000, repeat=9)) / 5000
 
     nop_ratio = best(inst.nop) / best(lambda: nop(handle))
-    add_ratio = best(lambda: inst.add(1, 2)) / best(lambda: add(handle, 1, 2, ctypes.byref(out)))
-    assert nop_ratio < 3.0, f"nop through the wrapper costs {nop_ratio:.1f} times the raw call"
-    assert add_ratio < 2.5, f"add through the wrapper costs {add_ratio:.1f} times the raw call"
+    add_ratio = best(lambda: inst.add(1, 2)) / best(lambda: add(handle, 1, 2))
+    assert nop_ratio < 2.5, f"nop through the wrapper costs {nop_ratio:.1f} times the raw call"
+    assert add_ratio < 2.4, f"add through the wrapper costs {add_ratio:.1f} times the raw call"
 
 
 def test_several_results_come_back_as_a_tuple(ext: Any) -> None:

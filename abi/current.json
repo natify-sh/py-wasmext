@@ -11,8 +11,8 @@
         "<NAME>_TRAP_NO_MEMORY": "0x7001"
       },
       "functions": {
-        "<name>_add": "int <name>_add(<name>_t *m, int32_t a0, int32_t a1, int32_t *r0)",
-        "<name>_call_host": "int <name>_call_host(<name>_t *m, int32_t a0, int32_t *r0)",
+        "<name>_add": "int32_t <name>_add(<name>_t *m, int32_t a0, int32_t a1)",
+        "<name>_call_host": "int32_t <name>_call_host(<name>_t *m, int32_t a0)",
         "<name>_export_find": "int <name>_export_find(<name>_t *m, const char *name, void *owner, <name>_export *out)",
         "<name>_free": "void <name>_free(<name>_t *m)",
         "<name>_funcref_call0": "int <name>_funcref_call0(const void *funcref, int32_t a0, int32_t *r0)",
@@ -36,6 +36,8 @@
         "<name>_pick": "int <name>_pick(<name>_t *m, const void *a0, void **r0)",
         "<name>_set_global_counter": "void <name>_set_global_counter(<name>_t *m, int32_t value)",
         "<name>_set_import0": "void <name>_set_import0(<name>_t *m, <name>_import0_fn function, void *user)",
+        "<name>_status": "int <name>_status(const <name>_t *m)",
+        "<name>_status_ptr": "const int * <name>_status_ptr(const <name>_t *m)",
         "<name>_table_export": "void <name>_table_export(void *table, void *owner, <name>_export *out)",
         "<name>_table_free": "void <name>_table_free(void *table)",
         "<name>_table_get_ref": "void * <name>_table_get_ref(const void *table, uint32_t index)",
@@ -159,6 +161,8 @@
         "<name>_memory_big_pin": "void <name>_memory_big_pin(<name>_t *m, int pin)",
         "<name>_new": "<name>_t * <name>_new(const <name>_config *config, int *error)",
         "<name>_set_import0": "void <name>_set_import0(<name>_t *m, <name>_import0_fn function, void *user)",
+        "<name>_status": "int <name>_status(const <name>_t *m)",
+        "<name>_status_ptr": "const int * <name>_status_ptr(const <name>_t *m)",
         "<name>_thread_free": "void <name>_thread_free(void)",
         "<name>_trap_is_exception": "int <name>_trap_is_exception(int code)",
         "<name>_trap_message": "const char * <name>_trap_message(int code)",

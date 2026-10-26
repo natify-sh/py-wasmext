@@ -234,7 +234,8 @@ int main(void) {
     if (tu_link_table_import0(u, &rec, msg, sizeof msg)) { printf("link: %s\n", msg); return 1; }
     if (tu_instantiate(u)) { puts("instantiate failed"); return 1; }
     int32_t r = -1;
-    trapped = tu_call(u, 3, &r);
+    r = tu_call(u, 3);
+    trapped = tu_status(u);
     printf("slot 3: %d %d\n", trapped, r);
     tf_t *f = tf_new(NULL, &err);
     if (tf_instantiate(f)) { puts("f instantiate failed"); return 1; }
@@ -243,7 +244,8 @@ int main(void) {
     printf("slot 0 empty: %d\n", tu_table_is_null(table, 0));
     printf("set: %d\n", tu_table_set(table, 0, five.funcref));
     printf("slot 0 is five: %d, empty: %d\n", tu_table_is(table, 0, five.funcref), tu_table_is_null(table, 0));
-    trapped = tu_call(u, 0, &r);
+    r = tu_call(u, 0);
+    trapped = tu_status(u);
     printf("slot 0: %d %d\n", trapped, r);
     void *ref = tu_table_get_ref(table, 0);
     int k = tu_funcref_type(ref);
@@ -259,7 +261,8 @@ int main(void) {
     printf("grow: %d size %u\n", (int)before, (unsigned)tu_table_size(table));
     printf("grow too much: %d\n", (int)tu_table_grow(table, 9));
     tu_unlink_tables(u);
-    trapped = tu_call(u, 3, &r);
+    tu_call(u, 3);
+    trapped = tu_status(u);
     printf("slot 3 after the unlink: %d\n", trapped);
     tu_free(u);
     tf_free(f);

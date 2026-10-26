@@ -390,7 +390,7 @@ there takes the one of `wasi_python.h`.
 
 What differs from the table of stage 1:
 
-- **One more hook, `end`** (`proc_exit`, `proc_raise`), called before the program is marked as over. The plan said the core would only
+- **One more hook, `end`** (`proc_exit`, `proc_raise`), called before the program is marked as over (**gone since 2026-10-26**: the host reads the state, `exited` and `exit_code` for `proc_exit`, `finished` and `end_value` for `proc_raise`; see the Update at the top of "Design: WASI"). The plan said the core would only
   record the end and the front end would make the exception later; the hook keeps the glue as it was (the exception is set at the
   moment of the call, as before) and costs one pointer. Python's `end` raises `WasiExit` / `WasiSignal`.
 - **`wasmext_wasi_create(config, &err, &bad)`** is the plain-C constructor; it copies the configuration (the host may free it at once).
@@ -493,7 +493,7 @@ bound there), `<name>_set_import<k>(m, f, user)` for each import that is not WAS
 `<name>_instantiate(m)` (0 or the code of a trap), each export as `int <name>_<export>(m, params..., results...)` (0 or the code of a trap; `<name>_trap_message(code)` is its text) -- **except an export with one number (`i32`, `i64`, `f32`, `f64`) as its result, which since 2026-10-26 answers the number as `T <name>_<export>(m, params...)`; the code of the last call of any export is `<name>_status(m)` (`<name>_status_ptr(m)` is the int itself, for the wrapper for ctypes, which reads it without a call: 875 ns for a call with an out parameter, 501 ns with the value returned)** -- and `<name>_free(m)`.
 A module that imports a global or a memory, or has several results in an import, is served now (see "Then built" in the audit below); `v128` in an import was refused with a clear message (served now, as 16 bytes behind a pointer; see the row `v128` in a signature).
 Checked by `tests/test_shared.py` with a host written in C, on Linux, macOS and Windows (MSVC) in CI. What was open when 6a was written is closed: Windows runs it, the configuration of WASI has the
-hooks of the clock, random bytes, sleep and the end of the program, a reactor is initialized by `_instantiate`, the globals have accessors, the link record for linking instances is in the API.
+hooks of the clock, random bytes, sleep and the end of the program (the last one is gone, see the Update at the top of this section), a reactor is initialized by `_instantiate`, the globals have accessors, the link record for linking instances is in the API.
 
 **The products, decided** (for stage 7): `--extension` (the default when no product is named), `--shared` and `--exe` are *one product for each run*, not combinable: a library must not hold a
 `main`, and an executable has its own, so they are separate builds of the same C (the C of wasm2c and the glue are shared by the work directory and not made twice). Naming `--shared` or `--exe`

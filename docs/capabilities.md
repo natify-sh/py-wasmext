@@ -53,6 +53,8 @@ So: calls that are plain (Redis GET / SET: a string in, a value out) can be plug
 
 ## 3. The host of WASI 0.1 and of 0.2 are bound differently
 
+> **Since 2026-10-26** the state of 0.1 is over the state of 0.2 (`fusedwasi_p1_create(&config, &p2_state, ...)`; every WASI module has `store->wasi2`, and a module of 0.1 has `store->wasi` as well): the arguments, environment, clocks, random bytes, sleep, standard streams, files and the exit are those of the state of 0.2 (`fusedwasi_p1_over_p2.md`). The table is about the *binding* of the two families (state on the heap, `fn` of the slot, memory), which is still as it says.
+
 The same idea (the state in the instance, `fn` and `user` in the slot), two shapes:
 
 | | p1 | p2 |

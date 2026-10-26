@@ -1,6 +1,6 @@
 # One state in fusedwasi: WASI 0.1 on top of WASI 0.2 (design, 2026-10-26)
 
-Status: **decided by the owner on 2026-10-26** ("take one state, as Wasmtime does, now, so that it is not redone later"); this reverses the entries that dropped `p1-on-p2` and set `fusedwasi_unification.md` aside. **Nothing here is built.** The work of the Store in wasmext (`WASI_TARGET_PLAN.md`, C2a) stops after its part 1 (`a7e4a4c`) until this is done in fusedwasi, as the owner asked from the start: fusedwasi first, then wasmext and wasmhost. Every change is made in both twins (C and Python) with the parity tests.
+Status: **decided by the owner on 2026-10-26** ("take one state, as Wasmtime does, now, so that it is not redone later"); this reverses the entries that dropped `p1-on-p2` and set `fusedwasi_unification.md` aside. **Built so far (2026-10-26): the clocks, random bytes, sleep, arguments and environment (F2 with the first group of F3), the standard streams (stage A) and the files (stage B); see "Status" at the end.** The work of the Store in wasmext (`WASI_TARGET_PLAN.md`, C2a) stops after its part 1 (`a7e4a4c`) until this is done in fusedwasi, as the owner asked from the start: fusedwasi first, then wasmext and wasmhost. Every change is made in both twins (C and Python) with the parity tests.
 
 ## What it is, and what it is not
 
@@ -56,3 +56,19 @@ Status: **decided by the owner on 2026-10-26** ("take one state, as Wasmtime doe
 4. **F3:** p1 over the core, **in place, with no second copy of the code kept in a commit**: the calls that hold no descriptor table (the environment and the arguments, the clocks, `random_get`) move first, one group after another, each commit with the suite at 72 of 72; then **the descriptor table and everything that uses it** (`fd_*`, `path_*`, `poll_oneoff`, `sock_*`, `proc_exit`) move **together in one change**, because they share the table and cannot be half in the old state and half in the new; the old code of those calls (and the files code of p1, C and Python) is deleted in that same change. While it is worked on, a copy of the old p1 may sit in the working tree for a differential run of the same programs through the old and the new (never committed).
 5. **F4:** what is left: the files code of p1 and its backends are gone in both twins, the parity script and the tests of fusedwasi green, the official suite 72 of 72 through wasmext (extensions and native executables, three systems in CI).
 6. **Then wasmext:** one state in the Store (the Store of `WASI_TARGET_PLAN.md`, C2a continues), the glue, the two `*_python.h` merged, the library config, the executable; then the originals, the registry of the functions, and wasmhost.
+
+## Status (2026-10-26)
+
+Done, in fusedwasi (C and Python), wasmext and wasmhost, with the suite at 72 of 72 and the tests of the three repositories green locally:
+
+1. **State and contract** (F2 and the first group of F3): `fusedwasi_p1_state` has a pointer to the `fusedwasi_p2_state` and no copy of the arguments, the environment, the clocks, the random source or the sleep; one `clock` function for the four clocks.
+2. **Stage A, the standard streams:** `fd_read` and `fd_write` on 0, 1 and 2 go through `s->std[i]` (or the descriptors of the process); the hooks `stdin_read` and `stdout_write` are gone from the core, the glue, the library and wasmhost. A stream tells the errno of the system when it fails.
+3. **Stage B, the files:** the file backend of 0.1 (about 900 lines of C for Windows, the POSIX block of the core, 1100 lines of Python for the two systems) is replaced by one backend over the system layer of 0.2 (`fusedwasi_p2_walk_path_with`, `fusedwasi_p2_sys_*`; in Python `fusedwasi.p2.wasi_p2_filesystem.sys_*`). The one difference found against the old behaviour is in the walk: a link with a slash after it, where links are not followed, is `ENOTDIR` for 0.1 (an option of the walk).
+
+**Not done, and what is planned:**
+
+- **Stage C, the end of the program** (`proc_exit`, `proc_raise`): the hook `end` of 0.1 becomes `exit` of the state of 0.2 for `proc_exit` (one record of the end for both families: `exited`, `exit_code`), and `proc_raise` keeps `finished`/`end_value` of 0.1; the glue of wasmext raises `WasiExit`/`WasiSignal` from them in `raise_trap_code`, and the library and the executable read the end from the state instead of `api_ended` / `run_ended`. Next, after the CI of stage B is green on the three systems.
+- **The table of descriptors stays 0.1's own, on purpose:** the numbers of the descriptors, the rights, the position of a file, `poll_oneoff` and `proc_raise` are what the design above lists in the column "Kept in 0.1" (Wasmtime keeps them in `p1.rs` too). The duplicated code is what was removed; the handles of the table of 0.2 are not used by 0.1. If a module of 0.1 and one of 0.2 in one store ever have to share an open file, this is where it is revisited.
+- **Windows and macOS** were not run locally: the backend of Windows is now `wasi_p2_fs_win32.h` for both families, and CI is the check.
+- **Documents** that still describe the old files (`fusedwasi_unification.md`, `capabilities.md`, `WASI_TARGET_PLAN.md`, the README of fusedwasi) are updated after stage C.
+- **Then, as before:** the Store of wasmext (C2a: Python `Store`, `Instance(store, ...)`), the versioned record of the store for artifacts built apart (C7), wasmhost stage 7.

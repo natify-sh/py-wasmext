@@ -4,6 +4,47 @@
 
 Status: **decided on 2026-10-26: the decisions are in [WASI_TARGET_PLAN.md](WASI_TARGET_PLAN.md), "The context: decisions", and where this file differs from that section, that section is right** (the context is the main way for modules to talk; the host of an artifact has all the families and a registry of all its functions; one flag, on the host only; the structure `Context` = `Host` + `Runtime`, `Instance`; the steps C0-C8). Step C1 is built. The text below is the background and the older reasoning, kept as it was: an idea, not built. Nothing here is in the code. It is written down so that it is not only in a conversation, and for the day a consumer asks for what it would give (see "What it would give"). The first form of the idea was a *domain* that instances join and leave (`attach`/`detach`); it is kept at the end as considered and replaced. The word *store* is not used: in wasmtime and the component model it means a runtime with an engine, and this is not that.
 
+## C7, a draft (2026-10-26, for review; nothing of this is built)
+
+The store that is made by one artifact (A) and used by an instance of a module of another artifact (B). What B needs from it, and what B must not touch.
+
+**The principle: the state of the host never crosses.** The state of WASI (`fusedwasi_p2_state`, and `fusedwasi_p1_state` over it) is **opaque to B**: it is allocated, filled and freed by A, and only code of A reads its fields. B reaches it only through function pointers in the record below, so B needs no knowledge of the layout of the state, and fusedwasi needs no version and no size field in its states for this (this corrects what was said earlier in the chat: the layout of the states would have had to be versioned only if B ran its *own* copy of the host on the state of A, which this draft does not allow). What does cross is the record and the arguments of its functions.
+
+**The record `wasmext_store`** (a capsule `wasmext.store.v<X>` for CPython, a pointer for any other host; in the manner of `wasmext_export` and `wasmext_traps`; it grows only at its end):
+
+```c
+typedef struct {
+    uint32_t size;      /* sizeof of this struct for the artifact that made it */
+    uint32_t abi;       /* WASMEXT_ABI of that artifact: what it provides */
+    uint32_t floor;     /* the lowest WASMEXT_ABI of a reader that can use this record */
+    uint32_t runtime;   /* WASMEXT_RUNTIME: the layout of the structs of the wasm2c runtime (a mismatch is a LinkError) */
+    uint32_t families;  /* bits: 1 = WASI 0.1 in the host, 2 = WASI 0.2, 4 = the host answers any WASI module (host_full) */
+    void *store;        /* the store of A: the first argument of every function below; opaque */
+    const wasmext_traps *traps;   /* the stack of entries of the runtime of A (the capsule that exists) */
+    /* identity and lifetime */
+    void (*retain)(void *store);              /* an instance of another artifact is bound: the counter of active members */
+    void (*release)(void *store);
+    /* the host */
+    int (*bind_import)(void *store, const char *module, const char *field, const char *signature, void **fn, void **user);
+        /* 0, or an error (the message by `error`): the function of the host of A that answers the import, and its `user` (a view of the instance, below) */
+    void *(*attach)(void *store, void *memory_base, uint64_t *memory_size);   /* an instance joins: its memory; returns the `user` of its imports */
+    void (*detach)(void *store, void *user);
+    /* what Python or the host makes for the module, owned by the arena of the store */
+    int (*own)(void *store, void *object, void (*free_fn)(void *));
+    /* errors and the end of one instance */
+    const char *(*error)(void *store);        /* the message of the last refusal, for a LinkError that names the import */
+    int (*ended)(void *store, void *user, uint32_t *value);   /* how the instance of this `user` ended (0: it has not) */
+} wasmext_store;
+```
+
+**Minimal for the first version** (what C2a-C5 with a store of one artifact already need, moved behind pointers): `retain`/`release`, `bind_import`, `attach`/`detach`, `own`, `error`, `ended`, and the existing `traps`. **Later, in a version that adds at the end:** the registry of the functions (`module_instance` to owner, for a `funcref` that crosses), the identity of tags, `close` with the counter of active calls, the shared locking.
+
+**What each function means for the code that exists:** `bind_import` is the table `fn[slot]`/`user[slot]` of the glue (`<last>_p1_import<k>`, `<last>_p2_import<k>`) made generic: the function is one of the registry of the host of A (all 46 + 201 functions when `host_full`), and `user` is what `attach` returned, a small view of the instance (its memory) in front of the shared resources, which is the piece the plan calls "the memory of the caller". `ended` is what `wasmext_wasi_check` and `raise_trap_code` read today from the state of the store.
+
+**An open question that needs fusedwasi (this one is real):** the end of the program is a fact about an *instance*, and today it is written in the shared state (`exited` / `exit_code` of 0.2, `finished` / `end_value` of 0.1), and `finish()` of 0.1 also closes every descriptor, as on an operating system. With one state for the whole store, a `proc_exit` of one instance would end the store (the glue refuses any call afterwards) and close the descriptors that another instance has open. Wasmtime ends the instance only. Two ways: (1) the glue moves the record into the instance after each trapped call (`ended` above) and clears it in the state, and `finish()` does not release the shared table when the store has more than one instance; (2) the state of 0.1 learns the instance (`fusedwasi_p1_enter(w, program)`), and `exited`, `finished` and the descriptors that a program opened belong to it. (1) is the smaller change (a flag of fusedwasi: "do not close on finish"), (2) is the one that keeps "what a program opened is closed when it ends". To be decided with C2a, before C7; in both, fusedwasi changes.
+
+**Not decided here:** the name of the capsule's major, the exact signature code of `bind_import` (the letters of `wasmext_export`: `i j f d o`), whether `attach` takes `memory64`, and the locking of the shared state (the store has one lock; the state of fusedwasi has none, as the plan says).
+
 ## The problem it answers
 
 Two modules built apart share nothing by default: each is a self-contained extension, shared library or program with its own copy of the wasm2c runtime, and nothing of `wasmext` is needed when it runs. That isolation is wanted. What is shared is shared on purpose: a `funcref` table, a memory, a global (see TABLES_PLAN.md).

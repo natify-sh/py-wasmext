@@ -243,3 +243,8 @@ All the modules of a store share the one configuration (`args`, `env`, `preopens
 - **C7:** across artifacts: the versioned record of the store (a pointer to a structure with a header and a table of functions), the link table of a module, the registry of the functions, the shared runtime and host; `host_full`. Part of the design, built after the rest.
 - **C8:** the lazy collector (hot reload, unloading of one member); later.
 - **Then stage 7 (wasmhost).**
+
+### Update (2026-10-26, later): one state, and the order
+
+The owner decided to take **one state, as Wasmtime has** (WASI 0.1 on top of WASI 0.2 inside the host, no conversion of the module, no import renamed), now, "so that it is not redone later". This reverses the lines above that dropped `p1-on-p2` and say that the two families have two states in the store. The design and the mapping of the 46 calls are in [fusedwasi_p1_over_p2.md](fusedwasi_p1_over_p2.md); the work is in **fusedwasi first** (F0-F4: the three defects of the p2 host, the cut of p2 into a typed core and a wrapper, one configuration, the new p1 beside the old and the switch, in both twins), **then wasmext** (the C2a of the Store continues from its part 1, `a7e4a4c`, with one state; then C2b onward) and wasmhost. The Store, `Instance(store, ...)`, the link table, `host_full`, the originals and `caller` as decided stand; only "two states" and "the dropped adapter" are replaced.
+

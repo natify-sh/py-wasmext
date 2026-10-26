@@ -112,7 +112,7 @@ def build_extension(wabt: Path, tmp_path_factory: pytest.TempPathFactory) -> Cal
         for c_name in (
             "wasmext_glue.h",
             *(
-                ("wasi_p1_core.h", "wasi_p1_files_win32.h", "wasi_python.h", *glue.wasi_headers)
+                ("wasi_p1_core.h", "wasi_python.h", *glue.wasi_headers)
                 if glue.wasi_headers
                 else ()
             ),

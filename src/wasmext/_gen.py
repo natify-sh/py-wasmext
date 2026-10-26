@@ -78,7 +78,7 @@ class Glue:
     stub: str = ""  # the .pyi of the extension module
     wasi_headers: tuple[
         str, ...
-    ] = ()  # the headers of wasmext for WASI that the glue includes (and those they share: wasi_p1_core.h, wasi_p1_files_win32.h and wasi_python.h): copied beside it
+    ] = ()  # the headers of wasmext for WASI that the glue includes (and those they share: wasi_p1_core.h and wasi_python.h): copied beside it
     api_header: str = ""  # the public header of the C API of the shared library (<name>_api.h), no Python in it
     shared: str = ""  # the C of the shared library (<name>_shared.c); both are empty when `shared_unsupported` says why
     shared_unsupported: str = ""
@@ -214,7 +214,9 @@ def _p2_headers(calls: dict[tuple[str, str], str], include: bool = False) -> lis
     """The headers of fusedwasi for the functions in `calls`, with the ones they include, the core and the streams that wasmext's own host needs (dependencies first).
     With `include`, only the ones the glue includes: the backends of the system (`..._fs_posix.h`, `..._fs_win32.h`) are included by the header of the files, one for each
     system, so they are copied (the build needs both) and not included."""
-    wanted = ["wasi_p2_core.h", "wasi_p2_io.h", "wasi_p2_cli.h"] + [_P2_FUNCS[c][0] for c in calls.values()]
+    wanted = ["wasi_p2_core.h", "wasi_p2_io.h", "wasi_p2_cli.h", "wasi_p2_filesystem.h"] + [
+        _P2_FUNCS[c][0] for c in calls.values()
+    ]
     order: list[str] = []
 
     def visit(header: str) -> None:

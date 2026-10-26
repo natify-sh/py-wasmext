@@ -47,7 +47,6 @@ GENERATED = "WASMEXT_GENERATED_"  # the prefix of the macros at the head of the 
 GLUE_SHARED = ("wasmext_glue.h",)  # the glue that is the same for every module
 WASI_SHARED = (
     "wasi_p1_core.h",
-    "wasi_p1_files_win32.h",
     "wasi_python.h",
 )  # what both snapshots share: the core of WASI and its file backend for Windows (both are those of fusedwasi), and its host, Python (wasmext's)
 C_DIR = Path(__file__).parent / "c"

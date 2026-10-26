@@ -173,3 +173,7 @@ The table of what a guest holds, in each front end; the shape of each call in th
 - The exact neutral error set (the union of what both front ends map: to be listed from the two mapping functions that exist, `fusedwasi_p1_errno` and the `error-code` conversion of p2).
 - Whether `fusedwasi_dir` is the `dirref` of p2 as it is (an `int` on POSIX, a record on Windows) or a pointer to a small record on both.
 - The names (`sys`, `core`, `fail`); `fusedwasi_config` against `fusedwasi_host_config`.
+
+## Found by the experiment of the wasm adapter (2026-10-26): three defects of the p2 host, to be fixed in both twins
+
+See `experiments/p1_adapter_on_p2.md`. They are independent of the unification and small, and the typed core / the adapter p1-on-p2 would meet them: (1) the descriptor that `open-at` makes for a directory should inherit `read` and `mutate-directory` from its parent (to check against the specification and Wasmtime first); (2) `fusedwasi_p2_alloc` must call `cabi_realloc` also for a size of 0 (the canonical ABI does); (3) the random source of the C host must not open `/dev/urandom` on every call. A fix is a change in C and in Python with a test in each, and goes before step 1 of B or with it.

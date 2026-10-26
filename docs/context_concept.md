@@ -1,6 +1,6 @@
 # The context: a group of instances that share (a concept)
 
-Status: **an idea, not built, not decided.** Nothing here is in the code. It is written down so that it is not only in a conversation, and for the day a consumer asks for what it would give (see "What it would give"). The first form of the idea was a *domain* that instances join and leave (`attach`/`detach`); it is kept at the end as considered and replaced. The word *store* is not used: in wasmtime and the component model it means a runtime with an engine, and this is not that.
+Status: **decided on 2026-10-26: the decisions are in [WASI_TARGET_PLAN.md](WASI_TARGET_PLAN.md), "The context: decisions", and where this file differs from that section, that section is right** (the context is the main way for modules to talk; the host of an artifact has all the families and a registry of all its functions; one flag, on the host only; the structure `Context` = `Host` + `Runtime`, `Instance`; the steps C0-C8). Step C1 is built. The text below is the background and the older reasoning, kept as it was: an idea, not built. Nothing here is in the code. It is written down so that it is not only in a conversation, and for the day a consumer asks for what it would give (see "What it would give"). The first form of the idea was a *domain* that instances join and leave (`attach`/`detach`); it is kept at the end as considered and replaced. The word *store* is not used: in wasmtime and the component model it means a runtime with an engine, and this is not that.
 
 ## The problem it answers
 

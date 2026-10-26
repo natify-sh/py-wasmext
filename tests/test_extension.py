@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import gc
 import subprocess
+import sys
 import weakref
 from collections.abc import Callable
 from pathlib import Path
@@ -114,6 +115,17 @@ def test_a_call_through_the_wrapper_for_ctypes_costs_little_more_than_the_raw_ca
         pytest.skip("the wrapper for ctypes only")
     import ctypes
     import timeit
+
+    try:
+        import coverage  # pyright: ignore[reportMissingTypeStubs]
+
+        traced = coverage.Coverage.current() is not None
+    except ImportError:
+        traced = False
+    if traced or sys.gettrace() is not None or sys.getprofile() is not None:
+        pytest.skip(
+            "the Python code is traced (coverage, a debugger): it costs more in Python than the raw call, which is what the ratio measures"
+        )
 
     inst = make(ext)
     library = ext._library()  # pyright: ignore[reportPrivateUsage]

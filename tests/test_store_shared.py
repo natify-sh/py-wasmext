@@ -83,3 +83,21 @@ def test_a_store_of_its_own_shares_nothing(build: Builder) -> None:
     b = mod.Instance(mod.Store(wasi={"stdout": out2.append}))
     assert a.fd_close(1) == 0
     assert write(b, 100, b"b") == 1 and out1 == [] and out2 == [b"b"]
+
+
+def test_a_memory_that_grows_is_read_again_and_the_other_keeps_its_size(build: Builder) -> None:
+    mod: Any = build(DATA / "wasi_grow.wat", "wasi_grow")
+    out: list[bytes] = []
+    store = mod.Store(wasi={"stdout": out.append})
+    a, b = mod.Instance(store), mod.Instance(store)
+    assert write(a, 100, b"before") == 6
+    assert a.grow(1) == 1  # one page, now two
+    assert write(a, 70000, b"in the new page") == 15  # beyond the first page: only the grown memory has it
+    assert write(b, 100, b"b") == 1
+    mem = b.memory
+    mem[0:8] = (70000).to_bytes(4, "little") + (4).to_bytes(4, "little")
+    assert b.fd_write(1, 0, 1, 32) == 21  # EFAULT: b is still one page, whatever a has grown to
+    del mem
+    assert b.grow(3) == 1 and write(b, 200000, b"b grew") == 6
+    assert write(a, 70000, b"a again") == 7
+    assert out == [b"before", b"in the new page", b"b", b"b grew", b"a again"]

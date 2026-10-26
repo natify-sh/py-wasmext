@@ -105,7 +105,7 @@ handler of 4 and the default configuration of the runtime on Linux x86-64 (guard
 
 The last row is **not about tables between instances**: the same wrong value comes out of **one** module with no sharing at all
 (`wasm2c` 1.0.42, `return_call_indirect` to a function whose own `return_call_indirect` goes to a function that has no tail variant: its
-result is not put into the tail-call stack). It is a bug of `wasm2c` next to the one in [FEATURES.md](FEATURES.md) (#2884), found on the way; not reported yet.
+result is not put into the tail-call stack). It is a bug of `wasm2c` next to the one in [FEATURES.md](FEATURES.md) (#2884), found on the way; reported as [WABT #2893](https://github.com/WebAssembly/wabt/issues/2893), fixed by [PR #2900](https://github.com/WebAssembly/wabt/pull/2900) (merged into `main` of WABT on 2026-10-26 as `f1c4e05`, not in a release yet); wasmext repairs the C meanwhile (`_tail_call_result`).
 
 What follows for the design: the entry must set the unwind target of every copy of the runtime (the stack of entries that the modules share keeps the list of the
 setters that each module gives when it joins), not only the buffer of the trap.

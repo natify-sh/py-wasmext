@@ -262,36 +262,6 @@ static int wasi_py_random(void *user, uint8_t *buf, size_t size) {
     return 0;
 }
 
-/* waits `ns` nanoseconds on the monotonic clock without holding the interpreter, in slices so that a signal (Ctrl+C) is seen */
-static int wasi_py_sleep(void *user, uint64_t ns) {
-    (void)user;
-    uint64_t start;
-    if (fusedwasi_p1_clock_system(1, &start) != 0) {
-        PyErr_SetString(PyExc_OSError, "wasi: the monotonic clock cannot be read");
-        return wasi_python_status();
-    }
-    for (;;) {
-        uint64_t now;
-        if (fusedwasi_p1_clock_system(1, &now) != 0) return 0;
-        uint64_t spent = now - start;
-        if (spent >= ns) return 0;
-        uint64_t left = ns - spent, slice = left < 100000000ull ? left : 100000000ull;
-        Py_BEGIN_ALLOW_THREADS
-#ifdef _WIN32
-        Sleep((DWORD)((slice + 999999u) / 1000000u));
-#else
-        {
-            struct timespec t;
-            t.tv_sec = (time_t)(slice / 1000000000ull);
-            t.tv_nsec = (long)(slice % 1000000000ull);
-            nanosleep(&t, NULL);
-        }
-#endif
-        Py_END_ALLOW_THREADS
-        if (PyErr_CheckSignals() < 0) return FUSEDWASI_P1_HOOK_TRAP;
-    }
-}
-
 static const char *const wasi_signal_names[31] = {
     "", "SIGHUP", "SIGINT", "SIGQUIT", "SIGILL", "SIGTRAP", "SIGABRT", "SIGBUS", "SIGFPE", "SIGKILL", "SIGUSR1",
     "SIGSEGV", "SIGUSR2", "SIGPIPE", "SIGALRM", "SIGTERM", "SIGCHLD", "SIGCONT", "SIGSTOP", "SIGTSTP", "SIGTTIN",
@@ -575,22 +545,6 @@ static inline int wasi_apply_option(wasmext_wasi_py *p, wasi_py_options *o, cons
 
 /* ---- the state of the extension: what the glue calls --------------------------------------------------------------------- */
 
-static inline int wasmext_wasi_traverse(fusedwasi_p1_state *w, visitproc visit, void *arg) {
-    wasmext_wasi_py *p = WASI_PY(w);
-    for (int i = 0; i < 3; i++) Py_VISIT(p->stream[i]);
-    Py_VISIT(p->exit_type);
-    Py_VISIT(p->signal_type);
-    Py_VISIT(p->ended_type);
-    Py_VISIT(p->time_module);
-    Py_VISIT(p->os_module);
-    Py_VISIT(p->text_base);
-    Py_VISIT(p->clock_fn);
-    Py_VISIT(p->random_fn);
-    for (int i = 0; i < 3; i++) Py_VISIT(p->decoder[i]);
-    Py_VISIT(p->stdin_rest);
-    return 0;
-}
-
 static inline void wasi_py_clear(wasmext_wasi_py *p) {
     for (int i = 0; i < 3; i++) Py_CLEAR(p->stream[i]);
     Py_CLEAR(p->exit_type);
@@ -603,88 +557,6 @@ static inline void wasi_py_clear(wasmext_wasi_py *p) {
     Py_CLEAR(p->random_fn);
     for (int i = 0; i < 3; i++) Py_CLEAR(p->decoder[i]);
     Py_CLEAR(p->stdin_rest);
-}
-
-static inline void wasmext_wasi_clear(fusedwasi_p1_state *w) { wasi_py_clear(WASI_PY(w)); }
-
-static inline void wasmext_wasi_free(fusedwasi_p1_state *w) {
-    if (w == NULL) return;
-    wasmext_wasi_py *p = WASI_PY(w);
-    wasi_py_clear(p);
-    fusedwasi_p1_destroy(w);
-    FUSEDWASI_P1_FREE(p);
-}
-
-/* `config` is None or a dict with the keys args, env, stdin, stdout, stderr, clock, random, preopens, readonly; the exceptions are
-   those that proc_exit and proc_raise raise; `program` is argv[0] when the config has no args. NULL with an exception set. */
-static inline fusedwasi_p1_state *wasmext_wasi_new(PyObject *config, PyObject *exit_type, PyObject *signal_type, PyObject *ended_type,
-                                             const char *program) {
-    wasmext_wasi_py *p = (wasmext_wasi_py *)FUSEDWASI_P1_CALLOC(1, sizeof(wasmext_wasi_py));
-    if (p == NULL) {
-        PyErr_NoMemory();
-        return NULL;
-    }
-    wasi_py_options o;
-    memset(&o, 0, sizeof o);
-    fusedwasi_p1_state *w = NULL;
-    Py_INCREF(exit_type);
-    p->exit_type = exit_type;
-    Py_INCREF(signal_type);
-    p->signal_type = signal_type;
-    Py_INCREF(ended_type);
-    p->ended_type = ended_type;
-    if (config == Py_None) config = NULL;
-    else if (!PyDict_Check(config)) {
-        PyErr_SetString(PyExc_TypeError, "wasi must be a dict (args, env, stdin, stdout, stderr)");
-        goto fail;
-    }
-    PyObject *key, *value;
-    Py_ssize_t pos = 0;
-    while (config != NULL && PyDict_Next(config, &pos, &key, &value)) {
-        PyObject *encoded = PyUnicode_Check(key) ? PyUnicode_AsUTF8String(key) : NULL;
-        if (encoded == NULL) {
-            if (!PyErr_Occurred()) PyErr_SetString(PyExc_TypeError, "the keys of wasi must be strings");
-            goto fail;
-        }
-        int rc = wasi_apply_option(p, &o, PyBytes_AsString(encoded), value);
-        Py_DECREF(encoded);
-        if (rc < 0) goto fail;
-    }
-    if (wasi_setup_preopens(p, &o) < 0) goto fail;
-    fusedwasi_p1_config cfg;
-    memset(&cfg, 0, sizeof cfg);
-    cfg.args = o.args;
-    cfg.args_size = o.args_size;
-    cfg.argc = o.argc;
-    cfg.env = o.env;
-    cfg.env_size = o.env_size;
-    cfg.envc = o.envc;
-    cfg.preopens = o.items;
-    cfg.npreopens = o.nitems;
-    cfg.program = program;
-    cfg.hooks.stdin_read = wasi_py_stdin_read;
-    cfg.hooks.stdout_write = wasi_py_stdout_write;
-    cfg.hooks.sleep = wasi_py_sleep;
-    cfg.hooks.end = wasi_py_end;
-    if (p->clock_fn != NULL) cfg.hooks.clock = wasi_py_clock;
-    if (p->random_fn != NULL) cfg.hooks.random = wasi_py_random;
-    cfg.user = p;
-    int err = 0;
-    size_t bad = (size_t)-1;
-    w = fusedwasi_p1_create(&cfg, &err, &bad);
-    if (w == NULL) {
-        errno = err;
-        if (bad != (size_t)-1) PyErr_SetFromErrnoWithFilename(PyExc_OSError, o.items[bad].host);
-        else PyErr_NoMemory();
-        goto fail;
-    }
-    wasi_py_options_free(&o);
-    return w;
-fail:
-    wasi_py_options_free(&o);
-    wasi_py_clear(p);
-    FUSEDWASI_P1_FREE(p);
-    return NULL;
 }
 
 /* 0, or -1 with an exception set: the program is over */

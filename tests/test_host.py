@@ -39,7 +39,9 @@ def test_the_default_host_binds_nothing_and_says_so() -> None:
 
 def test_wasip1_binds_wasi_and_is_told_by_the_module() -> None:
     glue = generate(parse(_wasm((WASI, "proc_exit"))), "m", host="wasm32-wasip1")
-    assert glue.wasi_headers == ("wasi_p1.h",)
+    assert (
+        glue.wasi_headers[-1] == "wasi_p1.h" and "wasi_p2_core.h" in glue.wasi_headers
+    )  # the headers of 0.1, over the state of 0.2
     assert not glue.notes
     assert "__host__: Literal['wasm32-wasip1']" in glue.stub.replace('"', "'")
     assert "__host__" in glue.source
@@ -71,7 +73,9 @@ def test_the_signature_check_is_of_what_was_said() -> None:
 def test_imports_that_do_not_belong_to_the_host_are_plain_imports_with_a_note() -> None:
     both = _wasm((WASI, "proc_exit"), ("wasi:cli/environment@0.2.12", "get-arguments"))
     glue = generate(parse(both), "m", host="wasm32-wasip1")
-    assert glue.wasi_headers == ("wasi_p1.h",)
+    assert (
+        glue.wasi_headers[-1] == "wasi_p1.h" and "wasi_p2_core.h" in glue.wasi_headers
+    )  # the headers of 0.1, over the state of 0.2
     assert any("wasi:cli/environment@0.2.12" in note and "yours to give" in note for note in glue.notes)
     assert "wasi:cli/environment@0.2.12" in glue.stub  # typed as the caller's
     only_p1 = generate(parse(_wasm((WASI, "proc_exit"))), "m", host="wasm32-wasip2")

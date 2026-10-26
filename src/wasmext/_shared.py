@@ -200,17 +200,24 @@ static uint64_t api_p2_check_write(fusedwasi_p2_state *s, fusedwasi_p2_stream *s
 }}
 static int api_p2_flush(fusedwasi_p2_state *s, fusedwasi_p2_stream *st) {{ (void)s; (void)st; return FUSEDWASI_P2_STREAM_OK; }}
 static int api_p2_ready(fusedwasi_p2_state *s, fusedwasi_p2_stream *st) {{ (void)s; (void)st; return 1; }}
-static uint64_t api_p2_clock(fusedwasi_p2_state *s, uint32_t id) {{
+/* a hook that failed on its own traps (the host kept its error); another status is a clock that cannot be read, a source that failed: the caller of the state decides what that is */
+static int api_p2_clock(fusedwasi_p2_state *s, uint32_t id, uint64_t *ns) {{
     {last}_t *m = API_M(s);
-    uint64_t ns = 0;
-    if (m->clock(m->user, id, &ns) != 0) s->trap(s, "the clock of the host failed");
-    return ns;
+    int rc = m->clock(m->user, id, ns);
+    if (rc == {big}_HOOK_TRAP) s->trap(s, "the clock of the host failed");
+    return rc != 0;
 }}
-static uint64_t api_p2_wall_ns(fusedwasi_p2_state *s) {{ return api_p2_clock(s, 0); }}
-static uint64_t api_p2_monotonic_ns(fusedwasi_p2_state *s) {{ return api_p2_clock(s, 1); }}
 static int api_p2_random(fusedwasi_p2_state *s, uint8_t *buf, size_t n) {{
     {last}_t *m = API_M(s);
-    return m->random(m->user, buf, n) != 0;
+    int rc = m->random(m->user, buf, n);
+    if (rc == {big}_HOOK_TRAP) s->trap(s, "the source of random bytes of the host failed");
+    return rc != 0;
+}}
+static int api_p2_sleep(fusedwasi_p2_state *s, uint64_t ns) {{
+    {last}_t *m = API_M(s);
+    int rc = m->sleep(m->user, ns);
+    if (rc == {big}_HOOK_TRAP) s->trap(s, "the sleep of the host failed");
+    return rc != 0;
 }}
 static void api_p2_wait(fusedwasi_p2_state *s) {{
     {last}_t *m = API_M(s);
@@ -245,8 +252,22 @@ static void api_p2_release({last}_t *m) {{
     C("")
 
 
-def _p2_new(C: Callable[[str], None], last: str, big: str, program: str, wasi_imports: list[int]) -> None:
+def _p2_new(
+    C: Callable[[str], None], last: str, big: str, program: str, wasi_imports: list[int], wasi2: bool, prefix: str
+) -> None:
     """The body of `<last>_new` for WASI 0.2: the state of the glue (made by `<last>_wasi_bind`) filled from the configuration."""
+    net = (
+        """        m->sockets = config->sockets;
+        m->sockets_all = config->sockets_all;
+        m->no_tcp = config->no_tcp;
+        m->no_udp = config->no_udp;
+        m->http = config->http;
+        m->http_all = config->http_all;
+        s->allow_ip_name_lookup = config->dns;
+"""
+        if wasi2
+        else ""
+    )
     body = f"""
     fusedwasi_p2_state *s;
     m->p2_core = &m->core;
@@ -260,14 +281,7 @@ def _p2_new(C: Callable[[str], None], last: str, big: str, program: str, wasi_im
         m->random = config->random;
         m->sleep = config->sleep;
         m->user = config->user;
-        m->sockets = config->sockets;
-        m->sockets_all = config->sockets_all;
-        m->no_tcp = config->no_tcp;
-        m->no_udp = config->no_udp;
-        m->http = config->http;
-        m->http_all = config->http_all;
-        s->allow_ip_name_lookup = config->dns;
-    }}
+{net}    }}
     {{
         /* arguments: NULL is the name of the module; environment: "NAME=value" cut at the first '='; directories: "host::guest" */
         size_t nargs = config != NULL && config->args != NULL ? config->nargs : 1;
@@ -329,17 +343,54 @@ def _p2_new(C: Callable[[str], None], last: str, big: str, program: str, wasi_im
         }}
         s->std[i] = st;
     }}
-    if (m->clock != NULL) {{
-        s->wall_ns = api_p2_wall_ns;
-        s->monotonic_ns = api_p2_monotonic_ns;
-    }}
+    if (m->clock != NULL) s->clock = api_p2_clock;
     if (m->random != NULL) s->random_bytes = s->insecure_random_bytes = api_p2_random;
-    if (m->sleep != NULL) s->wait = api_p2_wait;
+    if (m->sleep != NULL) {{
+        s->wait = api_p2_wait;
+        s->sleep = api_p2_sleep;
+    }}
     s->socket_addr_check = api_p2_sockets;
     s->http_check = api_p2_http;
 """
     for line in body.strip("\n").split("\n"):
         C(line)
+    if (
+        not wasi2
+    ):  # the state of 0.1 over it: the same directories, and the hooks of the standard streams and of the end
+        body_p1 = f"""
+    {{
+        fusedwasi_p1_config wasi;
+        fusedwasi_p1_preopen *over = (fusedwasi_p1_preopen *)calloc(m->npreopens ? m->npreopens : 1, sizeof *over);
+        size_t bad = (size_t)-1;
+        int err = 0;
+        if (over == NULL) goto nomem;
+        memset(&wasi, 0, sizeof wasi);
+        for (size_t i = 0; i < m->npreopens; i++) {{
+            over[i].host = m->preopens[i].path;
+            over[i].name = m->preopens[i].name;
+            over[i].name_len = strlen(over[i].name);
+            over[i].readonly = !m->preopens[i].writable;
+        }}
+        wasi.preopens = over;
+        wasi.npreopens = m->npreopens;
+        if (m->stdin_read != NULL) wasi.hooks.stdin_read = api_stdin;
+        if (m->stdout_write != NULL) wasi.hooks.stdout_write = api_stdout;
+        wasi.hooks.end = api_ended;
+        wasi.user = m;
+        m->core.store->wasi = fusedwasi_p1_create(&wasi, s, &err, &bad);
+        free(over);
+        if (m->core.store->wasi == NULL) {{
+            *error = err;
+            fusedwasi_p2_free(&m->core.store->wasi2);
+            api_p2_release(m);
+            free(m);
+            return NULL;
+        }}
+        {{ wasm_rt_memory_t *m_ = w2c_{prefix}_memory(&m->core.inst); fusedwasi_p1_bind(m->core.store->wasi, &m_->data, &m_->size); }}
+    }}
+"""
+        for line in body_p1.strip("\n").split("\n"):
+            C(line)
     for k in wasi_imports:
         C(f"    m->set[{k}] = 1;")
     C("    if (0) {")
@@ -644,7 +695,7 @@ def generate_shared(
     C("    int (*random)(void *user, uint8_t *buf, size_t n);")
     C("    int (*sleep)(void *user, uint64_t ns);")
     C("    void *user;")
-    if wasi2:
+    if uses_wasi:
         C(
             "    void *p2_core;  /* what the state's `user` points to: the glue reads the instance from it (it is the first member of this structure) */"
         )
@@ -663,9 +714,9 @@ def generate_shared(
         )
     C("};")
     C("")
-    if uses_wasi and wasi2:
+    if uses_wasi:
         _p2_helpers(C, last, big)
-    elif uses_wasi:
+    if uses_wasi and not wasi2:
         C("static void api_ended(void *user, int how, uint32_t value) {")
         C(f"    {last}_t *m = ({last}_t *)user;")
         C("    m->how = how;")
@@ -679,30 +730,6 @@ def generate_shared(
         C(f"    {last}_t *m = ({last}_t *)user;")
         C("    return m->stdout_write(m->user, fd, buf, n);")
         C("}")
-        C("static int api_clock(void *user, uint32_t id, uint64_t *ns) {")
-        C(f"    {last}_t *m = ({last}_t *)user;")
-        C("    return m->clock(m->user, id, ns);")
-        C("}")
-        C("static int api_random(void *user, uint8_t *buf, size_t n) {")
-        C(f"    {last}_t *m = ({last}_t *)user;")
-        C("    return m->random(m->user, buf, n);")
-        C("}")
-        C("static int api_sleep(void *user, uint64_t ns) {")
-        C(f"    {last}_t *m = ({last}_t *)user;")
-        C("    return m->sleep(m->user, ns);")
-        C("}")
-        C("static char *api_pack(const char *const *items, size_t count, size_t *size) {")
-        C("    size_t total = 0;")
-        C("    for (size_t i = 0; i < count; i++) total += strlen(items[i]) + 1;")
-        C("    char *buffer = (char *)malloc(total ? total : 1), *at = buffer;")
-        C("    for (size_t i = 0; buffer != NULL && i < count; i++) {")
-        C("        size_t n = strlen(items[i]) + 1;")
-        C("        memcpy(at, items[i], n);")
-        C("        at += n;")
-        C("    }")
-        C("    *size = total;")
-        C("    return buffer;")
-        C("}")
         C("")
     C(f"{last}_t *{last}_new(const {last}_config *config, int *error) {{")
     C("    int ignored;")
@@ -711,70 +738,10 @@ def generate_shared(
     C(f"    {last}_t *m = ({last}_t *)calloc(1, sizeof *m);")
     C("    if (m == NULL) { *error = 12; return NULL; }")
     C(f"    {last}_glue_store_init(&m->core);")
-    if uses_wasi and wasi2:
-        _p2_new(C, last, big, _c_string(last), [k for k, (_m, _f, _fn, w, _h, _s) in enumerate(imports) if w])
-    elif uses_wasi:
-        C("    fusedwasi_p1_config wasi;")
-        C("    memset(&wasi, 0, sizeof wasi);")
-        C("    char *args = NULL, *env = NULL;")
-        C("    char **hosts = NULL;")
-        C("    fusedwasi_p1_preopen *preopens = NULL;")
-        C(f"    wasi.program = {_c_string(last)};")
-        C("    size_t ndirs = config != NULL ? config->ndirs : 0;")
-        C("    if (config != NULL) {")
-        C("        size_t size;")
-        C("        if (config->args != NULL) {")
-        C("            args = api_pack(config->args, config->nargs, &size);")
-        C("            wasi.args = args; wasi.args_size = size; wasi.argc = (uint32_t)config->nargs;")
-        C("        }")
-        C("        if (config->nenv > 0) {")
-        C("            env = api_pack(config->env, config->nenv, &size);")
-        C("            wasi.env = env; wasi.env_size = size; wasi.envc = (uint32_t)config->nenv;")
-        C("        }")
-        C("        if (ndirs > 0) {")
-        C("            preopens = (fusedwasi_p1_preopen *)calloc(ndirs, sizeof *preopens);")
-        C("            hosts = (char **)calloc(ndirs, sizeof(char *));")
-        C("            for (size_t i = 0; preopens != NULL && hosts != NULL && i < ndirs; i++) {")
-        C('                const char *item = config->dirs[i], *sep = strstr(item, "::");')
-        C("                size_t host_len = sep != NULL ? (size_t)(sep - item) : strlen(item);")
-        C("                hosts[i] = (char *)malloc(host_len + 1);")
-        C("                if (hosts[i] == NULL) continue;")
-        C("                memcpy(hosts[i], item, host_len);")
-        C("                hosts[i][host_len] = '\\0';")
-        C("                preopens[i].host = hosts[i];")
-        C("                preopens[i].name = sep != NULL && sep[2] != '\\0' ? sep + 2 : \"/\";")
-        C("                preopens[i].name_len = strlen(preopens[i].name);")
-        C("                preopens[i].readonly = config->dirs_readonly != NULL && config->dirs_readonly[i] != 0;")
-        C("            }")
-        C("            wasi.preopens = preopens; wasi.npreopens = ndirs;")
-        C("        }")
-        C("        m->stdin_read = config->stdin_read;")
-        C("        m->stdout_write = config->stdout_write;")
-        C("        m->clock = config->clock;")
-        C("        m->random = config->random;")
-        C("        m->sleep = config->sleep;")
-        C("        m->user = config->user;")
-        C("    }")
-        C("    if (m->stdin_read != NULL) wasi.hooks.stdin_read = api_stdin;")
-        C("    if (m->stdout_write != NULL) wasi.hooks.stdout_write = api_stdout;")
-        C("    if (m->clock != NULL) wasi.hooks.clock = api_clock;")
-        C("    if (m->random != NULL) wasi.hooks.random = api_random;")
-        C("    if (m->sleep != NULL) wasi.hooks.sleep = api_sleep;")
-        C("    wasi.hooks.end = api_ended;")
-        C("    wasi.user = m;")
-        C("    size_t bad;")
-        C("    int err = 0;")
-        C("    m->core.store->wasi = fusedwasi_p1_create(&wasi, &err, &bad);")
-        C("    free(args); free(env); free(preopens);")
-        C("    if (hosts != NULL) { for (size_t i = 0; i < ndirs; i++) free(hosts[i]); free(hosts); }")
-        C("    if (m->core.store->wasi == NULL) { *error = err; free(m); return NULL; }")
-        C(
-            f"    {{ wasm_rt_memory_t *m_ = w2c_{prefix}_memory(&m->core.inst); fusedwasi_p1_bind(m->core.store->wasi, &m_->data, &m_->size); }}"
+    if uses_wasi:
+        _p2_new(
+            C, last, big, _c_string(last), [k for k, (_m, _f, _fn, w, _h, _s) in enumerate(imports) if w], wasi2, prefix
         )
-        C(f"    {last}_wasi_bind(&m->core);")
-        for k, (_module, _field, _func, is_wasi, _host, _slot) in enumerate(imports):
-            if is_wasi:
-                C(f"    m->set[{k}] = 1;")
     else:
         C("    (void)config;")
     C("    *error = 0;")
@@ -784,11 +751,11 @@ def generate_shared(
     C(f"void {last}_free({last}_t *m) {{")
     C("    if (m == NULL) return;")
     C(f"    {last}_glue_free(&m->core);")
-    if uses_wasi and wasi2:
+    if uses_wasi and not wasi2:
+        C("    fusedwasi_p1_destroy(m->core.store->wasi);")
+    if uses_wasi:
         C("    fusedwasi_p2_free(&m->core.store->wasi2);")
         C("    api_p2_release(m);")
-    elif uses_wasi:
-        C("    fusedwasi_p1_destroy(m->core.store->wasi);")
     C("    free(m);")
     C("}")
     C("")

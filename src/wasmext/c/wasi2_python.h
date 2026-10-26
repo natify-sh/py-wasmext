@@ -89,17 +89,43 @@ static int wasi2_stream_read(fusedwasi_p2_state *s, fusedwasi_p2_stream *st, uin
 
 /* ---- clocks, random bytes, waiting ------------------------------------------------------------------------------------------ */
 
-static uint64_t wasi2_clock(fusedwasi_p2_state *s, uint32_t id) {
-    uint64_t ns = 0;
-    int rc = wasi_py_clock(&WASI2_PY(s)->py, id, &ns);
-    if (rc != 0) s->trap(s, "the function 'clock' of the host failed");
-    return ns;
+/* a Python exception that is not an OSError traps (it stays set); an OSError is a clock that cannot be read, a source that failed: the caller of the state decides what that is */
+static int wasi2_clock(fusedwasi_p2_state *s, uint32_t id, uint64_t *ns) {
+    int rc = wasi_py_clock(&WASI2_PY(s)->py, id, ns);
+    if (rc == FUSEDWASI_P1_HOOK_TRAP) s->trap(s, "the function 'clock' of the host failed");
+    return rc != 0;
 }
 
-static uint64_t wasi2_wall_ns(fusedwasi_p2_state *s) { return wasi2_clock(s, 0); }
-static uint64_t wasi2_monotonic_ns(fusedwasi_p2_state *s) { return wasi2_clock(s, 1); }
+static int wasi2_random_bytes(fusedwasi_p2_state *s, uint8_t *buf, size_t n) {
+    int rc = wasi_py_random(&WASI2_PY(s)->py, buf, n);
+    if (rc == FUSEDWASI_P1_HOOK_TRAP) s->trap(s, "the function 'random' of the host failed");
+    return rc != 0;
+}
 
-static int wasi2_random_bytes(fusedwasi_p2_state *s, uint8_t *buf, size_t n) { return wasi_py_random(&WASI2_PY(s)->py, buf, n) != 0; }
+/* waits `ns` nanoseconds on the monotonic clock without holding the interpreter, in slices so that a signal (Ctrl+C) is seen */
+static int wasi2_sleep(fusedwasi_p2_state *s, uint64_t ns) {
+    uint64_t start, now;
+    if (s->clock(s, 1, &start) != 0) return -1;
+    for (;;) {
+        if (s->clock(s, 1, &now) != 0) return -1;
+        uint64_t spent = now - start;
+        if (spent >= ns) return 0;
+        uint64_t left = ns - spent, slice = left < 100000000ull ? left : 100000000ull;
+        Py_BEGIN_ALLOW_THREADS
+#ifdef _WIN32
+        Sleep((DWORD)((slice + 999999u) / 1000000u));
+#else
+        {
+            struct timespec t;
+            t.tv_sec = (time_t)(slice / 1000000000ull);
+            t.tv_nsec = (long)(slice % 1000000000ull);
+            nanosleep(&t, NULL);
+        }
+#endif
+        Py_END_ALLOW_THREADS
+        if (PyErr_CheckSignals() < 0) s->trap(s, "interrupted");
+    }
+}
 
 /* what a blocking call does between two looks at a pollable: a millisecond without the interpreter, so that another thread runs and a signal (Ctrl+C) is seen */
 static void wasi2_wait(fusedwasi_p2_state *s) {
@@ -325,11 +351,9 @@ static inline wasmext_wasi2_py *wasmext_wasi2_new(fusedwasi_p2_state *s, void *c
         }
         s->std[i] = st;
     }
-    if (p->clock_fn != NULL) {
-        s->wall_ns = wasi2_wall_ns;
-        s->monotonic_ns = wasi2_monotonic_ns;
-    }
+    if (p->clock_fn != NULL) s->clock = wasi2_clock;
     if (p->random_fn != NULL) s->random_bytes = s->insecure_random_bytes = wasi2_random_bytes;
+    s->sleep = wasi2_sleep;
     s->wait = wasi2_wait;
     s->socket_addr_check = wasi2_socket_addr_check;
     s->http_check = wasi2_http_check;
@@ -340,6 +364,28 @@ nomem:
 fail:
     wasmext_wasi2_free(w);
     return NULL;
+}
+
+/* The state of WASI 0.1 over the state `s` of 0.2 that `w` is the Python side of: the same arguments, environment, clocks, random bytes and directories, and the standard streams
+   of 0.1 (its hooks) over the same Python objects. NULL with an exception set. Free it with `fusedwasi_p1_destroy` before the state `s`. */
+static inline fusedwasi_p1_state *wasmext_wasi_over(wasmext_wasi2_py *w, fusedwasi_p2_state *s) {
+    fusedwasi_p1_config cfg;
+    memset(&cfg, 0, sizeof cfg);
+    cfg.preopens = w->keep.items;
+    cfg.npreopens = w->keep.nitems;
+    cfg.hooks.stdin_read = wasi_py_stdin_read;
+    cfg.hooks.stdout_write = wasi_py_stdout_write;
+    cfg.hooks.end = wasi_py_end;
+    cfg.user = &w->py;
+    int err = 0;
+    size_t bad = (size_t)-1;
+    fusedwasi_p1_state *p1 = fusedwasi_p1_create(&cfg, s, &err, &bad);
+    if (p1 == NULL) {
+        errno = err;
+        if (bad != (size_t)-1) PyErr_SetFromErrnoWithFilename(PyExc_OSError, w->keep.items[bad].host);
+        else PyErr_NoMemory();
+    }
+    return p1;
 }
 
 /* the program called wasi:cli/exit: WasiExit(code) is raised in the call */

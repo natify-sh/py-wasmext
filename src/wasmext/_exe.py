@@ -130,17 +130,139 @@ int main(int argc, char **argv) {
 
 @RUN@"""
 
+# the part of the program that both snapshots share: the state of the host (0.2's) filled from the command line
+_RUN_STATE = """    fusedwasi_p2_state *s;
+    int allow_net = 0;
+    wasm_rt_init();
+    @LAST@_wasi_bind(&instance);  /* the state of the host is made (fusedwasi_p2_init) and the imports are bound to it, for 0.1 as for 0.2 */
+    s = &instance.store->wasi2;
+    run_self = &instance;
+    s->user = &run_self;
+    allow_net = run_allow_net;
+    if (allow_net) {  /* nothing of the network is allowed unless the options say so, as in Wasmtime */
+        s->socket_addr_check = run_net_yes;
+        s->http_check = run_http_yes;
+        s->allow_ip_name_lookup = 1;
+    }
+    s->args = (const char *const *)args;
+    s->arg_count = (uint32_t)nargs;
+    {
+        const char **names = (const char **)calloc((size_t)nenv + 1, sizeof(char *));
+        const char **values = (const char **)calloc((size_t)nenv + 1, sizeof(char *));
+        for (int k = 0; k < nenv; k++) {
+            char *eq = strchr(env[k], '=');  /* checked above: there is one */
+            *eq = '\\0';
+            names[k] = env[k];
+            values[k] = eq + 1;
+        }
+        s->env_names = names;
+        s->env_values = values;
+        s->env_count = (uint32_t)nenv;
+    }
+    struct fusedwasi_p2_preopen *preopens = (struct fusedwasi_p2_preopen *)calloc((size_t)ndirs + 1, sizeof *preopens);
+    for (int k = 0; k < ndirs; k++) {
+        char *separator = strstr(dirs[k], "::");
+        size_t length = strlen(dirs[k]);
+        preopens[k].writable = 1;
+        if (length >= 3 && strcmp(dirs[k] + length - 3, ":ro") == 0 && (separator != NULL || length > 3)) {
+            dirs[k][length - 3] = '\\0';
+            preopens[k].writable = 0;
+        }
+        if (separator != NULL) *separator = '\\0';
+        preopens[k].path = dirs[k];
+#ifdef _WIN32
+        {  /* the whole path, as Windows wants it for a name below it */
+            char full[4096];
+            if (_fullpath(full, dirs[k], sizeof full) != NULL) preopens[k].path = _strdup(full);
+        }
+#endif
+        preopens[k].name = separator != NULL && separator[2] != '\\0' ? separator + 2 : "/";
+    }
+    s->preopens = preopens;
+    s->preopen_count = (uint32_t)ndirs;
+"""
+
+_RUN_P1 = """    (void)program;
+    run_end ended = {0, 0};
+    {
+        fusedwasi_p1_config config;
+        fusedwasi_p1_preopen *over = (fusedwasi_p1_preopen *)calloc((size_t)ndirs + 1, sizeof *over);
+        int error = 0;
+        size_t bad = (size_t)-1;
+        memset(&config, 0, sizeof config);
+        for (int k = 0; k < ndirs; k++) {
+            over[k].host = preopens[k].path;
+            over[k].name = preopens[k].name;
+            over[k].name_len = strlen(over[k].name);
+            over[k].readonly = !preopens[k].writable;
+        }
+        config.preopens = over;
+        config.npreopens = (size_t)ndirs;
+        config.hooks.end = run_ended;
+        config.user = &ended;
+        instance.store->wasi = fusedwasi_p1_create(&config, s, &error, &bad);
+        if (instance.store->wasi == NULL) {
+            if (bad != (size_t)-1) fprintf(stderr, "%s: --dir %s: %s\\n", argv[0], dirs[bad], strerror(error));
+            else fprintf(stderr, "%s: cannot set up WASI: %s\\n", argv[0], strerror(error));
+            return 2;
+        }
+    }
+    { wasm_rt_memory_t *m_ = w2c_@PREFIX@_memory(&instance.inst); fusedwasi_p1_bind(instance.store->wasi, &m_->data, &m_->size); }
+    int trapped = @LAST@_glue_instantiate(&instance);
+    if (!trapped) {
+        @LAST_U@_START(&instance.inst, &trapped);
+    }
+    int code = 0;
+    if (ended.how == FUSEDWASI_P1_END_EXIT) {
+        code = (int)ended.value;
+    } else if (ended.how == FUSEDWASI_P1_END_SIGNAL) {
+        fprintf(stderr, "%s: the program was ended by the signal %u\\n", argv[0], (unsigned)ended.value);
+        code = 134;
+    } else if (trapped) {
+        if (instance.store->p2_message[0] != '\\0') fprintf(stderr, "trap: %s\\n", instance.store->p2_message);
+        else fprintf(stderr, "trap: %s\\n", wasm_rt_strerror((wasm_rt_trap_t)trapped));
+        code = 134;
+    }
+    fflush(stdout);
+    @LAST@_glue_free(&instance);
+    fusedwasi_p1_destroy(instance.store->wasi);
+    fusedwasi_p2_free(s);
+    return code;
+}
+"""
+
+_RUN_P2 = """    int trapped = @LAST@_glue_instantiate(&instance);
+    if (!trapped) trapped = @LAST@_glue_initialize(&instance);
+    uint32_t result = 0;
+    if (!trapped) {
+        result = (uint32_t)@LAST_U@_RUN(&instance.inst, &trapped);
+    }
+    int code = 0;
+    if (s->exited) {  /* wasi:cli/exit: its code; the call came back as a trap of the host */
+        code = (int)s->exit_code;
+    } else if (trapped) {
+        if (instance.store->p2_message[0] != '\\0') fprintf(stderr, "trap: %s\\n", instance.store->p2_message);
+        else fprintf(stderr, "trap: %s\\n", wasm_rt_strerror((wasm_rt_trap_t)trapped));
+        code = 134;
+    } else {
+        code = result != 0 ? 1 : 0;  /* the result of run: 0 is ok, 1 is err */
+    }
+    fflush(stdout);
+    @LAST@_glue_free(&instance);
+    fusedwasi_p2_free(s);
+    return code;
+}
+"""
+
 _MAIN_P1 = {
-    "@HELPERS@": '#if !@LAST_U@_WASI || !@LAST_U@_ONLY_WASI\n#error "wasmext: an executable serves the imports of WASI and no others"\n#endif\n#ifndef @LAST_U@_START\n#error "wasmext: the module has no _start () -> ()"\n#endif\n\ntypedef struct {\n    int how;\n    uint32_t value;\n} run_end;\n\n/* proc_exit and proc_raise: told before the program is marked as over */\nstatic void run_ended(void *user, int how, uint32_t value) {\n    run_end *e = (run_end *)user;\n    e->how = how;\n    e->value = value;\n}\n\n/* the strings of an array, each ended by a NUL, in one new buffer */\nstatic char *run_pack(char **items, int count, size_t *size) {\n    size_t total = 0;\n    for (int i = 0; i < count; i++) total += strlen(items[i]) + 1;\n    char *buffer = (char *)malloc(total ? total : 1), *at = buffer;\n    for (int i = 0; buffer != NULL && i < count; i++) {\n        size_t n = strlen(items[i]) + 1;\n        memcpy(at, items[i], n);\n        at += n;\n    }\n    *size = total;\n    return buffer;\n}\n',
-    "@RUN@": '    fusedwasi_p1_config config;\n    memset(&config, 0, sizeof config);\n    fusedwasi_p1_preopen *preopens = (fusedwasi_p1_preopen *)calloc((size_t)ndirs + 1, sizeof *preopens);\n    for (int k = 0; k < ndirs; k++) {\n        char *separator = strstr(dirs[k], "::");\n        size_t length = strlen(dirs[k]);\n        if (length >= 3 && strcmp(dirs[k] + length - 3, ":ro") == 0 && (separator != NULL || length > 3)) {\n            dirs[k][length - 3] = \'\\0\';\n            preopens[k].readonly = 1;\n        }\n        if (separator != NULL) *separator = \'\\0\';\n        preopens[k].host = dirs[k];\n#ifdef _WIN32\n        {  /* the whole path, as Windows wants it for a name below it */\n            char full[4096];\n            if (_fullpath(full, dirs[k], sizeof full) != NULL) preopens[k].host = _strdup(full);\n        }\n#endif\n        preopens[k].name = separator != NULL && separator[2] != \'\\0\' ? separator + 2 : "/";\n        preopens[k].name_len = strlen(preopens[k].name);\n    }\n    size_t args_size, env_size;\n    config.args = run_pack(args, nargs, &args_size);\n    config.args_size = args_size;\n    config.argc = (uint32_t)nargs;\n    config.env = run_pack(env, nenv, &env_size);\n    config.env_size = env_size;\n    config.envc = (uint32_t)nenv;\n    config.preopens = preopens;\n    config.npreopens = (size_t)ndirs;\n    config.program = program;\n    run_end ended = {0, 0};\n    config.hooks.end = run_ended;\n    config.user = &ended;\n\n    wasm_rt_init();\n    int error = 0;\n    size_t bad = (size_t)-1;\n    instance.store->wasi = fusedwasi_p1_create(&config, &error, &bad);\n    if (instance.store->wasi == NULL) {\n        if (bad != (size_t)-1) fprintf(stderr, "%s: --dir %s: %s\\n", argv[0], dirs[bad], strerror(error));\n        else fprintf(stderr, "%s: cannot set up WASI: %s\\n", argv[0], strerror(error));\n        return 2;\n    }\n    { wasm_rt_memory_t *m_ = w2c_@PREFIX@_memory(&instance.inst); fusedwasi_p1_bind(instance.store->wasi, &m_->data, &m_->size); }\n    @LAST@_wasi_bind(&instance);\n    int trapped = @LAST@_glue_instantiate(&instance);\n    if (!trapped) {\n        @LAST_U@_START(&instance.inst, &trapped);\n    }\n    int code = 0;\n    if (ended.how == FUSEDWASI_P1_END_EXIT) {\n        code = (int)ended.value;\n    } else if (ended.how == FUSEDWASI_P1_END_SIGNAL) {\n        fprintf(stderr, "%s: the program was ended by the signal %u\\n", argv[0], (unsigned)ended.value);\n        code = 134;\n    } else if (trapped) {\n        fprintf(stderr, "trap: %s\\n", wasm_rt_strerror((wasm_rt_trap_t)trapped));\n        code = 134;\n    }\n    fflush(stdout);\n    @LAST@_glue_free(&instance);\n    fusedwasi_p1_destroy(instance.store->wasi);\n    return code;\n}\n',
-    "@NET@": "",
+    "@HELPERS@": '#if !@LAST_U@_WASI || !@LAST_U@_ONLY_WASI\n#error "wasmext: an executable serves the imports of WASI and no others"\n#endif\n#ifndef @LAST_U@_START\n#error "wasmext: the module has no _start () -> ()"\n#endif\n\ntypedef struct {\n    int how;\n    uint32_t value;\n} run_end;\n\n/* proc_exit and proc_raise: told before the program is marked as over */\nstatic void run_ended(void *user, int how, uint32_t value) {\n    run_end *e = (run_end *)user;\n    e->how = how;\n    e->value = value;\n}\n\n/* what the glue of the host reads the instance from: `s->user` points to it (the first member of what it points to is the instance) */\nstatic void *run_self;\n',
+    "@NET@": "static int run_allow_net;  /* nothing of the network is allowed: no option for it */\nstatic int run_net_yes(fusedwasi_p2_state *s, const char *ip, uint16_t port, int use) {\n    (void)s; (void)ip; (void)port; (void)use;\n    return 1;\n}\nstatic int run_http_yes(fusedwasi_p2_state *s, const char *scheme, const char *authority) {\n    (void)s; (void)scheme; (void)authority;\n    return 1;\n}\n",
     "@NETOPT@": "",
     "@NETUSAGE@": "",
 }
 
 _MAIN_P2 = {
     "@HELPERS@": '#if !@LAST_U@_WASI || !@LAST_U@_ONLY_WASI\n#error "wasmext: an executable serves the imports of WASI and no others"\n#endif\n#ifndef @LAST_U@_RUN\n#error "wasmext: the module does not export wasi:cli/run@0.2.x#run () -> i32"\n#endif\n\n/* what the glue of WASI 0.2 reads the instance from: `s->user` points to it (the first member of what it points to is the instance) */\nstatic void *run_self;\n',
-    "@RUN@": "    fusedwasi_p2_state *s;\n    int allow_net = 0;\n    wasm_rt_init();\n    @LAST@_wasi_bind(&instance);  /* the state of WASI 0.2 is made (fusedwasi_p2_init) and the imports are bound to it */\n    s = &instance.store->wasi2;\n    run_self = &instance;\n    s->user = &run_self;\n    allow_net = run_allow_net;\n    if (allow_net) {  /* nothing of the network is allowed unless the options say so, as in Wasmtime */\n        s->socket_addr_check = run_net_yes;\n        s->http_check = run_http_yes;\n        s->allow_ip_name_lookup = 1;\n    }\n    s->args = (const char *const *)args;\n    s->arg_count = (uint32_t)nargs;\n    {\n        const char **names = (const char **)calloc((size_t)nenv + 1, sizeof(char *));\n        const char **values = (const char **)calloc((size_t)nenv + 1, sizeof(char *));\n        for (int k = 0; k < nenv; k++) {\n            char *eq = strchr(env[k], '=');  /* checked above: there is one */\n            *eq = '\\0';\n            names[k] = env[k];\n            values[k] = eq + 1;\n        }\n        s->env_names = names;\n        s->env_values = values;\n        s->env_count = (uint32_t)nenv;\n    }\n    struct fusedwasi_p2_preopen *preopens = (struct fusedwasi_p2_preopen *)calloc((size_t)ndirs + 1, sizeof *preopens);\n    for (int k = 0; k < ndirs; k++) {\n        char *separator = strstr(dirs[k], \"::\");\n        size_t length = strlen(dirs[k]);\n        preopens[k].writable = 1;\n        if (length >= 3 && strcmp(dirs[k] + length - 3, \":ro\") == 0 && (separator != NULL || length > 3)) {\n            dirs[k][length - 3] = '\\0';\n            preopens[k].writable = 0;\n        }\n        if (separator != NULL) *separator = '\\0';\n        preopens[k].path = dirs[k];\n#ifdef _WIN32\n        {  /* the whole path, as Windows wants it for a name below it */\n            char full[4096];\n            if (_fullpath(full, dirs[k], sizeof full) != NULL) preopens[k].path = _strdup(full);\n        }\n#endif\n        preopens[k].name = separator != NULL && separator[2] != '\\0' ? separator + 2 : \"/\";\n    }\n    s->preopens = preopens;\n    s->preopen_count = (uint32_t)ndirs;\n    (void)program;\n    int trapped = @LAST@_glue_instantiate(&instance);\n    if (!trapped) trapped = @LAST@_glue_initialize(&instance);\n    uint32_t result = 0;\n    if (!trapped) {\n        result = (uint32_t)@LAST_U@_RUN(&instance.inst, &trapped);\n    }\n    int code = 0;\n    if (s->exited) {  /* wasi:cli/exit: its code; the call came back as a trap of the host */\n        code = (int)s->exit_code;\n    } else if (trapped) {\n        if (instance.store->p2_message[0] != '\\0') fprintf(stderr, \"trap: %s\\n\", instance.store->p2_message);\n        else fprintf(stderr, \"trap: %s\\n\", wasm_rt_strerror((wasm_rt_trap_t)trapped));\n        code = 134;\n    } else {\n        code = result != 0 ? 1 : 0;  /* the result of run: 0 is ok, 1 is err */\n    }\n    fflush(stdout);\n    @LAST@_glue_free(&instance);\n    fusedwasi_p2_free(s);\n    return code;\n}\n",
     "@NET@": "static int run_allow_net;  /* --allow-net */\nstatic int run_net_yes(fusedwasi_p2_state *s, const char *ip, uint16_t port, int use) {\n    (void)s; (void)ip; (void)port; (void)use;\n    return 1;\n}\nstatic int run_http_yes(fusedwasi_p2_state *s, const char *scheme, const char *authority) {\n    (void)s; (void)scheme; (void)authority;\n    return 1;\n}\n",
     "@NETOPT@": '        } else if (strcmp(a, "--allow-net") == 0) {\n            run_allow_net = 1;\n',
     "@NETUSAGE@": '            "  --allow-net           the program may use the network (sockets, name lookup, http); else all of it is refused\\n"\n',
@@ -152,8 +274,12 @@ def main_c(last: str, prefix: str, host: str = "wasm32-wasip1") -> str:
     from . import __version__
 
     text = _MAIN
-    for key, value in (_MAIN_P2 if host == "wasm32-wasip2" else _MAIN_P1).items():
+    parts = _MAIN_P2 if host == "wasm32-wasip2" else _MAIN_P1
+    for key, value in parts.items():
         text = text.replace(key, value)
+    text = text.replace(
+        "@RUN@", _RUN_STATE + (_RUN_P2 if host == "wasm32-wasip2" else "    (void)program;\n" + _RUN_P1)
+    )
     return (
         text.replace("@LAST_U@", last.upper())
         .replace("@LAST@", last)

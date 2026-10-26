@@ -1153,7 +1153,15 @@ def generate(
     _emit_links(hadd, last, imports, global_imports, memory_imports, hosts, table_imports)
     add("typedef struct {")
     add("    PyObject_HEAD")
+    add(f"    {last}_store st;  /* the host: who answers the imports of WASI */")
+    add("    PyObject *weakreflist;")
+    add("} StoreObject;")
+    add("static PyTypeObject *StoreType;")
+    add("")
+    add("typedef struct {")
+    add("    PyObject_HEAD")
     add(f"    {last}_instance core;")
+    add("    StoreObject *store_obj;  /* the store this instance lives in (a reference) */")
     add("    PyObject *weakreflist;")
     if tables:
         add(
@@ -1882,6 +1890,9 @@ def generate(
         hadd(f"static inline void {last}_p2_refresh({last}_instance *self) {{")
         hadd(f"    wasm_rt_memory_t *m_ = w2c_{prefix}_{mangle('memory')}(&self->inst);")
         hadd("    fusedwasi_p2_set_memory(&self->store->wasi2, 0, m_->data, m_->size);")
+        hadd(
+            f"    if (self->store->wasi2.user != NULL) *({last}_instance **)self->store->wasi2.user = self;  /* the instance in call: a store shared by several instances serves each */"
+        )
         hadd("}")
         hadd(
             f"static uint32_t {last}_p2_realloc(fusedwasi_p2_state *s, uint32_t comp, uint32_t old_ptr, uint32_t old_size, uint32_t align, uint32_t new_size) {{"
@@ -1901,11 +1912,12 @@ def generate(
         hadd('    snprintf(self->store->p2_message, sizeof self->store->p2_message, "%s", message);')
         hadd("    wasm_rt_trap(WASMEXT_TRAP_HOST);")
         hadd("}")
-        hadd(f"static inline void {last}_p2_init({last}_instance *self) {{")
-        hadd("    fusedwasi_p2_init(&self->store->wasi2);")
-        hadd(f"    self->store->wasi2.trap = {last}_p2_trap;")
-        hadd(f"    self->store->wasi2.realloc = {last}_p2_realloc;")
+        hadd(f"static inline void {last}_p2_store_init({last}_store *st) {{")
+        hadd("    fusedwasi_p2_init(&st->wasi2);")
+        hadd(f"    st->wasi2.trap = {last}_p2_trap;")
+        hadd(f"    st->wasi2.realloc = {last}_p2_realloc;")
         hadd("}")
+        hadd(f"static inline void {last}_p2_init({last}_instance *self) {{ {last}_p2_store_init(self->store); }}")
         for k, imp in enumerate(imports):
             if imp.module not in wasi_headers:
                 continue
@@ -1936,6 +1948,9 @@ def generate(
         hadd(
             "/* WASI 0.1: a trampoline for each import, as for 0.2: the slot is (function, instance), and the function calls the one of fusedwasi with the state `self->store->wasi` (made first). */"
         )
+        hadd(
+            f"static inline void {last}_p1_bind({last}_instance *self) {{ wasm_rt_memory_t *m_ = w2c_{prefix}_{mangle('memory')}(&self->inst); fusedwasi_p1_bind(self->store->wasi, &m_->data, &m_->size); }}  /* the memory of the instance that calls: a store shared by several serves each */"
+        )
         for k, imp in enumerate(imports):
             if imp.module not in wasi_headers:
                 continue
@@ -1946,9 +1961,7 @@ def generate(
             hadd(f"/* {_cc(imp.module)}.{_cc(imp.field)}{_signature(imp.func)} */")
             hadd(f"static {ret} {last}_p1_import{k}(void *user{params}, int *trapped) {{")
             hadd(f"    {last}_instance *self = ({last}_instance *)user;")
-            hadd(
-                f"    {{ wasm_rt_memory_t *m_ = w2c_{prefix}_{mangle('memory')}(&self->inst); fusedwasi_p1_bind(self->store->wasi, &m_->data, &m_->size); }}  /* the memory of the instance that calls: a host shared by several serves each */"
-            )
+            hadd(f"    {last}_p1_bind(self);")
             hadd(
                 f"    {'return ' if imp.func.results else ''}fusedwasi_p1_{'unstable_' if own else ''}{imp.field}(self->store->wasi{args}, trapped);"
             )

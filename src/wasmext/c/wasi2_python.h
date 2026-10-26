@@ -328,9 +328,9 @@ static inline wasmext_wasi2_py *wasmext_wasi2_new(fusedwasi_p2_state *s, void *c
     w->preopens = (struct fusedwasi_p2_preopen *)calloc(o->nitems ? o->nitems : 1, sizeof(struct fusedwasi_p2_preopen));
     if (w->preopens == NULL) goto nomem;
     for (size_t i = 0; i < o->nitems; i++) {
-        w->preopens[i].path = o->items[i].host;
+        w->preopens[i].path = o->items[i].path;
         w->preopens[i].name = o->items[i].name;
-        w->preopens[i].writable = !o->items[i].readonly;
+        w->preopens[i].writable = o->items[i].writable;
     }
     s->preopens = w->preopens;
     s->preopen_count = (uint32_t)o->nitems;
@@ -377,7 +377,7 @@ static inline fusedwasi_p1_state *wasmext_wasi_over(wasmext_wasi2_py *w, fusedwa
     fusedwasi_p1_state *p1 = fusedwasi_p1_create(&cfg, s, &err, &bad);
     if (p1 == NULL) {
         errno = err;
-        if (bad != (size_t)-1) PyErr_SetFromErrnoWithFilename(PyExc_OSError, w->keep.items[bad].host);
+        if (bad != (size_t)-1) PyErr_SetFromErrnoWithFilename(PyExc_OSError, w->keep.items[bad].path);
         else PyErr_NoMemory();
     }
     return p1;

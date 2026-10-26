@@ -379,10 +379,9 @@ def _p2_new(
         if (over == NULL) goto nomem;
         memset(&wasi, 0, sizeof wasi);
         for (size_t i = 0; i < m->npreopens; i++) {{
-            over[i].host = m->preopens[i].path;
+            over[i].path = m->preopens[i].path;
             over[i].name = m->preopens[i].name;
-            over[i].name_len = strlen(over[i].name);
-            over[i].readonly = !m->preopens[i].writable;
+            over[i].writable = m->preopens[i].writable;
         }}
         wasi.preopens = over;
         wasi.npreopens = m->npreopens;

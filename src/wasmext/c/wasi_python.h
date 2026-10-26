@@ -295,7 +295,7 @@ static inline void wasi_py_options_free(wasi_py_options *o) {
     FUSEDWASI_P1_FREE(o->env);
     for (size_t i = 0; i < o->nitems; i++) {
         FUSEDWASI_P1_FREE((char *)o->items[i].name);
-        FUSEDWASI_P1_FREE((char *)o->items[i].host);
+        FUSEDWASI_P1_FREE((char *)o->items[i].path);
     }
     FUSEDWASI_P1_FREE(o->items);
     Py_CLEAR(o->preopens);
@@ -441,17 +441,16 @@ static inline int wasi_setup_preopens(wasmext_wasi_py *p, wasi_py_options *o) {
         if (root != NULL && shown != NULL) {
             fusedwasi_p1_preopen *item = &o->items[o->nitems];
             item->name = fusedwasi_p1_copy(PyBytes_AsString(shown), (size_t)PyBytes_Size(shown));
-            item->name_len = (size_t)PyBytes_Size(shown);
-            item->host = fusedwasi_p1_copy(PyBytes_AsString(root), strlen(PyBytes_AsString(root)));
+            item->path = fusedwasi_p1_copy(PyBytes_AsString(root), strlen(PyBytes_AsString(root)));
             o->nitems++;  /* counted before the check, so that both are freed */
-            if (item->name == NULL || item->host == NULL) {
+            if (item->name == NULL || item->path == NULL) {
                 PyErr_NoMemory();
             } else {
-                item->readonly = all_readonly;
+                item->writable = !all_readonly;
                 for (Py_ssize_t k = 0; names != NULL && k < PyList_Size(names); k++) {
                     int same = PyObject_RichCompareBool(PyList_GetItem(names, k), name, Py_EQ);
                     if (same < 0) PyErr_Clear();
-                    if (same == 1) item->readonly = 1;
+                    if (same == 1) item->writable = 0;
                 }
                 made = 1;
             }

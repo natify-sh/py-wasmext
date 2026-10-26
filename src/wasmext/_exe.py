@@ -190,10 +190,9 @@ _RUN_P1 = """    (void)program;
         size_t bad = (size_t)-1;
         memset(&config, 0, sizeof config);
         for (int k = 0; k < ndirs; k++) {
-            over[k].host = preopens[k].path;
+            over[k].path = preopens[k].path;
             over[k].name = preopens[k].name;
-            over[k].name_len = strlen(over[k].name);
-            over[k].readonly = !preopens[k].writable;
+            over[k].writable = preopens[k].writable;
         }
         config.preopens = over;
         config.npreopens = (size_t)ndirs;

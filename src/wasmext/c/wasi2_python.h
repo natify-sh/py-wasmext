@@ -213,7 +213,6 @@ static inline int wasmext_wasi2_traverse(wasmext_wasi2_py *w, visitproc visit, v
     for (int i = 0; i < 3; i++) Py_VISIT(p->stream[i]);
     Py_VISIT(p->exit_type);
     Py_VISIT(p->signal_type);
-    Py_VISIT(p->ended_type);
     Py_VISIT(p->time_module);
     Py_VISIT(p->os_module);
     Py_VISIT(p->text_base);
@@ -249,7 +248,7 @@ static inline void wasmext_wasi2_free(wasmext_wasi2_py *w) {
    clock, random, preopens, readonly (those of WASI 0.1); the exceptions are those that the end of the program raises; `program` is argv[0] when the config
    has no args. Returns the Python side (to free with `wasmext_wasi2_free`), or NULL with an exception set. */
 static inline wasmext_wasi2_py *wasmext_wasi2_new(fusedwasi_p2_state *s, void *core, PyObject *config, PyObject *exit_type, PyObject *signal_type,
-                                                PyObject *ended_type, const char *program) {
+                                                const char *program) {
     wasmext_wasi2_py *w = (wasmext_wasi2_py *)calloc(1, sizeof(wasmext_wasi2_py));
     if (w == NULL) {
         PyErr_NoMemory();
@@ -262,8 +261,6 @@ static inline wasmext_wasi2_py *wasmext_wasi2_new(fusedwasi_p2_state *s, void *c
     p->exit_type = exit_type;
     Py_INCREF(signal_type);
     p->signal_type = signal_type;
-    Py_INCREF(ended_type);
-    p->ended_type = ended_type;
     wasi_py_options *o = &w->keep;
     if (config == Py_None) config = NULL;
     else if (!PyDict_Check(config)) {
@@ -388,10 +385,5 @@ static inline fusedwasi_p1_state *wasmext_wasi_over(wasmext_wasi2_py *w, fusedwa
 
 /* the program called wasi:cli/exit: WasiExit(code) is raised in the call */
 static inline void wasmext_wasi2_raise_exit(wasmext_wasi2_py *w, uint32_t code) { wasi_py_raise_end(&w->py, FUSEDWASI_P1_END_EXIT, code); }
-
-/* the call into an instance that has ended: the exception says how */
-static inline void wasmext_wasi2_ended(wasmext_wasi2_py *w, uint32_t code) {
-    PyErr_Format(w->py.ended_type, "the program has ended: exit(%u)", (unsigned)code);
-}
 
 #endif

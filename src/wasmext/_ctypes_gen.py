@@ -308,7 +308,6 @@ class Instance:
         self._lib = lib
         self._callbacks: list[Any] = []
         self._pending: BaseException | None = None
-        self._ended_raised = False
         if any(not wasi_call for *_, wasi_call in _IMPORTS) or _GLOBAL_IMPORTS or _MEMORY_IMPORTS or _TABLE_IMPORTS:
             if imports is None:
                 raise LinkError("the module has imports: pass imports={module: {name: callable or value}}")
@@ -1375,13 +1374,11 @@ _WASI_METHODS = """
     def _ended(self) -> BaseException:
         value = _c.c_uint32(0)
         how = self._lib.@NAME@_wasi_end(self._h, _c.byref(value))
-        first = not self._ended_raised
-        self._ended_raised = True
         if how == 1:
-            return WasiExit(value.value) if first else WasiTerminated(f"the program has ended: proc_exit({value.value})")
+            return WasiExit(value.value)
         if how == 2:
-            return WasiSignal(value.value) if first else WasiTerminated(f"the program has ended: proc_raise({value.value})")
-        return WasiTerminated("the program has ended: it trapped")
+            return WasiSignal(value.value)
+        return WasiTerminated("the call ended the program")
 """
 
 

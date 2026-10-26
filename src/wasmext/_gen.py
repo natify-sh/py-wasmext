@@ -1290,22 +1290,6 @@ def generate(
     add('        PyErr_SetString(TrapError, "a host function of the WebAssembly module failed");')
     add("        return;")
     add("    }")
-    if uses_wasi and wasi2:
-        add("    if (code == (int)WASMEXT_TRAP_ENDED) {")
-        add(
-            "        if (self->core.store->wasi2.exited) wasmext_wasi2_ended((wasmext_wasi2_py *)self->core.store->wasi2_py, self->core.store->wasi2.exit_code);"
-        )
-        add('        else PyErr_SetString(TrapError, "the WebAssembly program of a linked instance has ended");')
-        add("        return;")
-        add("    }")
-    elif uses_wasi:
-        add("    if (code == (int)WASMEXT_TRAP_ENDED) {")
-        add(
-            "        if (self->core.store->wasi != NULL && self->core.store->wasi->finished) wasmext_wasi_check(self->core.store->wasi);"
-        )
-        add('        else PyErr_SetString(TrapError, "the WebAssembly program of a linked instance has ended");')
-        add("        return;")
-        add("    }")
     if tags:
         add("    if (code == (int)WASM_RT_TRAP_UNCAUGHT_EXCEPTION) { raise_uncaught(); return; }")
     add("    if (code == (int)WASMEXT_TRAP_NO_MEMORY) PyErr_NoMemory();")
@@ -1554,7 +1538,7 @@ def generate(
     if uses_wasi:
         add(f"    {last}_p2_init(&self->core);")
         add(
-            f"    self->core.store->wasi2_py = wasmext_wasi2_new(&self->core.store->wasi2, &self->core, wasi, WasiExitError, WasiSignalError, WasiTerminatedError, {_c_string(last)});"
+            f"    self->core.store->wasi2_py = wasmext_wasi2_new(&self->core.store->wasi2, &self->core, wasi, WasiExitError, WasiSignalError, {_c_string(last)});"
         )
         add("    if (self->core.store->wasi2_py == NULL) { Py_DECREF(self); return NULL; }")
     if uses_wasi and not wasi2:
@@ -1834,13 +1818,7 @@ def generate(
         hadd("")
 
     # ---- the exports, as typed C functions of the glue (no Python): `result f(void *instance, parameters..., int *trapped)` ----
-    # A WASI program is over when it calls proc_exit or proc_raise; a command (it exports _start) is over after a trap too
-    is_command = any(exp_name == "_start" for exp_name, _ in funcs)
-    finish_on_trap = (
-        "fusedwasi_p1_finish(self->store->wasi, FUSEDWASI_P1_END_TRAP, 0); "
-        if uses_wasi and not wasi2 and is_command
-        else ""
-    )
+    # the end of a WASI program (proc_exit, proc_raise) is what the call leaves, as the error I32Exit of Wasmtime is the result of its call: nothing is kept in the instance
     hadd("/* instantiation: 0, or the code of the trap of the start function */")
     hadd(f"static inline int {last}_glue_instantiate({last}_instance *self) {{")
     # The runtime of wasm2c does not check the allocation of a table (1.0.42: a NULL that the first use trips over; later releases: abort()). The same
@@ -2011,15 +1989,13 @@ def generate(
             hadd(f"    {ret} zero;")
             hadd("    memset(&zero, 0, sizeof zero);")
         hadd(f"    {last}_instance *self = ({last}_instance *)((char *)inst - offsetof({last}_instance, inst));")
-        if uses_wasi and wasi2:
-            hadd(f"    if (self->store->wasi2.exited) {{ *trapped = (int)WASMEXT_TRAP_ENDED; {give} }}")
-        elif uses_wasi:
-            hadd(
-                f"    if (self->store->wasi != NULL && self->store->wasi->finished) {{ *trapped = (int)WASMEXT_TRAP_ENDED; {give} }}"
-            )
+        if uses_wasi:
+            hadd("    self->store->wasi2.exited = 0;  /* the end of the last call is not the end of this one */")
+            if not wasi2:
+                hadd("    if (self->store->wasi != NULL) self->store->wasi->finished = 0;")
         else:
             hadd("    (void)self;")
-        hadd(f"    WASMEXT_ENTER(trap_, {{ {finish_on_trap}*trapped = (int)trap_; {give} }})")
+        hadd(f"    WASMEXT_ENTER(trap_, {{ *trapped = (int)trap_; {give} }})")
         call = f"w2c_{prefix}_{mangle(exp_name)}((w2c_{prefix} *)inst{names})"
         if func.results:
             hadd(f"    {ret} r = {call};")
@@ -2581,7 +2557,7 @@ def generate(
     )
     if uses_wasi:
         add(
-            f'    WasiTerminatedError = PyErr_NewExceptionWithDoc({_c_string(name + ".WasiTerminated")}, "The WebAssembly program is over (proc_exit, proc_raise)", PyExc_Exception, NULL);'
+            f'    WasiTerminatedError = PyErr_NewExceptionWithDoc({_c_string(name + ".WasiTerminated")}, "The call ended the WebAssembly program (proc_exit, proc_raise); the base of WasiExit and WasiSignal. The instance can be called again, as in Wasmtime", PyExc_Exception, NULL);'
         )
         add(
             f'    WasiExitError = PyErr_NewExceptionWithDoc({_c_string(name + ".WasiExit")}, "The WebAssembly program called proc_exit (its code is .code)", WasiTerminatedError, NULL);'

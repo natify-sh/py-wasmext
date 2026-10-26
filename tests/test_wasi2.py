@@ -79,8 +79,9 @@ def test_exit_raises_the_exception_with_the_code(build_front_end: Builder) -> No
     with pytest.raises(mod.WasiExit) as raised:
         inst.exit(1)  # the result of wasi:cli/exit is err (1)
     assert raised.value.code == 1
-    with pytest.raises(mod.WasiTerminated, match="has ended"):  # the program is over
-        inst.args(1000)
+    inst.args(1000)  # the instance can be called again, as in Wasmtime: the end is what the call leaves
+    with pytest.raises(mod.WasiExit):
+        inst.exit(0)  # and it ends again
 
 
 def test_the_clock_and_the_random_bytes_can_be_replaced(build_front_end: Builder) -> None:

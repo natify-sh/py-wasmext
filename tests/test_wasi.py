@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import functools
+import gc
 from collections.abc import Callable
 from pathlib import Path
 from types import ModuleType
@@ -151,15 +152,17 @@ def test_descriptors_the_first_stage_has(build_extension: Builder) -> None:
     assert inst.path_open() == 8  # EBADF: there is no descriptor 3 without a preopen
 
 
-def test_proc_exit_is_an_exception_and_the_program_is_over(build_extension: Builder) -> None:
+def test_proc_exit_is_an_exception_of_the_call_and_the_instance_goes_on(build_extension: Builder) -> None:
+    """As in Wasmtime, where proc_exit is the error `I32Exit` that the call returns: the end is what the call leaves, not a state of the instance."""
     mod, inst = probe(build_extension)
     with pytest.raises(mod.WasiExit) as info:
         inst.proc_exit(7)
     assert info.value.code == 7 and isinstance(info.value, mod.WasiTerminated)
-    with pytest.raises(mod.WasiTerminated, match=r"the program has ended: proc_exit\(7\)") as again:
-        inst.sched_yield()
-    assert not isinstance(again.value, mod.WasiExit)  # not another exit: a call into what is over
-    assert bytes(inst.memory[:1]) == b"\0"  # what it left in memory can still be read
+    assert inst.sched_yield() == 0  # the instance can be called again
+    with pytest.raises(mod.WasiExit) as again:
+        inst.proc_exit(9)  # and it ends again, with its own code
+    assert again.value.code == 9
+    assert bytes(inst.memory[:1]) == b"\0"  # what it left in memory can be read
 
 
 def test_proc_raise_ends_the_program_with_a_signal_unless_the_signal_is_ignored(build_extension: Builder) -> None:
@@ -171,15 +174,17 @@ def test_proc_raise_ends_the_program_with_a_signal_unless_the_signal_is_ignored(
     with pytest.raises(mod.WasiSignal) as info:
         inst.proc_raise(6)
     assert (info.value.signal, info.value.name) == (6, "SIGABRT") and isinstance(info.value, mod.WasiTerminated)
-    with pytest.raises(mod.WasiTerminated, match=r"proc_raise\(6\)"):
-        inst.sched_yield()
+    assert inst.sched_yield() == 0  # the instance can be called again
+    with pytest.raises(mod.WasiSignal) as again:
+        inst.proc_raise(15)
+    assert again.value.name == "SIGTERM"  # the signal of the call, not the first one
     _, other = probe(build_extension)
     with pytest.raises(mod.WasiSignal) as term:
         other.proc_raise(15)
     assert term.value.name == "SIGTERM"
 
 
-def test_the_end_of_a_program_closes_what_it_opened(build_extension: Builder, tmp_path: Path) -> None:
+def test_the_end_of_a_call_leaves_what_the_program_opened(build_extension: Builder, tmp_path: Path) -> None:
     import os
     import sys
 
@@ -196,18 +201,21 @@ def test_the_end_of_a_program_closes_what_it_opened(build_extension: Builder, tm
     assert len(os.listdir("/proc/self/fd")) >= before + 2  # the preopen and the file
     with pytest.raises(mod.WasiExit):
         inst.proc_exit(0)
-    assert len(os.listdir("/proc/self/fd")) == before  # closed at once, not when the object is deleted
-    with pytest.raises(mod.WasiTerminated):
-        inst.fd_close(4)
+    assert (
+        len(os.listdir("/proc/self/fd")) >= before + 2
+    )  # nothing is closed by the end of a call, as in Wasmtime: the file is still open
+    assert inst.fd_close(4) == 0  # and it can be used
+    del mem, inst
+    gc.collect()
+    assert len(os.listdir("/proc/self/fd")) == before  # the files go with the instance
 
 
-def test_a_command_that_traps_is_over_a_reactor_that_traps_is_not(build_extension: Builder) -> None:
+def test_a_trap_does_not_end_the_instance_of_a_command_or_of_a_reactor(build_extension: Builder) -> None:
     command: Any = build_extension(DATA / "wasi_command_trap.wat", "wasi_command_trap")
     inst = command.Instance()
     with pytest.raises(command.Trap):
         inst._start()
-    with pytest.raises(command.WasiTerminated, match="it trapped"):
-        inst.ping()
+    assert inst.ping() == 1  # a core module that trapped can be called again in Wasmtime, command or not
     reactor: Any = build_extension(DATA / "wasi_reactor_trap.wat", "wasi_reactor_trap")
     loose = reactor.Instance()
     with pytest.raises(reactor.Trap):

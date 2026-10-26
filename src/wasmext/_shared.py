@@ -488,7 +488,9 @@ def generate_shared(
     )
     A(f"#define {big}_TRAP_HOST 0x7000  /* a host function answered with a failure; its error is the host's */")
     A(f"#define {big}_TRAP_NO_MEMORY 0x7001")
-    A(f"#define {big}_TRAP_ENDED 0x7002  /* the WASI program is over: {last}_wasi_end says how */")
+    A(
+        f"#define {big}_TRAP_ENDED 0x7002  /* the call ended the WASI program (proc_exit, proc_raise): {last}_wasi_end says how; the instance can be called again */"
+    )
     A(f"#define {big}_LINK_ERROR 0x7003  /* an import was not set before {last}_instantiate */")
     A(
         f"#define {big}_HOOK_TRAP 0x10000  /* what a hook of WASI answers for a failure of its own (a positive number below it is an errno of WASI) */"
@@ -581,7 +583,7 @@ def generate_shared(
         f"WASMEXT_API int {last}_trap_is_exception(int code);  /* whether a code is that of an exception of WebAssembly that nothing caught */"
     )
     A(
-        "/* How the WASI program ended: 0 not yet, 1 proc_exit (`*value` is the code), 2 proc_raise (the signal), 3 a trap of a command. */"
+        "/* How the last call ended the WASI program, if it did (it answered TRAP_ENDED): 0 it did not, 1 proc_exit (`*value` is the code), 2 proc_raise (the signal). The next call clears it, and can be made: nothing is closed, as in Wasmtime. */"
     )
     A(f"WASMEXT_API int {last}_wasi_end({last}_t *m, uint32_t *value);")
     A(
@@ -786,7 +788,7 @@ def generate_shared(
     C(f"const char *{last}_trap_message(int code) {{")
     C(f'    if (code == {big}_TRAP_HOST) return "a host function failed";')
     C(f'    if (code == {big}_TRAP_NO_MEMORY) return "out of memory";')
-    C(f'    if (code == {big}_TRAP_ENDED) return "the WASI program is over";')
+    C(f'    if (code == {big}_TRAP_ENDED) return "the call ended the WASI program";')
     C(f'    if (code == {big}_LINK_ERROR) return "an import was not set";')
     C("    return wasm_rt_strerror((wasm_rt_trap_t)code);")
     C("}")
@@ -907,13 +909,15 @@ def generate_shared(
             A(f"WASMEXT_API int {last}_host_call{k}({last}_t *m{args}{res});")
             C(f"int {last}_host_call{k}({last}_t *m{args}{res}) {{")
             C("    int trapped = 0;")
+            C("    m->core.store->wasi2.exited = 0;  /* the end of the last call is not the end of this one */")
+            C("    m->core.store->wasi->finished = 0;")
             call_args = "".join(f", ({_CTYPE[t]})a{j}" for j, t in enumerate(func.params))
             if func.results:
                 C(f"    {_CTYPE[func.results[0]]} r = {core}(m->core.store->wasi{call_args}, &trapped);")
             else:
                 C(f"    {core}(m->core.store->wasi{call_args}, &trapped);")
             C(
-                "    if (trapped) return m->core.store->wasi->finished ? (int)WASMEXT_TRAP_ENDED : (int)WASMEXT_TRAP_HOST;"
+                "    if (trapped) return (m->core.store->wasi2.exited || m->core.store->wasi->finished) ? (int)WASMEXT_TRAP_ENDED : (int)WASMEXT_TRAP_HOST;"
             )
             if func.results:
                 C(f"    if (r0 != NULL) *r0 = ({_API_TYPE[func.results[0]]})r;")
@@ -1219,7 +1223,7 @@ def generate_shared(
                 "    /* the call in which the program ends (proc_exit, proc_raise) unwound with the code of a host function; it is the end that it answers */"
             )
             C(
-                "    if (trapped == (int)WASMEXT_TRAP_HOST && m->core.store->wasi != NULL && (m->core.store->wasi->finished == FUSEDWASI_P1_END_EXIT || m->core.store->wasi->finished == FUSEDWASI_P1_END_SIGNAL))"
+                "    if (trapped == (int)WASMEXT_TRAP_HOST && (m->core.store->wasi2.exited || (m->core.store->wasi != NULL && m->core.store->wasi->finished == FUSEDWASI_P1_END_SIGNAL)))"
             )
             C("        trapped = (int)WASMEXT_TRAP_ENDED;")
         C("    m->status = trapped;")

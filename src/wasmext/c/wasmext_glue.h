@@ -24,7 +24,7 @@
 /* the codes of traps that are not the runtime's */
 #define WASMEXT_TRAP_HOST ((wasm_rt_trap_t)0x7000)       /* a host function failed and kept its error (Python: the exception is already set) */
 #define WASMEXT_TRAP_NO_MEMORY ((wasm_rt_trap_t)0x7001)  /* the copy of the runtime that wasmext brings cannot allocate a memory */
-#define WASMEXT_TRAP_ENDED ((wasm_rt_trap_t)0x7002)      /* the WASI program of the instance is over (proc_exit, proc_raise, a trap of a command) */
+#define WASMEXT_TRAP_ENDED ((wasm_rt_trap_t)0x7002)      /* the call ended the WASI program (proc_exit, proc_raise): `wasi_end` says how; the instance can be called again */
 /* A host function that is the export of another instance answers a trap of that instance as WASMEXT_TRAP_LINKED + its code: the caller then traps with
    that code (the trap goes through, as in WebAssembly); any other nonzero answer is a failure of the host (WASMEXT_TRAP_HOST). */
 #define WASMEXT_TRAP_LINKED 0x20000

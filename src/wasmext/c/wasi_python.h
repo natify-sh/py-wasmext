@@ -542,15 +542,15 @@ static inline void wasi_py_clear(wasmext_wasi_py *p) {
     Py_CLEAR(p->stdin_rest);
 }
 
-/* the call in which the program ended (proc_exit, proc_raise) trapped: the exception says how it ended (the state of 0.1 keeps it, the core has no hook for it) */
-static inline void wasmext_wasi_raise_end(fusedwasi_p1_state *w) { wasi_py_raise_end(WASI_PY(w), w->finished, w->end_value); }
+/* the call in which the program ended by proc_raise trapped: WasiSignal says which (the state of 0.1 keeps it; the end of proc_exit is the exit of the state of 0.2) */
+static inline void wasmext_wasi_raise_signal(fusedwasi_p1_state *w) { wasi_py_raise_end(WASI_PY(w), FUSEDWASI_P1_END_SIGNAL, w->end_value); }
 
 /* 0, or -1 with an exception set: the program is over */
 static inline int wasmext_wasi_check(fusedwasi_p1_state *w) {
     if (w == NULL || !w->finished) return 0;
     PyObject *ended = WASI_PY(w)->ended_type;
     switch (w->finished) {
-    case FUSEDWASI_P1_END_EXIT: PyErr_Format(ended, "the program has ended: proc_exit(%u)", (unsigned)w->end_value); break;
+    case FUSEDWASI_P1_END_EXIT: PyErr_Format(ended, "the program has ended: proc_exit(%u)", (unsigned)w->core->exit_code); break;
     case FUSEDWASI_P1_END_SIGNAL: PyErr_Format(ended, "the program has ended: proc_raise(%u)", (unsigned)w->end_value); break;
     default: PyErr_SetString(ended, "the program has ended: it trapped"); break;
     }

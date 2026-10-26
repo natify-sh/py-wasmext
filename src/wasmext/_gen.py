@@ -1255,14 +1255,15 @@ def generate(
     add("    (void)self;")
     add("    if (code == (int)WASMEXT_TRAP_HOST) {")
     add("        if (PyErr_Occurred()) return;")
-    if uses_wasi and not wasi2:
-        add(
-            "        if (self->core.store->wasi != NULL && (self->core.store->wasi->finished == FUSEDWASI_P1_END_EXIT || self->core.store->wasi->finished == FUSEDWASI_P1_END_SIGNAL)) { wasmext_wasi_raise_end(self->core.store->wasi); return; }"
-        )
-    if uses_wasi and wasi2:
+    if uses_wasi:
         add(
             "        if (self->core.store->wasi2.exited) { wasmext_wasi2_raise_exit((wasmext_wasi2_py *)self->core.store->wasi2_py, self->core.store->wasi2.exit_code); return; }"
         )
+    if uses_wasi and not wasi2:
+        add(
+            "        if (self->core.store->wasi != NULL && self->core.store->wasi->finished == FUSEDWASI_P1_END_SIGNAL) { wasmext_wasi_raise_signal(self->core.store->wasi); return; }"
+        )
+    if uses_wasi and wasi2:
         add(
             "        if (self->core.store->p2_message[0]) { PyErr_SetString(TrapError, self->core.store->p2_message); self->core.store->p2_message[0] = 0; return; }"
         )

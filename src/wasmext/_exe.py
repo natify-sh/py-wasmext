@@ -210,8 +210,8 @@ _RUN_P1 = """    (void)program;
         @LAST_U@_START(&instance.inst, &trapped);
     }
     int code = 0;
-    if (instance.store->wasi->finished == FUSEDWASI_P1_END_EXIT) {
-        code = (int)instance.store->wasi->end_value;
+    if (s->exited) {  /* proc_exit: its code, as wasi:cli/exit gives it */
+        code = (int)s->exit_code;
     } else if (instance.store->wasi->finished == FUSEDWASI_P1_END_SIGNAL) {
         fprintf(stderr, "%s: the program was ended by the signal %u\\n", argv[0], (unsigned)instance.store->wasi->end_value);
         code = 134;

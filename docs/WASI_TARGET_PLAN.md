@@ -196,3 +196,31 @@ Step 3 above is done for p1 (the slot is `(trampoline, instance)` as in p2; see 
 - **`Host` (the originals of the calls) for p2 waits for the context.** Today the originals of p1 come from `instance.__host__`, so they exist only after the instance, and a replacement that wants to call the original has to find the instance late (the `holder` of `tests/test_host.py`): the originals are bound to the state of one instance, and a replacement is needed to make the instance. A `Host` for p2 in that shape would have the same circle and would be redone for the context. In the context the host exists *before* the instances, so the originals can be taken first and given to the instances as an ordinary `imports=`; that is where `Host` for p2 is made, and p1's `Host` moves there too.
 - **`caller` of an import (the instance that called) is deferred to the first capability that shares one state among several instances** (a pool of connections, say). Until then a closure over the instance does the same. When it is made it must not need `import wasmext` or `import fusedwasi` at run time (a standing rule: extensions have no run-time dependency): a mark by name on the function itself (`fn.__wasm_caller__ = True`, set by the user or by a decorator of their own; checked once when the `Instance` is made; typed in the `.pyi` as a `Protocol`, which costs nothing at run time), not a decorator that is imported from wasmext. It comes with `lift` / `lower`, which need the memory of the caller.
 - **The next step is the context** (a private host and runtime; the host exists before the instances), then stage 7.
+
+### The structure of a module (the owner, 2026-10-26) and the steps to it
+
+```
+mod
+├── Context
+│   ├── Host
+│   └── Runtime
+└── Instance
+```
+
+- **Three ways to run a module, and no more:** a WASI 0.1 module runs as 0.1 (`host="wasm32-wasip1"`); a fused WASI 0.2 module runs as 0.2 (`host="wasm32-wasip2"`); a 0.1 module that has to be 0.2 is **converted at build time** (the adapter of Wasmtime, `wasm-tools component new --adapt`, `meld fuse`; the experiment is in `experiments/p1_adapter_on_p2.md`) and is then a 0.2 module. **No WASI 0.1 call goes through the layer of `wasi:*@0.2` in the host**; `p1-on-p2` is dropped.
+- **What "not unified" meant:** the way the originals of the host's calls are taken, and the way the user's imports are put in. Today p1 has `Instance.__host__` / `Host.__imports__` and p2 has nothing, and in both the originals exist only after the instance, so a replacement that wants the original looks for the instance late (the `holder` of `tests/test_host.py`).
+- **The answer is the structure above:** the **host belongs to the context** (it is not a class beside it), so the originals are `ctx.host.__imports__` and exist **before** the instance:
+
+  ```python
+  ctx = mod.Context(wasi={"preopens": {...}, "env": {...}})  # the host is configured here
+  orig = ctx.host.__imports__["wasi_snapshot_preview1"]["fd_write"]  # the original, before any instance
+  inst = mod.Instance(imports={...: {"fd_write": my_write}}, context=ctx)
+  ```
+
+  An `Instance` with no `context=` gets a private context (as now), and `Instance(wasi=...)` configures its private host; `inst.__host__` is `inst.context.host`. The same for p1 and p2.
+- **Steps (the context stage; C4 onward is in `context_concept.md`):**
+  - **C0:** settle the open points: `wasi=` goes to `Context`; what `ctx.runtime` shows while every artifact still has a runtime of its own (proposal: a light object that tells the identity of the runtime, the ABI and the fingerprint, with no operations; the shared runtime is a track of its own, C7); the private context by default; `close`.
+  - **C1:** the structure of the context in the glue (C, no Python), and the state of the host (p1, p2) moves from the instance into it; no change of behaviour or of the API.
+  - **C2a:** the public `Context`, `ctx.host`, `ctx.runtime`, `context=` of `Instance`.
+  - **C3:** the originals of both hosts from `ctx.host` (`Host` for p2 is made here; `Host` of p1 moves here).
+- The two other items deferred earlier stay: `caller` (a mark on the function, no import of wasmext) and `lift` / `lower`.

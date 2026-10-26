@@ -1947,6 +1947,9 @@ def generate(
             hadd(f"static {ret} {last}_p1_import{k}(void *user{params}, int *trapped) {{")
             hadd(f"    {last}_instance *self = ({last}_instance *)user;")
             hadd(
+                f"    {{ wasm_rt_memory_t *m_ = w2c_{prefix}_{mangle('memory')}(&self->inst); fusedwasi_p1_bind(self->ctx->wasi, &m_->data, &m_->size); }}  /* the memory of the instance that calls: a host shared by several serves each */"
+            )
+            hadd(
                 f"    {'return ' if imp.func.results else ''}fusedwasi_p1_{'unstable_' if own else ''}{imp.field}(self->ctx->wasi{args}, trapped);"
             )
             hadd("}")

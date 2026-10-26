@@ -16,6 +16,7 @@ DATA = Path(__file__).parent / "data"
 Builder = Callable[..., ModuleType]
 
 E_BADF, E_EXIST, E_INVAL, E_ISDIR, E_NOENT, E_NOTDIR = 8, 20, 28, 31, 44, 54
+E_UNLINK_OF_DIRECTORY = 63 if sys.platform == "darwin" else 2 if sys.platform == "win32" else E_ISDIR  # EPERM, EACCES
 E_NOTEMPTY, E_NOTCAPABLE, E_NAMETOOLONG, E_SPIPE = 55, 76, 37, 70
 # the rights the way wasi-libc asks for them to read a file
 FILE_RIGHTS = (1 << 1) | (1 << 2) | (1 << 5) | (1 << 21)  # fd_read, fd_seek, fd_tell, fd_filestat_get
@@ -482,8 +483,8 @@ def test_directories_are_created_and_removed_and_files_unlinked(probe: Any, worl
     assert fs.inst.path_remove_directory(3, *fs.path("hello.txt")) == E_NOTDIR
     assert fs.inst.path_remove_directory(3, *fs.path(".")) == E_INVAL
     assert (
-        fs.inst.path_unlink_file(3, *fs.path("sub")) == E_ISDIR and (world / "sub").is_dir()
-    )  # (macOS says EPERM; the layer of 0.2 turns it into EISDIR)
+        fs.inst.path_unlink_file(3, *fs.path("sub")) == E_UNLINK_OF_DIRECTORY and (world / "sub").is_dir()
+    )  # (the answer of the system)
     assert fs.inst.path_unlink_file(3, *fs.path("hello.txt")) == 0 and not (world / "hello.txt").exists()
     assert fs.inst.path_unlink_file(3, *fs.path("hello.txt")) == E_NOENT
     assert fs.inst.path_unlink_file(3, *fs.path("../outside.txt")) == E_NOTCAPABLE

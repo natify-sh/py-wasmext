@@ -32,30 +32,34 @@ static inline PyObject *wasi_module_of(PyObject **slot, const char *name) {
 
 /* ---- errors of Python ------------------------------------------------------------------------------------------------ */
 
-/* An OSError becomes the errno of WASI that its errno says (and is cleared); anything else is FUSEDWASI_P1_HOOK_TRAP, with the exception still set. */
-static inline int wasi_python_status(void) {
+/* An OSError becomes the errno of the system that it says (EIO when it says none), and is cleared; a BrokenPipeError is EPIPE. Anything else is -1, with the exception still set. */
+static inline int wasi_python_errno(void) {
     if (PyErr_ExceptionMatches(PyExc_BrokenPipeError)) {
         PyErr_Clear();
-        return FUSEDWASI_P1_E_PIPE;
+        return EPIPE;
     }
     if (PyErr_ExceptionMatches(PyExc_OSError)) {
         PyObject *type, *value, *traceback;
         PyErr_Fetch(&type, &value, &traceback);
         PyErr_NormalizeException(&type, &value, &traceback);
-        uint32_t code = FUSEDWASI_P1_E_IO;
+        int code = EIO;
         PyObject *number = value ? PyObject_GetAttrString(value, "errno") : NULL;
-        if (number != NULL && PyLong_Check(number)) code = fusedwasi_p1_errno((int)PyLong_AsLong(number));
+        if (number != NULL && PyLong_Check(number) && PyLong_AsLong(number) > 0) code = (int)PyLong_AsLong(number);
         PyErr_Clear();
         Py_XDECREF(number);
         Py_XDECREF(type);
         Py_XDECREF(value);
         Py_XDECREF(traceback);
-        return (int)code;
+        return code;
     }
-    return FUSEDWASI_P1_HOOK_TRAP;
+    return -1;
 }
 
-static inline uint32_t wasi_python_error(int *trapped) { return fusedwasi_p1_hook_status(wasi_python_status(), trapped); }
+/* The status of a hook after an exception: an OSError is the errno of WASI that its errno says (and is cleared); anything else is FUSEDWASI_P1_HOOK_TRAP, with the exception still set. */
+static inline int wasi_python_status(void) {
+    int code = wasi_python_errno();
+    return code < 0 ? FUSEDWASI_P1_HOOK_TRAP : (int)fusedwasi_p1_errno(code);
+}
 
 /* ---- the standard streams ---------------------------------------------------------------------------------------------- */
 
@@ -216,26 +220,6 @@ static inline PyObject *wasi_read_bytes(wasmext_wasi_py *p, Py_ssize_t size) {
 }
 
 /* ---- the hooks of the core ---------------------------------------------------------------------------------------------- */
-
-static int wasi_py_stdout_write(void *user, int fd, const uint8_t *buf, size_t n) {
-    return wasi_write_bytes((wasmext_wasi_py *)user, (uint32_t)fd, (const char *)buf, (Py_ssize_t)n) < 0 ? wasi_python_status() : 0;
-}
-
-static int wasi_py_stdin_read(void *user, uint8_t *buf, size_t cap, size_t *got) {
-    PyObject *bytes = wasi_read_bytes((wasmext_wasi_py *)user, (Py_ssize_t)cap);
-    if (bytes == NULL) return wasi_python_status();
-    char *data;
-    Py_ssize_t n;
-    if (PyBytes_AsStringAndSize(bytes, &data, &n) < 0 || (size_t)n > cap) {
-        Py_DECREF(bytes);
-        if (!PyErr_Occurred()) PyErr_SetString(PyExc_ValueError, "stdin gave more bytes than were asked for");
-        return wasi_python_status();
-    }
-    memcpy(buf, data, (size_t)n);
-    *got = (size_t)n;
-    Py_DECREF(bytes);
-    return 0;
-}
 
 static int wasi_py_clock(void *user, uint32_t id, uint64_t *ns) {
     PyObject *value = PyObject_CallFunction(((wasmext_wasi_py *)user)->clock_fn, "I", id);

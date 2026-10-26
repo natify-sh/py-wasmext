@@ -35,10 +35,11 @@ typedef struct wasmext_wasi2_py {
 
 /* the status of a stream after an exception of Python: an exception that is not an OSError traps (it stays set); a closed pipe closes the stream; the rest fails */
 static inline int wasi2_stream_status(fusedwasi_p2_state *s, fusedwasi_p2_stream *st) {
-    int rc = wasi_python_status();
-    if (rc == FUSEDWASI_P1_HOOK_TRAP) s->trap(s, "an exception of Python in a stream of the host");
-    if (rc == FUSEDWASI_P1_E_PIPE) return FUSEDWASI_P2_STREAM_CLOSED;
+    int code = wasi_python_errno();
+    if (code < 0) s->trap(s, "an exception of Python in a stream of the host");
+    if (code == EPIPE) return FUSEDWASI_P2_STREAM_CLOSED;
     st->failure = "i/o error";
+    st->failure_errno = code;
     return FUSEDWASI_P2_STREAM_FAILED;
 }
 
@@ -373,8 +374,6 @@ static inline fusedwasi_p1_state *wasmext_wasi_over(wasmext_wasi2_py *w, fusedwa
     memset(&cfg, 0, sizeof cfg);
     cfg.preopens = w->keep.items;
     cfg.npreopens = w->keep.nitems;
-    cfg.hooks.stdin_read = wasi_py_stdin_read;
-    cfg.hooks.stdout_write = wasi_py_stdout_write;
     cfg.hooks.end = wasi_py_end;
     cfg.user = &w->py;
     int err = 0;

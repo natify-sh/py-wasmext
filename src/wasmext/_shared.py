@@ -159,9 +159,19 @@ def _has_v128(func: FuncType) -> bool:
     return "v128" in (*func.params, *func.results)
 
 
-def _p2_helpers(C: Callable[[str], None], last: str, big: str) -> None:
+def _p2_helpers(C: Callable[[str], None], last: str, big: str, wasi2: bool) -> None:
     """The C of the library that WASI 0.2 needs after `struct <last>_t`: the callbacks of the state (streams, clocks, random bytes, the policies of the network) over the hooks of
     the configuration, and the release of what the state points into."""
+    c_errno = (
+        "static int api_c_errno(int wasi) { (void)wasi; return EIO; }  /* 0.2 has only the message */"
+        if wasi2
+        else """/* the errno of the system for an errno of WASI that a hook gave (the first that WASI 0.1 would turn back into it) */
+static int api_c_errno(int wasi) {
+    for (int c = 1; c < 256; c++)
+        if (fusedwasi_p1_errno(c) == (uint32_t)wasi) return c;
+    return EIO;
+}"""
+    )
     lines = f"""
 #define API_M(s) (({last}_t *)*(void **)(s)->user)
 static char *api_dup(const char *text) {{
@@ -171,11 +181,13 @@ static char *api_dup(const char *text) {{
     return copy;
 }}
 /* the status of a stream after a hook: a hook that failed on its own traps (the host kept its error), a closed pipe (EPIPE of WASI, 64) closes the stream, the rest fails it */
+{c_errno}
 static int api_p2_status(fusedwasi_p2_state *s, fusedwasi_p2_stream *st, int rc) {{
     if (rc == 0) return FUSEDWASI_P2_STREAM_OK;
     if (rc == {big}_HOOK_TRAP) s->trap(s, "a hook of the host failed");
     if (rc == 64) return FUSEDWASI_P2_STREAM_CLOSED;
     st->failure = "i/o error";
+    st->failure_errno = api_c_errno(rc);
     return FUSEDWASI_P2_STREAM_FAILED;
 }}
 static int api_p2_read(fusedwasi_p2_state *s, fusedwasi_p2_stream *st, uint8_t *buf, uint64_t len, uint64_t *got) {{
@@ -373,8 +385,6 @@ def _p2_new(
         }}
         wasi.preopens = over;
         wasi.npreopens = m->npreopens;
-        if (m->stdin_read != NULL) wasi.hooks.stdin_read = api_stdin;
-        if (m->stdout_write != NULL) wasi.hooks.stdout_write = api_stdout;
         wasi.hooks.end = api_ended;
         wasi.user = m;
         m->core.store->wasi = fusedwasi_p1_create(&wasi, s, &err, &bad);
@@ -715,20 +725,12 @@ def generate_shared(
     C("};")
     C("")
     if uses_wasi:
-        _p2_helpers(C, last, big)
+        _p2_helpers(C, last, big, wasi2)
     if uses_wasi and not wasi2:
         C("static void api_ended(void *user, int how, uint32_t value) {")
         C(f"    {last}_t *m = ({last}_t *)user;")
         C("    m->how = how;")
         C("    m->value = value;")
-        C("}")
-        C("static int api_stdin(void *user, uint8_t *buf, size_t cap, size_t *got) {")
-        C(f"    {last}_t *m = ({last}_t *)user;")
-        C("    return m->stdin_read(m->user, buf, cap, got);")
-        C("}")
-        C("static int api_stdout(void *user, int fd, const uint8_t *buf, size_t n) {")
-        C(f"    {last}_t *m = ({last}_t *)user;")
-        C("    return m->stdout_write(m->user, fd, buf, n);")
         C("}")
         C("")
     C(f"{last}_t *{last}_new(const {last}_config *config, int *error) {{")

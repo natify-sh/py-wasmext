@@ -84,15 +84,57 @@ def test_integers_wrap_at_the_edges_of_their_types(ext: Any) -> None:
     assert inst.mul64(2**63 - 1, 1) == 2**63 - 1
 
 
+def _seven(_x: float) -> int:
+    return 7
+
+
+def _true(_x: float) -> bool:
+    return True
+
+
+def _none(_x: float) -> None:
+    return None
+
+
 def test_the_result_of_an_import_that_is_a_number_is_checked_and_wrapped(ext: Any) -> None:
-    assert make(ext, twice=lambda x: 7).dbl(1.0) == 7.0  # an int is accepted where a float is wanted
-    assert make(ext, twice=lambda x: True).dbl(1.0) == 1.0
+    assert make(ext, twice=_seven).dbl(1.0) == 7.0  # an int is accepted where a float is wanted
+    assert make(ext, twice=_true).dbl(1.0) == 1.0
     with pytest.raises(
         TypeError
     ):  # (the text differs between the front ends; test_an_import_that_returns_the_wrong_thing has each)
         make(ext, twice=_text).dbl(1.0)
     with pytest.raises(TypeError):
-        make(ext, twice=lambda x: None).dbl(1.0)
+        make(ext, twice=_none).dbl(1.0)
+
+
+def test_a_call_through_the_wrapper_for_ctypes_costs_little_more_than_the_raw_call(ext: Any, front_end: str) -> None:
+    """A regression guard that does not depend on the speed of the machine: the call of a method is compared with the raw ctypes call of the same C function.
+    Before the methods were made for their signature the wrapper cost 3 to 5 times the raw call; it costs 1.2 to 2 now, and the limits leave room for a noisy runner."""
+    if front_end != "ctypes":
+        pytest.skip("the wrapper for ctypes only")
+    import ctypes
+    import timeit
+
+    inst = make(ext)
+    library = ext._library()  # pyright: ignore[reportPrivateUsage]
+    cnames = {name: cname for name, cname, _params, _results in ext._EXPORTS}  # pyright: ignore[reportPrivateUsage]
+    nop = getattr(library, cnames["nop"])
+    nop.restype, nop.argtypes = ctypes.c_int, [ctypes.c_void_p]
+    add = getattr(library, cnames["add"])
+    add.restype, add.argtypes = (
+        ctypes.c_int,
+        [ctypes.c_void_p, ctypes.c_int32, ctypes.c_int32, ctypes.POINTER(ctypes.c_int32)],
+    )
+    handle, out = inst._h, ctypes.c_int32()  # pyright: ignore[reportPrivateUsage]
+
+    def best(function: Callable[[], Any]) -> float:
+        function()
+        return min(timeit.repeat(function, number=5000, repeat=9)) / 5000
+
+    nop_ratio = best(inst.nop) / best(lambda: nop(handle))
+    add_ratio = best(lambda: inst.add(1, 2)) / best(lambda: add(handle, 1, 2, ctypes.byref(out)))
+    assert nop_ratio < 3.0, f"nop through the wrapper costs {nop_ratio:.1f} times the raw call"
+    assert add_ratio < 2.5, f"add through the wrapper costs {add_ratio:.1f} times the raw call"
 
 
 def test_several_results_come_back_as_a_tuple(ext: Any) -> None:

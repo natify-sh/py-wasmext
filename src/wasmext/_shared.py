@@ -366,9 +366,7 @@ def _p2_new(
 """
     for line in body.strip("\n").split("\n"):
         C(line)
-    if (
-        not wasi2
-    ):  # the state of 0.1 over it: the same directories
+    if not wasi2:  # the state of 0.1 over it: the same directories
         body_p1 = f"""
     {{
         fusedwasi_p1_config wasi;

@@ -183,7 +183,6 @@ _RUN_STATE = """    fusedwasi_p2_state *s;
 """
 
 _RUN_P1 = """    (void)program;
-    run_end ended = {0, 0};
     {
         fusedwasi_p1_config config;
         fusedwasi_p1_preopen *over = (fusedwasi_p1_preopen *)calloc((size_t)ndirs + 1, sizeof *over);
@@ -198,8 +197,6 @@ _RUN_P1 = """    (void)program;
         }
         config.preopens = over;
         config.npreopens = (size_t)ndirs;
-        config.hooks.end = run_ended;
-        config.user = &ended;
         instance.store->wasi = fusedwasi_p1_create(&config, s, &error, &bad);
         if (instance.store->wasi == NULL) {
             if (bad != (size_t)-1) fprintf(stderr, "%s: --dir %s: %s\\n", argv[0], dirs[bad], strerror(error));
@@ -213,10 +210,10 @@ _RUN_P1 = """    (void)program;
         @LAST_U@_START(&instance.inst, &trapped);
     }
     int code = 0;
-    if (ended.how == FUSEDWASI_P1_END_EXIT) {
-        code = (int)ended.value;
-    } else if (ended.how == FUSEDWASI_P1_END_SIGNAL) {
-        fprintf(stderr, "%s: the program was ended by the signal %u\\n", argv[0], (unsigned)ended.value);
+    if (instance.store->wasi->finished == FUSEDWASI_P1_END_EXIT) {
+        code = (int)instance.store->wasi->end_value;
+    } else if (instance.store->wasi->finished == FUSEDWASI_P1_END_SIGNAL) {
+        fprintf(stderr, "%s: the program was ended by the signal %u\\n", argv[0], (unsigned)instance.store->wasi->end_value);
         code = 134;
     } else if (trapped) {
         if (instance.store->p2_message[0] != '\\0') fprintf(stderr, "trap: %s\\n", instance.store->p2_message);
@@ -255,7 +252,7 @@ _RUN_P2 = """    int trapped = @LAST@_glue_instantiate(&instance);
 """
 
 _MAIN_P1 = {
-    "@HELPERS@": '#if !@LAST_U@_WASI || !@LAST_U@_ONLY_WASI\n#error "wasmext: an executable serves the imports of WASI and no others"\n#endif\n#ifndef @LAST_U@_START\n#error "wasmext: the module has no _start () -> ()"\n#endif\n\ntypedef struct {\n    int how;\n    uint32_t value;\n} run_end;\n\n/* proc_exit and proc_raise: told before the program is marked as over */\nstatic void run_ended(void *user, int how, uint32_t value) {\n    run_end *e = (run_end *)user;\n    e->how = how;\n    e->value = value;\n}\n\n/* what the glue of the host reads the instance from: `s->user` points to it (the first member of what it points to is the instance) */\nstatic void *run_self;\n',
+    "@HELPERS@": '#if !@LAST_U@_WASI || !@LAST_U@_ONLY_WASI\n#error "wasmext: an executable serves the imports of WASI and no others"\n#endif\n#ifndef @LAST_U@_START\n#error "wasmext: the module has no _start () -> ()"\n#endif\n\n/* what the glue of the host reads the instance from: `s->user` points to it (the first member of what it points to is the instance) */\nstatic void *run_self;\n',
     "@NET@": "static int run_allow_net;  /* nothing of the network is allowed: no option for it */\nstatic int run_net_yes(fusedwasi_p2_state *s, const char *ip, uint16_t port, int use) {\n    (void)s; (void)ip; (void)port; (void)use;\n    return 1;\n}\nstatic int run_http_yes(fusedwasi_p2_state *s, const char *scheme, const char *authority) {\n    (void)s; (void)scheme; (void)authority;\n    return 1;\n}\n",
     "@NETOPT@": "",
     "@NETUSAGE@": "",

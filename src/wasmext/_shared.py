@@ -368,7 +368,7 @@ def _p2_new(
         C(line)
     if (
         not wasi2
-    ):  # the state of 0.1 over it: the same directories, and the hooks of the standard streams and of the end
+    ):  # the state of 0.1 over it: the same directories
         body_p1 = f"""
     {{
         fusedwasi_p1_config wasi;
@@ -385,7 +385,6 @@ def _p2_new(
         }}
         wasi.preopens = over;
         wasi.npreopens = m->npreopens;
-        wasi.hooks.end = api_ended;
         wasi.user = m;
         m->core.store->wasi = fusedwasi_p1_create(&wasi, s, &err, &bad);
         free(over);
@@ -698,7 +697,6 @@ def generate_shared(
     if memories:
         C(f"    long mem_pins[{len(memories)}];  /* the pins of each exported memory (see <name>_memory_*_pin) */")
         C(f"    uint64_t mem_max_pages[{len(memories)}];")
-    C("    int how; uint32_t value;  /* how the WASI program ended */")
     C("    int (*stdin_read)(void *user, uint8_t *buf, size_t cap, size_t *got);")
     C("    int (*stdout_write)(void *user, int fd, const uint8_t *buf, size_t n);")
     C("    int (*clock)(void *user, uint32_t id, uint64_t *ns);")
@@ -726,13 +724,6 @@ def generate_shared(
     C("")
     if uses_wasi:
         _p2_helpers(C, last, big, wasi2)
-    if uses_wasi and not wasi2:
-        C("static void api_ended(void *user, int how, uint32_t value) {")
-        C(f"    {last}_t *m = ({last}_t *)user;")
-        C("    m->how = how;")
-        C("    m->value = value;")
-        C("}")
-        C("")
     C(f"{last}_t *{last}_new(const {last}_config *config, int *error) {{")
     C("    int ignored;")
     C("    api_enter();")

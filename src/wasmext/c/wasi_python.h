@@ -253,8 +253,7 @@ static const char *const wasi_signal_names[31] = {
 };
 
 /* the program is over by proc_exit (WasiExit, with .code) or by proc_raise (WasiSignal, with .signal and .name): raised in the call */
-static void wasi_py_end(void *user, int how, uint32_t value) {
-    wasmext_wasi_py *p = (wasmext_wasi_py *)user;
+static void wasi_py_raise_end(wasmext_wasi_py *p, int how, uint32_t value) {
     if (how == FUSEDWASI_P1_END_EXIT) {
         PyObject *exc = PyObject_CallFunction(p->exit_type, "I", value);
         if (exc != NULL) {
@@ -542,6 +541,9 @@ static inline void wasi_py_clear(wasmext_wasi_py *p) {
     for (int i = 0; i < 3; i++) Py_CLEAR(p->decoder[i]);
     Py_CLEAR(p->stdin_rest);
 }
+
+/* the call in which the program ended (proc_exit, proc_raise) trapped: the exception says how it ended (the state of 0.1 keeps it, the core has no hook for it) */
+static inline void wasmext_wasi_raise_end(fusedwasi_p1_state *w) { wasi_py_raise_end(WASI_PY(w), w->finished, w->end_value); }
 
 /* 0, or -1 with an exception set: the program is over */
 static inline int wasmext_wasi_check(fusedwasi_p1_state *w) {

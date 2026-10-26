@@ -374,7 +374,6 @@ static inline fusedwasi_p1_state *wasmext_wasi_over(wasmext_wasi2_py *w, fusedwa
     memset(&cfg, 0, sizeof cfg);
     cfg.preopens = w->keep.items;
     cfg.npreopens = w->keep.nitems;
-    cfg.hooks.end = wasi_py_end;
     cfg.user = &w->py;
     int err = 0;
     size_t bad = (size_t)-1;
@@ -388,7 +387,7 @@ static inline fusedwasi_p1_state *wasmext_wasi_over(wasmext_wasi2_py *w, fusedwa
 }
 
 /* the program called wasi:cli/exit: WasiExit(code) is raised in the call */
-static inline void wasmext_wasi2_raise_exit(wasmext_wasi2_py *w, uint32_t code) { wasi_py_end(&w->py, FUSEDWASI_P1_END_EXIT, code); }
+static inline void wasmext_wasi2_raise_exit(wasmext_wasi2_py *w, uint32_t code) { wasi_py_raise_end(&w->py, FUSEDWASI_P1_END_EXIT, code); }
 
 /* the call into an instance that has ended: the exception says how */
 static inline void wasmext_wasi2_ended(wasmext_wasi2_py *w, uint32_t code) {

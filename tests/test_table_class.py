@@ -229,7 +229,8 @@ int main(void) {
     printf("size %u maximum %u\n", (unsigned)tu_table_size(table), (unsigned)tu_table_maximum(table));
     tu_export rec;
     tu_table_export(table, table, &rec);
-    tu_t *u = tu_new(NULL, &err);
+    tu_store_t *u_s = tu_store_new(NULL, &err);
+    tu_t *u = tu_new(u_s, &err);
     char msg[256] = "";
     if (tu_link_table_import0(u, &rec, msg, sizeof msg)) { printf("link: %s\n", msg); return 1; }
     if (tu_instantiate(u)) { puts("instantiate failed"); return 1; }
@@ -237,7 +238,8 @@ int main(void) {
     r = tu_call(u, 3);
     trapped = tu_status(u);
     printf("slot 3: %d %d\n", trapped, r);
-    tf_t *f = tf_new(NULL, &err);
+    tf_store_t *f_s = tf_store_new(NULL, &err);
+    tf_t *f = tf_new(f_s, &err);
     if (tf_instantiate(f)) { puts("f instantiate failed"); return 1; }
     tf_export five;
     if (tf_export_find(f, "five", f, &five)) { puts("no five"); return 1; }
@@ -265,7 +267,9 @@ int main(void) {
     trapped = tu_status(u);
     printf("slot 3 after the unlink: %d\n", trapped);
     tu_free(u);
+    tu_store_free(u_s);
     tf_free(f);
+    tf_store_free(f_s);
     tu_table_free(table);
     tu_table_free(NULL);
     return 0;

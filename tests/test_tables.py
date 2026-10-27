@@ -331,11 +331,13 @@ _HOST = r"""
 int main(void) {
     int err = 0;
     if (tb_traps_use(ta_traps())) { puts("traps_use failed"); return 1; }
-    ta_t *a = ta_new(NULL, &err);
+    ta_store_t *a_s = ta_store_new(NULL, &err);
+    ta_t *a = ta_new(a_s, &err);
     if (ta_instantiate(a)) { puts("a instantiate failed"); return 1; }
     ta_export rec;
     if (ta_export_find(a, "tab", a, &rec)) { puts("no tab"); return 1; }
-    tb_t *b = tb_new(NULL, &err);
+    tb_store_t *b_s = tb_store_new(NULL, &err);
+    tb_t *b = tb_new(b_s, &err);
     char msg[256] = "";
     printf("instantiate before the link: %s\n", tb_instantiate(b) == TB_LINK_ERROR ? "LINK_ERROR" : "?");
     if (tb_link_table_import0(b, (const tb_export *)&rec, msg, sizeof msg)) { printf("link: %s\n", msg); return 1; }
@@ -349,8 +351,10 @@ int main(void) {
     tb_unlink_tables(b);
     r = ta_call(a, 3); t = ta_status(a); printf("a slot 3 after the unlink: %d (%s)\n", t, t ? ta_trap_message(t) : "");
     tb_free(b);
+    tb_store_free(b_s);
     r = ta_call(a, 0); t = ta_status(a); printf("a slot 0: %d %d\n", t, r);
     ta_free(a);
+    ta_store_free(a_s);
     return 0;
 }
 """

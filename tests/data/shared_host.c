@@ -17,7 +17,8 @@ static int32_t host_log(void *user, int32_t a, int *trapped) {
 
 int main(void) {
     int error = 0, rc;
-    mod_t *m = mod_new(NULL, &error);
+    mod_store_t *m_s = mod_store_new(NULL, &error);
+    mod_t *m = mod_new(m_s, &error);
     if (m == NULL) { printf("new failed %d\n", error); return 1; }
     int32_t r0 = 0, r1 = 0;
     rc = mod_instantiate(m);
@@ -55,5 +56,6 @@ int main(void) {
     uint8_t *memory = mod_memory_mem(m, &size);
     printf("memory: %zu %c%c\n", size, memory[0], memory[1]);
     mod_free(m);
+    mod_store_free(m_s);
     return 0;
 }

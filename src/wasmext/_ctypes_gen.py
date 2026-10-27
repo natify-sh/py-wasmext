@@ -94,6 +94,10 @@ def _library() -> Any:
         _lib = _c.CDLL(path)
         if _SHARES_TABLES:
             _share_traps(_lib)
+        _lib.@NAME@_store_new.restype = _c.c_void_p
+        _lib.@NAME@_store_new.argtypes = [_c.c_void_p, _c.POINTER(_c.c_int)]
+        _lib.@NAME@_store_free.restype = _c.c_int
+        _lib.@NAME@_store_free.argtypes = [_c.c_void_p]
         _lib.@NAME@_new.restype = _c.c_void_p
         _lib.@NAME@_new.argtypes = [_c.c_void_p, _c.POINTER(_c.c_int)]
         _lib.@NAME@_status_ptr.restype = _c.c_void_p
@@ -298,12 +302,44 @@ def _free(handle: int, lib: Any) -> None:
     lib.@NAME@_free(handle)
 
 
+def _store_free(handle: int, lib: Any) -> None:
+    lib.@NAME@_store_free(handle)
+
+
+class Store:
+    """The host of the instances made in it (who answers the imports of WASI), with its configuration `wasi=`; the library makes the state, this object owns it."""
+
+    def __init__(self, *, wasi: Any = None) -> None:
+        if wasi is not None and not _WASI:  # as the extension: a module whose host has no WASI built in takes no `wasi=`
+            raise TypeError("Store() got an unexpected keyword argument 'wasi'")
+        lib = _library()
+        self._lib = lib
+        self._pending: BaseException | None = None  # what a hook of the host raised, for the call that is running
+        config, self._alive = @WASI_CONFIG_CALL@
+        error = _c.c_int(0)
+        handle = lib.@NAME@_store_new(_c.byref(config) if config is not None else None, _c.byref(error))
+        if not handle:
+            raise OSError(error.value, os.strerror(error.value))
+        self._h = handle
+        self._finalizer = weakref.finalize(self, _store_free, handle, lib)  # after the instances: each of them keeps this object
+
+
 class Instance:
     """An instance of the module @NAME@ (the library makes the state, this object owns it)."""
 
-    def __init__(self, imports: Any = None, *, wasi: Any = None) -> None:
+    def __init__(self, store: Any = None, imports: Any = None, *, wasi: Any = None) -> None:
+        # Until the calls are rewritten (C2e) a first argument that is not a Store is what it was, the imports; an instance with no store makes a private one (from `wasi=`).
+        if store is not None and not isinstance(store, Store):
+            if imports is not None or type(store).__name__ == "Store":
+                raise TypeError("store must be a Store of this module (@NAME@.Store); a store of another module is a different host")
+            store, imports = None, store
+        if store is not None and wasi is not None:
+            raise TypeError("wasi= belongs to the Store: a different configuration is a different store")
         if wasi is not None and not _WASI:  # as the extension: a module whose host has no WASI built in takes no `wasi=`
             raise TypeError("Instance() got an unexpected keyword argument 'wasi'")
+        if store is None:
+            store = Store(wasi=wasi)
+        self._store = store
         lib = _library()
         self._lib = lib
         self._callbacks: list[Any] = []
@@ -313,9 +349,8 @@ class Instance:
                 raise LinkError("the module has imports: pass imports={module: {name: callable or value}}")
         elif imports is not None and not _WASI:
             raise TypeError("the module has no imports: Instance() takes none")
-        config, self._alive = @WASI_CONFIG_CALL@
         error = _c.c_int(0)
-        handle = lib.@NAME@_new(_c.byref(config) if config is not None else None, _c.byref(error))
+        handle = lib.@NAME@_new(store._h, _c.byref(error))
         if not handle:
             raise OSError(error.value, os.strerror(error.value))
         self._h = handle
@@ -358,6 +393,8 @@ class Instance:
         """The exception for the code that a call answered."""
         if code == _TRAP_HOST:
             pending, self._pending = self._pending, None
+            if pending is None:  # a hook of the host of the store (a stream, a clock) raised
+                pending, self._store._pending = self._store._pending, None
             for owner in self._owners if pending is None else ():  # the failure was in the host function of an instance this one calls
                 pending, owner._pending = owner._pending, None
                 if pending is not None:
@@ -942,7 +979,7 @@ class _Streams:
         return bytes(source.read(size))
 
 
-def _wasi_config(self_ref: Any, wasi: Any) -> tuple[Any, list[Any]]:
+def _wasi_config(self_ref: Any, wasi: Any) -> tuple[Any, list[Any]]:  # self_ref: a weak reference to the Store
     """The configuration of the library from the `wasi=` of the caller: the structure, and what has to stay alive with it."""
     wasi = dict(wasi or {})
     unknown = sorted(set(wasi) - {"args", "env", "stdin", "stdout", "stderr", "preopens", "readonly", "clock", "random"@NET_KEYS@})

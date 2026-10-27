@@ -2012,13 +2012,19 @@ def generate(
                 f"    {'return ' if imp.func.results else ''}{cname}(&self->store->wasi2{', 0' if has_comp else ''}{args});"
             )
             hadd("}")
-        hadd(f"static inline int {last}_wasi_bind({last}_instance *self) {{")
-        hadd(f"    {last}_p2_init(self);")
+        hadd(
+            "/* only the imports of an instance over the trampolines, for an instance made in a store that is made already (`wasi_bind` is this and the init of the store) */"
+        )
+        hadd(f"static inline int {last}_wasi_bind_imports({last}_instance *self) {{")
         for k, imp in enumerate(imports):
             if imp.module in wasi_headers:
                 hadd(f"    self->host{imp.host}.fn[{imp.slot}] = (void *){last}_p2_import{k};")
                 hadd(f"    self->host{imp.host}.user[{imp.slot}] = self;")
         hadd("    return 0;")
+        hadd("}")
+        hadd(f"static inline int {last}_wasi_bind({last}_instance *self) {{")
+        hadd(f"    {last}_p2_init(self);")
+        hadd(f"    return {last}_wasi_bind_imports(self);")
         hadd("}")
         hadd("")
     elif uses_wasi:
@@ -2049,13 +2055,19 @@ def generate(
             )
             hadd("}")
         hadd("/* the imports of WASI over the trampolines: 0 */")
-        hadd(f"static inline int {last}_wasi_bind({last}_instance *self) {{")
-        hadd(f"    {last}_p2_init(self);")
+        hadd(
+            "/* only the imports of an instance over the trampolines, for an instance made in a store that is made already (`wasi_bind` is this and the init of the store) */"
+        )
+        hadd(f"static inline int {last}_wasi_bind_imports({last}_instance *self) {{")
         for k, imp in enumerate(imports):
             if imp.module in wasi_headers:
                 hadd(f"    self->host{imp.host}.fn[{imp.slot}] = (void *){last}_p1_import{k};")
                 hadd(f"    self->host{imp.host}.user[{imp.slot}] = self;")
         hadd("    return 0;")
+        hadd("}")
+        hadd(f"static inline int {last}_wasi_bind({last}_instance *self) {{")
+        hadd(f"    {last}_p2_init(self);")
+        hadd(f"    return {last}_wasi_bind_imports(self);")
         hadd("}")
         hadd("")
     hadd(f"static inline void {last}_glue_free({last}_instance *self) {{")

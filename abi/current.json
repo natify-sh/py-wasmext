@@ -32,12 +32,14 @@
         "<name>_link_table_import0": "int <name>_link_table_import0(<name>_t *m, const <name>_export *e, char *message, size_t capacity)",
         "<name>_memory_mem": "uint8_t * <name>_memory_mem(<name>_t *m, size_t *size)",
         "<name>_memory_mem_pin": "void <name>_memory_mem_pin(<name>_t *m, int pin)",
-        "<name>_new": "<name>_t * <name>_new(const <name>_config *config, int *error)",
+        "<name>_new": "<name>_t * <name>_new(<name>_store_t *store, int *error)",
         "<name>_pick": "int <name>_pick(<name>_t *m, const void *a0, void **r0)",
         "<name>_set_global_counter": "void <name>_set_global_counter(<name>_t *m, int32_t value)",
         "<name>_set_import0": "void <name>_set_import0(<name>_t *m, <name>_import0_fn function, void *user)",
         "<name>_status": "int <name>_status(const <name>_t *m)",
         "<name>_status_ptr": "const int * <name>_status_ptr(const <name>_t *m)",
+        "<name>_store_free": "int <name>_store_free(<name>_store_t *store)",
+        "<name>_store_new": "<name>_store_t * <name>_store_new(const <name>_config *config, int *error)",
         "<name>_table_export": "void <name>_table_export(void *table, void *owner, <name>_export *out)",
         "<name>_table_free": "void <name>_table_free(void *table)",
         "<name>_table_get_ref": "void * <name>_table_get_ref(const void *table, uint32_t index)",
@@ -59,6 +61,7 @@
       },
       "macros": {},
       "opaque": [
+        "<name>_store_t",
         "<name>_t"
       ],
       "structs": {
@@ -159,10 +162,12 @@
         "<name>_link_memory_import0": "int <name>_link_memory_import0(<name>_t *m, const <name>_export *e, char *message, size_t capacity)",
         "<name>_memory_big": "uint8_t * <name>_memory_big(<name>_t *m, size_t *size)",
         "<name>_memory_big_pin": "void <name>_memory_big_pin(<name>_t *m, int pin)",
-        "<name>_new": "<name>_t * <name>_new(const <name>_config *config, int *error)",
+        "<name>_new": "<name>_t * <name>_new(<name>_store_t *store, int *error)",
         "<name>_set_import0": "void <name>_set_import0(<name>_t *m, <name>_import0_fn function, void *user)",
         "<name>_status": "int <name>_status(const <name>_t *m)",
         "<name>_status_ptr": "const int * <name>_status_ptr(const <name>_t *m)",
+        "<name>_store_free": "int <name>_store_free(<name>_store_t *store)",
+        "<name>_store_new": "<name>_store_t * <name>_store_new(const <name>_config *config, int *error)",
         "<name>_thread_free": "void <name>_thread_free(void)",
         "<name>_trap_is_exception": "int <name>_trap_is_exception(int code)",
         "<name>_trap_message": "const char * <name>_trap_message(int code)",
@@ -172,6 +177,7 @@
       },
       "macros": {},
       "opaque": [
+        "<name>_store_t",
         "<name>_t"
       ],
       "structs": {

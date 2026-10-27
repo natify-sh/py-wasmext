@@ -2,7 +2,7 @@
 """The C API of a module as a shared library (item 10 of DESIGN.md, stage 6a): a public header `<name>_api.h` for any host language and the C that
 exports it, `<name>_shared.c`, on the typed functions of `<name>_glue.h`. No Python in either.
 
-The life of an instance: `<name>_new(&config, &error)` (WASI is made and bound there), `<name>_set_import<k>(m, function, user)` for each import that is not WASI's
+The life of an instance: `<name>_store_new(&config, &error)` makes the host of WASI (a store, shared by the instances made in it), `<name>_new(store, &error)` binds the instance to it, `<name>_set_import<k>(m, function, user)` for each import that is not WASI's
 (a host function is `result f(void *user, parameters..., int *trapped)`: it answers through `trapped`, nonzero when it failed, and keeps its error itself, as the
 protocol of errors says), `<name>_instantiate(m)` (0, or the code of a trap), then the exports: `int <name>_<export>(m, parameters..., results...)` answers 0 or the code of the trap (`<name>_trap_message(code)` is its
 text), except an export with one number as its result, `T <name>_<export>(m, parameters...)`, which answers the number (0 if the call trapped); the code of the last call of
@@ -176,7 +176,7 @@ static int api_c_errno(int wasi) {
 }"""
     )
     lines = f"""
-#define API_M(s) (({last}_t *)*(void **)(s)->user)
+#define API_S(s) (({last}_store_t *)((char *)(s) - offsetof({last}_store, wasi2)))  /* the store of the library: the glue store is its first member */
 static char *api_dup(const char *text) {{
     size_t n = strlen(text) + 1;
     char *copy = (char *)malloc(n);
@@ -194,7 +194,7 @@ static int api_p2_status(fusedwasi_p2_state *s, fusedwasi_p2_stream *st, int rc)
     return FUSEDWASI_P2_STREAM_FAILED;
 }}
 static int api_p2_read(fusedwasi_p2_state *s, fusedwasi_p2_stream *st, uint8_t *buf, uint64_t len, uint64_t *got) {{
-    {last}_t *m = API_M(s);
+    {last}_store_t *m = API_S(s);
     size_t n = 0;
     *got = 0;
     if (len == 0) return FUSEDWASI_P2_STREAM_OK;
@@ -204,7 +204,7 @@ static int api_p2_read(fusedwasi_p2_state *s, fusedwasi_p2_stream *st, uint8_t *
     return n == 0 ? FUSEDWASI_P2_STREAM_CLOSED : FUSEDWASI_P2_STREAM_OK;  /* nothing at all is the end of the input */
 }}
 static int api_p2_write(fusedwasi_p2_state *s, fusedwasi_p2_stream *st, const uint8_t *data, uint64_t len) {{
-    {last}_t *m = API_M(s);
+    {last}_store_t *m = API_S(s);
     if (len == 0) return FUSEDWASI_P2_STREAM_OK;
     return api_p2_status(s, st, m->stdout_write(m->user, (int)(st - m->streams), data, (size_t)len));
 }}
@@ -217,29 +217,29 @@ static int api_p2_flush(fusedwasi_p2_state *s, fusedwasi_p2_stream *st) {{ (void
 static int api_p2_ready(fusedwasi_p2_state *s, fusedwasi_p2_stream *st) {{ (void)s; (void)st; return 1; }}
 /* a hook that failed on its own traps (the host kept its error); another status is a clock that cannot be read, a source that failed: the caller of the state decides what that is */
 static int api_p2_clock(fusedwasi_p2_state *s, uint32_t id, uint64_t *ns) {{
-    {last}_t *m = API_M(s);
+    {last}_store_t *m = API_S(s);
     int rc = m->clock(m->user, id, ns);
     if (rc == {big}_HOOK_TRAP) s->trap(s, "the clock of the host failed");
     return rc != 0;
 }}
 static int api_p2_random(fusedwasi_p2_state *s, uint8_t *buf, size_t n) {{
-    {last}_t *m = API_M(s);
+    {last}_store_t *m = API_S(s);
     int rc = m->random(m->user, buf, n);
     if (rc == {big}_HOOK_TRAP) s->trap(s, "the source of random bytes of the host failed");
     return rc != 0;
 }}
 static int api_p2_sleep(fusedwasi_p2_state *s, uint64_t ns) {{
-    {last}_t *m = API_M(s);
+    {last}_store_t *m = API_S(s);
     int rc = m->sleep(m->user, ns);
     if (rc == {big}_HOOK_TRAP) s->trap(s, "the sleep of the host failed");
     return rc != 0;
 }}
 static void api_p2_wait(fusedwasi_p2_state *s) {{
-    {last}_t *m = API_M(s);
+    {last}_store_t *m = API_S(s);
     if (m->sleep(m->user, 1000000u) != 0) s->trap(s, "the sleep of the host failed");
 }}
 static int api_p2_sockets(fusedwasi_p2_state *s, const char *ip, uint16_t port, int use) {{
-    {last}_t *m = API_M(s);
+    {last}_store_t *m = API_S(s);
     if (use >= FUSEDWASI_P2_USE_UDP_BIND ? m->no_udp : m->no_tcp) return 0;
     if (m->sockets_all) return 1;
     if (m->sockets == NULL) return 0;
@@ -248,14 +248,14 @@ static int api_p2_sockets(fusedwasi_p2_state *s, const char *ip, uint16_t port, 
     return rc;
 }}
 static int api_p2_http(fusedwasi_p2_state *s, const char *scheme, const char *authority) {{
-    {last}_t *m = API_M(s);
+    {last}_store_t *m = API_S(s);
     if (m->http_all) return 1;
     if (m->http == NULL) return 0;
     int rc = m->http(m->user, scheme, authority);
     if (rc < 0) s->trap(s, "a policy of the network failed");
     return rc;
 }}
-static void api_p2_release({last}_t *m) {{
+static void api_p2_release({last}_store_t *m) {{
     for (size_t i = 0; i < m->nargs_v; i++) free(m->args_v[i]);
     for (size_t i = 0; i < m->nenv_v; i++) {{ free(m->env_n[i]); free(m->env_v[i]); }}
     for (size_t i = 0; i < m->npreopens; i++) {{ free((void *)m->preopens[i].path); free((void *)m->preopens[i].name); }}
@@ -267,10 +267,8 @@ static void api_p2_release({last}_t *m) {{
     C("")
 
 
-def _p2_new(
-    C: Callable[[str], None], last: str, big: str, program: str, wasi_imports: list[int], wasi2: bool, prefix: str
-) -> None:
-    """The body of `<last>_new` for WASI 0.2: the state of the glue (made by `<last>_wasi_bind`) filled from the configuration."""
+def _p2_new(C: Callable[[str], None], last: str, big: str, program: str, wasi2: bool) -> None:
+    """The body of `<last>_store_new`: the state of the glue (made by `<last>_p2_store_init`) filled from the configuration; `m` is the store."""
     net = (
         """        m->sockets = config->sockets;
         m->sockets_all = config->sockets_all;
@@ -285,10 +283,9 @@ def _p2_new(
     )
     body = f"""
     fusedwasi_p2_state *s;
-    m->p2_core = &m->core;
-    {last}_wasi_bind(&m->core);
-    s = &m->core.store->wasi2;
-    s->user = &m->p2_core;
+    {last}_p2_store_init(&m->st);
+    s = &m->st.wasi2;
+    s->user = &m->cur;  /* the glue reads the instance in call from the first member of what `user` points to */
     if (config != NULL) {{
         m->stdin_read = config->stdin_read;
         m->stdout_write = config->stdout_write;
@@ -370,42 +367,39 @@ def _p2_new(
     for line in body.strip("\n").split("\n"):
         C(line)
     if not wasi2:  # the state of 0.1 over it: the same directories
-        body_p1 = f"""
-    {{
+        body_p1 = """
+    {
         fusedwasi_p1_config wasi;
         fusedwasi_p1_preopen *over = (fusedwasi_p1_preopen *)calloc(m->npreopens ? m->npreopens : 1, sizeof *over);
         size_t bad = (size_t)-1;
         int err = 0;
         if (over == NULL) goto nomem;
         memset(&wasi, 0, sizeof wasi);
-        for (size_t i = 0; i < m->npreopens; i++) {{
+        for (size_t i = 0; i < m->npreopens; i++) {
             over[i].path = m->preopens[i].path;
             over[i].name = m->preopens[i].name;
             over[i].writable = m->preopens[i].writable;
-        }}
+        }
         wasi.preopens = over;
         wasi.npreopens = m->npreopens;
         wasi.user = m;
-        m->core.store->wasi = fusedwasi_p1_create(&wasi, s, &err, &bad);
+        m->st.wasi = fusedwasi_p1_create(&wasi, s, &err, &bad);
         free(over);
-        if (m->core.store->wasi == NULL) {{
+        if (m->st.wasi == NULL) {
             *error = err;
-            fusedwasi_p2_free(&m->core.store->wasi2);
+            fusedwasi_p2_free(&m->st.wasi2);
             api_p2_release(m);
             free(m);
             return NULL;
-        }}
-        {{ wasm_rt_memory_t *m_ = w2c_{prefix}_memory(&m->core.inst); fusedwasi_p1_bind(m->core.store->wasi, &m_->data, &m_->size); }}
-    }}
+        }
+    }
 """
         for line in body_p1.strip("\n").split("\n"):
             C(line)
-    for k in wasi_imports:
-        C(f"    m->set[{k}] = 1;")
     C("    if (0) {")
     C("nomem:")
     C("        *error = 12;")
-    C("        fusedwasi_p2_free(&m->core.store->wasi2);")
+    C("        fusedwasi_p2_free(&m->st.wasi2);")
     C("        api_p2_release(m);")
     C("        free(m);")
     C("        return NULL;")
@@ -554,9 +548,20 @@ def generate_shared(
         A("    int http_all;")
     A(f"}} {last}_config;")
     A("")
-    A("/* A new instance (imports not set, not instantiated); NULL with `*error` (an errno) when it cannot be made. */")
-    A(f"WASMEXT_API {last}_t *{last}_new(const {last}_config *config, int *error);")
-    A(f"WASMEXT_API void {last}_free({last}_t *m);")
+    A(
+        "/* A store: the host of WASI with its configuration, which the instances made in it share (a file one opens, another sees). NULL with `*error` (an errno) when it cannot be made."
+    )
+    A("   `config` may be NULL. */")
+    A(f"typedef struct {last}_store_t {last}_store_t;")
+    A(f"WASMEXT_API {last}_store_t *{last}_store_new(const {last}_config *config, int *error);")
+    A(
+        f"WASMEXT_API int {last}_store_free({last}_store_t *store);  /* 0; 1 and nothing done when an instance made in it is not freed yet; NULL is allowed */"
+    )
+    A(
+        "/* A new instance in a store (imports not set, not instantiated); NULL with `*error` (an errno) when it cannot be made. */"
+    )
+    A(f"WASMEXT_API {last}_t *{last}_new({last}_store_t *store, int *error);")
+    A(f"WASMEXT_API void {last}_free({last}_t *m);  /* the store outlives it */")
     A(
         "/* The first call into the library from a thread sets that thread up for traps (the runtime of wasm2c does it for the thread that made the instance); a host thread that is going away may call this to give that back. */"
     )
@@ -689,6 +694,32 @@ def generate_shared(
     C("}")
     C("")
     n_imports = len(imports)
+    C(
+        "/* The store: the host of WASI (its configuration and its state) that the instances made in it share. The glue store is the first member. */"
+    )
+    C(f"struct {last}_store_t {{")
+    C(f"    {last}_store st;")
+    C(
+        f"    {last}_instance *cur;  /* the instance in call: what the state's `user` points to (the glue reads it from the first member) */"
+    )
+    C("    unsigned instances;  /* made in it and not freed yet */")
+    C("    int (*stdin_read)(void *user, uint8_t *buf, size_t cap, size_t *got);")
+    C("    int (*stdout_write)(void *user, int fd, const uint8_t *buf, size_t n);")
+    C("    int (*clock)(void *user, uint32_t id, uint64_t *ns);")
+    C("    int (*random)(void *user, uint8_t *buf, size_t n);")
+    C("    int (*sleep)(void *user, uint64_t ns);")
+    C("    void *user;")
+    if uses_wasi:
+        C("    int (*sockets)(void *user, const char *ip, uint16_t port, uint32_t use);")
+        C("    int (*http)(void *user, const char *scheme, const char *authority);")
+        C("    int sockets_all, no_tcp, no_udp, http_all;")
+        C("    char **args_v, **env_n, **env_v;")
+        C("    size_t nargs_v, nenv_v;")
+        C("    struct fusedwasi_p2_preopen *preopens;")
+        C("    size_t npreopens;")
+        C("    fusedwasi_p2_stream streams[3];")
+    C("};")
+    C("")
     C(f"struct {last}_t {{")
     C(f"    {last}_instance core;")
     C(f"    unsigned char set[{max(n_imports, 1)}];  /* an import that the host has set (those of WASI are) */")
@@ -704,24 +735,6 @@ def generate_shared(
     if memories:
         C(f"    long mem_pins[{len(memories)}];  /* the pins of each exported memory (see <name>_memory_*_pin) */")
         C(f"    uint64_t mem_max_pages[{len(memories)}];")
-    C("    int (*stdin_read)(void *user, uint8_t *buf, size_t cap, size_t *got);")
-    C("    int (*stdout_write)(void *user, int fd, const uint8_t *buf, size_t n);")
-    C("    int (*clock)(void *user, uint32_t id, uint64_t *ns);")
-    C("    int (*random)(void *user, uint8_t *buf, size_t n);")
-    C("    int (*sleep)(void *user, uint64_t ns);")
-    C("    void *user;")
-    if uses_wasi:
-        C(
-            "    void *p2_core;  /* what the state's `user` points to: the glue reads the instance from it (it is the first member of this structure) */"
-        )
-        C("    int (*sockets)(void *user, const char *ip, uint16_t port, uint32_t use);")
-        C("    int (*http)(void *user, const char *scheme, const char *authority);")
-        C("    int sockets_all, no_tcp, no_udp, http_all;")
-        C("    char **args_v, **env_n, **env_v;")
-        C("    size_t nargs_v, nenv_v;")
-        C("    struct fusedwasi_p2_preopen *preopens;")
-        C("    size_t npreopens;")
-        C("    fusedwasi_p2_stream streams[3];")
     C("    int status;  /* the code of the last call of an export: 0, or the trap (see `status`) */")
     if tags:
         C(
@@ -732,19 +745,47 @@ def generate_shared(
     C("")
     if uses_wasi:
         _p2_helpers(C, last, big, wasi2)
-    C(f"{last}_t *{last}_new(const {last}_config *config, int *error) {{")
+    C(f"{last}_store_t *{last}_store_new(const {last}_config *config, int *error) {{")
     C("    int ignored;")
     C("    api_enter();")
     C("    if (error == NULL) error = &ignored;")
+    C(f"    {last}_store_t *m = ({last}_store_t *)calloc(1, sizeof *m);")
+    C("    if (m == NULL) { *error = 12; return NULL; }")
+    if uses_wasi:
+        _p2_new(C, last, big, _c_string(last), wasi2)
+    else:
+        C("    (void)config;")
+    C("    *error = 0;")
+    C("    return m;")
+    C("}")
+    C("")
+    C(f"int {last}_store_free({last}_store_t *store) {{")
+    C("    if (store == NULL) return 0;")
+    C("    if (store->instances != 0) return 1;  /* an instance made in it is not freed: nothing is done */")
+    if uses_wasi and not wasi2:
+        C("    fusedwasi_p1_destroy(store->st.wasi);")
+    if uses_wasi:
+        C("    fusedwasi_p2_free(&store->st.wasi2);")
+        C("    api_p2_release(store);")
+    C("    free(store);")
+    C("    return 0;")
+    C("}")
+    C("")
+    C(f"{last}_t *{last}_new({last}_store_t *store, int *error) {{")
+    C("    int ignored;")
+    C("    api_enter();")
+    C("    if (error == NULL) error = &ignored;")
+    C("    if (store == NULL) { *error = 22; return NULL; }")
     C(f"    {last}_t *m = ({last}_t *)calloc(1, sizeof *m);")
     C("    if (m == NULL) { *error = 12; return NULL; }")
     C(f"    {last}_glue_store_init(&m->core);")
+    C("    m->core.store = &store->st;")
+    C("    store->instances++;")
     if uses_wasi:
-        _p2_new(
-            C, last, big, _c_string(last), [k for k, (_m, _f, _fn, w, _h, _s) in enumerate(imports) if w], wasi2, prefix
-        )
-    else:
-        C("    (void)config;")
+        C(f"    {last}_wasi_bind_imports(&m->core);")
+        for k, (_m, _f, _fn, w, _h, _s) in enumerate(imports):
+            if w:
+                C(f"    m->set[{k}] = 1;")
     C("    *error = 0;")
     C("    return m;")
     C("}")
@@ -752,11 +793,7 @@ def generate_shared(
     C(f"void {last}_free({last}_t *m) {{")
     C("    if (m == NULL) return;")
     C(f"    {last}_glue_free(&m->core);")
-    if uses_wasi and not wasi2:
-        C("    fusedwasi_p1_destroy(m->core.store->wasi);")
-    if uses_wasi:
-        C("    fusedwasi_p2_free(&m->core.store->wasi2);")
-        C("    api_p2_release(m);")
+    C(f"    (({last}_store_t *)m->core.store)->instances--;")
     C("    free(m);")
     C("}")
     C("")
@@ -908,6 +945,9 @@ def generate_shared(
             A(f"WASMEXT_API int {last}_host_call{k}({last}_t *m{args}{res});")
             C(f"int {last}_host_call{k}({last}_t *m{args}{res}) {{")
             C("    int trapped = 0;")
+            C(
+                f"    {last}_p1_bind(&m->core);  /* the memory of this instance, and this instance as the one in call: a store is shared by several */"
+            )
             C("    m->core.store->wasi2.exited = 0;  /* the end of the last call is not the end of this one */")
             C("    m->core.store->wasi->finished = 0;")
             call_args = "".join(f", ({_CTYPE[t]})a{j}" for j, t in enumerate(func.params))

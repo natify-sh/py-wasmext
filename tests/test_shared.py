@@ -103,6 +103,7 @@ _OOB_HOST = r"""
 #endif
 #include "m_api.h"
 static m_t *m;
+static m_store_t *m_s;
 static void report(void) {
     m_oob(m);
     int rc = m_status(m);
@@ -116,7 +117,8 @@ static void *other(void *arg) { report(); return arg; }
 int main(void) {
     int e, rc;
     int32_t v = 0;
-    m = m_new(NULL, &e);
+    m_s = m_store_new(NULL, &e);
+    m = m_new(m_s, &e);
     m_instantiate(m);
     m_oob(m);
     rc = m_status(m);
@@ -136,6 +138,7 @@ int main(void) {
     rc = m_status(m);
     printf("ok after thread: %d %d\n", rc, v);
     m_free(m);
+    m_store_free(m_s);
     return 0;
 }
 """
@@ -171,7 +174,8 @@ int main(void) {
     m_config config;
     memset(&config, 0, sizeof config);
     config.stdout_write = write_hook;
-    m_t *m = m_new(&config, &e);
+    m_store_t *m_s = m_store_new(&config, &e);
+    m_t *m = m_new(m_s, &e);
     m_instantiate(m);
     int rc = m__start(m);
     uint32_t value = 0;
@@ -179,6 +183,7 @@ int main(void) {
     printf("start: %s, end %d, value %u, wrote [%.*s]\n", rc == M_TRAP_ENDED ? "ENDED" : "other", how, value, (int)(n - 1), out);
     printf("again: %s\n", m__start(m) == M_TRAP_ENDED ? "ENDED" : "other");
     m_free(m);
+    m_store_free(m_s);
     return 0;
 }
 """
@@ -240,7 +245,8 @@ int main(void) {
     config.clock = clock_hook;
     config.random = random_hook;
     config.sleep = sleep_hook;
-    m_t *m = m_new(&config, &e);
+    m_store_t *m_s = m_store_new(&config, &e);
+    m_t *m = m_new(m_s, &e);
     m_instantiate(m);
     int64_t t = 0;
     int32_t r = 0, errno_of_wasi = -1;
@@ -253,6 +259,7 @@ int main(void) {
     errno_of_wasi = m_nap(m);
     printf("sleep: errno %d, slept %llu\n", errno_of_wasi, (unsigned long long)slept);
     m_free(m);
+    m_store_free(m_s);
     return 0;
 }
 """
@@ -283,7 +290,8 @@ _REACTOR_HOST = r"""
 #include "m_api.h"
 int main(void) {
     int e;
-    m_t *m = m_new(NULL, &e);
+    m_store_t *m_s = m_store_new(NULL, &e);
+    m_t *m = m_new(m_s, &e);
     int rc = m_instantiate(m);
     int32_t v = 0;
     v = m_peek(m);
@@ -295,6 +303,7 @@ int main(void) {
     r = m_counter_plus(m, 1);
     printf("after the set: counter %lld, plus 1 is %lld, ratio %g\n", (long long)m_global_counter(m), (long long)r, m_global_ratio(m));
     m_free(m);
+    m_store_free(m_s);
     return 0;
 }
 """
@@ -337,8 +346,10 @@ _LINK_HOST = r"""
 #include "b_api.h"
 int main(void) {
     int e;
-    a_t *a = a_new(NULL, &e);
-    b_t *b = b_new(NULL, &e);
+    a_store_t *a_s = a_store_new(NULL, &e);
+    a_t *a = a_new(a_s, &e);
+    b_store_t *b_s = b_store_new(NULL, &e);
+    b_t *b = b_new(b_s, &e);
     a_instantiate(a);
     a_export mem, counter, version, bump;
     char message[512];
@@ -378,7 +389,9 @@ int main(void) {
     rc = b_status(b);
     printf("tick again: %d %d\n", rc, v);
     b_free(b);
+    b_store_free(b_s);
     a_free(a);
+    a_store_free(a_s);
     return 0;
 }
 """
@@ -452,12 +465,14 @@ _FLAGS_HOST = r"""
 #include "m_api.h"
 int main(void) {
     int e;
-    m_t *m = m_new(NULL, &e);
+    m_store_t *m_s = m_store_new(NULL, &e);
+    m_t *m = m_new(m_s, &e);
     m_instantiate(m);
     m_export mem;
     m_export_find(m, "mem", NULL, &mem);
     printf("guard pages: %u\n", (mem.flags >> 2) & 1u);
     m_free(m);
+    m_store_free(m_s);
     return 0;
 }
 """
@@ -546,8 +561,10 @@ _TWO_HOST = r"""
 int main(int argc, char **argv) {
     int e;
     int32_t v = 0;
-    a_t *a = a_new(NULL, &e);
-    b_t *b = b_new(NULL, &e);
+    a_store_t *a_s = a_store_new(NULL, &e);
+    a_t *a = a_new(a_s, &e);
+    b_store_t *b_s = b_store_new(NULL, &e);
+    b_t *b = b_new(b_s, &e);
     a_instantiate(a);
     b_instantiate(b);
     v = a_ok(a);  /* both runtimes are set up before any fault: the handler of the signals is then the one of b, unless they chain */

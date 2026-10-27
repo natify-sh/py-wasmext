@@ -1,7 +1,7 @@
 """Two instances in one store (C2a): the host is shared, the memory is the instance's own.
 
 The module of WASI 0.1 gets the memory of the instance that calls (the trampoline binds it before each call), so a host shared by several instances serves each. These tests are written
-before the public `Store` existed (`WASI_TARGET_PLAN.md`, "The structure"). The extension has it; the wrapper for ctypes is expected to fail with `AttributeError` until its step, and `strict` makes the mark go with it.
+before the public `Store` existed (`WASI_TARGET_PLAN.md`, "The structure"). Both front ends have it: the extension, and the wrapper for ctypes over the `<name>_store_new` of the library.
 """
 
 from __future__ import annotations
@@ -17,12 +17,8 @@ import pytest
 DATA = Path(__file__).parent / "data"
 Builder = Callable[..., ModuleType]
 
-ctypes_not_yet = pytest.mark.xfail(
-    strict=True, raises=AttributeError, reason="C2a: the Store of the wrapper for ctypes is not made yet"
-)
 
-
-@pytest.fixture(params=["extension", pytest.param("ctypes", marks=ctypes_not_yet)])
+@pytest.fixture(params=["extension", "ctypes"])
 def build(request: pytest.FixtureRequest) -> Builder:
     builder: Builder = request.getfixturevalue("build_extension" if request.param == "extension" else "build_ctypes")
     return functools.partial(builder, host="wasm32-wasip1")

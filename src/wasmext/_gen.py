@@ -2075,11 +2075,11 @@ def generate(
         hadd("}")
     if uses_wasi and wasi2:
         hadd(
-            "/* WASI 0.2: the host of fusedwasi over the imports. Its state is `self->store->wasi2`; the memory is set again before each call (it moves when it grows). */"
+            "/* WASI 0.2: the host of fusedwasi over the imports. Its state is `self->store->wasi2`; the memory of the instance in call is bound before each call by the pointers to its base and size (they are the instance's own, so a memory that grows is followed). */"
         )
         hadd(f"static inline void {last}_p2_refresh({last}_instance *self) {{")
         hadd(f"    wasm_rt_memory_t *m_ = w2c_{prefix}_{mangle('memory')}(&self->inst);")
-        hadd("    fusedwasi_p2_set_memory(&self->store->wasi2, 0, m_->data, m_->size);")
+        hadd("    fusedwasi_p2_bind_memory(&self->store->wasi2, 0, &m_->data, &m_->size);")
         hadd(
             f"    if (self->store->wasi2.user != NULL) *({last}_instance **)self->store->wasi2.user = self;  /* the instance in call: a store shared by several instances serves each */"
         )
@@ -2094,8 +2094,7 @@ def generate(
         hadd(
             f"    uint32_t r = w2c_{prefix}_{mangle('cabi_realloc')}(&self->inst, old_ptr, old_size, align, new_size);"
         )
-        hadd(f"    {last}_p2_refresh(self);")
-        hadd("    return r;")
+        hadd("    return r;  /* the memory may have grown: the binding is of the pointers, nothing to set again */")
         hadd("}")
         hadd(f"static inline void {last}_p2_store_init({last}_store *st) {{")
         hadd("    fusedwasi_p2_init(&st->wasi2);")

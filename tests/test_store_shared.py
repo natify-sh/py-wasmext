@@ -7,6 +7,8 @@ before the public `Store` existed (`WASI_TARGET_PLAN.md`, "The structure"). Both
 from __future__ import annotations
 
 import functools
+import gc
+import weakref
 from collections.abc import Callable
 from pathlib import Path
 from types import ModuleType
@@ -97,3 +99,93 @@ def test_a_memory_that_grows_is_read_again_and_the_other_keeps_its_size(build: B
     assert b.grow(3) == 1 and write(b, 200000, b"b grew") == 6
     assert write(a, 70000, b"a again") == 7
     assert out == [b"before", b"in the new page", b"b", b"b grew", b"a again"]
+
+
+WASI = "wasi_snapshot_preview1"
+
+
+def test_a_with_block_closes_the_store_and_nothing_is_called_in_it_any_more(build: Builder) -> None:
+    mod: Any = build(DATA / "wasi_probe.wat", "wasi_probe")
+    out: list[bytes] = []
+    with mod.Store(wasi={"stdout": out.append}) as store:
+        inst = mod.Instance(store)
+        assert not store.closed and write(inst, 100, b"inside") == 6
+    assert store.closed and out == [b"inside"]
+    with pytest.raises(ValueError, match="closed"):
+        inst.fd_write(1, 0, 1, 32)  # a call into an instance of a closed store is an error, never a crash
+    with pytest.raises(ValueError, match="closed"):
+        mod.Instance(store)
+    with pytest.raises(ValueError, match="closed"), store:
+        pass
+    store.close()  # closing twice is not an error, as for a file
+
+
+def test_close_lets_go_the_objects_of_the_configuration(build: Builder) -> None:
+    mod: Any = build(DATA / "wasi_probe.wat", "wasi_probe")
+
+    class Sink:
+        def write(self, data: bytes) -> None:
+            pass
+
+    sink = Sink()
+    ref = weakref.ref(sink)
+    store = mod.Store(wasi={"stdout": sink})
+    inst = mod.Instance(store)
+    del sink
+    gc.collect()
+    assert ref() is not None  # the store holds it while it is open
+    store.close()
+    gc.collect()
+    assert ref() is None  # the host is let go: the files of the program are closed, the objects of the caller are free
+    assert inst is not None
+
+
+def test_a_store_is_not_closed_from_inside_a_call_that_runs_in_it(build: Builder) -> None:
+    mod: Any = build(DATA / "wasi_probe.wat", "wasi_probe")
+    holder: list[Any] = []
+
+    def hook(data: bytes) -> None:
+        holder[0].close()  # the call of fd_write is running in this store
+
+    store = mod.Store(wasi={"stdout": hook})
+    holder.append(store)
+    inst = mod.Instance(store)
+    with pytest.raises(RuntimeError, match="in use"):
+        write(inst, 100, b"x")
+    assert not store.closed  # nothing was done
+    store.close()
+    assert store.closed
+
+
+def test_the_runtime_of_a_store_says_what_it_is(build: Builder) -> None:
+    mod: Any = build(DATA / "wasi_probe.wat", "wasi_probe")
+    a, b = mod.Store(), mod.Store()
+    assert a.runtime.name == "wasm2c" and isinstance(a.runtime.abi, int) and isinstance(a.runtime.fingerprint, int)
+    assert (a.runtime.abi, a.runtime.fingerprint) == (b.runtime.abi, b.runtime.fingerprint)
+
+
+def test_a_store_of_another_module_is_refused(build: Builder) -> None:
+    mod_a: Any = build(DATA / "wasi_probe.wat", "wasi_probe")
+    mod_b: Any = build(DATA / "wasi_grow.wat", "wasi_grow")
+    with pytest.raises(TypeError, match="Store"):
+        mod_b.Instance(
+            mod_a.Store()
+        )  # the layouts of two modules differ: a store shared by modules waits for the versioned record (C7)
+    with pytest.raises(TypeError, match="Store"):
+        mod_a.Instance(object())
+
+
+def test_the_original_of_a_call_of_the_host_reads_the_memory_of_its_own_instance(build: Builder) -> None:
+    mod: Any = build(DATA / "wasi_probe.wat", "wasi_probe")
+    out: list[bytes] = []
+    store = mod.Store(wasi={"stdout": out.append})
+    a, b = mod.Instance(store), mod.Instance(store)
+    original = a.__host__.__imports__[WASI]["fd_write"]
+    write(b, 100, b"from b")  # b is the last instance that called
+    mem = a.memory
+    mem[100:106] = b"from a"
+    mem[0:8] = (100).to_bytes(4, "little") + (6).to_bytes(4, "little")
+    assert original(1, 0, 1, 32) == 0 and out == [b"from b", b"from a"]
+    store.close()
+    with pytest.raises(ValueError, match="closed"):
+        original(1, 0, 1, 32)

@@ -53,6 +53,7 @@ class LinkError(Exception):
 
 _TRAP_HOST = 0x7000
 _TRAP_ENDED = 0x7002
+_TRAP_CLOSED = 0x7004
 _TRAP_NO_MEMORY = 0x7001
 _HOOK_TRAP = 0x10000
 _LINK_ERROR = 0x7003
@@ -98,6 +99,14 @@ def _library() -> Any:
         _lib.@NAME@_store_new.argtypes = [_c.c_void_p, _c.POINTER(_c.c_int)]
         _lib.@NAME@_store_free.restype = _c.c_int
         _lib.@NAME@_store_free.argtypes = [_c.c_void_p]
+        _lib.@NAME@_store_close.restype = _c.c_int
+        _lib.@NAME@_store_close.argtypes = [_c.c_void_p]
+        _lib.@NAME@_store_closed.restype = _c.c_int
+        _lib.@NAME@_store_closed.argtypes = [_c.c_void_p]
+        _lib.@NAME@_abi.restype = _c.c_uint32
+        _lib.@NAME@_abi.argtypes = []
+        _lib.@NAME@_runtime.restype = _c.c_uint32
+        _lib.@NAME@_runtime.argtypes = []
         _lib.@NAME@_new.restype = _c.c_void_p
         _lib.@NAME@_new.argtypes = [_c.c_void_p, _c.POINTER(_c.c_int)]
         _lib.@NAME@_status_ptr.restype = _c.c_void_p
@@ -323,6 +332,29 @@ class Store:
         self._h = handle
         self._finalizer = weakref.finalize(self, _store_free, handle, lib)  # after the instances: each of them keeps this object
 
+    def close(self) -> None:
+        """Close the store: its host is let go (the files the program opened are closed) and its instances can not be called any more."""
+        if self._lib.@NAME@_store_close(self._h):
+            raise RuntimeError("the store is in use: a call into one of its instances is running")
+        self._alive = []  # the hooks and the objects of the configuration are let go with the host (the library calls none of them any more)
+
+    @property
+    def closed(self) -> bool:
+        return bool(self._lib.@NAME@_store_closed(self._h))
+
+    @property
+    def runtime(self) -> Any:
+        """The identity of the runtime the store lives in: name, abi, fingerprint (no operations)."""
+        return types.SimpleNamespace(name="wasm2c", abi=self._lib.@NAME@_abi(), fingerprint=self._lib.@NAME@_runtime())
+
+    def __enter__(self) -> "Store":
+        if self.closed:
+            raise ValueError("the store is closed")
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        self.close()
+
 
 class Instance:
     """An instance of the module @NAME@ (the library makes the state, this object owns it)."""
@@ -330,6 +362,8 @@ class Instance:
     def __init__(self, store: Any, imports: Any = None) -> None:
         if not isinstance(store, Store):
             raise TypeError("Instance() argument 'store' must be a Store made by this module (@NAME@.Store); a Store of another module is a different host")
+        if store.closed:
+            raise ValueError("the store is closed")
         self._store = store
         lib = _library()
         self._lib = lib
@@ -394,6 +428,8 @@ class Instance:
                 return pending  # the very object the function of the host raised
         if code == _TRAP_NO_MEMORY:
             return MemoryError()
+        if code == _TRAP_CLOSED:
+            return ValueError("the store is closed")
         if code == _TRAP_ENDED:
             return self._ended()
 @UNCAUGHT_ERROR@        message = self._lib.@NAME@_trap_message(code)

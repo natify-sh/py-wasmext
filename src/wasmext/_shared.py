@@ -485,6 +485,7 @@ def generate_shared(
         f"#define {big}_TRAP_ENDED 0x7002  /* the call ended the WASI program (proc_exit, proc_raise): {last}_wasi_end says how; the instance can be called again */"
     )
     A(f"#define {big}_LINK_ERROR 0x7003  /* an import was not set before {last}_instantiate */")
+    A(f"#define {big}_TRAP_CLOSED 0x7004  /* the store of the instance is closed: nothing is called any more */")
     A(
         f"#define {big}_HOOK_TRAP 0x10000  /* what a hook of WASI answers for a failure of its own (a positive number below it is an errno of WASI) */"
     )
@@ -554,6 +555,14 @@ def generate_shared(
     A("   `config` may be NULL. */")
     A(f"typedef struct {last}_store_t {last}_store_t;")
     A(f"WASMEXT_API {last}_store_t *{last}_store_new(const {last}_config *config, int *error);")
+    A(
+        f"WASMEXT_API int {last}_store_close({last}_store_t *store);  /* the host is let go (open files are closed) and nothing of the store is called any more; 0, 1 when a call is running (nothing done); twice is 0 */"
+    )
+    A(f"WASMEXT_API int {last}_store_closed(const {last}_store_t *store);")
+    A(f"WASMEXT_API uint32_t {last}_abi(void);  /* WASMEXT_ABI of this library */")
+    A(
+        f"WASMEXT_API uint32_t {last}_runtime(void);  /* the fingerprint of the layout of the runtime of wasm2c (WASMEXT_RUNTIME) */"
+    )
     A(
         f"WASMEXT_API int {last}_store_free({last}_store_t *store);  /* 0; 1 and nothing done when an instance made in it is not freed yet; NULL is allowed */"
     )
@@ -759,14 +768,33 @@ def generate_shared(
     C("    return m;")
     C("}")
     C("")
-    C(f"int {last}_store_free({last}_store_t *store) {{")
-    C("    if (store == NULL) return 0;")
-    C("    if (store->instances != 0) return 1;  /* an instance made in it is not freed: nothing is done */")
+    C(f"static void api_store_release({last}_store_t *store) {{")
     if uses_wasi and not wasi2:
         C("    fusedwasi_p1_destroy(store->st.wasi);")
+        C("    store->st.wasi = NULL;")
     if uses_wasi:
         C("    fusedwasi_p2_free(&store->st.wasi2);")
         C("    api_p2_release(store);")
+    else:
+        C("    (void)store;")
+    C("}")
+    C("")
+    C(f"int {last}_store_close({last}_store_t *store) {{")
+    C("    if (store == NULL || store->st.closed) return 0;")
+    C("    if (store->st.active != 0) return 1;  /* a call is running: nothing is done */")
+    C("    store->st.closed = 1;")
+    C("    api_store_release(store);")
+    C("    return 0;")
+    C("}")
+    C("")
+    C(f"int {last}_store_closed(const {last}_store_t *store) {{ return store == NULL || store->st.closed; }}")
+    C(f"uint32_t {last}_abi(void) {{ return (uint32_t)WASMEXT_ABI; }}")
+    C(f"uint32_t {last}_runtime(void) {{ return (uint32_t)WASMEXT_RUNTIME; }}")
+    C("")
+    C(f"int {last}_store_free({last}_store_t *store) {{")
+    C("    if (store == NULL) return 0;")
+    C("    if (store->instances != 0) return 1;  /* an instance made in it is not freed: nothing is done */")
+    C("    if (!store->st.closed) api_store_release(store);")
     C("    free(store);")
     C("    return 0;")
     C("}")
@@ -776,6 +804,7 @@ def generate_shared(
     C("    api_enter();")
     C("    if (error == NULL) error = &ignored;")
     C("    if (store == NULL) { *error = 22; return NULL; }")
+    C("    if (store->st.closed) { *error = 9; return NULL; }  /* EBADF: the store is closed */")
     C(f"    {last}_t *m = ({last}_t *)calloc(1, sizeof *m);")
     C("    if (m == NULL) { *error = 12; return NULL; }")
     C("    m->core.store = &store->st;")
@@ -825,6 +854,7 @@ def generate_shared(
     C(f'    if (code == {big}_TRAP_NO_MEMORY) return "out of memory";')
     C(f'    if (code == {big}_TRAP_ENDED) return "the call ended the WASI program";')
     C(f'    if (code == {big}_LINK_ERROR) return "an import was not set";')
+    C(f'    if (code == {big}_TRAP_CLOSED) return "the store is closed";')
     C("    return wasm_rt_strerror((wasm_rt_trap_t)code);")
     C("}")
     C("")
@@ -943,6 +973,7 @@ def generate_shared(
             )
             A(f"WASMEXT_API int {last}_host_call{k}({last}_t *m{args}{res});")
             C(f"int {last}_host_call{k}({last}_t *m{args}{res}) {{")
+            C("    if (m->core.store->closed) return (int)WASMEXT_TRAP_CLOSED;")
             C("    int trapped = 0;")
             C(
                 f"    {last}_p1_bind(&m->core);  /* the memory of this instance, and this instance as the one in call: a store is shared by several */"

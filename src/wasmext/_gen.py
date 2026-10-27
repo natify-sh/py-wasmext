@@ -1130,6 +1130,10 @@ def generate(
         hadd("    fusedwasi_p1_state *wasi;")
     else:
         hadd("    char unused_;  /* a module with no WASI has no host yet */")
+    hadd("    int closed;  /* the store was closed: a call is refused, the host was let go */")
+    hadd(
+        "    unsigned active;  /* the calls in progress (any thread holds the GIL when it changes this, or the host serialises) */"
+    )
     hadd(f"}} {last}_store;")
     hadd("")
     hadd("typedef struct {")
@@ -1289,7 +1293,8 @@ def generate(
     add("    }")
     if tags:
         add("    if (code == (int)WASM_RT_TRAP_UNCAUGHT_EXCEPTION) { raise_uncaught(); return; }")
-    add("    if (code == (int)WASMEXT_TRAP_NO_MEMORY) PyErr_NoMemory();")
+    add('    if (code == (int)WASMEXT_TRAP_CLOSED) PyErr_SetString(PyExc_ValueError, "the store is closed");')
+    add("    else if (code == (int)WASMEXT_TRAP_NO_MEMORY) PyErr_NoMemory();")
     add("    else PyErr_SetString(TrapError, wasm_rt_strerror((wasm_rt_trap_t)code));")
     add("}")
     add(
@@ -1468,16 +1473,75 @@ def generate(
     add("    return 0;")
     add("}")
     add("")
+    add(
+        "/* the host is let go: the files the program opened are closed, the Python objects of the configuration are dropped; once */"
+    )
+    add("static void store_release(StoreObject *self) {")
+    if uses_wasi and not wasi2:
+        add("    fusedwasi_p1_destroy(self->st.wasi);")
+        add("    self->st.wasi = NULL;")
+    if uses_wasi:
+        add("    fusedwasi_p2_free(&self->st.wasi2);")
+        add("    wasmext_wasi2_free((wasmext_wasi2_py *)self->st.wasi2_py);")
+        add("    self->st.wasi2_py = NULL;")
+    else:
+        add("    (void)self;")
+    add("}")
+    add("")
+    add("static PyObject *Store_close(StoreObject *self, PyObject *Py_UNUSED(ignored)) {")
+    add("    if (self->st.closed) Py_RETURN_NONE;  /* closing twice is not an error, as for a file */")
+    add("    if (self->st.active) {")
+    add(
+        '        PyErr_SetString(PyExc_RuntimeError, "the store is in use: a call into one of its instances is running");'
+    )
+    add("        return NULL;")
+    add("    }")
+    add("    self->st.closed = 1;")
+    add("    store_release(self);")
+    add("    Py_RETURN_NONE;")
+    add("}")
+    add("")
+    add("static PyObject *Store_enter(StoreObject *self, PyObject *Py_UNUSED(ignored)) {")
+    add('    if (self->st.closed) { PyErr_SetString(PyExc_ValueError, "the store is closed"); return NULL; }')
+    add("    Py_INCREF((PyObject *)self);")
+    add("    return (PyObject *)self;")
+    add("}")
+    add("")
+    add("static PyObject *Store_exit(StoreObject *self, PyObject *Py_UNUSED(args)) {")
+    add("    return Store_close(self, NULL);  /* an exception that leaves the block goes on */")
+    add("}")
+    add("")
+    add(
+        "static PyObject *Store_closed(StoreObject *self, void *Py_UNUSED(closure)) { return PyBool_FromLong(self->st.closed); }"
+    )
+    add("")
+    add(
+        "/* the identity of the runtime that the store lives in: no operations (the shared runtime is for the later steps) */"
+    )
+    add("static PyObject *Store_runtime(StoreObject *self, void *Py_UNUSED(closure)) {")
+    add("    (void)self;")
+    add('    PyObject *types = PyImport_ImportModule("types");')
+    add("    if (types == NULL) return NULL;")
+    add('    PyObject *ns = PyObject_GetAttrString(types, "SimpleNamespace");')
+    add("    Py_DECREF(types);")
+    add("    if (ns == NULL) return NULL;")
+    add(
+        '    PyObject *kw = Py_BuildValue("{s:s,s:I,s:I}", "name", "wasm2c", "abi", (unsigned)WASMEXT_ABI, "fingerprint", (unsigned)WASMEXT_RUNTIME);'
+    )
+    add("    PyObject *none = PyTuple_New(0);")
+    add("    PyObject *r = kw != NULL && none != NULL ? PyObject_Call(ns, none, kw) : NULL;")
+    add("    Py_XDECREF(kw);")
+    add("    Py_XDECREF(none);")
+    add("    Py_DECREF(ns);")
+    add("    return r;")
+    add("}")
+    add("")
     add("static void Store_dealloc(StoreObject *self) {")
     add("    PyTypeObject *tp = Py_TYPE((PyObject *)self);")
     add("    PyObject_GC_UnTrack(self);")
     add("    if (self->weakreflist != NULL) PyObject_ClearWeakRefs((PyObject *)self);")
     add("    Store_clear(self);")
-    if uses_wasi and not wasi2:
-        add("    fusedwasi_p1_destroy(self->st.wasi);")
-    if uses_wasi:
-        add("    fusedwasi_p2_free(&self->st.wasi2);")
-        add("    wasmext_wasi2_free((wasmext_wasi2_py *)self->st.wasi2_py);")
+    add("    if (!self->st.closed) store_release(self);")
     add("    ((freefunc)PyType_GetSlot(tp, Py_tp_free))((PyObject *)self);")
     add("    Py_DECREF(tp);")
     add("}")
@@ -1582,6 +1646,7 @@ def generate(
     add("        return NULL;")
     add("    }")
     add("    StoreObject *store_obj = (StoreObject *)store;")
+    add('    if (store_obj->st.closed) { PyErr_SetString(PyExc_ValueError, "the store is closed"); return NULL; }')
     add("    Py_INCREF((PyObject *)store_obj);")
     add("    InstanceObject *self = (InstanceObject *)PyType_GenericAlloc(type, 0);")
     add("    if (self == NULL) {")
@@ -2052,21 +2117,23 @@ def generate(
             hadd(f"    {ret} zero;")
             hadd("    memset(&zero, 0, sizeof zero);")
         hadd(f"    {last}_instance *self = ({last}_instance *)((char *)inst - offsetof({last}_instance, inst));")
+        hadd(f"    if (self->store->closed) {{ *trapped = (int)WASMEXT_TRAP_CLOSED; {give} }}")
+        hadd("    self->store->active++;")
         if uses_wasi:
             hadd("    self->store->wasi2.exited = 0;  /* the end of the last call is not the end of this one */")
             if not wasi2:
                 hadd("    if (self->store->wasi != NULL) self->store->wasi->finished = 0;")
-        else:
-            hadd("    (void)self;")
-        hadd(f"    WASMEXT_ENTER(trap_, {{ *trapped = (int)trap_; {give} }})")
+        hadd(f"    WASMEXT_ENTER(trap_, {{ self->store->active--; *trapped = (int)trap_; {give} }})")
         call = f"w2c_{prefix}_{mangle(exp_name)}((w2c_{prefix} *)inst{names})"
         if func.results:
             hadd(f"    {ret} r = {call};")
             hadd("    WASMEXT_LEAVE();")
+            hadd("    self->store->active--;")
             hadd("    return r;")
         else:
             hadd(f"    {call};")
             hadd("    WASMEXT_LEAVE();")
+            hadd("    self->store->active--;")
         hadd("}")
         hadd("")
     if shares_tables:
@@ -2438,6 +2505,10 @@ def generate(
                 add(f"    {_CTYPE[t]} a{j} = {_TO_WASM[t].format(f'args[{j}]')};")
             if n:
                 add("    if (PyErr_Occurred()) return NULL;")
+            add(
+                '    if (self->core.store->closed) { PyErr_SetString(PyExc_ValueError, "the store is closed"); return NULL; }'
+            )
+            add(f"    {last}_p1_bind(&self->core);  /* the memory of this instance: a store is shared by several */")
             add("    int trapped = 0;")
             call_args = "".join(f", a{j}" for j in range(n))
             call = f"{core}(self->core.store->wasi{call_args}, &trapped)"
@@ -2554,8 +2625,25 @@ def generate(
     add("    {NULL, 0, 0, 0, NULL}")
     add("};")
     add("")
+    add("static PyMethodDef Store_methods[] = {")
+    add(
+        '    {"close", (PyCFunction)Store_close, METH_NOARGS, "close the store: its host is let go, its instances can not be called any more"},'
+    )
+    add('    {"__enter__", (PyCFunction)Store_enter, METH_NOARGS, NULL},')
+    add('    {"__exit__", (PyCFunction)Store_exit, METH_VARARGS, NULL},')
+    add("    {NULL, NULL, 0, NULL}")
+    add("};")
+    add("")
+    add("static PyGetSetDef Store_getset[] = {")
+    add('    {"closed", (getter)Store_closed, NULL, "whether the store was closed", NULL},')
+    add('    {"runtime", (getter)Store_runtime, NULL, "the identity of the runtime: name, abi, fingerprint", NULL},')
+    add("    {NULL, NULL, NULL, NULL, NULL}")
+    add("};")
+    add("")
     add("static PyType_Slot store_slots[] = {")
     add("    {Py_tp_new, Store_new},")
+    add("    {Py_tp_methods, Store_methods},")
+    add("    {Py_tp_getset, Store_getset},")
     add("    {Py_tp_dealloc, Store_dealloc},")
     add("    {Py_tp_traverse, Store_traverse},")
     add("    {Py_tp_clear, Store_clear},")
@@ -2863,7 +2951,8 @@ def _function_type_c(last: str, ref_types: list[FuncType]) -> str:
     )
     add("        return;")
     add("    }")
-    add("    if (code == (int)WASMEXT_TRAP_NO_MEMORY) PyErr_NoMemory();")
+    add('    if (code == (int)WASMEXT_TRAP_CLOSED) PyErr_SetString(PyExc_ValueError, "the store is closed");')
+    add("    else if (code == (int)WASMEXT_TRAP_NO_MEMORY) PyErr_NoMemory();")
     add(
         '    else if (code == (int)WASM_RT_TRAP_UNCAUGHT_EXCEPTION) PyErr_SetString(TrapError, "an exception of WebAssembly that nothing caught");'
     )
@@ -3620,6 +3709,7 @@ def _stub(
     elif imports or table:
         lines += ["from collections.abc import Callable"] + (["from typing import TypedDict"] if imports else [])
     names = [t for t in (tables or ()) if _usable(t)]
+    lines.append("from types import SimpleNamespace")
     lines.append("from typing import Literal, overload" if names else "from typing import Literal")
     lines += [
         "",
@@ -3694,6 +3784,15 @@ def _stub(
         if wasi
         else "    def __init__(self) -> None: ..."
     )
+    lines += [
+        "    def close(self) -> None: ...",
+        "    def __enter__(self) -> Store: ...",
+        "    def __exit__(self, *exc: object) -> None: ...",
+        "    @property",
+        "    def closed(self) -> bool: ...",
+        "    @property",
+        "    def runtime(self) -> SimpleNamespace: ...",
+    ]
     lines.append("")
     lines.append("class Instance:")
     lines.append(

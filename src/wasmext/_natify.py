@@ -46,21 +46,28 @@ GENERATED = "WASMEXT_GENERATED_"  # the prefix of the macros at the head of the 
 # the C of wasmext that a module is built with when it needs it (WASI): copied beside the C of the module
 GLUE_SHARED = ("wasmext_glue.h",)  # the glue that is the same for every module
 WASI_SHARED = (
-    "wasi_p1_core.h",
     "wasi_python.h",
-)  # what both snapshots share: the core of WASI and its file backend for Windows (both are those of fusedwasi), and its host, Python (wasmext's)
+)  # what both families share of the host that is Python (wasmext's); the headers of fusedwasi come with the glue (Glue.wasi_headers), in the tree `fusedwasi/p1/`, `fusedwasi/p2/` that they include each other by
 C_DIR = Path(__file__).parent / "c"
 
 
 def shared_header(name: str) -> Path:
-    """Where a header that a module is built with comes from: the C of wasmext, or the WASI of the package fusedwasi (`fusedwasi/p1/` for 0.1, `fusedwasi/p2/` for 0.2)."""
+    """Where a header that a module is built with comes from: the C of wasmext, or the WASI of the package fusedwasi (`fusedwasi/p1/wasi_p1.h` for 0.1, `fusedwasi/p2/wasi_p2_core.h` for 0.2: the
+    name has the directory of the package, which the headers of fusedwasi include each other by)."""
     own = C_DIR / name
     if own.is_file():
         return own
     from fusedwasi import get_include
 
-    p1 = Path(get_include()) / "fusedwasi" / "p1" / name
-    return p1 if p1.is_file() else Path(get_include()) / "fusedwasi" / "p2" / name
+    return Path(get_include()) / name
+
+
+def write_shared_headers(glue: Glue, out_dir: Path) -> None:
+    """The headers that the glue of a module includes, beside it (the tree of fusedwasi's headers is kept below `fusedwasi/`); what is there already and the same is left alone."""
+    for name in _shared_headers(glue):
+        target = out_dir / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        _write_if_changed(target, shared_header(name).read_bytes())
 
 
 # A big module is split into files that gcc and the others compile at the same time: one file of 3 million lines was not compiled
@@ -667,8 +674,7 @@ def _prepare(
     # the C that wasmext brings, and the glue of the module, beside the C of the module (not made by wasm2c, so always put there)
     out_dir.mkdir(parents=True, exist_ok=True)
     _write_if_changed(out_dir / f"{last}_glue.h", glue.header.encode("utf-8"))
-    for c_name in _shared_headers(glue):
-        _write_if_changed(out_dir / c_name, shared_header(c_name).read_bytes())
+    write_shared_headers(glue, out_dir)
 
     # As cythonize() does, but by the content of the .wasm and not by its time (a cache, a copy or an archive does not keep the times): the C is made
     # again when it is missing, was made by another wasmext (or WABT) or from another .wasm, or when forced (`force`, or WASMEXT_FORCE_REGEN=1 for build systems). A tree that has the C in a

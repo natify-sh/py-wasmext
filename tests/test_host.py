@@ -17,6 +17,7 @@ from .conftest import DATA
 from .test_wasm_parser import I32, functype, leb, module, name, section, vec
 
 WASI = "wasi_snapshot_preview1"
+HELLO = Path(__file__).parent.parent / "examples" / "wasi2_unbundled" / "src" / "wasi2demo" / "_hello.wasm"
 Builder = Callable[..., ModuleType]
 
 
@@ -40,7 +41,7 @@ def test_the_default_host_binds_nothing_and_says_so() -> None:
 def test_wasip1_binds_wasi_and_is_told_by_the_module() -> None:
     glue = generate(parse(_wasm((WASI, "proc_exit"))), "m", host="wasm32-wasip1")
     assert (
-        glue.wasi_headers[-1] == "wasi_p1.h" and "wasi_p2_core.h" in glue.wasi_headers
+        glue.wasi_headers[-1] == "fusedwasi/p1/wasi_p1.h" and "fusedwasi/p2/wasi_p2_core.h" in glue.wasi_headers
     )  # the headers of 0.1, over the state of 0.2
     assert not glue.notes
     assert "__host__: Literal['wasm32-wasip1']" in glue.stub.replace('"', "'")
@@ -74,7 +75,7 @@ def test_imports_that_do_not_belong_to_the_host_are_plain_imports_with_a_note() 
     both = _wasm((WASI, "proc_exit"), ("wasi:cli/environment@0.2.12", "get-arguments"))
     glue = generate(parse(both), "m", host="wasm32-wasip1")
     assert (
-        glue.wasi_headers[-1] == "wasi_p1.h" and "wasi_p2_core.h" in glue.wasi_headers
+        glue.wasi_headers[-1] == "fusedwasi/p1/wasi_p1.h" and "fusedwasi/p2/wasi_p2_core.h" in glue.wasi_headers
     )  # the headers of 0.1, over the state of 0.2
     assert any("wasi:cli/environment@0.2.12" in note and "yours to give" in note for note in glue.notes)
     assert "wasi:cli/environment@0.2.12" in glue.stub  # typed as the caller's
@@ -268,3 +269,16 @@ def test_a_wrapper_calls_the_original_of_the_call_it_replaces(build_front_end: B
     with pytest.raises(mod.WasiExit) as raised:
         inst._start()  # pyright: ignore[reportPrivateUsage]
     assert raised.value.code == 3 and len(seen) == 1 and b"".join(out) == b"hello, wasi\n"
+
+
+def test_one_state_and_one_guest_for_each_instance_in_the_glue_of_both_families() -> None:
+    """The store holds ONE `fusedwasi_p2_state` for 0.1 and 0.2 and each instance its own `fusedwasi_p2_guest`, made with it (nothing is rebound before a call)."""
+    for host in ("wasm32-wasip1", "wasm32-wasip2"):
+        wasm = _wasm((WASI, "proc_exit")) if host == "wasm32-wasip1" else HELLO.read_bytes()
+        glue = generate(parse(wasm), "m", host=host)
+        header = glue.header
+        assert header.count("fusedwasi_p2_state wasi;") == 1 and header.count("fusedwasi_p2_guest guest;") == 1
+        assert "fusedwasi_p1_state" not in header and "fusedwasi_p1_create" not in header
+        assert "_p1_bind" not in header and "_p2_refresh" not in header and "wasi2" not in header
+        assert "g->user = self;" in header and "fusedwasi_p2_bind_memory(g, 0," in header
+        assert "wasm_rt_trap(WASMEXT_TRAP_HOST)" in header  # trap, exit and signal are wasmext's hooks

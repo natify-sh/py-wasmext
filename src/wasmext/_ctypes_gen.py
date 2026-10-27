@@ -1373,7 +1373,7 @@ class Table:
 _WASI_HOST_CLASS = """
 
 class Host:
-    \"\"\"What answers the imports of WASI (wasm32-wasip1) in one instance, and the originals of its calls.\"\"\"
+    \"\"\"What answers the imports of WASI (0.1 or 0.2, as the host of the module says) in one instance, and the originals of its calls.\"\"\"
 
     def __init__(self, instance: Any) -> None:
         self._instance = instance
@@ -1502,8 +1502,8 @@ def generate_ctypes(model: ApiModel, *, library_file: str, version: str | None =
         "@WASI_EXCEPTIONS@": wasi_exceptions,
         "@EXCEPTION_SETUP@": _UNCAUGHT_SETUP if model.has_tags else "",
         "@UNCAUGHT_ERROR@": _UNCAUGHT_ERROR if model.has_tags else "",
-        "@WASI_RUNTIME@": (_WASI_RUNTIME + ("" if wasi2 else _WASI_HOST_CLASS)) if uses_wasi else "",
-        "@WASI_METHODS@": (("" if wasi2 else _WASI_METHODS_HOST) + _WASI_METHODS if uses_wasi else "")
+        "@WASI_RUNTIME@": (_WASI_RUNTIME + _WASI_HOST_CLASS) if uses_wasi else "",
+        "@WASI_METHODS@": ((_WASI_METHODS_HOST + _WASI_METHODS) if uses_wasi else "")
         + (_UNCAUGHT_METHOD if model.has_tags else ""),
         "@NET_TYPES@": _NET_TYPES_P2 if wasi2 else "",
         "@CONFIG_EXTRA@": _CONFIG_EXTRA_P2 if wasi2 else "",

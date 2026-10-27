@@ -187,7 +187,9 @@ input, an output thrown away), `preopens` (`{name the program sees: directory of
 `readonly` (`True`, a name or a list of names of the preopens that cannot be changed), `clock` (a function: the id of the clock ->
 nanoseconds; default: the clocks of the system) and `random` (a function: how many -> that many bytes; default: the random bytes of the
 system). The types are in the `.pyi` that the build puts beside the module. A call can also be replaced as any import can:
-`Instance(store, imports={"wasi_snapshot_preview1": {"clock_time_get": my_clock}})`; what you give wins, call by call.
+`Instance(store, imports={"wasi_snapshot_preview1": {"clock_time_get": my_clock}})`; what you give wins, call by call. The original of
+a call (wasmext's own, bound to the instance that calls) is `instance.__host__.__imports__[module][name]`, for WASI 0.1 and 0.2 alike (a
+function that asks for the `Caller` reaches it as `caller.instance.__host__.__imports__[...]`); the stub types it with the Protocols of fusedwasi.
 
 A program is kept inside the directories it was given: `..` out of a directory, an absolute name, or a symbolic link that leads out is
 `ENOTCAPABLE`. A directory the program opens is a capability for that directory only. A program built with an old libc finds a relative path

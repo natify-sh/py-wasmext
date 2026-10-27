@@ -135,10 +135,8 @@ int main(int argc, char **argv) {
 _RUN_STATE = """    fusedwasi_p2_state *s;
     int allow_net = 0;
     wasm_rt_init();
-    @LAST@_wasi_bind(&instance);  /* the state of the host is made (fusedwasi_p2_init) and the imports are bound to it, for 0.1 as for 0.2 */
-    s = &instance.store->wasi2;
-    run_self = &instance;
-    s->user = &run_self;
+    @LAST@_wasi_bind(&instance);  /* the state of the host is made (fusedwasi_p2_init), and the guest of the instance and its imports are bound to it, for 0.1 as for 0.2 */
+    s = &instance.store->wasi;
     allow_net = run_allow_net;
     if (allow_net) {  /* nothing of the network is allowed unless the options say so, as in Wasmtime */
         s->socket_addr_check = run_net_yes;
@@ -185,35 +183,23 @@ _RUN_STATE = """    fusedwasi_p2_state *s;
 
 _RUN_P1 = """    (void)program;
     {
-        fusedwasi_p1_config config;
-        fusedwasi_p1_preopen *over = (fusedwasi_p1_preopen *)calloc((size_t)ndirs + 1, sizeof *over);
         int error = 0;
         size_t bad = (size_t)-1;
-        memset(&config, 0, sizeof config);
-        for (int k = 0; k < ndirs; k++) {
-            over[k].path = preopens[k].path;
-            over[k].name = preopens[k].name;
-            over[k].writable = preopens[k].writable;
-        }
-        config.preopens = over;
-        config.npreopens = (size_t)ndirs;
-        instance.store->wasi = fusedwasi_p1_create(&config, s, &error, &bad);
-        if (instance.store->wasi == NULL) {
+        if (fusedwasi_p1_open_descriptors(s, &error, &bad) != 0) {  /* a directory that cannot be opened is told now, with its place in the list */
             if (bad != (size_t)-1) fprintf(stderr, "%s: --dir %s: %s\\n", argv[0], dirs[bad], strerror(error));
             else fprintf(stderr, "%s: cannot set up WASI: %s\\n", argv[0], strerror(error));
             return 2;
         }
     }
-    { wasm_rt_memory_t *m_ = w2c_@PREFIX@_memory(&instance.inst); fusedwasi_p1_bind(instance.store->wasi, &m_->data, &m_->size); }
     int trapped = @LAST@_glue_instantiate(&instance);
     if (!trapped) {
         @LAST_U@_START(&instance.inst, &trapped);
     }
     int code = 0;
-    if (s->exited) {  /* proc_exit: its code, as wasi:cli/exit gives it */
-        code = (int)s->exit_code;
-    } else if (instance.store->wasi->finished == FUSEDWASI_P1_END_SIGNAL) {
-        fprintf(stderr, "%s: the program was ended by the signal %u\\n", argv[0], (unsigned)instance.store->wasi->end_value);
+    if (instance.guest.exited) {  /* proc_exit: its code, as wasi:cli/exit gives it */
+        code = (int)instance.guest.exit_code;
+    } else if (instance.signalled) {
+        fprintf(stderr, "%s: the program was ended by the signal %u\\n", argv[0], (unsigned)instance.signalled);
         code = 134;
     } else if (trapped) {
         if (instance.store->p2_message[0] != '\\0') fprintf(stderr, "trap: %s\\n", instance.store->p2_message);
@@ -222,7 +208,6 @@ _RUN_P1 = """    (void)program;
     }
     fflush(stdout);
     @LAST@_glue_free(&instance);
-    fusedwasi_p1_destroy(instance.store->wasi);
     fusedwasi_p2_free(s);
     return code;
 }
@@ -235,8 +220,8 @@ _RUN_P2 = """    int trapped = @LAST@_glue_instantiate(&instance);
         result = (uint32_t)@LAST_U@_RUN(&instance.inst, &trapped);
     }
     int code = 0;
-    if (s->exited) {  /* wasi:cli/exit: its code; the call came back as a trap of the host */
-        code = (int)s->exit_code;
+    if (instance.guest.exited) {  /* wasi:cli/exit: its code; the call came back as a trap of the host */
+        code = (int)instance.guest.exit_code;
     } else if (trapped) {
         if (instance.store->p2_message[0] != '\\0') fprintf(stderr, "trap: %s\\n", instance.store->p2_message);
         else fprintf(stderr, "trap: %s\\n", wasm_rt_strerror((wasm_rt_trap_t)trapped));
@@ -252,14 +237,14 @@ _RUN_P2 = """    int trapped = @LAST@_glue_instantiate(&instance);
 """
 
 _MAIN_P1 = {
-    "@HELPERS@": '#if !@LAST_U@_WASI || !@LAST_U@_ONLY_WASI\n#error "wasmext: an executable serves the imports of WASI and no others"\n#endif\n#ifndef @LAST_U@_START\n#error "wasmext: the module has no _start () -> ()"\n#endif\n\n/* what the glue of the host reads the instance from: `s->user` points to it (the first member of what it points to is the instance) */\nstatic void *run_self;\n',
+    "@HELPERS@": '#if !@LAST_U@_WASI || !@LAST_U@_ONLY_WASI\n#error "wasmext: an executable serves the imports of WASI and no others"\n#endif\n#ifndef @LAST_U@_START\n#error "wasmext: the module has no _start () -> ()"\n#endif\n',
     "@NET@": "static int run_allow_net;  /* nothing of the network is allowed: no option for it */\nstatic int run_net_yes(fusedwasi_p2_state *s, const char *ip, uint16_t port, int use) {\n    (void)s; (void)ip; (void)port; (void)use;\n    return 1;\n}\nstatic int run_http_yes(fusedwasi_p2_state *s, const char *scheme, const char *authority) {\n    (void)s; (void)scheme; (void)authority;\n    return 1;\n}\n",
     "@NETOPT@": "",
     "@NETUSAGE@": "",
 }
 
 _MAIN_P2 = {
-    "@HELPERS@": '#if !@LAST_U@_WASI || !@LAST_U@_ONLY_WASI\n#error "wasmext: an executable serves the imports of WASI and no others"\n#endif\n#ifndef @LAST_U@_RUN\n#error "wasmext: the module does not export wasi:cli/run@0.2.x#run () -> i32"\n#endif\n\n/* what the glue of WASI 0.2 reads the instance from: `s->user` points to it (the first member of what it points to is the instance) */\nstatic void *run_self;\n',
+    "@HELPERS@": '#if !@LAST_U@_WASI || !@LAST_U@_ONLY_WASI\n#error "wasmext: an executable serves the imports of WASI and no others"\n#endif\n#ifndef @LAST_U@_RUN\n#error "wasmext: the module does not export wasi:cli/run@0.2.x#run () -> i32"\n#endif\n',
     "@NET@": "static int run_allow_net;  /* --allow-net */\nstatic int run_net_yes(fusedwasi_p2_state *s, const char *ip, uint16_t port, int use) {\n    (void)s; (void)ip; (void)port; (void)use;\n    return 1;\n}\nstatic int run_http_yes(fusedwasi_p2_state *s, const char *scheme, const char *authority) {\n    (void)s; (void)scheme; (void)authority;\n    return 1;\n}\n",
     "@NETOPT@": '        } else if (strcmp(a, "--allow-net") == 0) {\n            run_allow_net = 1;\n',
     "@NETUSAGE@": '            "  --allow-net           the program may use the network (sockets, name lookup, http); else all of it is refused\\n"\n',

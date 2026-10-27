@@ -1,15 +1,15 @@
-/* WASI 0.1 for a host that is Python: the configuration `wasi=` (a dict) turned into the plain-C `fusedwasi_p1_config` of wasi_p1_core.h,
-   and the hooks of the core (the standard streams as Python objects, the functions `clock` and `random`, the sleep that lets a signal
-   through, the exceptions of proc_exit and proc_raise). The glue of the extension includes it after wasi_p1.h / wasi_p1_unstable.h.
+/* WASI for a host that is Python, the part that is the same for 0.1 and 0.2 (wasi2_python.h includes it): the configuration `wasi=` (a dict) read into plain C (arguments,
+   environment, the `struct fusedwasi_p2_preopen` list), the standard streams as Python objects, the functions `clock` and `random`, and the exceptions of the end of a program
+   (proc_exit, proc_raise). The glue of the extension includes wasi2_python.h after the headers of fusedwasi.
 
-   The Python objects are in `wasmext_wasi_py`, which the core knows only as `user`. A hook that fails with an exception of Python
-   keeps it where Python keeps it, in the state of the thread, and answers FUSEDWASI_P1_HOOK_TRAP; an OSError becomes an errno of WASI. */
+   The Python objects are in `wasmext_wasi_py`. A hook that fails with an exception of Python keeps it where Python keeps it, in the state of the thread; an OSError is
+   a source that failed (the caller decides what that is), anything else makes the hook trap. */
 #ifndef WASMEXT_WASI_PYTHON_H
 #define WASMEXT_WASI_PYTHON_H
 
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
-#include "wasi_p1_core.h"
+#include "fusedwasi/p2/wasi_p2_core.h"
 
 typedef struct {
     PyObject *stream[3];  /* what the caller gave for stdin, stdout, stderr (NULL: sys.stdin, sys.stdout, sys.stderr) */
@@ -22,8 +22,6 @@ typedef struct {
     PyObject *decoder[3];  /* a text stream with no binary side gets text: the bytes of one character may come in two writes, so each stream has its decoder */
     PyObject *stdin_rest;  /* the bytes of a text stdin that did not fit in the last read */
 } wasmext_wasi_py;
-
-#define WASI_PY(w) ((wasmext_wasi_py *)(w)->user)
 
 static inline PyObject *wasi_module_of(PyObject **slot, const char *name) {
     if (*slot == NULL) *slot = PyImport_ImportModule(name);
@@ -55,11 +53,8 @@ static inline int wasi_python_errno(void) {
     return -1;
 }
 
-/* The status of a hook after an exception: an OSError is the errno of WASI that its errno says (and is cleared); anything else is FUSEDWASI_P1_HOOK_TRAP, with the exception still set. */
-static inline int wasi_python_status(void) {
-    int code = wasi_python_errno();
-    return code < 0 ? FUSEDWASI_P1_HOOK_TRAP : (int)fusedwasi_p1_errno(code);
-}
+/* The status of a hook of the state after an exception: an OSError is a source that failed, 1 (it is cleared); anything else is -1, with the exception still set (the hook traps). */
+static inline int wasi_python_status(void) { return wasi_python_errno() < 0 ? -1 : 1; }
 
 /* ---- the standard streams ---------------------------------------------------------------------------------------------- */
 
@@ -254,7 +249,7 @@ static const char *const wasi_signal_names[31] = {
 
 /* the program is over by proc_exit (WasiExit, with .code) or by proc_raise (WasiSignal, with .signal and .name): raised in the call */
 static void wasi_py_raise_end(wasmext_wasi_py *p, int how, uint32_t value) {
-    if (how == FUSEDWASI_P1_END_EXIT) {
+    if (how == WASMEXT_END_EXIT) {
         PyObject *exc = PyObject_CallFunction(p->exit_type, "I", value);
         if (exc != NULL) {
             PyObject *number = PyLong_FromUnsignedLong(value);
@@ -286,18 +281,28 @@ typedef struct {
     size_t args_size, env_size;
     uint32_t argc, envc;
     PyObject *preopens, *readonly;  /* until the preopens are made */
-    fusedwasi_p1_preopen *items;    /* the preopens, made: names and paths are new memory */
+    struct fusedwasi_p2_preopen *items;    /* the preopens, made: names and paths are new memory */
     size_t nitems;
 } wasi_py_options;
 
-static inline void wasi_py_options_free(wasi_py_options *o) {
-    FUSEDWASI_P1_FREE(o->args);
-    FUSEDWASI_P1_FREE(o->env);
-    for (size_t i = 0; i < o->nitems; i++) {
-        FUSEDWASI_P1_FREE((char *)o->items[i].name);
-        FUSEDWASI_P1_FREE((char *)o->items[i].path);
+/* a NUL-ended copy of `len` bytes, new memory */
+static inline char *wasi_copy(const char *text, size_t len) {
+    char *out = (char *)malloc(len + 1);
+    if (out != NULL) {
+        memcpy(out, text, len);
+        out[len] = '\0';
     }
-    FUSEDWASI_P1_FREE(o->items);
+    return out;
+}
+
+static inline void wasi_py_options_free(wasi_py_options *o) {
+    free(o->args);
+    free(o->env);
+    for (size_t i = 0; i < o->nitems; i++) {
+        free((char *)o->items[i].name);
+        free((char *)o->items[i].path);
+    }
+    free(o->items);
     Py_CLEAR(o->preopens);
     Py_CLEAR(o->readonly);
 }
@@ -327,7 +332,7 @@ static inline int wasi_pack_strings(PyObject *seq, char **out, size_t *size, uin
         }
         total += len + 1;
     }
-    char *buf = (char *)FUSEDWASI_P1_MALLOC(total > 0 ? (size_t)total : 1);
+    char *buf = (char *)malloc(total > 0 ? (size_t)total : 1);
     if (buf == NULL) {
         Py_DECREF(list);
         PyErr_NoMemory();
@@ -417,7 +422,7 @@ static inline int wasi_setup_preopens(wasmext_wasi_py *p, wasi_py_options *o) {
     PyObject *items = ospath ? PyMapping_Items(o->preopens) : NULL;
     int rc = -1;
     if (items == NULL) goto done;
-    o->items = (fusedwasi_p1_preopen *)FUSEDWASI_P1_CALLOC((size_t)PyList_Size(items) + 1, sizeof(fusedwasi_p1_preopen));
+    o->items = (struct fusedwasi_p2_preopen *)calloc((size_t)PyList_Size(items) + 1, sizeof(struct fusedwasi_p2_preopen));
     if (o->items == NULL) {
         PyErr_NoMemory();
         goto done;
@@ -439,9 +444,9 @@ static inline int wasi_setup_preopens(wasmext_wasi_py *p, wasi_py_options *o) {
         Py_XDECREF(isdir);
         int made = 0;
         if (root != NULL && shown != NULL) {
-            fusedwasi_p1_preopen *item = &o->items[o->nitems];
-            item->name = fusedwasi_p1_copy(PyBytes_AsString(shown), (size_t)PyBytes_Size(shown));
-            item->path = fusedwasi_p1_copy(PyBytes_AsString(root), strlen(PyBytes_AsString(root)));
+            struct fusedwasi_p2_preopen *item = &o->items[o->nitems];
+            item->name = wasi_copy(PyBytes_AsString(shown), (size_t)PyBytes_Size(shown));
+            item->path = wasi_copy(PyBytes_AsString(root), strlen(PyBytes_AsString(root)));
             o->nitems++;  /* counted before the check, so that both are freed */
             if (item->name == NULL || item->path == NULL) {
                 PyErr_NoMemory();
@@ -473,7 +478,7 @@ done:
 static inline int wasi_apply_option(wasmext_wasi_py *p, wasi_py_options *o, const char *name, PyObject *value) {
     if (strcmp(name, "args") == 0) {
         if (value == Py_None) {  /* none, which is not the name of the program */
-            o->args = (char *)FUSEDWASI_P1_MALLOC(1);
+            o->args = (char *)malloc(1);
             if (o->args == NULL) return (PyErr_NoMemory(), -1);
             o->args_size = 0;
             o->argc = 0;
@@ -539,8 +544,5 @@ static inline void wasi_py_clear(wasmext_wasi_py *p) {
     for (int i = 0; i < 3; i++) Py_CLEAR(p->decoder[i]);
     Py_CLEAR(p->stdin_rest);
 }
-
-/* the call in which the program ended by proc_raise trapped: WasiSignal says which (the state of 0.1 keeps it; the end of proc_exit is the exit of the state of 0.2) */
-static inline void wasmext_wasi_raise_signal(fusedwasi_p1_state *w) { wasi_py_raise_end(WASI_PY(w), FUSEDWASI_P1_END_SIGNAL, w->end_value); }
 
 #endif

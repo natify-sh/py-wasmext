@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any
 
 from ._wasi_p2_table import FUNCS as _P2_FUNCS
+from ._wasi_p2_table import IMPORTS as _P2_IMPORTS
 from ._wasi_p2_table import INCLUDES as _P2_INCLUDES
 from ._wasm import FuncType, GlobalType, Import, Limits, Module, TableType, ValType
 
@@ -180,6 +181,10 @@ def _ident(name: str) -> str:
     return last
 
 
+# where the headers of fusedwasi are beside the glue: the tree of the package (`fusedwasi/p1/`, `fusedwasi/p2/`), as `wasi_p1_core.h` includes `../p2/...`
+_FUSEDWASI_P1 = "fusedwasi/p1/"
+_FUSEDWASI_P2 = "fusedwasi/p2/"
+
 # the modules a WASI program imports its system calls from; wasmext gives them (the headers of src/wasmext/c) unless the caller does
 _WASI_PREVIEW1 = "wasi_snapshot_preview1"
 _WASI_UNSTABLE = "wasi_unstable"  # the first snapshot
@@ -200,16 +205,9 @@ def check_host(host: str) -> str:
     return host
 
 
-def _p2_cname(module: str, name: str) -> str:
-    """The name of the function of fusedwasi for an import of WASI 0.2: the module without its version and the name, every character that is not a letter or
-    a digit turned into `_` (`wasi:io/streams@0.2.12` `[method]output-stream.write` is `fusedwasi_wasi_io_streams_output_stream_write`)."""
-    base = module.split("@")[0].replace(":", "/")
-    if name.startswith("[resource-drop]"):
-        name = name[len("[resource-drop]") :] + "-drop"
-    elif name.startswith("[constructor]"):
-        name = name[len("[constructor]") :] + "-new"
-    name = re.sub(r"^\[(method|static)\]", "", name).replace(".", "-")
-    return "fusedwasi_" + re.sub(r"[^0-9A-Za-z]+", "_", f"{base}/{name}").strip("_")
+def _p2_cname(module: str, name: str) -> str | None:
+    """The function of fusedwasi for an import of WASI 0.2 (any 0.2.N: the module without its version is the key), from the table of signatures of fusedwasi; None if it has none."""
+    return _P2_IMPORTS.get((module.split("@")[0], name))
 
 
 def _p2_headers(calls: dict[tuple[str, str], str], include: bool = False) -> list[str]:
@@ -536,8 +534,8 @@ def generate(
                 raise GenError(f"import {imp.module}.{imp.name} {reason}: not supported yet")
             if imp.module in wasi_headers and wasi2:
                 cname = _p2_cname(imp.module, imp.name)
-                entry = _P2_FUNCS.get(cname)
-                if entry is None:
+                entry = _P2_FUNCS.get(cname) if cname is not None else None
+                if cname is None or entry is None:
                     raise GenError(f"import {imp.module}.{imp.name} is not a function of WASI 0.2 that fusedwasi has")
                 _, _, ptypes, rtype = entry
                 if tuple(str(t) for t in imp.type.params) != ptypes or tuple(str(t) for t in imp.type.results) != (
@@ -708,12 +706,12 @@ def generate(
         hadd("#endif")
     hadd(f'#include "{last}_w2c.h"')
     hadd('#include "wasmext_glue.h"')
-    if not wasi2:
-        for module_name in wasi_modules:
-            hadd(f'#include "{wasi_headers[module_name]}"')
     if uses_wasi:  # the state of the host is the one of 0.2, for a module of 0.1 too
         for header in _p2_headers(p2_calls, include=True):
-            hadd(f'#include "{header}"')
+            hadd(f'#include "{_FUSEDWASI_P2}{header}"')
+        if not wasi2:
+            for module_name in wasi_modules:
+                hadd(f'#include "{_FUSEDWASI_P1}{wasi_headers[module_name]}"')
     tags = module.tags
     notes: list[str] = []
     for tag_index, tag in enumerate(tags):
@@ -1043,7 +1041,7 @@ def generate(
         add("static PyObject *UncaughtExceptionError;")
     if uses_wasi:
         add("static PyObject *WasiExitError, *WasiSignalError, *WasiTerminatedError;")
-    if uses_wasi and not wasi2:
+    if uses_wasi:
         add("static PyTypeObject *HostType;")
     if uses_wasi:
         add(
@@ -1124,12 +1122,13 @@ def generate(
     hadd("typedef struct {")
     if uses_wasi:
         hadd(
-            "    fusedwasi_p2_state wasi2;  /* the state of the host (fusedwasi, p2/): made by the glue, its Python side is `wasi2_py`. A module of WASI 0.1 has it too: `wasi` is over it */"
+            "    fusedwasi_p2_state wasi;  /* the world of the host (fusedwasi): one state for WASI 0.1 and 0.2 alike, shared by the instances of the store, made once and freed once. Its Python side is `wasi_py` */"
         )
-        hadd("    void *wasi2_py;")
+        hadd("    void *wasi_py;")
         hadd("    char p2_message[160];  /* why the host trapped, when it did not say with an exception */")
-    if uses_wasi and not wasi2:
-        hadd("    fusedwasi_p1_state *wasi;")
+        hadd(
+            "    void (*wait)(fusedwasi_p2_guest *g);  /* the `wait` of the guests of this store (what a blocking call does between two looks at a pollable); NULL: the default of fusedwasi */"
+        )
     else:
         hadd("    char unused_;  /* a module with no WASI has no host yet */")
     hadd("    int closed;  /* the store was closed: a call is refused, the host was let go */")
@@ -1145,6 +1144,11 @@ def generate(
     hadd(
         f"    {last}_store *store;  /* the store the instance lives in: its host; set by whoever makes the instance */"
     )
+    if uses_wasi:
+        hadd(
+            "    fusedwasi_p2_guest guest;  /* the caller of the world: made with the instance (`wasi_guest_init`), its memory bound once; its `user` is the instance */"
+        )
+        hadd("    uint32_t signalled;  /* the number of the signal that ended the last call (proc_raise), or 0 */")
     for i, host in enumerate(hosts):
         hadd(f"    struct w2c_{mangle(host, module=True)} host{i};")
     hadd(
@@ -1261,13 +1265,11 @@ def generate(
     add("        if (PyErr_Occurred()) return;")
     if uses_wasi:
         add(
-            "        if (self->core.store->wasi2.exited) { wasmext_wasi2_raise_exit((wasmext_wasi2_py *)self->core.store->wasi2_py, self->core.store->wasi2.exit_code); return; }"
+            "        if (self->core.guest.exited) { wasmext_wasi2_raise_end((wasmext_wasi2_py *)self->core.store->wasi_py, WASMEXT_END_EXIT, self->core.guest.exit_code); return; }"
         )
-    if uses_wasi and not wasi2:
         add(
-            "        if (self->core.store->wasi != NULL && self->core.store->wasi->finished == FUSEDWASI_P1_END_SIGNAL) { wasmext_wasi_raise_signal(self->core.store->wasi); return; }"
+            "        if (self->core.signalled) { wasmext_wasi2_raise_end((wasmext_wasi2_py *)self->core.store->wasi_py, WASMEXT_END_SIGNAL, self->core.signalled); return; }"
         )
-    if uses_wasi and wasi2:
         add(
             "        if (self->core.store->p2_message[0]) { PyErr_SetString(TrapError, self->core.store->p2_message); self->core.store->p2_message[0] = 0; return; }"
         )
@@ -1436,14 +1438,28 @@ def generate(
     add("    StoreObject *self = (StoreObject *)PyType_GenericAlloc(type, 0);")
     add("    if (self == NULL) return NULL;")
     if uses_wasi:
-        add(f"    {last}_p2_store_init(&self->st);")
+        add(f"    {last}_wasi_store_init(&self->st);")
         add(
-            f"    self->st.wasi2_py = wasmext_wasi2_new(&self->st.wasi2, NULL, wasi, WasiExitError, WasiSignalError, {_c_string(last)});"
+            f"    self->st.wasi_py = wasmext_wasi2_new(&self->st.wasi, wasi, WasiExitError, WasiSignalError, {_c_string(last)});"
         )
-        add("    if (self->st.wasi2_py == NULL) { Py_DECREF((PyObject *)self); return NULL; }")
+        add("    if (self->st.wasi_py == NULL) { Py_DECREF((PyObject *)self); return NULL; }")
+        add("    self->st.wait = wasi2_wait;")
         if not wasi2:
-            add("    self->st.wasi = wasmext_wasi_over((wasmext_wasi2_py *)self->st.wasi2_py, &self->st.wasi2);")
-            add("    if (self->st.wasi == NULL) { Py_DECREF((PyObject *)self); return NULL; }")
+            add(
+                "    {  /* the descriptors of 0.1 are made now, so that a preopen that cannot be opened is told here and not by the first call of the program */"
+            )
+            add("        int err = 0;")
+            add("        size_t bad = (size_t)-1;")
+            add("        if (fusedwasi_p1_open_descriptors(&self->st.wasi, &err, &bad) != 0) {")
+            add("            errno = err;")
+            add(
+                "            if (bad != (size_t)-1) PyErr_SetFromErrnoWithFilename(PyExc_OSError, self->st.wasi.preopens[bad].path);"
+            )
+            add("            else PyErr_NoMemory();")
+            add("            Py_DECREF((PyObject *)self);")
+            add("            return NULL;")
+            add("        }")
+            add("    }")
     else:
         add("    (void)wasi;")
     add("    return self;")
@@ -1464,13 +1480,13 @@ def generate(
     add("static int Store_traverse(StoreObject *self, visitproc visit, void *arg) {")
     add("    Py_VISIT(Py_TYPE((PyObject *)self));")
     if uses_wasi:
-        add("    wasmext_wasi2_traverse((wasmext_wasi2_py *)self->st.wasi2_py, visit, arg);")
+        add("    wasmext_wasi2_traverse((wasmext_wasi2_py *)self->st.wasi_py, visit, arg);")
     add("    return 0;")
     add("}")
     add("")
     add("static int Store_clear(StoreObject *self) {")
     if uses_wasi:
-        add("    wasmext_wasi2_clear((wasmext_wasi2_py *)self->st.wasi2_py);")
+        add("    wasmext_wasi2_clear((wasmext_wasi2_py *)self->st.wasi_py);")
     else:
         add("    (void)self;")
     add("    return 0;")
@@ -1480,13 +1496,12 @@ def generate(
         "/* the host is let go: the files the program opened are closed, the Python objects of the configuration are dropped; once */"
     )
     add("static void store_release(StoreObject *self) {")
-    if uses_wasi and not wasi2:
-        add("    fusedwasi_p1_destroy(self->st.wasi);")
-        add("    self->st.wasi = NULL;")
     if uses_wasi:
-        add("    fusedwasi_p2_free(&self->st.wasi2);")
-        add("    wasmext_wasi2_free((wasmext_wasi2_py *)self->st.wasi2_py);")
-        add("    self->st.wasi2_py = NULL;")
+        add(
+            "    fusedwasi_p2_free(&self->st.wasi);  /* once: the descriptors of 0.1 and the handles of 0.2 are in its table */"
+        )
+        add("    wasmext_wasi2_free((wasmext_wasi2_py *)self->st.wasi_py);")
+        add("    self->st.wasi_py = NULL;")
     else:
         add("    (void)self;")
     add("}")
@@ -1743,10 +1758,8 @@ def generate(
     if funcref_args:
         add("    self->refs = PyList_New(0);")
         add("    if (self->refs == NULL) { Py_DECREF(self); return NULL; }")
-    if uses_wasi and not wasi2:
-        add(
-            f"    {{ wasm_rt_memory_t *m_ = w2c_{prefix}_{mangle('memory')}(&self->core.inst); fusedwasi_p1_bind(self->core.store->wasi, &m_->data, &m_->size); }}"
-        )
+    if uses_wasi:
+        add(f"    {last}_wasi_guest_init(&self->core);  /* the guest of the world for this instance, once */")
     if has_imports:
         if needs_imports:
             add("    if (imports == Py_None) {")
@@ -1785,12 +1798,8 @@ def generate(
                 add("            if (v == NULL) { Py_DECREF(self); return NULL; }")
                 add("        }")
                 add("        if (v == NULL) {")
-                if wasi2:
-                    add(f"            {host}.fn[{imp.slot}] = (void *){last}_p2_import{k};")
-                    add(f"            {host}.user[{imp.slot}] = &self->core;")
-                else:
-                    add(f"            {host}.fn[{imp.slot}] = (void *){last}_p1_import{k};")
-                    add(f"            {host}.user[{imp.slot}] = &self->core;")
+                add(f"            {host}.fn[{imp.slot}] = (void *){last}_wasi_import{k};")
+                add(f"            {host}.user[{imp.slot}] = &self->core;")
                 add("        } else {")
             else:
                 add(
@@ -2064,116 +2073,128 @@ def generate(
         hadd(f"#define {last.upper()}_RUN {last}_call{run}  /* wasi:cli/run#run: 0 for ok, 1 for err */")
     if uses_wasi:
         hadd(
-            "/* The state of the host (fusedwasi, p2/) is `self->store->wasi2`, for a module of WASI 0.1 too; a trap of the core comes back to the caller of the module as a trap of the host. */"
+            "/* The world of the host (fusedwasi): ONE state for WASI 0.1 and 0.2, `self->store->wasi`, shared by every instance of the store; and ONE guest for each instance, `self->guest`, made with it"
         )
-        hadd(f"static void {last}_p2_trap(fusedwasi_p2_state *s, const char *message) {{")
         hadd(
-            f"    {last}_instance *self = *({last}_instance **)s->user;  /* the instance in call: the first member of what `user` points to */"
+            "   (`wasi_guest_init`) and never rewritten: its memory is bound once, by the pointers to the base and size of the instance's own memory (a memory that grows is followed), and the hooks that"
         )
+        hadd(
+            "   need the instance get it from the guest's `user`. A trap of a hook is a trap of the host: the frames of the module are unwound with WASMEXT_TRAP_HOST, and the message (when there is no"
+        )
+        hadd("   exception of the host) is kept in the store for the caller. */")
+        hadd(f"static void {last}_wasi_trap(fusedwasi_p2_guest *g, const char *message) {{")
+        hadd(f"    {last}_instance *self = ({last}_instance *)g->user;")
         hadd('    snprintf(self->store->p2_message, sizeof self->store->p2_message, "%s", message);')
         hadd("    wasm_rt_trap(WASMEXT_TRAP_HOST);")
         hadd("}")
-    if uses_wasi and wasi2:
         hadd(
-            "/* WASI 0.2: the host of fusedwasi over the imports. Its state is `self->store->wasi2`; the memory of the instance in call is bound before each call by the pointers to its base and size (they are the instance's own, so a memory that grows is followed). */"
+            "/* a hook of the state (a stream, the clock, a policy) has no guest: the store is the one the state is in */"
         )
-        hadd(f"static inline void {last}_p2_refresh({last}_instance *self) {{")
+        hadd(f"static void {last}_wasi_state_trap(fusedwasi_p2_state *s, const char *message) {{")
+        hadd(f"    {last}_store *st = ({last}_store *)((char *)s - offsetof({last}_store, wasi));")
+        hadd('    snprintf(st->p2_message, sizeof st->p2_message, "%s", message);')
+        hadd("    wasm_rt_trap(WASMEXT_TRAP_HOST);")
+        hadd("}")
+        hadd(f"#define WASMEXT_STATE_TRAP {last}_wasi_state_trap")
+        hadd(
+            "/* proc_exit and wasi:cli/exit: the code is the guest's (`exited`, `exit_code`), the call comes back to the caller as a trap of the host, and the caller reads the end from the guest */"
+        )
+        hadd(f"static void {last}_wasi_exit(fusedwasi_p2_guest *g, uint32_t code) {{")
+        hadd("    g->exited = 1;")
+        hadd("    g->exit_code = code;")
+        hadd("    wasm_rt_trap(WASMEXT_TRAP_HOST);")
+        hadd("}")
+        if not wasi2:
+            hadd(
+                "/* proc_raise: a signal that would end a process ends the program (the instance keeps the number, the caller sees it after the call); the others are answered with success */"
+            )
+            hadd(f"static uint32_t {last}_wasi_signal(fusedwasi_p2_guest *g, uint32_t number) {{")
+            hadd(f"    {last}_instance *self = ({last}_instance *)g->user;")
+            hadd("    if (!wasmext_signal_ends(number)) return 0;")
+            hadd("    self->signalled = number;")
+            hadd("    wasm_rt_trap(WASMEXT_TRAP_HOST);")
+            hadd("}")
+        else:
+            hadd(
+                f"static uint32_t {last}_wasi_realloc(fusedwasi_p2_guest *g, uint32_t comp, uint32_t old_ptr, uint32_t old_size, uint32_t align, uint32_t new_size) {{"
+            )
+            hadd("    (void)comp;")
+            hadd(f"    {last}_instance *self = ({last}_instance *)g->user;")
+            hadd(f"    return w2c_{prefix}_{mangle('cabi_realloc')}(&self->inst, old_ptr, old_size, align, new_size);")
+            hadd("}")
+        hadd(
+            "/* the state of a store: the system's clocks and random bytes, no streams of its own; the caller fills it in */"
+        )
+        hadd(f"static inline void {last}_wasi_store_init({last}_store *st) {{ fusedwasi_p2_init(&st->wasi); }}")
+        hadd("/* the guest of an instance: once, when the instance is made in a store whose state is made */")
+        hadd(f"static inline void {last}_wasi_guest_init({last}_instance *self) {{")
         hadd(f"    wasm_rt_memory_t *m_ = w2c_{prefix}_{mangle('memory')}(&self->inst);")
-        hadd("    fusedwasi_p2_bind_memory(&self->store->wasi2, 0, &m_->data, &m_->size);")
+        hadd("    fusedwasi_p2_guest *g = &self->guest;")
+        hadd("    fusedwasi_p2_guest_init(g, &self->store->wasi);")
+        hadd("    g->user = self;")
+        hadd(f"    g->trap = {last}_wasi_trap;")
+        hadd(f"    g->exit = {last}_wasi_exit;")
+        hadd(f"    g->{'realloc' if wasi2 else 'signal'} = {last}_wasi_{'realloc' if wasi2 else 'signal'};")
+        hadd("    if (self->store->wait != NULL) g->wait = self->store->wait;")
         hadd(
-            f"    if (self->store->wasi2.user != NULL) *({last}_instance **)self->store->wasi2.user = self;  /* the instance in call: a store shared by several instances serves each */"
+            "    fusedwasi_p2_bind_memory(g, 0, &m_->data, &m_->size);  /* memory 0 (the only one of a module of 0.1): read at each access, so a memory that grows needs nothing */"
         )
         hadd("}")
-        hadd(
-            f"static uint32_t {last}_p2_realloc(fusedwasi_p2_state *s, uint32_t comp, uint32_t old_ptr, uint32_t old_size, uint32_t align, uint32_t new_size) {{"
-        )
-        hadd("    (void)comp;")
-        hadd(
-            f"    {last}_instance *self = *({last}_instance **)s->user;  /* the first member of what `user` points to */"
-        )
-        hadd(
-            f"    uint32_t r = w2c_{prefix}_{mangle('cabi_realloc')}(&self->inst, old_ptr, old_size, align, new_size);"
-        )
-        hadd("    return r;  /* the memory may have grown: the binding is of the pointers, nothing to set again */")
-        hadd("}")
-        hadd(f"static inline void {last}_p2_store_init({last}_store *st) {{")
-        hadd("    fusedwasi_p2_init(&st->wasi2);")
-        hadd(f"    st->wasi2.trap = {last}_p2_trap;")
-        hadd(f"    st->wasi2.realloc = {last}_p2_realloc;")
-        hadd("}")
-        hadd(f"static inline void {last}_p2_init({last}_instance *self) {{ {last}_p2_store_init(self->store); }}")
         for k, imp in enumerate(imports):
             if imp.module not in wasi_headers:
                 continue
-            cname = p2_calls[(imp.module, imp.field)]
-            has_comp = _P2_FUNCS[cname][1]
             params = "".join(f", {_CTYPE[t]} a{j}" for j, t in enumerate(imp.func.params))
             ret = _CTYPE[imp.func.results[0]] if imp.func.results else "void"
             args = "".join(f", a{j}" for j in range(len(imp.func.params)))
+            if wasi2:
+                cname = p2_calls[(imp.module, imp.field)]
+                call = f"{cname}(&self->guest{', 0' if _P2_FUNCS[cname][1] else ''}{args})"
+            else:
+                own = imp.module == _WASI_UNSTABLE and imp.field in _WASI_UNSTABLE_OWN
+                call = f"fusedwasi_p1_{'unstable_' if own else ''}{imp.field}(&self->guest{args})"
             hadd(f"/* {_cc(imp.module)}.{_cc(imp.field)}{_signature(imp.func)} */")
-            hadd(f"static {ret} {last}_p2_import{k}(void *user{params}, int *trapped) {{")
+            hadd(f"static {ret} {last}_wasi_import{k}(void *user{params}, int *trapped) {{")
             hadd(f"    {last}_instance *self = ({last}_instance *)user;")
             hadd("    (void)trapped;")
-            hadd(f"    {last}_p2_refresh(self);")
+            hadd(f"    {'return ' if imp.func.results else ''}{call};")
+            hadd("}")
+            # the original, for the host: the same call on the guest of this instance, entered as an export is (a trap comes back as `*trapped`)
             hadd(
-                f"    {'return ' if imp.func.results else ''}{cname}(&self->store->wasi2{', 0' if has_comp else ''}{args});"
+                f"/* the original of {_cc(imp.module)}.{_cc(imp.field)}, called from outside the module (Host, the library): fusedwasi's own, on the guest of this instance */"
             )
+            hadd(f"static inline {ret} {last}_hostcall{k}({last}_instance *self{params}, int *trapped) {{")
+            if imp.func.results:
+                hadd(f"    {ret} zero;")
+                hadd("    memset(&zero, 0, sizeof zero);")
+            give = "return zero;" if imp.func.results else "return;"
+            hadd(f"    if (self->store->closed) {{ *trapped = (int)WASMEXT_TRAP_CLOSED; {give} }}")
+            hadd("    self->store->active++;")
+            hadd("    self->guest.exited = 0;  /* the end of the last call is not the end of this one */")
+            hadd("    self->signalled = 0;")
+            hadd(f"    WASMEXT_ENTER(trap_, {{ self->store->active--; *trapped = (int)trap_; {give} }})")
+            if imp.func.results:
+                hadd(f"    {ret} r = {call};")
+                hadd("    WASMEXT_LEAVE();")
+                hadd("    self->store->active--;")
+                hadd("    return r;")
+            else:
+                hadd(f"    {call};")
+                hadd("    WASMEXT_LEAVE();")
+                hadd("    self->store->active--;")
             hadd("}")
         hadd(
-            "/* only the imports of an instance over the trampolines, for an instance made in a store that is made already (`wasi_bind` is this and the init of the store) */"
+            "/* the guest and the imports of an instance over the trampolines, for an instance made in a store that is made already (`wasi_bind` is this and the init of the store) */"
         )
         hadd(f"static inline int {last}_wasi_bind_imports({last}_instance *self) {{")
+        hadd(f"    {last}_wasi_guest_init(self);")
         for k, imp in enumerate(imports):
             if imp.module in wasi_headers:
-                hadd(f"    self->host{imp.host}.fn[{imp.slot}] = (void *){last}_p2_import{k};")
+                hadd(f"    self->host{imp.host}.fn[{imp.slot}] = (void *){last}_wasi_import{k};")
                 hadd(f"    self->host{imp.host}.user[{imp.slot}] = self;")
         hadd("    return 0;")
         hadd("}")
         hadd(f"static inline int {last}_wasi_bind({last}_instance *self) {{")
-        hadd(f"    {last}_p2_init(self);")
-        hadd(f"    return {last}_wasi_bind_imports(self);")
-        hadd("}")
-        hadd("")
-    elif uses_wasi:
-        hadd(
-            "/* WASI 0.1: a trampoline for each import, as for 0.2: the slot is (function, instance), and the function calls the one of fusedwasi with the state `self->store->wasi` (made first). */"
-        )
-        hadd(f"static inline void {last}_p2_store_init({last}_store *st) {{")
-        hadd("    fusedwasi_p2_init(&st->wasi2);")
-        hadd(f"    st->wasi2.trap = {last}_p2_trap;")
-        hadd("}")
-        hadd(f"static inline void {last}_p2_init({last}_instance *self) {{ {last}_p2_store_init(self->store); }}")
-        hadd(
-            f"static inline void {last}_p1_bind({last}_instance *self) {{ wasm_rt_memory_t *m_ = w2c_{prefix}_{mangle('memory')}(&self->inst); fusedwasi_p1_bind(self->store->wasi, &m_->data, &m_->size); if (self->store->wasi2.user != NULL) *({last}_instance **)self->store->wasi2.user = self; }}  /* the memory of the instance that calls: a store shared by several serves each */"
-        )
-        for k, imp in enumerate(imports):
-            if imp.module not in wasi_headers:
-                continue
-            own = imp.module == _WASI_UNSTABLE and imp.field in _WASI_UNSTABLE_OWN
-            params = "".join(f", {_CTYPE[t]} a{j}" for j, t in enumerate(imp.func.params))
-            ret = _CTYPE[imp.func.results[0]] if imp.func.results else "void"
-            args = "".join(f", a{j}" for j in range(len(imp.func.params)))
-            hadd(f"/* {_cc(imp.module)}.{_cc(imp.field)}{_signature(imp.func)} */")
-            hadd(f"static {ret} {last}_p1_import{k}(void *user{params}, int *trapped) {{")
-            hadd(f"    {last}_instance *self = ({last}_instance *)user;")
-            hadd(f"    {last}_p1_bind(self);")
-            hadd(
-                f"    {'return ' if imp.func.results else ''}fusedwasi_p1_{'unstable_' if own else ''}{imp.field}(self->store->wasi{args}, trapped);"
-            )
-            hadd("}")
-        hadd("/* the imports of WASI over the trampolines: 0 */")
-        hadd(
-            "/* only the imports of an instance over the trampolines, for an instance made in a store that is made already (`wasi_bind` is this and the init of the store) */"
-        )
-        hadd(f"static inline int {last}_wasi_bind_imports({last}_instance *self) {{")
-        for k, imp in enumerate(imports):
-            if imp.module in wasi_headers:
-                hadd(f"    self->host{imp.host}.fn[{imp.slot}] = (void *){last}_p1_import{k};")
-                hadd(f"    self->host{imp.host}.user[{imp.slot}] = self;")
-        hadd("    return 0;")
-        hadd("}")
-        hadd(f"static inline int {last}_wasi_bind({last}_instance *self) {{")
-        hadd(f"    {last}_p2_init(self);")
+        hadd(f"    {last}_wasi_store_init(self->store);")
         hadd(f"    return {last}_wasi_bind_imports(self);")
         hadd("}")
         hadd("")
@@ -2203,9 +2224,8 @@ def generate(
         hadd(f"    if (self->store->closed) {{ *trapped = (int)WASMEXT_TRAP_CLOSED; {give} }}")
         hadd("    self->store->active++;")
         if uses_wasi:
-            hadd("    self->store->wasi2.exited = 0;  /* the end of the last call is not the end of this one */")
-            if not wasi2:
-                hadd("    if (self->store->wasi != NULL) self->store->wasi->finished = 0;")
+            hadd("    self->guest.exited = 0;  /* the end of the last call is not the end of this one */")
+            hadd("    self->signalled = 0;")
         hadd(f"    WASMEXT_ENTER(trap_, {{ self->store->active--; *trapped = (int)trap_; {give} }})")
         call = f"w2c_{prefix}_{mangle(exp_name)}((w2c_{prefix} *)inst{names})"
         if func.results:
@@ -2565,15 +2585,13 @@ def generate(
             add("}")
         add("")
     host_calls = [(k, imp) for k, imp in enumerate(imports) if imp.module in wasi_headers]
-    if uses_wasi and not wasi2:
+    if uses_wasi:
         add(
-            "/* ---- the Host: what answers the imports of WASI (wasm32-wasip1) and the originals of its calls, for Python ---- */"
+            "/* ---- the Host: what answers the imports of WASI (0.1 or 0.2) and the originals of its calls, for Python ---- */"
         )
         add("typedef struct { PyObject_HEAD InstanceObject *inst; } HostObject;")
         for k, imp in host_calls:
             n = len(imp.func.params)
-            own = imp.module == _WASI_UNSTABLE and imp.field in _WASI_UNSTABLE_OWN
-            core = f"fusedwasi_p1_{'unstable_' if own else ''}{imp.field}"
             add(f"/* the call of wasmext for {_cc(imp.module)}.{_cc(imp.field)}{_signature(imp.func)}, from Python */")
             add(f"static PyObject *host_call{k}(PyObject *selfobj, PyObject *const *args, Py_ssize_t nargs) {{")
             add("    InstanceObject *self = (InstanceObject *)selfobj;")
@@ -2591,17 +2609,18 @@ def generate(
             add(
                 '    if (self->core.store->closed) { PyErr_SetString(PyExc_ValueError, "the store is closed"); return NULL; }'
             )
-            add(f"    {last}_p1_bind(&self->core);  /* the memory of this instance: a store is shared by several */")
-            add("    int trapped = 0;")
+            add(
+                "    int trapped = 0;  /* the guest of this instance is the one that answers: a store is shared by several */"
+            )
             call_args = "".join(f", a{j}" for j in range(n))
-            call = f"{core}(self->core.store->wasi{call_args}, &trapped)"
+            call = f"{last}_hostcall{k}(&self->core{call_args}, &trapped)"
             if imp.func.results:
                 add(f"    {_CTYPE[imp.func.results[0]]} r = {call};")
-                add("    if (trapped) { raise_trap(self, (int)WASMEXT_TRAP_HOST); return NULL; }")
+                add("    if (trapped) { raise_trap(self, trapped); return NULL; }")
                 add(f"    return {_FROM_WASM[imp.func.results[0]].format('r')};")
             else:
                 add(f"    {call};")
-                add("    if (trapped) { raise_trap(self, (int)WASMEXT_TRAP_HOST); return NULL; }")
+                add("    if (trapped) { raise_trap(self, trapped); return NULL; }")
                 add("    Py_RETURN_NONE;")
             add("}")
             add(
@@ -2674,7 +2693,7 @@ def generate(
     add(
         '    {"__exports__", (getter)Instance_exports, NULL, "{name: a reference to the export}: what another instance can take as an import", NULL},'
     )
-    if uses_wasi and not wasi2:
+    if uses_wasi:
         add(
             '    {"__host__", (getter)Instance_host, NULL, "the Host: what answers the imports of WASI, and the originals of its calls", NULL},'
         )
@@ -2844,7 +2863,7 @@ def generate(
     if has_imports:
         add("    CallerType = (PyTypeObject *)PyType_FromSpec(&caller_spec);")
     add("    InstanceType = (PyTypeObject *)PyType_FromSpec(&instance_spec);")
-    if uses_wasi and not wasi2:
+    if uses_wasi:
         add("    HostType = (PyTypeObject *)PyType_FromSpec(&host_spec);")
     if memories:
         add("    MemoryType = (PyTypeObject *)PyType_FromSpec(&memory_spec);")
@@ -2855,7 +2874,7 @@ def generate(
         "    if (!TrapError || !LinkError || !StoreType || !InstanceType"
         + (" || !CallerType" if has_imports else "")
         + (" || !WasiTerminatedError || !WasiExitError || !WasiSignalError" if uses_wasi else "")
-        + (" || !HostType" if uses_wasi and not wasi2 else "")
+        + (" || !HostType" if uses_wasi else "")
         + (" || !MemoryType" if memories else "")
         + (" || !TableType || !FunctionType" if shares_tables else "")
         + (" || !UncaughtExceptionError" if tags else "")
@@ -2865,7 +2884,7 @@ def generate(
         add('    if (PyModule_AddObjectRef(m, "WasiTerminated", WasiTerminatedError) < 0) goto fail;')
         add('    if (PyModule_AddObjectRef(m, "WasiExit", WasiExitError) < 0) goto fail;')
         add('    if (PyModule_AddObjectRef(m, "WasiSignal", WasiSignalError) < 0) goto fail;')
-    if uses_wasi and not wasi2:
+    if uses_wasi:
         add('    if (PyModule_AddObjectRef(m, "Host", (PyObject *)HostType) < 0) goto fail;')
     add('    if (PyModule_AddObjectRef(m, "Trap", TrapError) < 0) goto fail;')
     if tags:
@@ -2937,13 +2956,14 @@ def generate(
             wasi2,
         ),
         (
-            ("wasi2_python.h", *_p2_headers(p2_calls))
-            if wasi2 and uses_wasi
-            else (
-                ("wasi2_python.h", *_p2_headers(p2_calls), *(wasi_headers[m] for m in wasi_modules))
-                if uses_wasi
-                else ()
+            (
+                "wasi2_python.h",
+                *(_FUSEDWASI_P2 + h for h in _p2_headers(p2_calls)),
+                *(() if wasi2 else (_FUSEDWASI_P1 + "wasi_p1_core.h",)),
+                *(() if wasi2 else (_FUSEDWASI_P1 + wasi_headers[m] for m in wasi_modules)),
             )
+            if uses_wasi
+            else ()
         ),
         api_header=api_header,
         shared=shared,
@@ -3864,7 +3884,7 @@ def _stub(
             f"{_py_string(m)}: {f'NotRequired[{type_names[m]}]' if m in bound else type_names[m]}" for m in by_module
         )
         lines += [f"Imports = TypedDict('Imports', {{{fields}}})", ""]
-    if wasi and not wasi2:  # the host answers some imports: its originals, as the calls of wasmext have them
+    if wasi:  # the host answers some imports (0.1 or 0.2): its originals, as the calls of wasmext have them, typed as fusedwasi types them
         host_names = {m: f"_Host{type_names[m]}" for m in by_module if m in bound}
         for module_name, type_name in host_names.items():
             items = ", ".join(f"{_py_string(m.name)}: {kind(module_name, m, False)}" for m in by_module[module_name])
@@ -3926,7 +3946,7 @@ def _stub(
         else "    def __init__(self, store: Store) -> None: ..."
     )
     lines += ["    @property", "    def __exports__(self) -> dict[str, object]: ..."]
-    if wasi and not wasi2:
+    if wasi:
         lines += ["    @property", "    def __host__(self) -> Host: ..."]
     if names:  # the table that instance['name'] gives is a Table
         for n in names:

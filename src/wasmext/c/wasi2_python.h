@@ -1,12 +1,13 @@
-/* WASI 0.2 for a host that is Python: the configuration `wasi=` (a dict) turned into the state of fusedwasi (`fusedwasi_p2_state`, p2/wasi_p2_core.h), the standard
-   streams as Python objects, the functions `clock` and `random`, and the sleep that lets a signal through. It reads `wasi=` with the code of WASI 0.1 (wasi_python.h:
-   the same keys, the same errors), so a user writes the same for both; what 0.1 builds into its own configuration is built here into the state of 0.2.
+/* WASI for a host that is Python, 0.1 and 0.2 alike: the configuration `wasi=` (a dict) turned into the one state of fusedwasi (`fusedwasi_p2_state`, p2/wasi_p2_core.h),
+   the standard streams as Python objects, the functions `clock` and `random`, the policies of the network, the sleep that lets a signal through and the `wait` of a guest.
+   It reads `wasi=` with the code of wasi_python.h (the same keys, the same errors for both families).
 
-   The glue of the module (no Python in it) makes the state and gives the callbacks that need the module (`trap`, `realloc`); this file adds the ones that need Python.
-   The state's `user` is a `wasmext_wasi2_py`, whose first member is the pointer to the instance of the glue (`core`), which the callbacks of the glue read.
+   The glue of the module (no Python in it) makes the state and the guest of each instance and gives the hooks that need the module (`trap`, `realloc`, `exit`, `signal`,
+   and `WASMEXT_STATE_TRAP`, how a hook of the state traps); this file adds the ones that need Python. The state's `user` is a `wasmext_wasi2_py`.
 
-   A hook that fails with an exception of Python keeps it where Python keeps it, in the state of the thread, and traps through `s->trap`, which does not return: the
-   call into the module that was running comes back to Python with that exception. An OSError of a stream is an error of the stream, as an operating system has it. */
+   A hook that fails with an exception of Python keeps it where Python keeps it, in the state of the thread, and traps (`WASMEXT_STATE_TRAP` for a hook of the state, `g->trap`
+   for the guest's), which does not return: the call into the module that was running comes back to Python with that exception. An OSError of a stream is an error of the
+   stream, as an operating system has it. */
 #ifndef WASMEXT_WASI2_PYTHON_H
 #define WASMEXT_WASI2_PYTHON_H
 
@@ -15,12 +16,10 @@
 #define WASI2_READ_CAP 65536u
 
 typedef struct wasmext_wasi2_py {
-    void *core;                    /* the instance of the glue: first, the callbacks of the glue read it through `s->user` */
-    wasmext_wasi_py py;            /* what 0.1 keeps for Python: the streams, the functions clock and random, the exceptions */
-    wasi_py_options keep;          /* the buffers that the state points into (arguments, environment, directories) */
+    wasmext_wasi_py py;            /* what is Python's: the streams, the functions clock and random, the exceptions */
+    wasi_py_options keep;          /* the buffers that the state points into (arguments, environment, the preopens) */
     const char **args_v;
     const char **env_n, **env_v;
-    struct fusedwasi_p2_preopen *preopens;
     fusedwasi_p2_stream streams[3];
     char *program;                 /* argv[0] when the configuration has no arguments */
     PyObject *sockets_fn;          /* sockets=callable(ip, port, use), or NULL */
@@ -36,7 +35,7 @@ typedef struct wasmext_wasi2_py {
 /* the status of a stream after an exception of Python: an exception that is not an OSError traps (it stays set); a closed pipe closes the stream; the rest fails */
 static inline int wasi2_stream_status(fusedwasi_p2_state *s, fusedwasi_p2_stream *st) {
     int code = wasi_python_errno();
-    if (code < 0) s->trap(s, "an exception of Python in a stream of the host");
+    if (code < 0) WASMEXT_STATE_TRAP(s, "an exception of Python in a stream of the host");
     if (code == EPIPE) return FUSEDWASI_P2_STREAM_CLOSED;
     st->failure = "i/o error";
     st->failure_errno = code;
@@ -93,13 +92,13 @@ static int wasi2_stream_read(fusedwasi_p2_state *s, fusedwasi_p2_stream *st, uin
 /* a Python exception that is not an OSError traps (it stays set); an OSError is a clock that cannot be read, a source that failed: the caller of the state decides what that is */
 static int wasi2_clock(fusedwasi_p2_state *s, uint32_t id, uint64_t *ns) {
     int rc = wasi_py_clock(&WASI2_PY(s)->py, id, ns);
-    if (rc == FUSEDWASI_P1_HOOK_TRAP) s->trap(s, "the function 'clock' of the host failed");
+    if (rc < 0) WASMEXT_STATE_TRAP(s, "the function 'clock' of the host failed");
     return rc != 0;
 }
 
 static int wasi2_random_bytes(fusedwasi_p2_state *s, uint8_t *buf, size_t n) {
     int rc = wasi_py_random(&WASI2_PY(s)->py, buf, n);
-    if (rc == FUSEDWASI_P1_HOOK_TRAP) s->trap(s, "the function 'random' of the host failed");
+    if (rc < 0) WASMEXT_STATE_TRAP(s, "the function 'random' of the host failed");
     return rc != 0;
 }
 
@@ -124,12 +123,12 @@ static int wasi2_sleep(fusedwasi_p2_state *s, uint64_t ns) {
         }
 #endif
         Py_END_ALLOW_THREADS
-        if (PyErr_CheckSignals() < 0) s->trap(s, "interrupted");
+        if (PyErr_CheckSignals() < 0) WASMEXT_STATE_TRAP(s, "interrupted");
     }
 }
 
-/* what a blocking call does between two looks at a pollable: a millisecond without the interpreter, so that another thread runs and a signal (Ctrl+C) is seen */
-static void wasi2_wait(fusedwasi_p2_state *s) {
+/* the `wait` of a guest: what a blocking call does between two looks at a pollable: a millisecond without the interpreter, so that another thread runs and a signal (Ctrl+C) is seen */
+static void wasi2_wait(fusedwasi_p2_guest *g) {
     Py_BEGIN_ALLOW_THREADS
 #ifdef _WIN32
     Sleep(1);
@@ -140,19 +139,17 @@ static void wasi2_wait(fusedwasi_p2_state *s) {
     }
 #endif
     Py_END_ALLOW_THREADS
-    if (PyErr_CheckSignals() < 0) s->trap(s, "interrupted");
+    if (PyErr_CheckSignals() < 0) g->trap(g, "interrupted");
 }
 
 /* ---- the policies of the network (as in Wasmtime: callables or True, nothing is allowed by default) ------------------------------ */
 
-static const char *const wasi2_uses[] = {"tcp-bind", "tcp-connect", "udp-bind", "udp-connect", "udp-outgoing"};
-
 /* the answer of a policy callable: true allows; an exception of Python traps (it stays set) */
 static int wasi2_policy(fusedwasi_p2_state *s, PyObject *res) {
-    if (res == NULL) s->trap(s, "an exception of Python in a policy of the network");
+    if (res == NULL) WASMEXT_STATE_TRAP(s, "an exception of Python in a policy of the network");
     int ok = PyObject_IsTrue(res);
     Py_DECREF(res);
-    if (ok < 0) s->trap(s, "an exception of Python in a policy of the network");
+    if (ok < 0) WASMEXT_STATE_TRAP(s, "an exception of Python in a policy of the network");
     return ok;
 }
 
@@ -162,7 +159,7 @@ static int wasi2_socket_addr_check(fusedwasi_p2_state *s, const char *ip, uint16
     if (udp ? !w->udp : !w->tcp) return 0;
     if (w->sockets_all) return 1;
     if (w->sockets_fn == NULL) return 0;
-    return wasi2_policy(s, PyObject_CallFunction(w->sockets_fn, "sis", ip, (int)port, wasi2_uses[use]));
+    return wasi2_policy(s, PyObject_CallFunction(w->sockets_fn, "sis", ip, (int)port, fusedwasi_p2_use_name(use)));
 }
 
 static int wasi2_http_check(fusedwasi_p2_state *s, const char *scheme, const char *authority) {
@@ -239,22 +236,19 @@ static inline void wasmext_wasi2_free(wasmext_wasi2_py *w) {
     free(w->args_v);
     free(w->env_n);
     free(w->env_v);
-    free(w->preopens);
     free(w->program);
     free(w);
 }
 
 /* The Python side of the state `s` (already made by `fusedwasi_p2_init` in the glue): `config` is None or a dict with the keys args, env, stdin, stdout, stderr,
-   clock, random, preopens, readonly (those of WASI 0.1); the exceptions are those that the end of the program raises; `program` is argv[0] when the config
-   has no args. Returns the Python side (to free with `wasmext_wasi2_free`), or NULL with an exception set. */
-static inline wasmext_wasi2_py *wasmext_wasi2_new(fusedwasi_p2_state *s, void *core, PyObject *config, PyObject *exit_type, PyObject *signal_type,
-                                                const char *program) {
+   clock, random, preopens, readonly, and for the network sockets, http, dns, tcp, udp; the exceptions are those that the end of the program raises; `program` is
+   argv[0] when the config has no args. Returns the Python side (to free with `wasmext_wasi2_free`), or NULL with an exception set. */
+static inline wasmext_wasi2_py *wasmext_wasi2_new(fusedwasi_p2_state *s, PyObject *config, PyObject *exit_type, PyObject *signal_type, const char *program) {
     wasmext_wasi2_py *w = (wasmext_wasi2_py *)calloc(1, sizeof(wasmext_wasi2_py));
     if (w == NULL) {
         PyErr_NoMemory();
         return NULL;
     }
-    w->core = core;
     w->tcp = w->udp = 1;
     wasmext_wasi_py *p = &w->py;
     Py_INCREF(exit_type);
@@ -324,15 +318,8 @@ static inline wasmext_wasi2_py *wasmext_wasi2_new(fusedwasi_p2_state *s, void *c
     s->env_names = w->env_n;
     s->env_values = w->env_v;
     s->env_count = o->envc;
-    /* directories */
-    w->preopens = (struct fusedwasi_p2_preopen *)calloc(o->nitems ? o->nitems : 1, sizeof(struct fusedwasi_p2_preopen));
-    if (w->preopens == NULL) goto nomem;
-    for (size_t i = 0; i < o->nitems; i++) {
-        w->preopens[i].path = o->items[i].path;
-        w->preopens[i].name = o->items[i].name;
-        w->preopens[i].writable = o->items[i].writable;
-    }
-    s->preopens = w->preopens;
+    /* directories: the list that the configuration made is the state's */
+    s->preopens = o->items;
     s->preopen_count = (uint32_t)o->nitems;
     /* the three streams are Python objects (None, or the absent key, are decided by the code of 0.1: nothing, or sys.stdin / sys.stdout / sys.stderr) */
     for (int i = 0; i < 3; i++) {
@@ -352,7 +339,6 @@ static inline wasmext_wasi2_py *wasmext_wasi2_new(fusedwasi_p2_state *s, void *c
     if (p->clock_fn != NULL) s->clock = wasi2_clock;
     if (p->random_fn != NULL) s->random_bytes = s->insecure_random_bytes = wasi2_random_bytes;
     s->sleep = wasi2_sleep;
-    s->wait = wasi2_wait;
     s->socket_addr_check = wasi2_socket_addr_check;
     s->http_check = wasi2_http_check;
     s->user = w;
@@ -364,26 +350,7 @@ fail:
     return NULL;
 }
 
-/* The state of WASI 0.1 over the state `s` of 0.2 that `w` is the Python side of: the same arguments, environment, clocks, random bytes and directories, and the standard streams
-   of 0.1 (its hooks) over the same Python objects. NULL with an exception set. Free it with `fusedwasi_p1_destroy` before the state `s`. */
-static inline fusedwasi_p1_state *wasmext_wasi_over(wasmext_wasi2_py *w, fusedwasi_p2_state *s) {
-    fusedwasi_p1_config cfg;
-    memset(&cfg, 0, sizeof cfg);
-    cfg.preopens = w->keep.items;
-    cfg.npreopens = w->keep.nitems;
-    cfg.user = &w->py;
-    int err = 0;
-    size_t bad = (size_t)-1;
-    fusedwasi_p1_state *p1 = fusedwasi_p1_create(&cfg, s, &err, &bad);
-    if (p1 == NULL) {
-        errno = err;
-        if (bad != (size_t)-1) PyErr_SetFromErrnoWithFilename(PyExc_OSError, w->keep.items[bad].path);
-        else PyErr_NoMemory();
-    }
-    return p1;
-}
-
-/* the program called wasi:cli/exit: WasiExit(code) is raised in the call */
-static inline void wasmext_wasi2_raise_exit(wasmext_wasi2_py *w, uint32_t code) { wasi_py_raise_end(&w->py, FUSEDWASI_P1_END_EXIT, code); }
+/* the program ended in the call: WasiExit(code) for wasi:cli/exit and proc_exit, WasiSignal(number) for proc_raise */
+static inline void wasmext_wasi2_raise_end(wasmext_wasi2_py *w, int how, uint32_t value) { wasi_py_raise_end(&w->py, how, value); }
 
 #endif

@@ -32,6 +32,16 @@
 #define WASMEXT_TRAP_OF(TRAPPED) \
     ((TRAPPED) >= WASMEXT_TRAP_LINKED ? (wasm_rt_trap_t)((TRAPPED) - WASMEXT_TRAP_LINKED) : WASMEXT_TRAP_HOST)
 
+/* How a WASI program ended, as `<name>_wasi_end` answers it: by proc_exit / wasi:cli/exit (the code is the guest's `exit_code`) or by proc_raise (the number of the signal). */
+#define WASMEXT_END_NONE 0
+#define WASMEXT_END_EXIT 1
+#define WASMEXT_END_SIGNAL 2
+
+/* Which signals of proc_raise (WASI 0.1, numbers 1 to 30) end the program. fusedwasi does not decide it: the guest has a hook `signal`, and this is wasmext's answer, as a process would
+   behave: a signal that is ignored when nothing handles it (the child, continue, urgent data, the size of the window) or that stops a process (stop, and the ones of a terminal)
+   is answered with success and the program goes on; any other ends it. */
+static inline int wasmext_signal_ends(uint32_t number) { return !(number == 0 || (number >= 16 && number <= 22) || number == 27); }
+
 /* A fingerprint of the layout of the structs of the wasm2c runtime that modules share, for the maintainers: it is in every record and in the stack of traps, and
    it changes by itself when a new WABT changes a layout. It is not a gate of the link of an export (the layout is checked when a module is built, WASMEXT_LAYOUT);
    only the stack of traps compares it, because the buffer of a jump (wasm_rt_jmp_buf) is a type of the platform that a check by relations cannot pin. */

@@ -137,7 +137,7 @@ toml = [
 [[package]]
 name = "fusedwasi"
 version = "0.0.0"
-source = { git = "https://github.com/natify-sh/fusedwasi?branch=wasi-p2#f4669eb6a3f80214e241c8e91ee381c160fed9e3" }
+source = { git = "https://github.com/natify-sh/fusedwasi?branch=wasi-p2#1af4777965218f586a28c27e502895ab484e5aab" }
 
 [[package]]
 name = "iniconfig"

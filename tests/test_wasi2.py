@@ -133,6 +133,65 @@ def test_the_imports_of_wasi_p2_are_replaced_one_by_one(build_front_end: Builder
         nothing.now()
 
 
+ENV = "wasi:cli/environment@0.2.12"
+CLOCK = "wasi:clocks/monotonic-clock@0.2.12"
+
+
+def clock_41(clock_id: int) -> int:
+    return 41
+
+
+def test_the_host_gives_the_originals_of_the_calls_of_wasi_p2_in_both_front_ends(
+    build_front_end: Builder, front_end: str
+) -> None:
+    mod = build_front_end(DATA / "wasi2_probe.wat", f"wasi2_originals_{front_end}", host=P2)
+    store = mod.Store(wasi={"args": ["prog", "one"], "clock": clock_41})
+    inst = mod.Instance(store)
+    host = inst.__host__
+    assert host.name == P2 and isinstance(host, mod.Host)
+    originals = host.__imports__
+    assert set(originals) == {ENV, "wasi:cli/exit@0.2.12", CLOCK, "wasi:random/random@0.2.12"}
+    assert originals[CLOCK]["now"]() == 41
+    originals[ENV]["get-arguments"](
+        1024
+    )  # the original writes the list into THIS instance's memory (it calls its cabi_realloc)
+    assert strings(inst, 1024) == ["prog", "one"]
+    assert isinstance(originals["wasi:random/random@0.2.12"]["get-random-u64"](), int)
+    with pytest.raises(
+        mod.WasiExit
+    ) as raised:  # a call that ends the program raises its exception, and the instance can be called again
+        originals["wasi:cli/exit@0.2.12"]["exit"](1)
+    assert raised.value.code == 1 and inst.now() == 41
+    with pytest.raises(TypeError):
+        originals[CLOCK]["now"](1)
+
+
+def test_the_original_of_a_call_of_wasi_p2_works_on_the_instance_that_called(
+    build_front_end: Builder, front_end: str
+) -> None:
+    """Two instances in one store (one state, one guest each): the wrapper reaches the original through its Caller and the original answers in the memory of the caller."""
+    mod = build_front_end(DATA / "wasi2_probe.wat", f"wasi2_caller_{front_end}", host=P2)
+
+    def args(caller: Any, retptr: int) -> None:
+        caller.instance.__host__.__imports__[ENV]["get-arguments"](retptr)
+
+    args.__wasm_caller__ = True  # type: ignore[attr-defined]
+    store = mod.Store(wasi={"args": ["shared"]})
+    first = mod.Instance(store, imports={ENV: {"get-arguments": args}})
+    second = mod.Instance(store)
+    first.args(2048)
+    assert strings(first, 2048) == ["shared"] and bytes(second.memory[2048:2056]) == bytes(8)
+    second.args(4096)
+    assert strings(second, 4096) == ["shared"]
+    with pytest.raises(mod.WasiExit):  # the end of one instance is not the end of the other
+        first.exit(5)
+    second.args(4096)
+    assert strings(second, 4096) == ["shared"]
+    store.close()
+    with pytest.raises(ValueError, match="closed"):
+        first.__host__.__imports__[CLOCK]["now"]()
+
+
 def test_the_stub_of_a_module_of_wasi_p2() -> None:
     module = parse((HELLO).read_bytes())
     stub = generate(module, "m", host=P2).stub
@@ -141,7 +200,12 @@ def test_the_stub_of_a_module_of_wasi_p2() -> None:
         "_Imports_wasi_io_streams_0_2_12 = TypedDict(" in stub
         and "def __init__(self, store: Store, imports: Imports | None = None" in stub
     )
-    assert "class Host" not in stub  # the originals of the calls of 0.2 are not made yet
+    assert (
+        "class Host:" in stub and "def __host__(self) -> Host: ..." in stub
+    )  # the originals of the calls, typed by fusedwasi
+    assert (
+        "_HostImports = TypedDict(" in stub and "class ClocksMonotonicClockNow(Protocol):" in stub
+    )  # ... with the Protocols of fusedwasi, without the Caller in the originals
     compile(stub, "m.pyi", "exec")
 
 
@@ -289,9 +353,10 @@ def test_every_function_of_the_table_compiles_with_the_headers_the_glue_includes
         pytest.skip("no C compiler of the cc kind")
     calls = {("wasi:test", name): name for name in FUNCS}
     for header in _p2_headers(calls):
-        (tmp_path / header).write_bytes(shared_header(header).read_bytes())
+        (tmp_path / "fusedwasi" / "p2").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "fusedwasi" / "p2" / header).write_bytes(shared_header(f"fusedwasi/p2/{header}").read_bytes())
     source = tmp_path / "all.c"
-    includes = "".join(f'#include "{h}"\n' for h in _p2_headers(calls, include=True))
+    includes = "".join(f'#include "fusedwasi/p2/{h}"\n' for h in _p2_headers(calls, include=True))
     table = ",\n".join(f"    (void *){name}" for name in sorted(FUNCS))
     source.write_text(
         f"#define _GNU_SOURCE\n{includes}\nvoid *const all_functions[] = {{\n{table}}};\n", encoding="utf-8"

@@ -81,7 +81,7 @@ def _run(project: Path) -> str:
         "    global now\n"
         "    now += 15000\n"
         "    return now\n"
-        "print(round(pk.cm.Instance({'env': {'clock_ms': clock}}).run(), 4))\n"
+        "print(round(pk.cm.Instance(pk.cm.Store(), imports={'env': {'clock_ms': clock}}).run(), 4))\n"
     )
     ran = subprocess.run(
         [sys.executable, "-c", code],

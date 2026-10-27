@@ -39,7 +39,7 @@ def test_a_command_of_wasi_p2_runs_with_no_host_of_python(build_front_end: Build
     mod = build_front_end(HELLO, "wasi2_hello", host=P2)
     assert mod.__host__ == P2
     out: list[bytes] = []
-    inst = mod.Instance(wasi={"stdout": out.append})
+    inst = mod.Instance(mod.Store(wasi={"stdout": out.append}))
     assert getattr(inst, RUN)() == 1  # the program returned 3, which is the err of the result of wasi:cli/run
     assert b"".join(out) == b"hello from wasip2\n"
 
@@ -48,16 +48,18 @@ def test_the_standard_output_goes_to_sys_stdout_when_it_is_not_given(
     build_front_end: Builder, capsys: pytest.CaptureFixture[str]
 ) -> None:
     mod = build_front_end(HELLO, "wasi2_hello_sys", host=P2)
-    getattr(mod.Instance(), RUN)()
+    getattr(mod.Instance(mod.Store()), RUN)()
     assert capsys.readouterr().out == "hello from wasip2\n"
 
 
 def test_arguments_and_environment(build_front_end: Builder) -> None:
     mod = build_front_end(DATA / "wasi2_probe.wat", "wasi2_probe_args", host=P2)
-    assert strings_of(mod.Instance(), "args") == ["wasi2_probe_args"]  # the name of the program, when there are none
-    assert strings_of(mod.Instance(wasi={"args": ["prog", "-x", "é"]}), "args") == ["prog", "-x", "é"]
-    assert strings_of(mod.Instance(wasi={"args": None}), "args") == []
-    inst = mod.Instance(wasi={"env": {"A": "1", "B": "two words"}})
+    assert strings_of(mod.Instance(mod.Store()), "args") == [
+        "wasi2_probe_args"
+    ]  # the name of the program, when there are none
+    assert strings_of(mod.Instance(mod.Store(wasi={"args": ["prog", "-x", "é"]})), "args") == ["prog", "-x", "é"]
+    assert strings_of(mod.Instance(mod.Store(wasi={"args": None})), "args") == []
+    inst = mod.Instance(mod.Store(wasi={"env": {"A": "1", "B": "two words"}}))
     inst.env(1000)
     mem = inst.memory
     ptr, count = struct.unpack("<II", bytes(mem[1000:1008]))
@@ -75,7 +77,7 @@ def strings_of(inst: Any, export: str) -> list[str]:
 
 def test_exit_raises_the_exception_with_the_code(build_front_end: Builder) -> None:
     mod = build_front_end(DATA / "wasi2_probe.wat", "wasi2_probe_exit", host=P2)
-    inst = mod.Instance()
+    inst = mod.Instance(mod.Store())
     with pytest.raises(mod.WasiExit) as raised:
         inst.exit(1)  # the result of wasi:cli/exit is err (1)
     assert raised.value.code == 1
@@ -95,10 +97,10 @@ def test_the_clock_and_the_random_bytes_can_be_replaced(build_front_end: Builder
     def random(n: int) -> bytes:
         return b"\x01" * n
 
-    inst = mod.Instance(wasi={"clock": clock, "random": random})
+    inst = mod.Instance(mod.Store(wasi={"clock": clock, "random": random}))
     assert inst.now() == 123456789 and seen == [1]  # the monotonic clock is 1
     assert inst.rand() == 0x0101010101010101
-    real = mod.Instance()
+    real = mod.Instance(mod.Store())
     assert real.now() > 0  # the clock of the system
 
 
@@ -109,23 +111,23 @@ def test_an_exception_of_a_hook_comes_out_of_the_call(build_front_end: Builder) 
         raise KeyError("no clock")
 
     with pytest.raises(KeyError, match="no clock"):
-        mod.Instance(wasi={"clock": clock}).now()
+        mod.Instance(mod.Store(wasi={"clock": clock})).now()
 
 
 def test_a_wrong_configuration_is_refused(build_front_end: Builder) -> None:
     mod = build_front_end(DATA / "wasi2_probe.wat", "wasi2_probe_config", host=P2)
     with pytest.raises(TypeError, match="unknown option"):
-        mod.Instance(wasi={"nope": 1})
+        mod.Instance(mod.Store(wasi={"nope": 1}))
     with pytest.raises(TypeError, match="lists of strings"):
-        mod.Instance(wasi={"args": "abc"})
+        mod.Instance(mod.Store(wasi={"args": "abc"}))
 
 
 def test_the_imports_of_wasi_p2_are_replaced_one_by_one(build_front_end: Builder) -> None:
     mod = build_front_end(DATA / "wasi2_probe.wat", "wasi2_probe_replace", host=P2)
-    inst = mod.Instance({"wasi:clocks/monotonic-clock@0.2.12": {"now": lambda: 7}})
+    inst = mod.Instance(mod.Store(), imports={"wasi:clocks/monotonic-clock@0.2.12": {"now": lambda: 7}})
     assert inst.now() == 7
     nothing = mod.Instance(
-        {"wasi:clocks/monotonic-clock@0.2.12": {"now": None}}
+        mod.Store(), imports={"wasi:clocks/monotonic-clock@0.2.12": {"now": None}}
     )  # None is nothing given: a call with no errno traps
     with pytest.raises(mod.Trap, match="given as None"):
         nothing.now()
@@ -137,7 +139,7 @@ def test_the_stub_of_a_module_of_wasi_p2() -> None:
     assert "class WasiP2(TypedDict):" in stub and "Wasi = WasiP2" in stub and "wasi: Wasi | None = None" in stub
     assert (
         "_Imports_wasi_io_streams_0_2_12 = TypedDict(" in stub
-        and "def __init__(self, imports: Imports | None = None" in stub
+        and "def __init__(self, store: Store, imports: Imports | None = None" in stub
     )
     assert "class Host" not in stub  # the originals of the calls of 0.2 are not made yet
     compile(stub, "m.pyi", "exec")
@@ -163,7 +165,7 @@ class Fs:
     """The files of WASI 0.2 at the level of the canonical ABI, through `tests/data/wasi2_fs.wat`: the arguments laid out in the memory, the results read from it."""
 
     def __init__(self, mod: Any, **wasi: Any) -> None:
-        self.inst = mod.Instance(wasi=wasi)
+        self.inst = mod.Instance(mod.Store(wasi=wasi))
         self.mem = self.inst.memory
 
     def u32(self, at: int) -> int:
@@ -341,7 +343,7 @@ def sock_module(build_front_end: Builder) -> ModuleType:
 
 def test_the_network_is_refused_unless_the_caller_allows_it(sock_module: ModuleType) -> None:
     out: list[bytes] = []
-    inst = sock_module.Instance(wasi={"stdout": out.append})
+    inst = sock_module.Instance(sock_module.Store(wasi={"stdout": out.append}))
     assert getattr(inst, RUN)() == 1  # connect failed: sock.c returned 3
     assert b"reply" not in b"".join(out)
 
@@ -354,7 +356,7 @@ def test_a_policy_of_sockets_decides_each_use(sock_module: ModuleType) -> None:
         return port == 47123
 
     out: list[bytes] = []
-    getattr(sock_module.Instance(wasi={"stdout": out.append, "sockets": policy}), RUN)()
+    getattr(sock_module.Instance(sock_module.Store(wasi={"stdout": out.append, "sockets": policy})), RUN)()
     assert seen == [("127.0.0.1", 47123, "tcp-connect")]
     assert b"reply" not in b"".join(out)  # allowed, but nothing listens on 47123 (or not our server)
 
@@ -366,7 +368,7 @@ def test_a_program_talks_to_a_server_when_the_policy_allows_it(sock_module: Modu
         pytest.skip(f"port 47123 is busy: {exc}")
     with srv:
         out: list[bytes] = []
-        getattr(sock_module.Instance(wasi={"stdout": out.append, "sockets": True}), RUN)()
+        getattr(sock_module.Instance(sock_module.Store(wasi={"stdout": out.append, "sockets": True})), RUN)()
     assert b"".join(out) == b"reply: pong\n"
     assert got == [b"ping"]
 
@@ -376,7 +378,7 @@ def test_tcp_false_refuses_before_the_policy_is_asked(sock_module: ModuleType) -
         raise AssertionError("not asked")
 
     out: list[bytes] = []
-    inst = sock_module.Instance(wasi={"stdout": out.append, "sockets": policy, "tcp": False})
+    inst = sock_module.Instance(sock_module.Store(wasi={"stdout": out.append, "sockets": policy, "tcp": False}))
     getattr(inst, RUN)()
     assert b"reply" not in b"".join(out)
 
@@ -386,14 +388,14 @@ def test_an_exception_in_a_policy_comes_out_of_the_call(sock_module: ModuleType)
         raise KeyError("policy")
 
     with pytest.raises(KeyError):
-        getattr(sock_module.Instance(wasi={"sockets": policy}), RUN)()
+        getattr(sock_module.Instance(sock_module.Store(wasi={"sockets": policy})), RUN)()
 
 
 @pytest.mark.parametrize("key", ["sockets", "dns", "http", "tcp", "udp"])
 def test_a_network_key_must_be_a_bool_or_a_callable(sock_module: ModuleType, key: str) -> None:
     with pytest.raises(TypeError, match=key):
-        sock_module.Instance(wasi={key: "yes"})
-    sock_module.Instance(wasi={key: None})
+        sock_module.Instance(sock_module.Store(wasi={key: "yes"}))
+    sock_module.Instance(sock_module.Store(wasi={key: None}))
 
 
 def exe(build_dir: Path, wasm: Path, name: str = "prog") -> Path:

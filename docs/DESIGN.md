@@ -13,8 +13,8 @@ engine owns the objects), but the exports of one instance given as the imports o
 (the `Table`, below), is code of that module, not of the package.
 
 ```python
-a = A.Instance()
-b = B.Instance({"env": a})  # imports of module "env" are taken, by name, from the exports of a
+a = A.Instance(A.Store())
+b = B.Instance(B.Store(), imports={"env": a})  # imports of module "env" are taken, by name, from the exports of a
 ```
 
 **What wasm2c gives.** The C of a module that imports a global, a memory or a table keeps a *pointer* to it (`u32 *w2c_env_g`,
@@ -34,10 +34,10 @@ There are two kinds of access on an instance, with different jobs:
 | items | **link** it to another module | `a["counter"]` is the reference to the export; `a.__exports__` is the dict of all of them |
 
 ```python
-B.Instance({"env": a})  # a shelf from an instance: all of it
-B.Instance({"env": {"log": print}})  # a dict: by keys, as now
-B.Instance({"env": {**a.__exports__, "log": print}})  # everything of a, and log from Python (the later key wins)
-B.Instance({"env": {"counter": a["counter"], "log": print}})  # one export of a, and log from Python
+B.Instance(B.Store(), imports={"env": a})  # a shelf from an instance: all of it
+B.Instance(B.Store(), imports={"env": {"log": print}})  # a dict: by keys, as now
+B.Instance(B.Store(), imports={"env": {**a.__exports__, "log": print}})  # everything of a, and log from Python (the later key wins)
+B.Instance(B.Store(), imports={"env": {"counter": a["counter"], "log": print}})  # one export of a, and log from Python
 ```
 
 There is no `export()` and no `keys()` on the instance: the instance has no names of its own, only the double-underscore ones
@@ -192,8 +192,8 @@ renaming and `poll_oneoff`.
 (plain Python, MIT), which was meant to be run beside it and was not. Its code is not copied: this is written from the specification.
 
 **Decided (the first version).**
-- Configuration is a keyword of the instance, `Instance(imports, wasi={"args": [...], "env": {...}, "preopens": {"/": "dir"},
-  "stdin": ..., "stdout": ..., "stderr": ...})`.
+- Configuration is a keyword of the store (2026-10-27; it was of the instance), `Store(wasi={"args": [...], "env": {...}, "preopens": {"/": "dir"},
+  "stdin": ..., "stdout": ..., "stderr": ...})`, and the instance is made in it: `Instance(store, imports=...)`.
 - Standard streams go to `sys.stdin.buffer`, `sys.stdout.buffer` and `sys.stderr.buffer` by default, so that capturing in a notebook or
   a test works, and an object with `write(bytes)` replaces one.
 - `proc_exit(n)` is an exception (`WasiExit`, carrying the code) out of the call that led to it; `proc_raise(signal)` is `WasiSignal` (`.signal`, `.name`); both are a `WasiTerminated`. The program is over: see "The end of a program" in "Decisions".
@@ -216,7 +216,7 @@ the first snapshot has its own (a clock subscription with an identifier, 56 byte
 a file in the way (`os.replace` on the Python path). On POSIX these go straight to the system (`write`, `mkdirat`, `unlinkat`, `utimensat`, ...) after the same walk that confines a path. Rights are kept per descriptor (`readonly` takes the
 mutating ones away), and a directory descriptor is a capability for that directory: `..` out of it, an absolute name, or a link that
 leads out are `ENOTCAPABLE` (an absolute link inside is refused too, as in cap-std). Both snapshots are served (`sock_accept` is not a call of the first:
-`GenError`); the first has its own `fd_seek` (another order of `whence`) and `fd_filestat_get`/`path_filestat_get` (56 bytes). `Instance()` needs no
+`GenError`); the first has its own `fd_seek` (another order of `whence`) and `fd_filestat_get`/`path_filestat_get` (56 bytes). `Instance(store)` needs no
 imports; `wasi={...}` takes args, env, stdin, stdout, stderr, preopens, readonly. What the caller gives as an import wins, call by call.
 **The official tests.** The precompiled programs of [WebAssembly/wasi-testsuite](https://github.com/WebAssembly/wasi-testsuite) (`prod/testsuite-base`, commit
 `d552798`, WASI 0.1: AssemblyScript, C and Rust, 72 programs; the 55 of WASI 0.3 are skipped) run on wasmext: `tests/wasi_testsuite/adapter.py` is the

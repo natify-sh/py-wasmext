@@ -55,7 +55,7 @@ def run(
             "stderr": err.write,
             "preopens": {".": str(root), "/": str(root)},
         }
-        instance = module.Instance(wasi=wasi)
+        instance = module.Instance(module.Store(wasi=wasi))
         try:
             instance._start()
             code = 0

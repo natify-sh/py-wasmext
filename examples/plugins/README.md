@@ -15,9 +15,9 @@ uv run pytest
 ```
 
 ```python
-host = _host.Instance()
+host = _host.Instance(_host.Store())
 table = host["table"]  # a _host.Table: the table of the host, for others to import
-double = _double.Instance({"env": {"table": table}})  # the plugin puts `double` in slot 1
+double = _double.Instance(_double.Store(), imports={"env": {"table": table}})  # the plugin puts `double` in slot 1
 host.call(1, 21)  # 42: the host calls the function of the plugin through the table
 ```
 
@@ -26,7 +26,7 @@ A table does not need a host module. The extension of any module that shares tab
 
 ```python
 table = _double.Table(4, 16)
-plugin = _double.Instance({"env": {"table": table}})
+plugin = _double.Instance(_double.Store(), imports={"env": {"table": table}})
 table.set(0, host.inc)  # Python puts a function of an instance in a slot
 table.grow(2)  # the plugin sees 6 slots
 ```

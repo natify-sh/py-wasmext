@@ -64,7 +64,7 @@ def test_the_extensions_get_their_names_from_the_packages(project: Path) -> None
 def test_setup_py_builds_a_working_extension(project: Path) -> None:
     (project / "setup.py").write_text(SETUP.format(arg='"pkg/*.wasm"'), encoding="utf-8")
     run_python(project, "setup.py", "-q", "build_ext", "--inplace")
-    out = run_python(project, "-c", "from pkg import add; print(add.Instance().add(40, 2))")
+    out = run_python(project, "-c", "from pkg import add; print(add.Instance(add.Store()).add(40, 2))")
     assert out.strip() == "42"
 
 
@@ -79,7 +79,9 @@ def test_an_extension_object_keeps_its_settings_and_gives_the_name(project: Path
         SETUP.format(arg='[__import__("setuptools").Extension("pkg.fast", ["pkg/add.wasm"])]'), encoding="utf-8"
     )
     run_python(project, "setup.py", "-q", "build_ext", "--inplace")
-    assert run_python(project, "-c", "from pkg import fast; print(fast.Instance().add(1, 2))").strip() == "3"
+    assert (
+        run_python(project, "-c", "from pkg import fast; print(fast.Instance(fast.Store()).add(1, 2))").strip() == "3"
+    )
 
 
 def test_an_ordinary_extension_passes_through(project: Path) -> None:

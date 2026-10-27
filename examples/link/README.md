@@ -17,8 +17,10 @@ With pip, build the wheel of wasmext in the root of the repository (`uv build --
 `pip install --find-links ../../dist .`.
 
 ```python
-counter = _counter.Instance()
-app = _app.Instance({"env": {**counter.__exports__, "log": print}})  # everything counter exports, and log from Python
+counter = _counter.Instance(_counter.Store())
+app = _app.Instance(
+    _app.Store(), imports={"env": {**counter.__exports__, "log": print}}
+)  # everything counter exports, and log from Python
 app.tick()  # app calls counter.bump(1) directly, and tells `log` the result
 counter.count  # 1: the variable of counter, written by that call
 ```

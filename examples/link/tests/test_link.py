@@ -26,6 +26,8 @@ def test_what_is_not_the_right_kind_is_a_link_error() -> None:
     counter, _ = linkdemo.make()
     exports = {**counter.__exports__, "log": print}
     with pytest.raises(_app.LinkError):
-        _app.Instance({"env": {**exports, "count": 0}})  # a number is not a variable that two modules can share
+        _app.Instance(
+            _app.Store(), imports={"env": {**exports, "count": 0}}
+        )  # a number is not a variable that two modules can share
     with pytest.raises(_app.LinkError):
-        _app.Instance({"env": {**exports, "bump": exports["memory"]}})
+        _app.Instance(_app.Store(), imports={"env": {**exports, "bump": exports["memory"]}})

@@ -327,18 +327,9 @@ class Store:
 class Instance:
     """An instance of the module @NAME@ (the library makes the state, this object owns it)."""
 
-    def __init__(self, store: Any = None, imports: Any = None, *, wasi: Any = None) -> None:
-        # Until the calls are rewritten (C2e) a first argument that is not a Store is what it was, the imports; an instance with no store makes a private one (from `wasi=`).
-        if store is not None and not isinstance(store, Store):
-            if imports is not None or type(store).__name__ == "Store":
-                raise TypeError("store must be a Store of this module (@NAME@.Store); a store of another module is a different host")
-            store, imports = None, store
-        if store is not None and wasi is not None:
-            raise TypeError("wasi= belongs to the Store: a different configuration is a different store")
-        if wasi is not None and not _WASI:  # as the extension: a module whose host has no WASI built in takes no `wasi=`
-            raise TypeError("Instance() got an unexpected keyword argument 'wasi'")
-        if store is None:
-            store = Store(wasi=wasi)
+    def __init__(self, store: Any, imports: Any = None) -> None:
+        if not isinstance(store, Store):
+            raise TypeError("Instance() argument 'store' must be a Store made by this module (@NAME@.Store); a Store of another module is a different host")
         self._store = store
         lib = _library()
         self._lib = lib

@@ -103,7 +103,7 @@ def test_a_c_program_runs_in_python(build_front_end: Builder, tmp_path: Path) ->
         "stderr": err.append,
         "preopens": {"/data": data},
     }
-    assert getattr(mod.Instance(wasi=wasi), RUN)() == 0
+    assert getattr(mod.Instance(mod.Store(wasi=wasi)), RUN)() == 0
     lines = b"".join(out).decode().splitlines()
     assert lines[0] == "argc=2 argv0=prog" and "GREETING=hi" in lines and "stdin line: hello stdin" in lines
     assert "read back: written by wasip2" in lines and "entries=2" in lines
@@ -145,7 +145,7 @@ def test_a_rust_program_runs_in_python(build_front_end: Builder, tmp_path: Path)
         "stderr": None,
         "preopens": {"/data": data},
     }
-    inst = mod.Instance(wasi=wasi)
+    inst = mod.Instance(mod.Store(wasi=wasi))
     with pytest.raises(mod.WasiExit) as ended:  # a Rust program ends with process::exit
         getattr(inst, RUN_RUST)()
     assert ended.value.code == 0  # std::process::exit(0) is wasi:cli/exit(ok)
@@ -177,7 +177,7 @@ def test_the_network_policies_see_each_use_in_python(build_front_end: Builder) -
         return True
 
     out: list[bytes] = []
-    assert getattr(mod.Instance(wasi={"stdout": out.append, "sockets": sockets, "dns": True}), RUN)() == 0
+    assert getattr(mod.Instance(mod.Store(wasi={"stdout": out.append, "sockets": sockets, "dns": True})), RUN)() == 0
     assert b"".join(out).decode().splitlines() == NET_OUTPUT
     uses = {use for _ip, use in seen}
     assert {
@@ -195,7 +195,9 @@ def test_udp_can_be_refused_while_tcp_is_allowed(build_front_end: Builder) -> No
     mod = build_front_end(NET_MODULE, "wasi2_net_c", host=P2)
     out: list[bytes] = []
     err: list[bytes] = []
-    inst = mod.Instance(wasi={"stdout": out.append, "stderr": err.append, "sockets": True, "udp": False, "dns": True})
+    inst = mod.Instance(
+        mod.Store(wasi={"stdout": out.append, "stderr": err.append, "sockets": True, "udp": False, "dns": True})
+    )
     assert getattr(inst, RUN)() == 1  # main returned 1: the bind of the UDP socket failed
     assert b"".join(out).decode().splitlines() == NET_OUTPUT[:3]
     assert b"udp bind" in b"".join(err)
@@ -205,7 +207,7 @@ def test_names_are_not_resolved_unless_dns_is_allowed(build_front_end: Builder) 
     mod = build_front_end(NET_MODULE, "wasi2_net_c", host=P2)
     out: list[bytes] = []
     assert (
-        getattr(mod.Instance(wasi={"stdout": out.append, "sockets": True}), RUN)() == 1
+        getattr(mod.Instance(mod.Store(wasi={"stdout": out.append, "sockets": True})), RUN)() == 1
     )  # the lookup is refused: main returned 2, the err of run
     assert b"".join(out).decode().splitlines()[:4] == NET_OUTPUT[:4]
     assert b"getaddrinfo" in b"".join(out)
@@ -264,7 +266,9 @@ def test_the_policy_of_http_sees_the_scheme_and_the_authority_in_python(
 
     out: list[bytes] = []
     # the transport of the host is a socket, and it is the policy of http that decides (the one of sockets is not asked)
-    inst = mod.Instance(wasi={"args": ["x", f"127.0.0.1:{http_port}", "/p"], "stdout": out.append, "http": policy})
+    inst = mod.Instance(
+        mod.Store(wasi={"args": ["x", f"127.0.0.1:{http_port}", "/p"], "stdout": out.append, "http": policy})
+    )
     getattr(inst, RUN_RUST)()
     assert seen == [("http", f"127.0.0.1:{http_port}")]
     assert b"".join(out).decode().splitlines() == ["status=200", "body=served /p"]
@@ -302,5 +306,5 @@ def test_positions_links_times_and_errors_of_files_in_python(build_front_end: Bu
     data = tmp_path / "data"
     data.mkdir()
     out: list[bytes] = []
-    assert getattr(mod.Instance(wasi={"stdout": out.append, "preopens": {"/data": data}}), RUN)() == 0
+    assert getattr(mod.Instance(mod.Store(wasi={"stdout": out.append, "preopens": {"/data": data}})), RUN)() == 0
     assert b"".join(out).decode().splitlines() == FS_OUTPUT

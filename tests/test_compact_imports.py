@@ -182,7 +182,7 @@ def _run_start(cwd: Path, wabt: Path, code: str) -> subprocess.CompletedProcess[
     )
 
 
-START = "try:\n    m.Instance()._start()\nexcept m.WasiExit as exc:\n    print('exit', exc.code)\n"
+START = "try:\n    m.Instance(m.Store())._start()\nexcept m.WasiExit as exc:\n    print('exit', exc.code)\n"
 
 
 @pytest.mark.parametrize("form", ["each", "kind", "empty", "overlong", "mixed"])

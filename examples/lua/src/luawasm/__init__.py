@@ -46,7 +46,7 @@ def run(args: list[str], *, stdin: bytes = b"", root: str | os.PathLike[str] | N
     if root is not None:
         directory = os.fspath(root)
         wasi["preopens"] = {".": directory, "/": directory}  # an old libc finds a relative name only through "."
-    instance = _lua.Instance(wasi=wasi)  # pyright: ignore[reportArgumentType]
+    instance = _lua.Instance(_lua.Store(wasi=wasi))  # pyright: ignore[reportArgumentType]
     try:
         instance._start()
         code = 0

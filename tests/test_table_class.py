@@ -104,7 +104,7 @@ def test_the_arguments_of_a_table_are_checked(front: str, make: Callable[..., Mo
 def test_a_module_imports_a_table_that_has_no_module_and_fills_it(front: str, make: Callable[..., ModuleType]) -> None:
     mod = make(front, "tc_user", _USER)
     table = mod.Table(4, 8)
-    user = mod.Instance({"env": {"tab": table}})
+    user = mod.Instance(mod.Store(), imports={"env": {"tab": table}})
     assert user.call(3) == 7  # its own function, put there by its elem segment
     assert user.size() == 4
     table.grow(2)  # one table: the module sees it
@@ -118,46 +118,46 @@ def test_a_table_is_shared_by_modules_through_the_record_whatever_the_class(
     ext = make("extension", "tc_user", _USER)
     other = make("ctypes", "tc_user", _USER)
     table = ext.Table(4, 8)
-    one = ext.Instance({"env": {"tab": table}})
-    two = other.Instance({"env": {"tab": table}})
+    one = ext.Instance(ext.Store(), imports={"env": {"tab": table}})
+    two = other.Instance(other.Store(), imports={"env": {"tab": table}})
     assert one.call(3) == 7 and two.call(3) == 7
     table.grow(1)
     assert one.size() == two.size() == 5
     back = other.Table(4, 8)
-    assert ext.Instance({"env": {"tab": back}}).call(3) == 7
+    assert ext.Instance(ext.Store(), imports={"env": {"tab": back}}).call(3) == 7
 
 
 def test_the_limits_of_a_table_of_its_own_are_checked_at_the_link(front: str, make: Callable[..., ModuleType]) -> None:
     mod = make(front, "tc_user", _USER)
     with pytest.raises(mod.LinkError, match="at least 4"):
-        mod.Instance({"env": {"tab": mod.Table(3, 8)}})
+        mod.Instance(mod.Store(), imports={"env": {"tab": mod.Table(3, 8)}})
     with pytest.raises(mod.LinkError, match="may grow to"):
-        mod.Instance({"env": {"tab": mod.Table(4)}})  # no maximum, the import allows 8
+        mod.Instance(mod.Store(), imports={"env": {"tab": mod.Table(4)}})  # no maximum, the import allows 8
     with pytest.raises(mod.LinkError, match="is a table"):
-        mod.Instance({"env": {"tab": 5}})
+        mod.Instance(mod.Store(), imports={"env": {"tab": 5}})
 
 
 def test_instance_item_of_a_table_is_a_table(front: str, make: Callable[..., ModuleType]) -> None:
     owner_mod = make(front, "tc_owner", _OWNER)
     user_mod = make(front, "tc_user", _USER)
-    owner = owner_mod.Instance()
+    owner = owner_mod.Instance(owner_mod.Store())
     table = owner["tab"]
     assert type(table).__name__ == "Table"
     assert (table.size, table.maximum) == (6, 8)
     assert owner.__exports__["tab"].size == 6
-    user = user_mod.Instance({"env": {"tab": table}})
+    user = user_mod.Instance(user_mod.Store(), imports={"env": {"tab": table}})
     assert user.call(3) == 7 and user.call(0) == 5  # a function of the owner and one of the user
     table.grow(1)  # through the Table: the owner and the user see it
     assert owner.size() == user.size() == 7
     assert owner.grow(1) == 7 and table.size == 8
-    user2 = user_mod.Instance({"env": owner})  # the whole shelf from the instance
+    user2 = user_mod.Instance(user_mod.Store(), imports={"env": owner})  # the whole shelf from the instance
     assert user2.call(0) == 5
 
 
 def test_a_table_keeps_the_modules_that_put_functions_in_it_alive(front: str, make: Callable[..., ModuleType]) -> None:
     mod = make(front, "tc_user", _USER)
     table = mod.Table(4, 8)
-    user: Any = mod.Instance({"env": {"tab": table}})
+    user: Any = mod.Instance(mod.Store(), imports={"env": {"tab": table}})
     ref = weakref.ref(user)
     del user
     gc.collect()
@@ -172,9 +172,9 @@ def test_a_table_keeps_the_modules_that_put_functions_in_it_alive(front: str, ma
 def test_a_table_outlives_the_instance_that_has_it(front: str, make: Callable[..., ModuleType]) -> None:
     owner_mod = make(front, "tc_owner", _OWNER)
     user_mod = make(front, "tc_user", _USER)
-    owner = owner_mod.Instance()
+    owner = owner_mod.Instance(owner_mod.Store())
     table = owner["tab"]
-    user = user_mod.Instance({"env": {"tab": table}})
+    user = user_mod.Instance(user_mod.Store(), imports={"env": {"tab": table}})
     ref = weakref.ref(owner)
     del owner
     gc.collect()
@@ -351,9 +351,9 @@ def test_the_elements_of_a_table_are_set_and_read_from_python(
 ) -> None:
     table_front, funcs_front = combo
     user_mod = make(table_front, "tc_user", _USER)
-    funcs = make(funcs_front, "tc_funcs", _FUNCS, share_tables=True).Instance()
+    funcs = (_mod17 := make(funcs_front, "tc_funcs", _FUNCS, share_tables=True)).Instance(_mod17.Store())
     table = user_mod.Table(4, 8)
-    user = user_mod.Instance({"env": {"tab": table}})
+    user = user_mod.Instance(user_mod.Store(), imports={"env": {"tab": table}})
     assert [table.get(i) for i in (0, 1, 2)] == [None, None, None]
     table.set(0, funcs.five)  # a method of the instance
     table.set(1, funcs["six"])  # the reference to the export
@@ -375,7 +375,7 @@ def test_an_element_put_by_an_elem_segment_is_a_function_with_no_name(
 ) -> None:
     mod = make(front, "tc_user", _USER)
     table = mod.Table(4, 8)
-    user = mod.Instance({"env": {"tab": table}})
+    user = mod.Instance(mod.Store(), imports={"env": {"tab": table}})
     assert user.call(3) == 7
     seven = table.get(3)  # put by the elem segment of the module: it is no export, so it has no name
     assert (seven.name, seven.signature) == (None, ((), ("i32",)))
@@ -385,7 +385,7 @@ def test_an_element_put_by_an_elem_segment_is_a_function_with_no_name(
 
 def test_the_elements_are_checked(front: str, make: Callable[..., ModuleType]) -> None:
     mod = make(front, "tc_user", _USER)
-    funcs = make(front, "tc_funcs", _FUNCS, share_tables=True).Instance()
+    funcs = (_mod16 := make(front, "tc_funcs", _FUNCS, share_tables=True)).Instance(_mod16.Store())
     table = mod.Table(4, 8)
     with pytest.raises(IndexError):
         table.get(4)
@@ -399,15 +399,15 @@ def test_the_elements_are_checked(front: str, make: Callable[..., ModuleType]) -
         table.set(0, print)  # a function of Python cannot be in a table
     with pytest.raises(TypeError):
         table.set(0, funcs)  # an instance is not a function
-    other = make(front, "tc_owner", _OWNER).Instance()
+    other = (_mod15 := make(front, "tc_owner", _OWNER)).Instance(_mod15.Store())
     with pytest.raises(TypeError, match="not one"):
         table.set(0, other["tab"])  # a table is not a function
 
 
 def test_a_table_of_an_instance_has_elements_too(combo: tuple[str, str], make: Callable[..., ModuleType]) -> None:
     table_front, funcs_front = combo
-    owner = make(table_front, "tc_owner", _OWNER).Instance()
-    funcs = make(funcs_front, "tc_funcs", _FUNCS, share_tables=True).Instance()
+    owner = (_mod14 := make(table_front, "tc_owner", _OWNER)).Instance(_mod14.Store())
+    funcs = (_mod13 := make(funcs_front, "tc_funcs", _FUNCS, share_tables=True)).Instance(_mod13.Store())
     table = owner["tab"]
     table.set(1, funcs.six)
     assert owner.call(1) == 6 and table.get(1)() == 6
@@ -421,8 +421,8 @@ def test_a_table_keeps_the_instance_whose_function_it_holds_alive(
     table_front, funcs_front = combo
     user_mod = make(table_front, "tc_user", _USER)
     table = user_mod.Table(4, 8)
-    user = user_mod.Instance({"env": {"tab": table}})
-    funcs: Any = make(funcs_front, "tc_funcs", _FUNCS, share_tables=True).Instance()
+    user = user_mod.Instance(user_mod.Store(), imports={"env": {"tab": table}})
+    funcs: Any = (_mod12 := make(funcs_front, "tc_funcs", _FUNCS, share_tables=True)).Instance(_mod12.Store())
     ref = weakref.ref(funcs)
     table.set(0, funcs.five)
     del funcs
@@ -438,7 +438,9 @@ def test_a_function_of_a_module_with_no_table_cannot_be_put_in_a_table(
     front: str, make: Callable[..., ModuleType]
 ) -> None:
     mod = make(front, "tc_user", _USER)
-    plain = make(front, "tc_plain", '(module (func (export "five") (result i32) i32.const 5))').Instance()
+    plain = (_mod11 := make(front, "tc_plain", '(module (func (export "five") (result i32) i32.const 5))')).Instance(
+        _mod11.Store()
+    )
     with pytest.raises(TypeError, match="share tables"):
         mod.Table(2).set(0, plain.five)
 
@@ -467,7 +469,7 @@ def test_a_function_is_called_with_the_arguments_and_the_results_of_its_type(
     front: str, make: Callable[..., ModuleType]
 ) -> None:
     mod = make(front, "tc_types", _TYPES)
-    owner = mod.Instance()
+    owner = mod.Instance(mod.Store())
     table = owner["tab"]
     functions = [table.get(i) for i in range(6)]
     assert [f.signature for f in functions] == [
@@ -498,7 +500,7 @@ def test_a_function_is_equal_to_the_same_function_and_a_function_goes_into_anoth
     front: str, make: Callable[..., ModuleType]
 ) -> None:
     mod = make(front, "tc_types", _TYPES)
-    owner = mod.Instance()
+    owner = mod.Instance(mod.Store())
     table = owner["tab"]
     other = mod.Table(8, 8)
     assert table.get(0) == table.get(0) and table.get(0) != table.get(1)
@@ -513,7 +515,7 @@ def test_a_function_of_a_type_the_module_does_not_declare_is_told_and_not_called
     front: str, make: Callable[..., ModuleType]
 ) -> None:
     mod = make(front, "tc_user", _USER)  # declares () -> i32 and (i32) -> i32
-    funcs = make(front, "tc_funcs", _FUNCS, share_tables=True).Instance()
+    funcs = (_mod10 := make(front, "tc_funcs", _FUNCS, share_tables=True)).Instance(_mod10.Store())
     table = mod.Table(4, 8)
     table.set(0, funcs.wide)  # (i64) -> i64
     function = table.get(0)
@@ -532,7 +534,7 @@ def test_a_function_cannot_be_made_by_hand(front: str, make: Callable[..., Modul
 
 def test_a_function_keeps_the_table_and_so_the_instances_alive(front: str, make: Callable[..., ModuleType]) -> None:
     mod = make(front, "tc_user", _USER)
-    funcs: Any = make(front, "tc_funcs", _FUNCS, share_tables=True).Instance()
+    funcs: Any = (_mod9 := make(front, "tc_funcs", _FUNCS, share_tables=True)).Instance(_mod9.Store())
     ref = weakref.ref(funcs)
     table = mod.Table(4, 8)
     table.set(0, funcs.five)
@@ -563,8 +565,8 @@ _REFS = """
 
 def test_a_funcref_is_a_parameter_and_a_result(combo: tuple[str, str], make: Callable[..., ModuleType]) -> None:
     refs_front, funcs_front = combo
-    refs = make(refs_front, "tc_refs", _REFS).Instance()
-    funcs = make(funcs_front, "tc_funcs", _FUNCS, share_tables=True).Instance()
+    refs = (_mod8 := make(refs_front, "tc_refs", _REFS)).Instance(_mod8.Store())
+    funcs = (_mod7 := make(funcs_front, "tc_funcs", _FUNCS, share_tables=True)).Instance(_mod7.Store())
     assert refs.id(None) is None and refs.isnull(None) == 1
     given = refs.id(funcs.five)  # a function of an instance, and back as a Function
     assert given() == 5 and given.signature == ((), ("i32",)) and given == refs.id(funcs["five"])
@@ -582,8 +584,8 @@ def test_a_funcref_that_the_module_keeps_keeps_its_instance_alive(
     combo: tuple[str, str], make: Callable[..., ModuleType]
 ) -> None:
     refs_front, funcs_front = combo
-    refs = make(refs_front, "tc_refs", _REFS).Instance()
-    funcs: Any = make(funcs_front, "tc_funcs", _FUNCS, share_tables=True).Instance()
+    refs = (_mod6 := make(refs_front, "tc_refs", _REFS)).Instance(_mod6.Store())
+    funcs: Any = (_mod5 := make(funcs_front, "tc_funcs", _FUNCS, share_tables=True)).Instance(_mod5.Store())
     ref = weakref.ref(funcs)
     refs.store(3, funcs.six)
     del funcs
@@ -597,8 +599,10 @@ def test_a_funcref_that_the_module_keeps_keeps_its_instance_alive(
 def test_a_funcref_takes_only_a_function_of_a_module_that_shares_tables(
     front: str, make: Callable[..., ModuleType]
 ) -> None:
-    refs = make(front, "tc_refs", _REFS).Instance()
-    plain = make(front, "tc_plain", '(module (func (export "five") (result i32) i32.const 5))').Instance()
+    refs = (_mod4 := make(front, "tc_refs", _REFS)).Instance(_mod4.Store())
+    plain = (_mod3 := make(front, "tc_plain", '(module (func (export "five") (result i32) i32.const 5))')).Instance(
+        _mod3.Store()
+    )
     with pytest.raises(TypeError):
         refs.id(5)
     with pytest.raises(TypeError, match="shares tables"):

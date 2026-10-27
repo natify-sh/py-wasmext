@@ -37,7 +37,7 @@ def main() -> int:
         return 2
     tool, module = sys.argv[1], tools[sys.argv[1]]
     wasi = {"args": [tool, *sys.argv[2:]], "preopens": preopens(sys.argv[2:])}
-    instance = module.Instance(wasi=wasi)
+    instance = module.Instance(module.Store(wasi=wasi))
     try:
         instance._start()
     except module.WasiExit as exit_:

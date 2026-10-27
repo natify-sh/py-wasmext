@@ -13,7 +13,7 @@ def test_the_library_is_called_through_ctypes() -> None:
         said.append(value)
         return value + 1
 
-    engine = engine_ctypes.Instance({"env": {"log": log}})
+    engine = engine_ctypes.Instance(engine_ctypes.Store(), imports={"env": {"log": log}})
     assert engine.add(2, 3) == 5
     assert engine.twice(7) == (7, 7)
     assert engine.call_log(41) == 42 and said == [41]  # the import is a function of Python
@@ -21,7 +21,7 @@ def test_the_library_is_called_through_ctypes() -> None:
 
 
 def test_a_trap_and_an_exception_of_webassembly_are_errors_of_python() -> None:
-    engine = engine_ctypes.Instance({"env": {"log": lambda value: value}})
+    engine = engine_ctypes.Instance(engine_ctypes.Store(), imports={"env": {"log": lambda value: value}})
     with pytest.raises(engine_ctypes.Trap):
         engine.trap()
     with pytest.raises(engine_ctypes.UncaughtException):

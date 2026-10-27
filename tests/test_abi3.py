@@ -25,7 +25,7 @@ def ext(build_extension: Builder) -> Any:
 def make(ext: Any, **overrides: Callable[..., Any]) -> Any:
     env: dict[str, Callable[..., Any]] = {"log": lambda _x: None, "twice": lambda x: x * 2, "cb": lambda: None}  # pyright: ignore[reportUnknownLambdaType]
     env.update(overrides)
-    return ext.Instance({"env": env})
+    return ext.Instance(ext.Store(), imports={"env": env})
 
 
 def test_calls_imports_and_traps(ext: Any) -> None:
@@ -57,7 +57,7 @@ def test_a_subclass_works(ext: Any) -> None:
     class Mine(ext.Instance):
         pass
 
-    inst = Mine({"env": {"log": print, "twice": float, "cb": print}})
+    inst = Mine(ext.Store(), imports={"env": {"log": print, "twice": float, "cb": print}})
     assert inst.add(1, 2) == 3
     del inst
     gc.collect()

@@ -86,14 +86,14 @@ def test_a_module_built_with_the_default_host_asks_for_its_wasi_imports(build_ex
     mod = build_extension(DATA / "wasi_hello.wat", "host_default")
     assert mod.__host__ == "wasm32"
     with pytest.raises(mod.LinkError, match="has imports"):
-        mod.Instance()  # the module does not get WASI by itself any more
+        mod.Instance(mod.Store())  # the module does not get WASI by itself any more
 
 
 def test_a_module_built_with_wasip1_gets_wasi_by_itself(build_extension: Builder) -> None:
     mod = build_extension(DATA / "wasi_hello.wat", "host_wasip1", host="wasm32-wasip1")
     assert mod.__host__ == "wasm32-wasip1"
     with pytest.raises(mod.WasiExit):
-        mod.Instance()._start()  # pyright: ignore[reportPrivateUsage]
+        mod.Instance(mod.Store())._start()  # pyright: ignore[reportPrivateUsage]
 
 
 def test_a_program_needs_the_wasip1_host(tmp_path: Path, wabt: Path) -> None:
@@ -132,7 +132,7 @@ def test_a_call_of_wasi_is_replaced_through_imports_in_both_front_ends(
         return 0
 
     with pytest.raises(mod.WasiExit) as raised:
-        mod.Instance({WASI: {"fd_write": fd_write}})._start()  # pyright: ignore[reportPrivateUsage]
+        mod.Instance(mod.Store(), imports={WASI: {"fd_write": fd_write}})._start()  # pyright: ignore[reportPrivateUsage]
     assert raised.value.code == 3 and len(seen) == 1 and seen[0][0] == 1  # fd 1; the real call did not write
 
 
@@ -146,11 +146,15 @@ def test_the_stub_types_every_module_of_the_imports_by_its_name() -> None:
     assert "_Imports_env = TypedDict('_Imports_env', {'f': Callable" in stub  # the caller's: required
     assert "_Imports_wasi_cli_environment_0_2_12 = TypedDict(" in stub
     assert "'wasi_snapshot_preview1': NotRequired[_Imports_wasi_snapshot_preview1]" in stub
-    assert "'env': _Imports_env" in stub and "def __init__(self, imports: Imports, *, wasi" in stub  # env is asked for
+    assert (
+        "'env': _Imports_env" in stub
+        and "def __init__(self, store: Store, imports: Imports) -> None: ..." in stub
+        and "def __init__(self, *, wasi: Wasi | None = None)" in stub
+    )  # env is asked for
     assert "_Imports0" not in stub
     compile(stub, "m.pyi", "exec")
     only = generate(parse(_wasm((WASI, "proc_exit"))), "m", host="wasm32-wasip1").stub
-    assert "imports: Imports | None = None, *, wasi: Wasi | None = None" in only  # a WASI program asks for nothing
+    assert "store: Store, imports: Imports | None = None" in only  # a WASI program asks for nothing but the store
     twin = generate(parse(_wasm(("a-b", "f"), ("a_b", "g"))), "m").stub
     assert (
         "_Imports_a_b = " in twin and "_Imports_a_b_2 = " in twin
@@ -172,13 +176,13 @@ def test_a_call_of_wasi_given_as_none_is_nothing_given_in_both_front_ends(
     with pytest.raises(
         mod.WasiExit
     ) as raised:  # fd_write is None: ENOSYS, nothing is written; the program goes on to proc_exit(3)
-        mod.Instance({WASI: {"fd_write": None}}, wasi={"stdout": stdout})._start()  # pyright: ignore[reportPrivateUsage]
+        mod.Instance(mod.Store(wasi={"stdout": stdout}), imports={WASI: {"fd_write": None}})._start()  # pyright: ignore[reportPrivateUsage]
     assert raised.value.code == 3 and written == []
     with pytest.raises(mod.WasiExit):  # the key is absent: the call of wasmext
-        mod.Instance({WASI: {}}, wasi={"stdout": stdout})._start()  # pyright: ignore[reportPrivateUsage]
+        mod.Instance(mod.Store(wasi={"stdout": stdout}), imports={WASI: {}})._start()  # pyright: ignore[reportPrivateUsage]
     assert b"".join(written) == b"hello, wasi\n"
     with pytest.raises(mod.Trap, match="proc_exit was given as None"):  # no errno to answer with
-        mod.Instance({WASI: {"proc_exit": None}})._start()  # pyright: ignore[reportPrivateUsage]
+        mod.Instance(mod.Store(), imports={WASI: {"proc_exit": None}})._start()  # pyright: ignore[reportPrivateUsage]
 
 
 def test_an_import_of_the_caller_given_as_none_is_not_linked(
@@ -190,8 +194,8 @@ def test_an_import_of_the_caller_given_as_none_is_not_linked(
     )
     mod = build_front_end(wat, f"host_none_env_{front_end}")
     with pytest.raises(mod.LinkError):
-        mod.Instance({"env": {"f": None}})
-    assert mod.Instance({"env": {"f": lambda: 7}}).g() == 7
+        mod.Instance(mod.Store(), imports={"env": {"f": None}})
+    assert mod.Instance(mod.Store(), imports={"env": {"f": lambda: 7}}).g() == 7
 
 
 def test_an_import_wins_over_the_hook_of_wasi_in_both_front_ends(build_front_end: Builder, front_end: str) -> None:
@@ -205,7 +209,7 @@ def test_an_import_wins_over_the_hook_of_wasi_in_both_front_ends(build_front_end
         return 0
 
     with pytest.raises(mod.WasiExit):
-        mod.Instance({WASI: {"fd_write": fd_write}}, wasi={"stdout": hooked.append})._start()  # pyright: ignore[reportPrivateUsage]
+        mod.Instance(mod.Store(wasi={"stdout": hooked.append}), imports={WASI: {"fd_write": fd_write}})._start()  # pyright: ignore[reportPrivateUsage]
     assert hooked == [] and len(imported) == 1
 
 
@@ -217,7 +221,7 @@ def test_wasi_is_only_for_a_host_that_has_it(build_front_end: Builder, front_end
     )
     mod = build_front_end(wat, f"host_nowasi_{front_end}")
     with pytest.raises(TypeError):
-        mod.Instance({"env": {"f": lambda: 1}}, wasi={})
+        mod.Instance(mod.Store(wasi={}), imports={"env": {"f": lambda: 1}})
 
 
 def test_the_stub_names_the_configuration_by_its_host() -> None:
@@ -230,7 +234,7 @@ def test_the_stub_names_the_configuration_by_its_host() -> None:
 def test_the_host_gives_the_originals_of_its_calls_in_both_front_ends(build_front_end: Builder, front_end: str) -> None:
     mod = build_front_end(DATA / "wasi_hello.wat", f"host_originals_{front_end}", host="wasm32-wasip1")
     out: list[bytes] = []
-    inst = mod.Instance(wasi={"stdout": out.append})
+    inst = mod.Instance(mod.Store(wasi={"stdout": out.append}))
     host = inst.__host__
     assert host.name == "wasm32-wasip1" and isinstance(host, mod.Host)
     originals = host.__imports__
@@ -260,7 +264,7 @@ def test_a_wrapper_calls_the_original_of_the_call_it_replaces(build_front_end: B
         original = holder["inst"].__host__.__imports__[WASI]["fd_write"]  # type: ignore[attr-defined]
         return original(*args)  # type: ignore[no-any-return,operator]
 
-    holder["inst"] = inst = mod.Instance({WASI: {"fd_write": fd_write}}, wasi={"stdout": out.append})
+    holder["inst"] = inst = mod.Instance(mod.Store(wasi={"stdout": out.append}), imports={WASI: {"fd_write": fd_write}})
     with pytest.raises(mod.WasiExit) as raised:
         inst._start()  # pyright: ignore[reportPrivateUsage]
     assert raised.value.code == 3 and len(seen) == 1 and b"".join(out) == b"hello, wasi\n"

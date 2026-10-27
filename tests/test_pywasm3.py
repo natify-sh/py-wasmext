@@ -35,7 +35,7 @@ def test_fibonacci(build_extension: Builder, tmp_path: Path) -> None:
 """,
         encoding="utf-8",
     )
-    fib = build_extension(wat, "pw3_fib").Instance()
+    fib = (_mod2 := build_extension(wat, "pw3_fib")).Instance(_mod2.Store())
     assert fib.fib(24) == 46368  # N and the result of the example
     assert [fib.fib(n) for n in range(10)] == [0, 1, 1, 2, 3, 5, 8, 13, 21, 34]
     assert fib.fib(2**64 + 5) == 5  # an i64 argument wraps, as in the JavaScript API
@@ -53,7 +53,7 @@ def test_coremark_minimal(build_extension: Builder) -> None:
         now += 15_000
         return now
 
-    score = mod.Instance({"env": {"clock_ms": clock_ms}}).run()
+    score = mod.Instance(mod.Store(), imports={"env": {"clock_ms": clock_ms}}).run()
     # The module has return_call in functions with locals: wasm2c 1.0.42 writes C that does not compile for those, and
     # wasmext repairs it. 10 passes in the 15 s of the clock above; a run that is not valid scores 0.0.
     assert score == pytest.approx(10 / 15, rel=1e-6)
@@ -69,7 +69,7 @@ def test_fire_draws_a_frame_into_its_memory(build_extension: Builder) -> None:
     mod = build_extension(DATA / "fire.wasm", "pw3_fire")
     frames: list[bytes] = []
     for _ in range(2):  # the same "random" gives the same frame
-        inst = mod.Instance({"": {"rand": lambda: 0.5}})
+        inst = mod.Instance(mod.Store(), imports={"": {"rand": lambda: 0.5}})
         before = _frame(inst)
         inst.run()
         frames.append(_frame(inst))
@@ -79,7 +79,7 @@ def test_fire_draws_a_frame_into_its_memory(build_extension: Builder) -> None:
 
 def test_ray_tracer_uses_the_sin_of_the_host(build_extension: Builder) -> None:
     mod = build_extension(DATA / "ray.wasm", "pw3_ray")
-    inst = mod.Instance({"Math": {"sin": math.sin}})
+    inst = mod.Instance(mod.Store(), imports={"Math": {"sin": math.sin}})
     inst.run(0.5)
     first = _frame(inst)
     inst.run(1.5)
@@ -89,7 +89,9 @@ def test_ray_tracer_uses_the_sin_of_the_host(build_extension: Builder) -> None:
 def test_maze_calls_back_for_random_sin_and_time(build_extension: Builder) -> None:
     mod = build_extension(DATA / "maze.wasm", "pw3_maze")
     ticks: list[int] = []
-    inst = mod.Instance({"Math": {"random": lambda: 0.25, "sin": math.sin}, "env": {"t": ticks.append}})
+    inst = mod.Instance(
+        mod.Store(), imports={"Math": {"random": lambda: 0.25, "sin": math.sin}, "env": {"t": ticks.append}}
+    )
     before = _frame(inst)
     inst.run()
     assert _frame(inst) != before
@@ -118,7 +120,10 @@ def test_asyncified_module_pauses_and_resumes_through_its_own_exports(build_exte
             state["sleeping"] = False
 
     inst = mod.Instance(
-        {"env": {"before": lambda: events.append("before"), "sleep": sleep, "after": lambda: events.append("after")}}
+        mod.Store(),
+        imports={
+            "env": {"before": lambda: events.append("before"), "sleep": sleep, "after": lambda: events.append("after")}
+        },
     )
     box["inst"] = inst
     inst.main()
@@ -155,7 +160,7 @@ def test_a_trap_after_a_call_into_the_instance_from_its_own_import(build_extensi
         inst = box["inst"]
         seen.append(inst.inner(x))  # type: ignore[attr-defined]
 
-    inst = mod.Instance({"env": {"host": host}})
+    inst = mod.Instance(mod.Store(), imports={"env": {"host": host}})
     box["inst"] = inst
     inst.outer(4)
     assert seen == [5]
@@ -171,6 +176,6 @@ def test_a_trap_after_a_call_into_the_instance_from_its_own_import(build_extensi
 # which compiled code does not have and cannot get. Its module, though, is an ordinary one that keeps its progress in exported
 # globals; it is run to the end here.
 def test_collatz_search_of_the_suspend_example_runs_to_the_end(build_extension: Builder) -> None:
-    inst = build_extension(DATA / "collatz.wat", "pw3_collatz").Instance()
+    inst = (_mod1 := build_extension(DATA / "collatz.wat", "pw3_collatz")).Instance(_mod1.Store())
     assert inst.search(10_000) == 6171  # the number below 10000 with the longest chain
     assert (inst.best_n, inst.best_len, inst.n) == (6171, 261, 10_000)

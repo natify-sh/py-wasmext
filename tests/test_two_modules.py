@@ -28,7 +28,7 @@ sys.path.insert(0, {path!r})
 import {first}, {second}   # {second} is imported last: its runtime owns the handler of the signals
 for fn in ("boom", "oob"):
     try:
-        getattr({first}.Instance(), fn)()
+        getattr({first}.Instance({first}.Store()), fn)()
     except {first}.Trap:
         print(fn, "trap", flush=True)
 print("alive", flush=True)

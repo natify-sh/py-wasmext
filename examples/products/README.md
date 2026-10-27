@@ -9,7 +9,7 @@ One wheel with the two products of wasmext that are not Python extensions:
 ```python
 from productsdemo import HELLO, engine_ctypes
 
-engine_ctypes.Instance({"env": {"log": print}}).add(2, 3)  # 5
+engine_ctypes.Instance(engine_ctypes.Store(), imports={"env": {"log": print}}).add(2, 3)  # 5
 subprocess.run([HELLO])  # prints "hello, wasi", exits with 3
 ```
 

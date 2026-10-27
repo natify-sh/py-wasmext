@@ -20,6 +20,6 @@ __all__ = ["Host", "run"]
 def run(module: Any, host: Host) -> int:
     """Make an instance of the extension `module` with the imports of `host` and call `wasi:cli/run@0.2.12#run`: 0 is `ok`, 1 is `err`
     (the `main` of the program returned something other than 0; the number itself does not come out of `run`)."""
-    instance = module.Instance(host.imports())
+    instance = module.Instance(module.Store(), imports=host.imports())
     host.bind(instance)
     return getattr(instance, "wasi:cli/run@0.2.12#run")()

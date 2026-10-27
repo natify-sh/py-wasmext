@@ -28,7 +28,7 @@ def test_hello_writes_to_stdout_and_exits_with_a_code(
     build_extension: Builder, capsys: pytest.CaptureFixture[str]
 ) -> None:
     mod = build_extension(DATA / "wasi_hello.wat", "wasi_hello")
-    inst = mod.Instance()  # no imports: the module gets WASI by itself
+    inst = mod.Instance(mod.Store())  # no imports: the module gets WASI by itself
     with pytest.raises(mod.WasiExit) as info:
         inst._start()
     assert info.value.code == 3
@@ -37,7 +37,7 @@ def test_hello_writes_to_stdout_and_exits_with_a_code(
 
 def probe(build_extension: Builder, **config: object) -> tuple[Any, Any]:
     mod = build_extension(DATA / "wasi_probe.wat", "wasi_probe")
-    return mod, mod.Instance(wasi=config) if config else mod.Instance()
+    return mod, mod.Instance(mod.Store(wasi=config)) if config else mod.Instance(mod.Store())
 
 
 def u32(mem: memoryview, at: int) -> int:
@@ -193,7 +193,7 @@ def test_the_end_of_a_call_leaves_what_the_program_opened(build_extension: Build
     mod: Any = build_extension(DATA / "wasi_fs_probe.wat", "wasi_fs_probe_end")
     (tmp_path / "f.txt").write_text("x", encoding="utf-8")
     before = len(os.listdir("/proc/self/fd"))
-    inst = mod.Instance(wasi={"preopens": {"/": str(tmp_path)}})
+    inst = mod.Instance(mod.Store(wasi={"preopens": {"/": str(tmp_path)}}))
     mem = inst.memory
     mem[1000:1005] = b"f.txt"
     assert inst.path_open(3, 0, 1000, 5, 0, 0xFFFFFFFF, 0, 0, 2000) == 0  # rights: all, no flags
@@ -212,12 +212,12 @@ def test_the_end_of_a_call_leaves_what_the_program_opened(build_extension: Build
 
 def test_a_trap_does_not_end_the_instance_of_a_command_or_of_a_reactor(build_extension: Builder) -> None:
     command: Any = build_extension(DATA / "wasi_command_trap.wat", "wasi_command_trap")
-    inst = command.Instance()
+    inst = command.Instance(command.Store())
     with pytest.raises(command.Trap):
         inst._start()
     assert inst.ping() == 1  # a core module that trapped can be called again in Wasmtime, command or not
     reactor: Any = build_extension(DATA / "wasi_reactor_trap.wat", "wasi_reactor_trap")
-    loose = reactor.Instance()
+    loose = reactor.Instance(reactor.Store())
     with pytest.raises(reactor.Trap):
         loose.boom()
     assert loose.ping() == 1  # the instance stays usable
@@ -225,7 +225,7 @@ def test_a_trap_does_not_end_the_instance_of_a_command_or_of_a_reactor(build_ext
 
 def test_the_caller_can_replace_a_call_and_the_rest_stays(build_extension: Builder) -> None:
     mod: Any = build_extension(DATA / "wasi_probe.wat", "wasi_probe")
-    inst = mod.Instance({"wasi_snapshot_preview1": {"sched_yield": lambda: 99}})
+    inst = mod.Instance(mod.Store(), imports={"wasi_snapshot_preview1": {"sched_yield": lambda: 99}})
     assert inst.sched_yield() == 99
     assert inst.random_get(64, 8) == 0  # still ours
 
@@ -233,11 +233,11 @@ def test_the_caller_can_replace_a_call_and_the_rest_stays(build_extension: Build
 def test_a_wrong_config_is_refused(build_extension: Builder) -> None:
     mod = build_extension(DATA / "wasi_probe.wat", "wasi_probe")
     with pytest.raises(TypeError, match="unknown option 'colour'"):
-        mod.Instance(wasi={"colour": 1})
+        mod.Instance(mod.Store(wasi={"colour": 1}))
     with pytest.raises(NotADirectoryError):
-        mod.Instance(wasi={"preopens": {"/": __file__}})
+        mod.Instance(mod.Store(wasi={"preopens": {"/": __file__}}))
     with pytest.raises(TypeError):
-        mod.Instance(wasi=[1])
+        mod.Instance(mod.Store(wasi=[1]))
 
 
 def test_the_header_has_a_function_for_each_call_of_the_specification() -> None:
@@ -285,7 +285,7 @@ def test_the_first_snapshot_wasi_unstable_is_served_too(build_extension: Builder
         (DATA / "wasi_probe.wat").read_text("utf-8").replace("wasi_snapshot_preview1", "wasi_unstable"), "utf-8"
     )
     mod: Any = build_extension(wat, "wasi_unstable_probe")
-    inst = mod.Instance(wasi={"args": ["prog", "x"], "env": {"A": "1"}})
+    inst = mod.Instance(mod.Store(wasi={"args": ["prog", "x"], "env": {"A": "1"}}))
     mem = inst.memory
     inst.args_sizes_get(0, 4)
     assert (u32(mem, 0), u32(mem, 4)) == (2, len(b"prog\0x\0"))
@@ -318,7 +318,7 @@ def test_one_module_can_import_both_snapshots(
     )
     mod: Any = build_extension(wat, "wasi_both")
     with pytest.raises(mod.WasiExit) as info:
-        mod.Instance()._start()
+        mod.Instance(mod.Store())._start()
     assert info.value.code == 4 and capsys.readouterr().out == "both\n"
 
 
@@ -340,7 +340,7 @@ def test_sock_accept_is_not_a_call_of_the_first_snapshot(wabt: Path, tmp_path: P
 
 def test_a_function_imported_twice_is_one_function(build_extension: Builder) -> None:
     mod: Any = build_extension(DATA / "wasi_twice.wat", "wasi_twice")
-    inst = mod.Instance()
+    inst = mod.Instance(mod.Store())
     assert inst.first(99) == 8 and inst.second(99) == 8  # EBADF from both
     seen: list[int] = []
 
@@ -348,7 +348,7 @@ def test_a_function_imported_twice_is_one_function(build_extension: Builder) -> 
         seen.append(fd)
         return 0
 
-    again = mod.Instance({"wasi_snapshot_preview1": {"fd_write": fd_write}})
+    again = mod.Instance(mod.Store(), imports={"wasi_snapshot_preview1": {"fd_write": fd_write}})
     assert again.first(5) == 0 and again.second(6) == 0 and seen == [5, 6]
 
 
@@ -418,9 +418,9 @@ def test_the_clock_and_the_random_bytes_can_be_replaced(build_extension: Builder
         short.random_get(64, 4)
     mod = build_extension(DATA / "wasi_probe.wat", "wasi_probe")
     with pytest.raises(TypeError, match="'clock' must be a function"):
-        mod.Instance(wasi={"clock": None})
+        mod.Instance(mod.Store(wasi={"clock": None}))
     with pytest.raises(TypeError, match="'random' must be a function"):
-        mod.Instance(wasi={"random": 5})
+        mod.Instance(mod.Store(wasi={"random": 5}))
 
 
 def test_the_clocks_are_those_of_the_system(build_extension: Builder) -> None:
@@ -577,4 +577,4 @@ def test_args_and_env_are_checked(build_extension: Builder) -> None:
         ({"args": [b"a"]}, TypeError),
     ):
         with pytest.raises(error):
-            mod.Instance(wasi=bad)
+            mod.Instance(mod.Store(wasi=bad))

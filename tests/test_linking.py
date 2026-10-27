@@ -51,11 +51,11 @@ def modules(
 
 def test_instances_share_a_mutable_global_and_an_instance_is_a_mapping(modules: Callable[..., tuple[Any, ...]]) -> None:
     a_mod, b_mod = modules(a=_COUNTER_A, b=_COUNTER_B)
-    a = a_mod.Instance()
+    a = a_mod.Instance(a_mod.Store())
     assert sorted(a.__exports__) == sorted(["counter", "fixed", "wide", "bump", "log"])
     said: list[int] = []
     shelf = {**a.__exports__, "log": said.append}  # everything of a, and log from Python (the later key wins)
-    b = b_mod.Instance({"env": shelf})
+    b = b_mod.Instance(b_mod.Store(), imports={"env": shelf})
     assert (b.read(), b.fixed()) == (10, 7)  # the global of a, seen from b
     assert (b.add(5), a.counter, a.bump(), b.read()) == (15, 15, 16, 16)  # one variable
     a.counter = 100
@@ -63,7 +63,7 @@ def test_instances_share_a_mutable_global_and_an_instance_is_a_mapping(modules: 
     b.say(3)
     assert said == [3]  # log came from Python, not from a
     c = b_mod.Instance(
-        {"env": {"counter": a["counter"], "fixed": 5, "log": print}}
+        b_mod.Store(), imports={"env": {"counter": a["counter"], "fixed": 5, "log": print}}
     )  # one export of a, the rest by hand
     assert (c.read(), c.fixed()) == (100, 5)
     del a, shelf
@@ -73,18 +73,18 @@ def test_instances_share_a_mutable_global_and_an_instance_is_a_mapping(modules: 
 
 def test_the_whole_instance_is_a_shelf(modules: Callable[..., tuple[Any, ...]]) -> None:
     a_mod, b_mod = modules(a=_FUNCS_A, b=_FUNCS_B)
-    a = a_mod.Instance()
-    b = b_mod.Instance({"env": a})
+    a = a_mod.Instance(a_mod.Store())
+    b = b_mod.Instance(b_mod.Store(), imports={"env": a})
     assert b.sum(2, 3) == 5
 
 
 def test_linking_a_global_checks_what_it_is(modules: Callable[..., tuple[Any, ...]]) -> None:
     a_mod, b_mod = modules(a=_COUNTER_A, b=_COUNTER_B)
-    a = a_mod.Instance()
+    a = a_mod.Instance(a_mod.Store())
 
     def attempt(counter: Any, fixed: Any = 5) -> str:
         try:
-            b_mod.Instance({"env": {"counter": counter, "fixed": fixed, "log": print}})
+            b_mod.Instance(b_mod.Store(), imports={"env": {"counter": counter, "fixed": fixed, "log": print}})
         except b_mod.LinkError as exc:
             return str(exc)
         return "linked"
@@ -103,16 +103,16 @@ def test_linking_a_global_checks_what_it_is(modules: Callable[..., tuple[Any, ..
 
 def test_instances_call_each_others_functions(modules: Callable[..., tuple[Any, ...]]) -> None:
     a_mod, b_mod = modules(a=_FUNCS_A, b=_FUNCS_B)
-    a = a_mod.Instance()
-    b = b_mod.Instance({"env": a})  # the whole shelf from an instance
+    a = a_mod.Instance(a_mod.Store())
+    b = b_mod.Instance(b_mod.Store(), imports={"env": a})  # the whole shelf from an instance
     assert b.sum(2, 3) == 5
     b.tell(42)
     assert a.seen() == 42  # a void function of a
     assert b.twin(7) == (7, 8)  # several results
-    c = b_mod.Instance({"env": {**a.__exports__}})  # unpacked references
+    c = b_mod.Instance(b_mod.Store(), imports={"env": {**a.__exports__}})  # unpacked references
     assert c.sum(10, 20) == 30
     d = b_mod.Instance(
-        {"env": {"add": a.add, "note": a["note"], "pair": a.pair, "boom": a["boom"]}}
+        b_mod.Store(), imports={"env": {"add": a.add, "note": a["note"], "pair": a.pair, "boom": a["boom"]}}
     )  # a bound method stands for its export
     assert d.sum(1, 1) == 2
     with pytest.raises(RuntimeError, match="(?i)unreachable") as raised:  # the trap of a, raised through b
@@ -125,9 +125,11 @@ def test_instances_call_each_others_functions(modules: Callable[..., tuple[Any, 
 
 def test_linking_a_function_checks_its_signature(modules: Callable[..., tuple[Any, ...]]) -> None:
     a_mod, b_mod = modules(a=_FUNCS_A, b=_FUNCS_B)
-    refs = a_mod.Instance().__exports__
+    refs = a_mod.Instance(a_mod.Store()).__exports__
     with pytest.raises(b_mod.LinkError) as raised:
-        b_mod.Instance({"env": {**refs, "add": refs["note"]}})  # note(i32), add wants (i32, i32) -> i32
+        b_mod.Instance(
+            b_mod.Store(), imports={"env": {**refs, "add": refs["note"]}}
+        )  # note(i32), add wants (i32, i32) -> i32
     assert "import env.add is a function ii>i" in str(raised.value) and "(i>)" in str(raised.value)
 
 
@@ -143,24 +145,24 @@ def test_an_exception_of_a_function_of_another_instance_comes_out_of_the_call(
     def fail() -> int:
         raise ValueError("from the function of a")
 
-    a = a_mod.Instance({"env": {"fail": fail}})
-    b = b_mod.Instance({"env": a})
+    a = a_mod.Instance(a_mod.Store(), imports={"env": {"fail": fail}})
+    b = b_mod.Instance(b_mod.Store(), imports={"env": a})
     with pytest.raises(ValueError, match="from the function of a"):
         b.explode()
 
 
 def test_instances_share_a_memory(modules: Callable[..., tuple[Any, ...]]) -> None:
     a_mod, b_mod = modules(a=_MEMORY_A, b=_MEMORY_B)
-    a = a_mod.Instance()
-    b = b_mod.Instance({"env": a})  # the shelf from an instance
+    a = a_mod.Instance(a_mod.Store())
+    b = b_mod.Instance(b_mod.Store(), imports={"env": a})  # the shelf from an instance
     assert (chr(b.load(0)), len(a.memory)) == ("h", 65536)
     b.store(1, 65)
     assert bytes(a.memory[:5]) == b"hAllo"  # one memory
     a.memory[2] = 66
     assert b.load(2) == 66
     assert (b.grow(1), len(a.memory)) == (1, 131072)  # a grows with b
-    c = b_mod.Instance({"env": {"memory": a.memory}})  # a memoryview of the memory stands for it
-    d = b_mod.Instance({"env": {"memory": a["memory"]}})  # or the reference
+    c = b_mod.Instance(b_mod.Store(), imports={"env": {"memory": a.memory}})  # a memoryview of the memory stands for it
+    d = b_mod.Instance(b_mod.Store(), imports={"env": {"memory": a["memory"]}})  # or the reference
     assert (c.load(1), d.load(1)) == (65, 65)
 
 
@@ -172,11 +174,11 @@ def test_linking_a_memory_checks_its_size_and_kind(modules: Callable[..., tuple[
         wide='(module (import "env" "memory" (memory i64 1)))',
         other='(module (import "env" "memory" (memory 1)) (global (export "g") i32 (i32.const 1)))',
     )
-    a = a_mod.Instance()
+    a = a_mod.Instance(a_mod.Store())
     messages: list[str] = []
     for module, given in ((big, a.memory), (small, a.memory), (wide, a.memory), (other, 3)):
         with pytest.raises(module.LinkError) as raised:
-            module.Instance({"env": {"memory": given}})
+            module.Instance(module.Store(), imports={"env": {"memory": given}})
         messages.append(str(raised.value))
     assert "1 pages" in messages[0] and "at least 2" in messages[0]
     assert "may grow to 4 pages" in messages[1] and "allows 2" in messages[1]
@@ -191,12 +193,12 @@ def test_an_imported_immutable_global_is_a_number(modules: Callable[..., tuple[A
         ' (func (export "big") (result i64) global.get 2))'
     )
     imports: dict[str, dict[str, Any]] = {"env": {"limit": 100, "big": -(2**40)}, "env2": {"scale": 2.5}}
-    i = mod.Instance(imports)
+    i = mod.Instance(mod.Store(), imports=imports)
     assert (i.limit(), i.scale(), i.big()) == (100, 2.5, -1099511627776)
     imports["env"]["limit"] = 7  # the value was taken when the instance was made
-    assert (i.limit(), mod.Instance(imports).limit()) == (100, 7)
+    assert (i.limit(), mod.Instance(mod.Store(), imports=imports).limit()) == (100, 7)
     assert (
-        mod.Instance({"env": {"limit": 2**32 + 3, "big": 1}, "env2": {"scale": 1}}).limit() == 3
+        mod.Instance(mod.Store(), imports={"env": {"limit": 2**32 + 3, "big": 1}, "env2": {"scale": 1}}).limit() == 3
     )  # wraps, an int is a number
     for bad in (
         {"env2": {"scale": 1}, "env": {"big": 1}},  # missing
@@ -205,7 +207,7 @@ def test_an_imported_immutable_global_is_a_number(modules: Callable[..., tuple[A
         {"env": {"limit": 1, "big": 1}, "env2": {"scale": print}},  # a function for a global
     ):
         with pytest.raises(mod.LinkError):
-            mod.Instance(bad)
+            mod.Instance(mod.Store(), imports=bad)
 
 
 def test_exports_named_like_the_methods_of_instance_are_reached_by_name(
@@ -215,7 +217,7 @@ def test_exports_named_like_the_methods_of_instance_are_reached_by_name(
         m='(module (func (export "keys") (result i32) i32.const 1) (func (export "__class__") (result i32) i32.const 2)'
         ' (func (export "__init__") (result i32) i32.const 3) (func (export "ok") (result i32) i32.const 4))'
     )
-    i = mod.Instance()
+    i = mod.Instance(mod.Store())
     assert (i.__class__.__name__, i.ok(), i.keys(), sorted(i.__exports__)) == (
         "Instance",
         4,
@@ -231,8 +233,8 @@ def test_exports_named_like_the_methods_of_instance_are_reached_by_name(
 def test_a_wrapper_keeps_the_instance_it_uses_alive(modules: Callable[..., tuple[Any, ...]], tmp_path: Path) -> None:
     del tmp_path
     a_mod, b_mod = modules(a=_MEMORY_A, b=_MEMORY_B)
-    a = a_mod.Instance()
-    b = b_mod.Instance({"env": a})
+    a = a_mod.Instance(a_mod.Store())
+    b = b_mod.Instance(b_mod.Store(), imports={"env": a})
     del a
     gc.collect()
     assert chr(b.load(0)) == "h"  # the memory of a is still there
@@ -271,14 +273,14 @@ def test_an_export_of_another_x_is_not_linked(modules: Callable[..., tuple[Any, 
     from wasmext._abi import ABI, capsule_name  # pyright: ignore[reportPrivateUsage]
 
     a_mod, b_mod = modules(a=_FUNCS_A, b=_FUNCS_B)
-    a = a_mod.Instance()
+    a = a_mod.Instance(a_mod.Store())
     imports = {"env": {name: a[name] for name in _NAMES}}
     name, record = _record_of(imports["env"]["add"])
     assert name == capsule_name().encode()  # x is in the name
     assert record.abi == ABI
     record.abi = ABI + (1 << 24)  # another x
     with pytest.raises(b_mod.LinkError, match="incompatible"):
-        b_mod.Instance(imports)
+        b_mod.Instance(b_mod.Store(), imports=imports)
 
 
 @pytest.mark.parametrize("step", [1, 0x100, 0x10000])  # the serial, z, y: something that is not x
@@ -286,11 +288,11 @@ def test_an_export_of_another_y_z_or_serial_is_linked(modules: Callable[..., tup
     from wasmext._abi import ABI  # pyright: ignore[reportPrivateUsage]
 
     a_mod, b_mod = modules(a=_FUNCS_A, b=_FUNCS_B)
-    a = a_mod.Instance()
+    a = a_mod.Instance(a_mod.Store())
     imports = {"env": {name: a[name] for name in _NAMES}}
     _name, record = _record_of(imports["env"]["add"])
     record.abi = ABI + step
-    assert b_mod.Instance(imports) is not None  # linked: the record is accepted
+    assert b_mod.Instance(b_mod.Store(), imports=imports) is not None  # linked: the record is accepted
 
 
 def test_a_record_is_refused_by_a_reader_below_its_floor(modules: Callable[..., tuple[Any, ...]]) -> None:
@@ -298,12 +300,12 @@ def test_a_record_is_refused_by_a_reader_below_its_floor(modules: Callable[..., 
     from wasmext._abi import ABI  # pyright: ignore[reportPrivateUsage]
 
     a_mod, b_mod = modules(a=_FUNCS_A, b=_FUNCS_B)
-    a = a_mod.Instance()
+    a = a_mod.Instance(a_mod.Store())
     imports = {"env": {name: a[name] for name in _NAMES}}
     _name, record = _record_of(imports["env"]["add"])
     assert record.floor <= ABI  # a record made by this wasmext can be read by it
     record.floor = ABI + 0x100  # a version of the reader that is not this one
     with pytest.raises(b_mod.LinkError, match="incompatible"):
-        b_mod.Instance(imports)
+        b_mod.Instance(b_mod.Store(), imports=imports)
     record.floor = ABI  # this one
-    b_mod.Instance(imports)
+    b_mod.Instance(b_mod.Store(), imports=imports)

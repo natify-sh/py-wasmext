@@ -30,12 +30,13 @@ def run(millis: Callable[[], int] = _monotonic_ms) -> str:
         printed.append(bytes(box["memory"][offset : offset + length]))
 
     instance = _core.Instance(
-        {
+        _core.Store(),
+        imports={
             "wiring": {
                 "millis": millis,
                 "print": print_,
             }
-        }
+        },
     )
     box["memory"] = instance.memory
     instance.setup()

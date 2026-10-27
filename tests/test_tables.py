@@ -94,8 +94,8 @@ def user_mod(build: Callable[..., ModuleType]) -> ModuleType:
 
 
 def test_one_instance_calls_the_functions_of_the_table_of_another(owner_mod: Any, user_mod: Any) -> None:
-    a = owner_mod.Instance()
-    b = user_mod.Instance({"env": {"tab": a["tab"]}})
+    a = owner_mod.Instance(owner_mod.Store())
+    b = user_mod.Instance(user_mod.Store(), imports={"env": {"tab": a["tab"]}})
     assert b.call(0) == 5  # a function of the owner
     assert b.call(3) == 7  # b's own, put there by its elem segment
     assert a.call(3) == 7  # and the owner calls it: one table
@@ -103,15 +103,15 @@ def test_one_instance_calls_the_functions_of_the_table_of_another(owner_mod: Any
 
 
 def test_the_whole_instance_can_stand_for_its_table(owner_mod: Any, user_mod: Any) -> None:
-    a = owner_mod.Instance()
+    a = owner_mod.Instance(owner_mod.Store())
     assert "tab" in a.__exports__
-    b = user_mod.Instance({"env": a})
+    b = user_mod.Instance(user_mod.Store(), imports={"env": a})
     assert b.call(0) == 5
 
 
 def test_a_table_that_grows_grows_for_both(owner_mod: Any, user_mod: Any) -> None:
-    a = owner_mod.Instance()
-    b = user_mod.Instance({"env": {"tab": a["tab"]}})
+    a = owner_mod.Instance(owner_mod.Store())
+    b = user_mod.Instance(user_mod.Store(), imports={"env": {"tab": a["tab"]}})
     assert a.grow(2) == 6  # the old size
     assert (a.size(), b.size()) == (8, 8)
     with pytest.raises(user_mod.Trap, match="Invalid call_indirect"):
@@ -132,31 +132,31 @@ def test_a_table_of_another_size_is_not_linked(
 ) -> None:
     wat = f'(module (import "env" "tab" (table {limits})) (func (export "f") (result i32) i32.const 0))'
     mod = build(f"tbl_limits_{abs(hash(wat)) % 10**6}", wat)
-    a = owner_mod.Instance()
+    a = owner_mod.Instance(owner_mod.Store())
     with pytest.raises(mod.LinkError, match=message):
-        mod.Instance({"env": {"tab": a["tab"]}})
+        mod.Instance(mod.Store(), imports={"env": {"tab": a["tab"]}})
 
 
 def test_an_import_with_no_maximum_takes_a_table_with_one(build: Callable[..., ModuleType], owner_mod: Any) -> None:
     mod = build(
         "tbl_nomax", '(module (import "env" "tab" (table 2 funcref)) (func (export "f") (result i32) i32.const 0))'
     )
-    assert mod.Instance({"env": {"tab": owner_mod.Instance()["tab"]}}).f() == 0
+    assert mod.Instance(mod.Store(), imports={"env": {"tab": owner_mod.Instance(owner_mod.Store())["tab"]}}).f() == 0
 
 
 def test_what_is_not_a_table_is_not_linked_as_one(owner_mod: Any, user_mod: Any) -> None:
-    a = owner_mod.Instance()
+    a = owner_mod.Instance(owner_mod.Store())
     with pytest.raises(user_mod.LinkError, match="is a table: the export given is not"):
-        user_mod.Instance({"env": {"tab": a["mem"]}})
+        user_mod.Instance(user_mod.Store(), imports={"env": {"tab": a["mem"]}})
     with pytest.raises(user_mod.LinkError, match="is a table: pass a Table, or the table of another instance"):
-        user_mod.Instance({"env": {"tab": print}})
+        user_mod.Instance(user_mod.Store(), imports={"env": {"tab": print}})
     with pytest.raises(user_mod.LinkError, match="tab"):
-        user_mod.Instance({"env": {}})
+        user_mod.Instance(user_mod.Store(), imports={"env": {}})
 
 
 def test_an_element_of_another_type_is_a_trap(owner_mod: Any, user_mod: Any) -> None:
-    a = owner_mod.Instance()
-    b = user_mod.Instance({"env": {"tab": a["tab"]}})
+    a = owner_mod.Instance(owner_mod.Store())
+    b = user_mod.Instance(user_mod.Store(), imports={"env": {"tab": a["tab"]}})
     with pytest.raises(user_mod.Trap, match="Invalid call_indirect"):
         b.call_other(0)
     assert b.call(0) == 5
@@ -173,8 +173,8 @@ def test_an_element_of_another_type_is_a_trap(owner_mod: Any, user_mod: Any) -> 
 def test_a_trap_in_a_function_of_another_instance_is_a_trap_of_the_caller(
     owner_mod: Any, user_mod: Any, slot: int, message: str
 ) -> None:
-    a = owner_mod.Instance()
-    b = user_mod.Instance({"env": {"tab": a["tab"]}})
+    a = owner_mod.Instance(owner_mod.Store())
+    b = user_mod.Instance(user_mod.Store(), imports={"env": {"tab": a["tab"]}})
     with pytest.raises(user_mod.Trap, match=message):
         b.call(slot)
     assert b.call(0) == 5  # the instances are fine afterwards
@@ -187,8 +187,8 @@ import sys
 for p in {paths!r}:
     sys.path.insert(0, p)
 import {owner}, {user}
-a = {owner}.Instance()
-b = {user}.Instance({{"env": {{"tab": a["tab"]}}}})
+a = {owner}.Instance({owner}.Store())
+b = {user}.Instance({user}.Store(), imports={{"env": {{"tab": a["tab"]}}}})
 try:
     b.call(4)
 except {user}.Trap as exc:
@@ -201,7 +201,7 @@ import sys
 for p in {paths!r}:
     sys.path.insert(0, p)
 import {mod}
-inst = {mod}.Instance()
+inst = {mod}.Instance({mod}.Store())
 try:
     inst.rec()
 except {mod}.Trap as exc:
@@ -247,8 +247,8 @@ def test_stack_exhaustion_in_a_module_with_no_table_is_a_trap(build: Callable[..
 
 
 def test_the_owner_keeps_the_instances_that_use_its_table_alive(owner_mod: Any, user_mod: Any) -> None:
-    a = owner_mod.Instance()
-    b = user_mod.Instance({"env": {"tab": a["tab"]}})
+    a = owner_mod.Instance(owner_mod.Store())
+    b = user_mod.Instance(user_mod.Store(), imports={"env": {"tab": a["tab"]}})
     ref_a, ref_b = weakref.ref(a), weakref.ref(b)
     del b
     gc.collect()
@@ -260,8 +260,8 @@ def test_the_owner_keeps_the_instances_that_use_its_table_alive(owner_mod: Any, 
 
 
 def test_the_user_of_a_table_keeps_its_owner_alive(owner_mod: Any, user_mod: Any) -> None:
-    a = owner_mod.Instance()
-    b = user_mod.Instance({"env": {"tab": a["tab"]}})
+    a = owner_mod.Instance(owner_mod.Store())
+    b = user_mod.Instance(user_mod.Store(), imports={"env": {"tab": a["tab"]}})
     ref_a = weakref.ref(a)
     del a
     gc.collect()
@@ -284,9 +284,9 @@ def test_an_instance_that_fails_to_instantiate_takes_back_what_it_put_in_the_tab
       (elem (i32.const 100) func $nine))
     """
     bad = build("tbl_bad_writer", wat)
-    a = owner_mod.Instance()
+    a = owner_mod.Instance(owner_mod.Store())
     with pytest.raises(bad.Trap):
-        bad.Instance({"env": {"tab": a["tab"]}})
+        bad.Instance(bad.Store(), imports={"env": {"tab": a["tab"]}})
     gc.collect()
     with pytest.raises(owner_mod.Trap, match="Invalid call_indirect"):
         a.call(3)  # the slot it filled is empty again, not a function of an instance that is gone
@@ -297,10 +297,10 @@ def test_two_extensions_that_share_a_table_do_not_disturb_one_that_does_not(
     build: Callable[..., ModuleType], owner_mod: Any, user_mod: Any
 ) -> None:
     plain = build("tbl_plain", '(module (func (export "f") (result i32) unreachable))')
-    a = owner_mod.Instance()
-    b = user_mod.Instance({"env": {"tab": a["tab"]}})
+    a = owner_mod.Instance(owner_mod.Store())
+    b = user_mod.Instance(user_mod.Store(), imports={"env": {"tab": a["tab"]}})
     with pytest.raises(plain.Trap, match="Unreachable"):
-        plain.Instance().f()
+        plain.Instance(plain.Store()).f()
     with pytest.raises(user_mod.Trap, match="Unreachable"):
         b.call(1)
     assert b.call(0) == 5
@@ -450,8 +450,10 @@ def test_a_table_a_memory_and_a_global_with_no_code_behind_them_are_a_module_tha
     wasmext has no object for it at run time (DESIGN.md, "linking instances")."""
     provider = build("tbl_provider", _PROVIDER, "owner")
     user = build("tbl_provider_user", _PROVIDER_USER, "user")
-    a = provider.Instance()
-    b = user.Instance({"env": a})  # the shelf of the provider: its table, its memory and its global
+    a = provider.Instance(provider.Store())
+    b = user.Instance(
+        user.Store(), imports={"env": a}
+    )  # the shelf of the provider: its table, its memory and its global
     assert b.call(2) == 9  # the user filled the table of the provider
     assert bytes(a.mem[8:10]) == b"hi"  # ... and wrote to its memory
     assert (a.g, b.bump(), a.g) == (7, 8, 8)  # ... and shares its global

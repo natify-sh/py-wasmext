@@ -209,7 +209,9 @@ def test_feature(case: Case, tmp_path: Path, wabt: Path) -> None:
     built = wasmext(tmp_path, wabt, "natify", "-i", "-q", "--host", "wasm32-wasip1", "pkg/m.wasm")
     assert built.returncode == 0, built.stderr[-600:]
 
-    code = f"import pkg.m\ninstance = pkg.m.Instance()\nprint(repr(instance.{case.call}(*{case.args!r})))\n"
+    code = (
+        f"import pkg.m\ninstance = pkg.m.Instance(pkg.m.Store())\nprint(repr(instance.{case.call}(*{case.args!r})))\n"
+    )
     ran = subprocess.run([sys.executable, "-c", code], cwd=tmp_path, capture_output=True, text=True, check=False)
     assert ran.returncode == 0, ran.stderr[-400:]
     assert ran.stdout.strip() == repr(case.expect)
@@ -229,7 +231,7 @@ def test_an_exception_nobody_catches_is_a_trap(tmp_path: Path, wabt: Path) -> No
     assert built.returncode == 0, built.stderr[-600:]
     code = (
         "import pkg.m\n"
-        "instance = pkg.m.Instance()\n"
+        "instance = pkg.m.Instance(pkg.m.Store())\n"
         "print(instance.ok())\n"  # the payload of the exception is what the handler gets: 7
         "try:\n"
         "    instance.boom()\n"
@@ -257,11 +259,11 @@ def test_an_imported_function_returns_several_results_as_a_tuple(tmp_path: Path,
     assert built.returncode == 0, built.stderr[-600:]
     code = """
 import pkg.m
-i = pkg.m.Instance({'env': {'pair': lambda n: (n + 1, 2.5, -3)}})
+i = pkg.m.Instance(pkg.m.Store(), imports={'env': {'pair': lambda n: (n + 1, 2.5, -3)}})
 print(i.f(4))
 for bad in (lambda n: (1, 2), lambda n: 7, lambda n: (1, 'x', 3)):
     try:
-        pkg.m.Instance({'env': {'pair': bad}}).f(1)
+        pkg.m.Instance(pkg.m.Store(), imports={'env': {'pair': bad}}).f(1)
     except TypeError:
         print('TypeError')
 print(i.f(5))
@@ -286,7 +288,7 @@ def test_an_exported_memory64_is_a_memoryview_too(tmp_path: Path, wabt: Path) ->
     assert built.returncode == 0, built.stderr[-600:]
     code = """
 import pkg.m
-i = pkg.m.Instance()
+i = pkg.m.Instance(pkg.m.Store())
 print(bytes(i.mem[:2]), len(i.mem))
 i.mem[5] = 42
 print(i.peek(5))
@@ -319,7 +321,7 @@ def test_memory64_addresses_above_4_gib(tmp_path: Path, wabt: Path) -> None:
     )
     code = """
 import pkg.m
-i = pkg.m.Instance()
+i = pkg.m.Instance(pkg.m.Store())
 a = 2**32 + 12
 i.put(a, 0x12345678)
 print(len(i.mem), i.get(a), bytes(i.mem[a:a + 4]).hex())
@@ -339,7 +341,7 @@ def test_a_memory_that_cannot_be_allocated_is_a_memory_error(tmp_path: Path, wab
     code = """
 import pkg.m
 try:
-    pkg.m.Instance()
+    pkg.m.Instance(pkg.m.Store())
 except MemoryError:
     print('MemoryError')
 """
@@ -382,7 +384,7 @@ def test_a_limit_on_address_space(guard_pages: bool, tmp_path: Path, wabt: Path)
         tmp_path, wabt, "natify", "-i", "-q", "--guard-pages" if guard_pages else "--no-guard-pages", "pkg/m.wasm"
     )
     assert built.returncode == 0, built.stderr[-600:]
-    ran = _limited_run(tmp_path, "import pkg.m; i = pkg.m.Instance(); print(i.f(), len(i.mem))", 2048)
+    ran = _limited_run(tmp_path, "import pkg.m; i = pkg.m.Instance(pkg.m.Store()); print(i.f(), len(i.mem))", 2048)
     if guard_pages:
         assert ran.returncode != 0 and "MemoryError" in ran.stderr
     else:
@@ -401,7 +403,7 @@ def test_exported_globals_are_attributes(tmp_path: Path, wabt: Path) -> None:
     )
     code = """
 import pkg.m
-i = pkg.m.Instance()
+i = pkg.m.Instance(pkg.m.Store())
 print(i.mi, i.ci, i.mj, i.mf, i.cd)
 i.mi = 40
 i.bump()
@@ -415,7 +417,7 @@ for what in ('i.ci = 1', 'i.cd = 1.0', 'del i.mi', "i.mi = 'x'", 'i.mf = None'):
         exec(what)
     except (AttributeError, TypeError) as exc:
         print(type(exc).__name__)
-print(i.mi, pkg.m.Instance().mi)  # a failed set changed nothing; instances do not share globals
+print(i.mi, pkg.m.Instance(pkg.m.Store()).mi)  # a failed set changed nothing; instances do not share globals
 """
     ran = subprocess.run([sys.executable, "-c", code], cwd=tmp_path, capture_output=True, text=True, check=False)
     assert ran.returncode == 0, ran.stderr[-500:]
@@ -446,17 +448,17 @@ def test_an_imported_immutable_global_is_a_number(tmp_path: Path, wabt: Path) ->
     code = """
 import pkg.m
 imports = {'env': {'limit': 100, 'big': -2**40}, 'env2': {'scale': 2.5}}
-i = pkg.m.Instance(imports)
+i = pkg.m.Instance(pkg.m.Store(), imports=imports)
 print(i.limit(), i.scale(), i.big())
 imports['env']['limit'] = 7          # the value was taken when the instance was made
-print(i.limit(), pkg.m.Instance(imports).limit())
-print(pkg.m.Instance({'env': {'limit': 2**32 + 3, 'big': 1}, 'env2': {'scale': 1}}).limit())  # wraps, an int is a number
+print(i.limit(), pkg.m.Instance(pkg.m.Store(), imports=imports).limit())
+print(pkg.m.Instance(pkg.m.Store(), imports={'env': {'limit': 2**32 + 3, 'big': 1}, 'env2': {'scale': 1}}).limit())  # wraps, an int is a number
 for bad in ({'env2': {'scale': 1}, 'env': {'big': 1}},                      # missing
             {'env': {'limit': 'x', 'big': 1}, 'env2': {'scale': 1}},        # not a number
             {'env': {'limit': 1.5, 'big': 1}, 'env2': {'scale': 1}},        # a float for an i32
             {'env': {'limit': 1, 'big': 1}, 'env2': {'scale': print}}):     # a function for a global
     try:
-        pkg.m.Instance(bad)
+        pkg.m.Instance(pkg.m.Store(), imports=bad)
     except pkg.m.LinkError as exc:
         print('LinkError')
 """
@@ -510,13 +512,13 @@ def test_instances_share_a_mutable_global_and_an_instance_is_a_mapping(tmp_path:
     code = """
 import pkg.a, pkg.b
 
-a = pkg.a.Instance()
+a = pkg.a.Instance(pkg.a.Store())
 print(sorted(a.__exports__))
 print(set({**a.__exports__}) == set(a.__exports__))
 
 said = []
 shelf = {**a.__exports__, 'log': said.append}              # everything of a, and log from Python (the later key wins)
-b = pkg.b.Instance({'env': shelf})
+b = pkg.b.Instance(pkg.b.Store(), imports={'env': shelf})
 print(b.read(), b.fixed())                       # 10 7: the global of a, seen from b
 print(b.add(5), a.counter, a.bump(), b.read())   # 15 15 16 16: one variable
 a.counter = 100
@@ -524,7 +526,7 @@ print(b.read())                                  # 100
 b.say(3)
 print(said)                                      # [3]: log came from Python, not from a
 
-c = pkg.b.Instance({'env': {'counter': a['counter'], 'fixed': 5, 'log': print}})   # one export of a, the rest by hand
+c = pkg.b.Instance(pkg.b.Store(), imports={'env': {'counter': a['counter'], 'fixed': 5, 'log': print}})   # one export of a, the rest by hand
 print(c.read(), c.fixed())                       # 100 5
 
 del a, shelf
@@ -549,11 +551,11 @@ def test_linking_a_global_checks_what_it_is(tmp_path: Path, wabt: Path) -> None:
     _build_modules(tmp_path, wabt, a=_COUNTER_A, b=_COUNTER_B)
     code = """
 import pkg.a, pkg.b
-a = pkg.a.Instance()
+a = pkg.a.Instance(pkg.a.Store())
 
 def attempt(counter, fixed=5):
     try:
-        pkg.b.Instance({'env': {'counter': counter, 'fixed': fixed, 'log': print}})
+        pkg.b.Instance(pkg.b.Store(), imports={'env': {'counter': counter, 'fixed': fixed, 'log': print}})
     except pkg.b.LinkError as exc:
         print('LinkError:', exc)
     else:
@@ -589,7 +591,7 @@ def test_a_trap_from_a_signal_handler_can_happen_again(tmp_path: Path, wabt: Pat
     )
     code = (
         "import pkg.m as m\n"
-        "i = m.Instance()\n"
+        "i = m.Instance(m.Store())\n"
         "for _ in range(3):\n"
         "    try:\n"
         "        i.load(0x7ffffff0)\n"
@@ -627,7 +629,7 @@ def twice(b):
     seen.append(type(b).__name__)
     return lanes(*(2 * x for x in struct.unpack('<4i', b)))
 
-i = m.Instance({'env': {'twice': twice, 'seed': lanes(9, 8, 7, 6)}})
+i = m.Instance(m.Store(), imports={'env': {'twice': twice, 'seed': lanes(9, 8, 7, 6)}})
 print(i.double(lanes(1, 2, 3, 4)) == lanes(2, 4, 6, 8))
 print(i.double(bytearray(lanes(5, 5, 5, 5))) == lanes(10, 10, 10, 10))   # any bytes-like object
 print(i.pair(7, lanes(1, 1, 1, 1)) == (lanes(1, 1, 1, 1), 7))
@@ -642,7 +644,7 @@ for bad, exc in ((b'short', ValueError), (7, TypeError), ('0123456789abcdef', Ty
     except exc:
         print('ok', exc.__name__)
 try:
-    m.Instance({'env': {'twice': twice, 'seed': b'xx'}})
+    m.Instance(m.Store(), imports={'env': {'twice': twice, 'seed': b'xx'}})
 except m.LinkError:
     print('LinkError')
 """
@@ -673,7 +675,7 @@ def test_exports_named_like_the_methods_of_instance_are_reached_by_name(tmp_path
     )
     code = """
 import pkg.m
-i = pkg.m.Instance()
+i = pkg.m.Instance(pkg.m.Store())
 print(i.__class__.__name__, i.ok(), i.keys(), sorted(i.__exports__))
 print([type(i[name]).__name__ for name in ('__class__', '__init__')], type(i.__exports__['keys']).__name__)
 """
@@ -711,15 +713,15 @@ def test_instances_call_each_others_functions_directly(tmp_path: Path, wabt: Pat
     _build_modules(tmp_path, wabt, a=_FUNCS_A, b=_FUNCS_B)
     code = """
 import pkg.a, pkg.b
-a = pkg.a.Instance()
+a = pkg.a.Instance(pkg.a.Store())
 
-b = pkg.b.Instance({'env': a})                                      # the whole shelf from an instance
+b = pkg.b.Instance(pkg.b.Store(), imports={'env': a})                                      # the whole shelf from an instance
 print(b.sum(2, 3))                                                    # 5
 b.tell(42); print(a.seen())                                           # 42: a void function of a
 print(b.twin(7))                                                      # (7, 8): several results
-c = pkg.b.Instance({'env': {**a.__exports__}})                      # unpacked references: a capsule is not callable,
+c = pkg.b.Instance(pkg.b.Store(), imports={'env': {**a.__exports__}})                      # unpacked references: a capsule is not callable,
 print(c.sum(10, 20))                                                  # so this is the direct call: 30
-d = pkg.b.Instance({'env': {'add': a.add, 'note': a['note'], 'pair': a.pair, 'boom': a['boom']}})
+d = pkg.b.Instance(pkg.b.Store(), imports={'env': {'add': a.add, 'note': a['note'], 'pair': a.pair, 'boom': a['boom']}})
 print(d.sum(1, 1))                                                    # 2: a bound method stands for its export
 
 try:
@@ -743,10 +745,10 @@ def test_linking_a_function_checks_its_signature(tmp_path: Path, wabt: Path) -> 
     _build_modules(tmp_path, wabt, a=_FUNCS_A, b=_FUNCS_B)
     code = """
 import pkg.a, pkg.b
-a = pkg.a.Instance()
+a = pkg.a.Instance(pkg.a.Store())
 refs = a.__exports__
 try:
-    pkg.b.Instance({'env': {**refs, 'add': refs['note']}})            # note(i32), add wants (i32, i32) -> i32
+    pkg.b.Instance(pkg.b.Store(), imports={'env': {**refs, 'add': refs['note']}})            # note(i32), add wants (i32, i32) -> i32
 except pkg.b.LinkError as exc:
     print(exc)
 """
@@ -768,9 +770,9 @@ def test_instances_share_a_memory(tmp_path: Path, wabt: Path) -> None:
     _build_modules(tmp_path, wabt, a=_MEMORY_A, b=_MEMORY_B)
     code = """
 import pkg.a, pkg.b
-a = pkg.a.Instance()
+a = pkg.a.Instance(pkg.a.Store())
 
-b = pkg.b.Instance({'env': a})                          # the shelf from an instance
+b = pkg.b.Instance(pkg.b.Store(), imports={'env': a})                          # the shelf from an instance
 print(chr(b.load(0)), len(a.memory))                      # h 65536
 b.store(1, 65)
 print(bytes(a.memory[:5]))                                # b'hAllo': one memory
@@ -778,8 +780,8 @@ a.memory[2] = 66
 print(b.load(2))                                          # 66
 print(b.grow(1), len(a.memory))                           # 1 131072: a grows with b
 
-c = pkg.b.Instance({'env': {'memory': a.memory}})       # a memoryview of the memory stands for it
-d = pkg.b.Instance({'env': {'memory': a['memory']}})    # or the reference
+c = pkg.b.Instance(pkg.b.Store(), imports={'env': {'memory': a.memory}})       # a memoryview of the memory stands for it
+d = pkg.b.Instance(pkg.b.Store(), imports={'env': {'memory': a['memory']}})    # or the reference
 print(c.load(1), d.load(1))                               # 65 65
 """
     ran = subprocess.run([sys.executable, "-c", code], cwd=tmp_path, capture_output=True, text=True, check=False)
@@ -809,8 +811,8 @@ def test_the_fingerprint_of_the_runtime_is_not_a_gate_of_the_link(
     assert built.returncode == 0, built.stderr[-600:]
     code = """
 import pkg.a, pkg.b
-a = pkg.a.Instance()
-pkg.b.Instance({'env': a})
+a = pkg.a.Instance(pkg.a.Store())
+pkg.b.Instance(pkg.b.Store(), imports={'env': a})
 print('linked')
 """
     ran = subprocess.run([sys.executable, "-c", code], cwd=tmp_path, capture_output=True, text=True, check=False)
@@ -830,10 +832,10 @@ def test_linking_a_memory_checks_its_size_and_kind(tmp_path: Path, wabt: Path) -
     )
     code = """
 import pkg.a, pkg.big, pkg.small, pkg.wide, pkg.other
-a = pkg.a.Instance()
+a = pkg.a.Instance(pkg.a.Store())
 for module, given in ((pkg.big, a.memory), (pkg.small, a.memory), (pkg.wide, a.memory), (pkg.other, 3)):
     try:
-        module.Instance({'env': {'memory': given}})
+        module.Instance(module.Store(), imports={'env': {'memory': given}})
     except module.LinkError as exc:
         print(exc)
 """
@@ -859,7 +861,7 @@ def test_a_wasi_module_is_built_with_the_wasi_header_of_wasmext(tmp_path: Path, 
     assert (tmp_path / "build" / "wasmext" / "pkg.m" / "wasi_p1.h").is_file()
     code = (
         "import pkg.m\n"
-        "i = pkg.m.Instance(wasi={'stdout': lambda b: print(repr(bytes(b)))})\n"
+        "i = pkg.m.Instance(pkg.m.Store(wasi={'stdout': lambda b: print(repr(bytes(b)))}))\n"
         "try:\n"
         "    i._start()\n"
         "except pkg.m.WasiExit as e:\n"
@@ -885,7 +887,7 @@ def test_wasi_files_work_on_every_platform_of_ci(tmp_path: Path, wabt: Path) -> 
     (world / "hello.txt").write_bytes(b"hello, files\n")
     code = f"""
 import pkg.m
-i = pkg.m.Instance(wasi={{'preopens': {{'/': {str(world)!r}}}}})
+i = pkg.m.Instance(pkg.m.Store(wasi={{'preopens': {{'/': {str(world)!r}}}}}))
 mem = i.memory
 def open_(name, fd=3, rights=2 | 4 | 32 | (1 << 21)):
     mem[1000:1000 + len(name)] = name.encode()
@@ -923,7 +925,7 @@ def test_uncaught_exceptions_are_told_apart_by_the_whole_path_in_one_file_or_sev
     assert built.returncode == 0, built.stderr[-800:]
     code = (
         "import pkg.m\n"
-        "i = pkg.m.Instance()\n"
+        "i = pkg.m.Instance(pkg.m.Store())\n"
         "try:\n"
         "    i.throw_many()\n"
         "except pkg.m.UncaughtException as e:\n"

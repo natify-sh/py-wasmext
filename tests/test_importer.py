@@ -37,13 +37,13 @@ def cached(tmp_path: Path) -> list[Path]:
 
 def test_a_wasm_file_is_imported_and_the_extension_is_kept(tmp_path: Path, env: dict[str, str]) -> None:
     shutil.copy(SIMPLE, tmp_path / "fast.wasm")
-    first = python(tmp_path, env, "import fast\nprint(fast.Instance().add(2, 3), fast.__file__)")
+    first = python(tmp_path, env, "import fast\nprint(fast.Instance(fast.Store()).add(2, 3), fast.__file__)")
     assert first.returncode == 0, first.stderr[-600:]
     assert first.stdout.split()[0] == "5"
     [so] = cached(tmp_path)
     assert not (tmp_path / "fast.pyi").exists()  # nothing is written beside the source
     stamp = so.stat().st_mtime_ns
-    again = python(tmp_path, env, "import fast\nprint(fast.Instance().add(4, 5))")
+    again = python(tmp_path, env, "import fast\nprint(fast.Instance(fast.Store()).add(4, 5))")
     assert again.returncode == 0 and again.stdout.strip() == "9"
     assert so.stat().st_mtime_ns == stamp  # loaded, not made again
 
@@ -53,14 +53,14 @@ def test_a_module_in_a_package(tmp_path: Path, env: dict[str, str]) -> None:
     package.mkdir()
     (package / "__init__.py").write_text("", encoding="utf-8")
     shutil.copy(SIMPLE, package / "add.wasm")
-    done = python(tmp_path, env, "import pkg.add\nprint(pkg.add.Instance().add(1, 1), pkg.add.__name__)")
+    done = python(tmp_path, env, "import pkg.add\nprint(pkg.add.Instance(pkg.add.Store()).add(1, 1), pkg.add.__name__)")
     assert done.returncode == 0, done.stderr[-600:]
     assert done.stdout.split() == ["2", "pkg.add"]
 
 
 def test_a_changed_wasm_is_made_again(tmp_path: Path, env: dict[str, str]) -> None:
     shutil.copy(SIMPLE, tmp_path / "m.wasm")
-    assert python(tmp_path, env, "import m\nprint(hasattr(m.Instance(), 'mul64'))").stdout.strip() == "False"
+    assert python(tmp_path, env, "import m\nprint(hasattr(m.Instance(m.Store()), 'mul64'))").stdout.strip() == "False"
     shutil.copy(DATA / "features.wasm", tmp_path / "m.wasm")
     later = (tmp_path / "m.wasm").stat().st_mtime + 10
     os.utime(tmp_path / "m.wasm", (later, later))
@@ -68,7 +68,7 @@ def test_a_changed_wasm_is_made_again(tmp_path: Path, env: dict[str, str]) -> No
         tmp_path,
         env,
         "import m\nprint(hasattr(m, 'Instance'))\n"
-        "i = m.Instance({'env': {'log': print, 'twice': float, 'cb': print}})\nprint(i.mul64(2, 3))",
+        "i = m.Instance(m.Store(), imports={'env': {'log': print, 'twice': float, 'cb': print}})\nprint(i.mul64(2, 3))",
     )
     assert done.returncode == 0, done.stderr[-600:]
     assert done.stdout.split() == ["True", "6"]
@@ -106,7 +106,9 @@ def test_inplace_puts_the_extension_next_to_the_wasm(tmp_path: Path, env: dict[s
     (package / "__init__.py").write_text("", encoding="utf-8")
     shutil.copy(SIMPLE, package / "add.wasm")
     done = python(
-        tmp_path, env, "wasmimport.install(inplace=True)\nimport pkg.add\nprint(pkg.add.Instance().add(1, 2))"
+        tmp_path,
+        env,
+        "wasmimport.install(inplace=True)\nimport pkg.add\nprint(pkg.add.Instance(pkg.add.Store()).add(1, 2))",
     )
     assert done.returncode == 0, done.stderr[-600:]
     assert done.stdout.strip() == "3"
@@ -117,7 +119,9 @@ def test_inplace_puts_the_extension_next_to_the_wasm(tmp_path: Path, env: dict[s
 def test_build_in_temp_false_writes_the_c_beside_the_wasm(tmp_path: Path, env: dict[str, str]) -> None:
     shutil.copy(SIMPLE, tmp_path / "fast.wasm")
     done = python(
-        tmp_path, env, "wasmimport.install(build_in_temp=False)\nimport fast\nprint(fast.Instance().add(1, 2))"
+        tmp_path,
+        env,
+        "wasmimport.install(build_in_temp=False)\nimport fast\nprint(fast.Instance(fast.Store()).add(1, 2))",
     )
     assert done.returncode == 0, done.stderr[-600:]
     assert (tmp_path / "build" / "wasmext" / "fast" / "fast_w2c.c").is_file()
@@ -161,7 +165,7 @@ def test_what_the_compiler_prints_does_not_reach_the_standard_output(tmp_path: P
 
 def test_a_change_of_how_it_is_built_makes_the_extension_again(tmp_path: Path, env: dict[str, str]) -> None:
     shutil.copy(SIMPLE, tmp_path / "fast.wasm")
-    use = "import fast\nprint(fast.Instance().add(2, 3), fast.__file__)"
+    use = "import fast\nprint(fast.Instance(fast.Store()).add(2, 3), fast.__file__)"
     first = python(tmp_path, env, f"wasmimport.install(guard_pages=True)\n{use}")
     assert first.returncode == 0, first.stderr[-600:]
     [so] = cached(tmp_path)
@@ -203,10 +207,10 @@ def test_the_working_directory_does_not_make_the_extension_again(tmp_path: Path,
     here = {**env, "PYTHONPATH": str(tmp_path)}
     elsewhere = tmp_path / "elsewhere" / "deeper"
     elsewhere.mkdir(parents=True)
-    first = python(tmp_path, here, "import fast\nprint(fast.Instance().add(2, 3))")
+    first = python(tmp_path, here, "import fast\nprint(fast.Instance(fast.Store()).add(2, 3))")
     assert first.returncode == 0, first.stderr
     [so] = cached(tmp_path)
     stamp = so.stat().st_mtime_ns
-    other = python(elsewhere, here, "import fast\nprint(fast.Instance().add(2, 3))")
+    other = python(elsewhere, here, "import fast\nprint(fast.Instance(fast.Store()).add(2, 3))")
     assert other.returncode == 0, other.stderr
     assert so.stat().st_mtime_ns == stamp  # loaded from another directory, not made again

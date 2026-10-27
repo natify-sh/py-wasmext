@@ -1136,18 +1136,15 @@ def generate(
     hadd(f"    w2c_{prefix} inst;")
     hadd("    int instantiated;")
     hadd("    int initialized;  /* the `_initialize` of a reactor has run */")
-    hadd(f"    {last}_store own;  /* the private store */")
-    hadd(f"    {last}_store *store;  /* the store in use: `&own` unless the instance was given another */")
+    hadd(
+        f"    {last}_store *store;  /* the store the instance lives in: its host; set by whoever makes the instance */"
+    )
     for i, host in enumerate(hosts):
         hadd(f"    struct w2c_{mangle(host, module=True)} host{i};")
     hadd(
         f"    wasm_rt_funcref_t exp_ref[{max(len(funcs), 1)}];  /* the exported functions as a table holds them: see {last}_glue_funcref */"
     )
     hadd(f"}} {last}_instance;")
-    hadd(
-        "/* every front end calls this once, when the instance is made and before anything else: it uses the private store */"
-    )
-    hadd(f"static inline void {last}_glue_store_init({last}_instance *self) {{ self->store = &self->own; }}")
     hadd("")
     _emit_funcrefs(hadd, last, prefix, funcs)
     _emit_links(hadd, last, imports, global_imports, memory_imports, hosts, table_imports)
@@ -1569,61 +1566,23 @@ def generate(
         add("}")
         add("")
     add("static PyObject *Instance_new(PyTypeObject *type, PyObject *args, PyObject *kwds) {")
-    # `Instance(store, imports=..., wasi=...)`. Until the calls are rewritten (C2e) a first argument that is not a Store is what it was, the imports; an instance with no store
-    # makes a private one (from `wasi=`).
-    if uses_wasi:
-        add('    static char *kwlist[] = {"store", "imports", "wasi", NULL};')
-        add("    PyObject *store = Py_None, *imports = Py_None, *wasi = Py_None;")
-        add(
-            '    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|OO$O:Instance", kwlist, &store, &imports, &wasi)) return NULL;'
-        )
-    elif has_imports:
+    # `Instance(store, imports=None)`: the store is required (there is no implicit store); `wasi=` is the configuration of the Store
+    if has_imports:
         add('    static char *kwlist[] = {"store", "imports", NULL};')
-        add("    PyObject *store = Py_None, *imports = Py_None;")
-        add('    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|OO:Instance", kwlist, &store, &imports)) return NULL;')
+        add("    PyObject *store, *imports = Py_None;")
+        add('    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O|O:Instance", kwlist, &store, &imports)) return NULL;')
     else:
         add('    static char *kwlist[] = {"store", NULL};')
-        add("    PyObject *store = Py_None;")
-        add('    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|O:Instance", kwlist, &store)) return NULL;')
-    add("    if (store != Py_None && !PyObject_TypeCheck(store, StoreType)) {")
-    if has_imports or uses_wasi:
-        add(
-            '        PyObject *tn_ = PyObject_GetAttrString((PyObject *)Py_TYPE(store), "__name__");  /* the limited API has no tp_name */'
-        )
-        add(
-            '        int is_store_ = tn_ != NULL && PyUnicode_Check(tn_) && PyUnicode_CompareWithASCIIString(tn_, "Store") == 0;'
-        )
-        add("        Py_XDECREF(tn_);")
-        add("        PyErr_Clear();")
-        add("        if (imports != Py_None || is_store_) {")
-        add(
-            f'            PyErr_SetString(PyExc_TypeError, "store must be a Store of this module ({_c_string(name)[1:-1]}.Store); a store of another module is a different host");'
-        )
-        add("            return NULL;")
-        add("        }")
-        add("        imports = store;  /* before the stores, the first argument was the imports */")
-        add("        store = Py_None;")
-    else:
-        add(
-            f'        PyErr_SetString(PyExc_TypeError, "store must be a Store of this module ({_c_string(name)[1:-1]}.Store)");'
-        )
-        add("        return NULL;")
+        add("    PyObject *store;")
+        add('    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O:Instance", kwlist, &store)) return NULL;')
+    add("    if (!PyObject_TypeCheck(store, StoreType)) {")
+    add(
+        f"        PyErr_SetString(PyExc_TypeError, \"Instance() argument 'store' must be a Store made by this module ({_c_string(name)[1:-1]}.Store); a Store of another module is a different host\");"
+    )
+    add("        return NULL;")
     add("    }")
-    if uses_wasi:
-        add("    if (store != Py_None && wasi != Py_None) {")
-        add(
-            '        PyErr_SetString(PyExc_TypeError, "wasi= belongs to the Store: a different configuration is a different store");'
-        )
-        add("        return NULL;")
-        add("    }")
-    add("    StoreObject *store_obj;")
-    add("    if (store == Py_None) {")
-    add(f"        store_obj = store_make(StoreType, {'wasi' if uses_wasi else 'Py_None'});")
-    add("        if (store_obj == NULL) return NULL;")
-    add("    } else {")
-    add("        store_obj = (StoreObject *)store;")
-    add("        Py_INCREF((PyObject *)store_obj);")
-    add("    }")
+    add("    StoreObject *store_obj = (StoreObject *)store;")
+    add("    Py_INCREF((PyObject *)store_obj);")
     add("    InstanceObject *self = (InstanceObject *)PyType_GenericAlloc(type, 0);")
     add("    if (self == NULL) {")
     add("        Py_DECREF((PyObject *)store_obj);")
@@ -3729,24 +3688,21 @@ def _stub(
         ]
     if table:
         lines += _TABLE_STUB
+    lines.append("class Store:")
+    lines.append(
+        "    def __init__(self, *, wasi: Wasi | None = None) -> None: ..."
+        if wasi
+        else "    def __init__(self) -> None: ..."
+    )
+    lines.append("")
     lines.append("class Instance:")
-    if wasi:
-        required = (
-            "imports: Imports, "
-            if asked
-            else "imports: Imports | None = None, "
-            if by_module
-            else "imports: None = None, "
-        )
-        lines.append(f"    def __init__(self, {required}*, wasi: Wasi | None = None) -> None: ...")
-    else:
-        lines.append(
-            "    def __init__(self, imports: Imports) -> None: ..."
-            if asked
-            else "    def __init__(self, imports: Imports | None = None) -> None: ..."
-            if by_module
-            else "    def __init__(self) -> None: ..."
-        )
+    lines.append(
+        "    def __init__(self, store: Store, imports: Imports) -> None: ..."
+        if asked
+        else "    def __init__(self, store: Store, imports: Imports | None = None) -> None: ..."
+        if by_module
+        else "    def __init__(self, store: Store) -> None: ..."
+    )
     lines += ["    @property", "    def __exports__(self) -> dict[str, object]: ..."]
     if wasi and not wasi2:
         lines += ["    @property", "    def __host__(self) -> Host: ..."]

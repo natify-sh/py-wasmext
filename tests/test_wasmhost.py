@@ -40,7 +40,7 @@ def test_host_functions_with_several_results_and_an_exception(build_extension: B
     imports: dict[str, dict[str, Callable[..., object]]] = {
         "env": {"plus": plus, "note": note, "half": half, "pair": pair}
     }
-    inst = mod.Instance(imports)
+    inst = mod.Instance(mod.Store(), imports=imports)
     assert inst.call_plus(2, 3) == 5
     assert inst.twice(10) == 12  # two calls of the host
     assert inst.call_half(5.0) == 2.5
@@ -52,7 +52,7 @@ def test_host_functions_with_several_results_and_an_exception(build_extension: B
     def broken(a: int, b: int) -> int:
         raise ValueError("no thanks")
 
-    other = mod.Instance({"env": {**imports["env"], "plus": broken}})
+    other = mod.Instance(mod.Store(), imports={"env": {**imports["env"], "plus": broken}})
     with pytest.raises(ValueError, match="no thanks"):
         other.call_plus(1, 2)
     assert other.call_half(1.0) == 0.5

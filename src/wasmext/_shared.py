@@ -778,7 +778,6 @@ def generate_shared(
     C("    if (store == NULL) { *error = 22; return NULL; }")
     C(f"    {last}_t *m = ({last}_t *)calloc(1, sizeof *m);")
     C("    if (m == NULL) { *error = 12; return NULL; }")
-    C(f"    {last}_glue_store_init(&m->core);")
     C("    m->core.store = &store->st;")
     C("    store->instances++;")
     if uses_wasi:

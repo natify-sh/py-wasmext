@@ -71,7 +71,7 @@ def test_the_blink_program_runs(build_extension: Builder, language: str) -> None
     greeting, blinks = LANGUAGES[language]
     mod = build_extension(DATA / f"{language}.wasm", f"w2m_{language}")
     board = Board()
-    inst = mod.Instance(board.imports())
+    inst = mod.Instance(mod.Store(), imports=board.imports())
     board.memory = inst.memory  # the strings it prints are in its memory, which the host reads when asked to print
     inst.setup()
     assert board.text.splitlines()[0] == greeting

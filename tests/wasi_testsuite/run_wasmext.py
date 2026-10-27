@@ -75,14 +75,16 @@ def main(argv: list[str]) -> int:
         host, _, guest = item.partition("::")
         preopens[guest or "/"] = host
     instance = imported.Instance(
-        wasi={
-            "args": [str(program), *options.arguments],
-            "env": env,
-            "preopens": preopens,
-            "stdin": sys.stdin.buffer,
-            "stdout": sys.stdout.buffer,
-            "stderr": sys.stderr.buffer,
-        }
+        imported.Store(
+            wasi={
+                "args": [str(program), *options.arguments],
+                "env": env,
+                "preopens": preopens,
+                "stdin": sys.stdin.buffer,
+                "stdout": sys.stdout.buffer,
+                "stderr": sys.stderr.buffer,
+            }
+        )
     )
     try:
         instance._start()  # pyright: ignore[reportPrivateUsage]

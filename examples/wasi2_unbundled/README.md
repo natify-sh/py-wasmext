@@ -25,7 +25,7 @@ run(_hello, Host(stdout=out))  # 1: main returned 3, which is the err of the res
 out.getvalue()  # b'hello from wasip2\n'
 ```
 
-`run(module, host)` makes `module.Instance(host.imports())`, gives the instance to the host (`host.bind`, the imports need its memory and `cabi_realloc`) and
+`run(module, host)` makes `module.Instance(module.Store(), imports=host.imports())`, gives the instance to the host (`host.bind`, the imports need its memory and `cabi_realloc`) and
 calls the export `wasi:cli/run@0.2.12#run`. The number is `0` for `ok` and `1` for `err`: the value `main` returned does not come out of it.
 
 ## The host

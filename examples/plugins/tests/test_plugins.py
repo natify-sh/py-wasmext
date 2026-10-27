@@ -76,6 +76,8 @@ def test_the_table_keeps_the_instances_whose_functions_it_holds_alive() -> None:
 def test_a_table_that_is_too_small_is_a_link_error() -> None:
     small = _negate.Table(2, 16)  # the plugins need 4 slots at least
     with pytest.raises(_negate.LinkError, match="at least 4"):
-        _negate.Instance({"env": {"table": small}})
+        _negate.Instance(_negate.Store(), imports={"env": {"table": small}})
     with pytest.raises(_negate.LinkError, match="may grow to"):
-        _negate.Instance({"env": {"table": _negate.Table(4)}})  # no maximum, the plugin allows 16
+        _negate.Instance(
+            _negate.Store(), imports={"env": {"table": _negate.Table(4)}}
+        )  # no maximum, the plugin allows 16

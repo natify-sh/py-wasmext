@@ -2,7 +2,7 @@
 used through ctypes) and `hello` (a WASI program as a native executable).
 
 >>> from productsdemo import engine_ctypes
->>> engine_ctypes.Instance({"env": {"log": print}}).add(2, 3)
+>>> engine_ctypes.Instance(engine_ctypes.Store(), imports={"env": {"log": print}}).add(2, 3)
 5
 """
 

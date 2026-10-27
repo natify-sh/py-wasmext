@@ -41,7 +41,7 @@ def run(
                 raise NotImplementedError(label)
 
         imports.setdefault(item.module, {})[item.name] = function
-    instance = _python.Instance(imports)
+    instance = _python.Instance(_python.Store(), imports=imports)
     host.bind(instance)
     try:
         return int(getattr(instance, "wasi:cli/run@0.2.12#run")())

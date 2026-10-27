@@ -42,7 +42,7 @@ class Fs:
     """A probe module with a preopen, and the memory calls around it."""
 
     def __init__(self, mod: Any, root: Path, **options: Any) -> None:
-        self.inst = mod.Instance(wasi={"preopens": {"/": str(root)}, **options})
+        self.inst = mod.Instance(mod.Store(wasi={"preopens": {"/": str(root)}, **options}))
         self.mem = self.inst.memory
         self.cursor = 1100
 
@@ -236,14 +236,14 @@ def test_the_rights_of_a_directory_are_kept_and_readonly_takes_the_writing_ones_
 
 def test_a_bad_preopens_config_is_refused(probe: Any, world: Path, tmp_path: Path) -> None:
     with pytest.raises(NotADirectoryError, match="is not a directory"):
-        probe.Instance(wasi={"preopens": {"/": str(world / "hello.txt")}})
+        probe.Instance(probe.Store(wasi={"preopens": {"/": str(world / "hello.txt")}}))
     with pytest.raises(ValueError, match="no preopen of that name"):
-        probe.Instance(wasi={"preopens": {"/": str(world)}, "readonly": ["data"]})
+        probe.Instance(probe.Store(wasi={"preopens": {"/": str(world)}, "readonly": ["data"]}))
     with pytest.raises(ValueError, match="readonly without preopens"):
-        probe.Instance(wasi={"readonly": True})
+        probe.Instance(probe.Store(wasi={"readonly": True}))
     with pytest.raises(TypeError, match="preopens must be a dict"):
-        probe.Instance(wasi={"preopens": [str(world)]})
-    two = probe.Instance(wasi={"preopens": {"/": str(world), "data": str(tmp_path)}, "readonly": "data"})
+        probe.Instance(probe.Store(wasi={"preopens": [str(world)]}))
+    two = probe.Instance(probe.Store(wasi={"preopens": {"/": str(world), "data": str(tmp_path)}, "readonly": "data"}))
     assert two.fd_prestat_get(4, 40) == 0 and two.fd_prestat_get(5, 40) == E_BADF
 
 

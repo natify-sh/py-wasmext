@@ -25,7 +25,7 @@ sys.path.insert(0, {path!r})
 import {mod}
 
 def worker(out):
-    inst = {mod}.Instance()
+    inst = {mod}.Instance({mod}.Store())
     try:
         inst.rec()
     except {mod}.Trap as exc:
@@ -52,7 +52,7 @@ for t in threads:
 print("together:", all(o == ["trap", 5] for o in outs))
 
 # the main thread, which imported the module
-inst = {mod}.Instance()
+inst = {mod}.Instance({mod}.Store())
 try:
     inst.rec()
 except {mod}.Trap:
@@ -66,7 +66,7 @@ out = []
 
 def go():
     import {mod}
-    inst = {mod}.Instance()
+    inst = {mod}.Instance({mod}.Store())
     try:
         inst.rec()
     except {mod}.Trap:
@@ -119,7 +119,7 @@ threading.stack_size(512 * 1024)
 out = []
 
 def go():
-    inst = {mod}.Instance()
+    inst = {mod}.Instance({mod}.Store())
     try:
         inst.rec()
     except {mod}.Trap as exc:
@@ -128,7 +128,7 @@ def go():
 t = threading.Thread(target=go)
 t.start()
 t.join()
-main = {mod}.Instance()
+main = {mod}.Instance({mod}.Store())
 try:
     main.rec()
 except {mod}.Trap as exc:

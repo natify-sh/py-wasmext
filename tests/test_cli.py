@@ -62,7 +62,7 @@ def test_inplace_builds_next_to_the_wasm(project: Path, wabt: Path) -> None:
     assert done.returncode == 0, done.stderr
     [extension] = built(project / "src" / "pkg", "add")
     out = subprocess.run(
-        [sys.executable, "-c", "from pkg import add; print(add.Instance().add(40, 2))"],
+        [sys.executable, "-c", "from pkg import add; print(add.Instance(add.Store()).add(40, 2))"],
         cwd=project,
         env={**os.environ, "PYTHONPATH": str(project / "src")},
         capture_output=True,
@@ -159,7 +159,7 @@ def test_abi3_builds_an_extension_that_runs(project: Path, wabt: Path) -> None:
     [extension] = built(project / "src" / "pkg", "add")
     assert is_abi3_file(extension.name) or extension.suffix == ".pyd"
     out = subprocess.run(
-        [sys.executable, "-c", "from pkg import add; print(add.Instance().add(40, 2))"],
+        [sys.executable, "-c", "from pkg import add; print(add.Instance(add.Store()).add(40, 2))"],
         cwd=project,
         env={**os.environ, "PYTHONPATH": str(project / "src")},
         capture_output=True,

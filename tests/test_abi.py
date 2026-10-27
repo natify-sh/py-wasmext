@@ -9,7 +9,14 @@ from pathlib import Path
 
 import pytest
 
-from wasmext._abi import ABI, ABI_FINGERPRINT, ABI_X, C_DIR, abi_fingerprint, capsule_name  # pyright: ignore[reportPrivateUsage]
+from wasmext._abi import (  # pyright: ignore[reportPrivateUsage]
+    ABI,
+    ABI_FINGERPRINT,
+    ABI_X,
+    C_DIR,
+    abi_fingerprint,
+    capsule_name,
+)
 
 
 def test_the_abi_is_read_from_the_header_and_names_the_capsule() -> None:

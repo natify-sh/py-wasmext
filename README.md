@@ -89,7 +89,7 @@ another kind (a hand-written C one) goes with the table. [`examples/quickjs`](ex
 ```python
 import mypkg.fast  # src/mypkg/fast.wasm
 
-inst = mypkg.fast.Instance()  # Instance({"env": {"log": print}}) if the module imports functions
+inst = mypkg.fast.Instance(mypkg.fast.Store())  # Instance(store, imports={"env": {"log": print}}) if the module imports functions; the store is made by hand, always
 inst.add(2, 3)  # the exports are methods; an exported memory is a memoryview attribute
 ```
 
@@ -143,10 +143,10 @@ An instance can take its imports from the exports of another one, with no Python
 as a C function, a memory and a global are the very same ones. This works between modules of separate extensions.
 
 ```python
-a = mypkg.lib.Instance()
-b = mypkg.app.Instance({"env": a})  # the whole shelf: everything that `a` exports, under its names
-b = mypkg.app.Instance({"env": {**a.__exports__, "log": print}})  # or by names, with what only Python can give
-b = mypkg.app.Instance({"env": {"add": a.add, "counter": a["counter"], "memory": a.memory}})
+a = mypkg.lib.Instance(mypkg.lib.Store())
+b = mypkg.app.Instance(mypkg.app.Store(), imports={"env": a})  # the whole shelf: everything that `a` exports, under its names
+b = mypkg.app.Instance(mypkg.app.Store(), imports={"env": {**a.__exports__, "log": print}})  # or by names, with what only Python can give
+b = mypkg.app.Instance(mypkg.app.Store(), imports={"env": {"add": a.add, "counter": a["counter"], "memory": a.memory}})
 ```
 
 The rule: **attributes use, items link**. `a.add(1, 2)`, `a.counter` (a number; `a.counter = 5` writes it) and `a.memory` (a
@@ -158,13 +158,13 @@ method `a.add` and the `memoryview` are accepted as references too). What does n
 ### WASI programs
 
 A module that imports `wasi_snapshot_preview1` (or its first snapshot, `wasi_unstable`) gets those calls from wasmext, compiled into
-the extension (C in `wasi_*.h` that the glue includes: the built module needs nothing of wasmext when it runs). `Instance()` needs no
+the extension (C in `wasi_*.h` that the glue includes: the built module needs nothing of wasmext when it runs). `Instance(store)` needs no
 imports, and the program is started as an export:
 
 ```python
 import mypkg.lua  # lua.wasm, a command built for WASI
 
-lua = mypkg.lua.Instance(wasi={"args": ["lua", "/hello.lua"], "preopens": {"/": "scripts"}, "readonly": True})
+lua = mypkg.lua.Instance(mypkg.lua.Store(wasi={"args": ["lua", "/hello.lua"], "preopens": {"/": "scripts"}, "readonly": True}))
 try:
     lua._start()
 except mypkg.lua.WasiExit as exit:  # proc_exit(code): the program is over, and what it opened is closed
@@ -179,7 +179,7 @@ input, an output thrown away), `preopens` (`{name the program sees: directory of
 `readonly` (`True`, a name or a list of names of the preopens that cannot be changed), `clock` (a function: the id of the clock ->
 nanoseconds; default: the clocks of the system) and `random` (a function: how many -> that many bytes; default: the random bytes of the
 system). The types are in the `.pyi` that the build puts beside the module. A call can also be replaced as any import can:
-`Instance({"wasi_snapshot_preview1": {"clock_time_get": my_clock}})`; what you give wins, call by call.
+`Instance(store, imports={"wasi_snapshot_preview1": {"clock_time_get": my_clock}})`; what you give wins, call by call.
 
 A program is kept inside the directories it was given: `..` out of a directory, an absolute name, or a symbolic link that leads out is
 `ENOTCAPABLE`. A directory the program opens is a capability for that directory only. A program built with an old libc finds a relative path
@@ -320,7 +320,7 @@ What may be relied on, and what may change. This is the boundary for the alpha; 
 
 **Stable** (the interface that users of a built wheel, and of the build, see):
 
-- The module that wasmext makes: `Instance(imports, wasi=...)`; an export as an attribute or a method; `instance["name"]` and `instance.__exports__` (a reference to give to another instance as an import: a capsule of the ABI below, or, from the wrapper for ctypes, an object that gives one as `__wasmext_ref__`);
+- The module that wasmext makes: `Store(wasi=...)` (the host and its configuration, made by hand) and `Instance(store, imports=...)`; an export as an attribute or a method; `instance["name"]` and `instance.__exports__` (a reference to give to another instance as an import: a capsule of the ABI below, or, from the wrapper for ctypes, an object that gives one as `__wasmext_ref__`);
   an exported memory as a `memoryview`; an exported global as an attribute; a `v128` as 16 bytes; the exceptions `Trap` and `LinkError`, `UncaughtException` (for a module that has exception tags) and, for a module that uses WASI, `WasiExit`, `WasiSignal`, `WasiTerminated`; the `.pyi` beside the built module.
 - The build: `natify()` and its keyword arguments, the options of `wasmext natify` (and `wasmext inspect`, whose text is for people, not for programs), the keys of `[[tool.wasmext.ext-modules]]` and `limited-api` of `[tool.wasmext]` in `pyproject.toml`, and the values of `product`.
 - The environment variables of a user: `WASMEXT_WABT`, `WASMEXT_WASM2C`, `WASMEXT_WASM2C_RUNTIME`, `WASMEXT_WASM2C_INCLUDE`, `WASMEXT_LIMITED_API`, `WASMEXT_GUARD_PAGES`, `WASMEXT_PARTS`, `WASMEXT_JOBS`, `WASMEXT_NO_PYPROJECT`, `WASMEXT_FORCE_REGEN` (a build again of the C), `WASMEXT_<NAME>_LIBRARY` (the path of the library for its ctypes wrapper); `WASMIMPORT_BUILD_DIR` of `wasmimport` is provisional.

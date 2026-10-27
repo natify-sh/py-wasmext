@@ -49,7 +49,7 @@ def make(ext: Any, **overrides: Callable[..., Any]) -> Any:
         "cb": _nothing,
     }
     env.update(overrides)
-    return ext.Instance({"env": env})
+    return ext.Instance(ext.Store(), imports={"env": env})
 
 
 def test_the_committed_wasm_is_the_wat(wabt: Path, tmp_path: Path) -> None:
@@ -189,13 +189,13 @@ def test_imports_are_called(ext: Any) -> None:
 
 def test_missing_imports_are_link_errors(ext: Any) -> None:
     with pytest.raises(ext.LinkError, match="pass imports"):
-        ext.Instance()
+        ext.Instance(ext.Store())
     with pytest.raises(ext.LinkError, match="missing import module 'env'"):
-        ext.Instance({})
+        ext.Instance(ext.Store(), imports={})
     with pytest.raises(ext.LinkError, match=r"missing import 'env.twice'"):
-        ext.Instance({"env": {"log": print, "cb": print}})
+        ext.Instance(ext.Store(), imports={"env": {"log": print, "cb": print}})
     with pytest.raises(ext.LinkError, match=r"import 'env.log' is not callable"):
-        ext.Instance({"env": {"log": 1, "twice": print, "cb": print}})
+        ext.Instance(ext.Store(), imports={"env": {"log": 1, "twice": print, "cb": print}})
 
 
 def test_a_trap_is_an_exception_and_the_instance_goes_on(ext: Any) -> None:
@@ -293,9 +293,9 @@ def test_a_cycle_through_an_import_is_collected(ext: Any) -> None:
 
 def test_the_module_without_imports_takes_no_arguments(build_front_end: Builder, front_end: str) -> None:
     simple = build_front_end(DATA / "simple.wasm", f"simple_{front_end}")
-    assert simple.Instance().add(3, 4) == 7
+    assert simple.Instance(simple.Store()).add(3, 4) == 7
     with pytest.raises(TypeError):
-        simple.Instance({"env": {}})
+        simple.Instance(simple.Store(), imports={"env": {}})
     if front_end == "extension":
         assert simple.Instance.__module__ == "simple_extension"
 
@@ -305,7 +305,7 @@ def test_an_exception_that_nothing_catches_is_an_uncaught_exception_with_its_tag
     front_end: str,
 ) -> None:
     mod: Any = build_front_end(DATA / "exceptions.wat", f"exceptions_{front_end}")
-    inst = mod.Instance()
+    inst = mod.Instance(mod.Store())
     assert inst.caught() == 8 and inst.ok() == 5  # an exception that a `try` of the module catches is not seen
     with pytest.raises(mod.UncaughtException) as one:
         inst.throw_one(-9)
@@ -331,7 +331,7 @@ def test_imports_of_several_modules_are_bound_by_the_name_of_the_module_not_by_t
         encoding="utf-8",
     )
     mod = build_front_end(wat, f"order_{front_end}")
-    inst = mod.Instance({"z": {"f": lambda: 1}, "a": {"g": lambda: 2}})
+    inst = mod.Instance(mod.Store(), imports={"z": {"f": lambda: 1}, "a": {"g": lambda: 2}})
     assert (inst.callf(), inst.callg()) == (1, 2)
 
 
@@ -347,7 +347,7 @@ def test_a_wasi_module_with_imports_of_its_own_still_reaches_wasi(
         encoding="utf-8",
     )
     mod = build_front_end(wat, f"wasienv_{front_end}", host="wasm32-wasip1")
-    inst = mod.Instance({"env": {"get": lambda: 5}})
+    inst = mod.Instance(mod.Store(), imports={"env": {"get": lambda: 5}})
     with pytest.raises(mod.WasiExit) as raised:
         inst._start()  # pyright: ignore[reportPrivateUsage]
     assert raised.value.code == 5
@@ -364,7 +364,7 @@ def test_a_table_that_cannot_be_allocated_is_a_memory_error(
     )
     mod = build_front_end(wat, f"bigtable_{front_end}")
     with pytest.raises(MemoryError):
-        mod.Instance()
+        mod.Instance(mod.Store())
 
 
 def test_odd_names_of_exports_and_imports_cannot_break_the_generated_c(
@@ -383,7 +383,7 @@ def test_odd_names_of_exports_and_imports_cannot_break_the_generated_c(
         encoding="utf-8",
     )
     mod = build_front_end(wat, f"odd_{front_end}")
-    inst = mod.Instance()
+    inst = mod.Instance(mod.Store())
     assert inst.a() == 6  # not the function behind "a\0b", which is left out
     assert getattr(inst, "a*/ static int injected_by_name(void){return 77;} /*")() == 1
     assert getattr(inst, "line\n*/ int x;")() == 2
@@ -428,7 +428,7 @@ def test_an_instance_that_could_not_be_made_gives_its_memory_back(
     before = megabytes()
     for _ in range(50):
         with pytest.raises(RuntimeError):  # Trap
-            mod.Instance()
+            mod.Instance(mod.Store())
     assert megabytes() - before < 1000, "the address space grew by the memories of the failed instances"
 
 
@@ -455,7 +455,7 @@ def test_a_memory_that_can_move_does_not_grow_while_a_memoryview_of_it_is_alive(
     )
     defines = () if guard_pages else ("WASM_RT_USE_MMAP=0",)
     mod: Any = build_front_end(wat, f"grower_{front_end}_{'guard' if guard_pages else 'noguard'}", defines=defines)
-    inst = mod.Instance()
+    inst = mod.Instance(mod.Store())
     view = inst.mem
     again = inst.mem
     if (
@@ -497,11 +497,11 @@ def test_a_reactor_is_initialized_once_when_the_instance_is_made(
     wat = tmp_path / "reactor.wat"
     wat.write_text(_REACTOR, encoding="utf-8")
     mod: Any = build_front_end(wat, f"reactor_{front_end}")
-    inst = mod.Instance()
+    inst = mod.Instance(mod.Store())
     assert (inst.runs(), inst.peek()) == (1, 1234)  # run by the instance, before the first export
     inst._initialize()  # a program written before it was automatic: it must not run the constructors again
     assert inst.runs() == 1
-    other = mod.Instance()
+    other = mod.Instance(mod.Store())
     assert other.runs() == 1  # each instance is initialized, once
 
 
@@ -515,7 +515,7 @@ def test_a_trap_in_initialize_is_the_error_of_making_the_instance(
     )
     mod: Any = build_front_end(wat, f"reactor_trap_{front_end}")
     with pytest.raises(mod.Trap):
-        mod.Instance()
+        mod.Instance(mod.Store())
 
 
 def test_a_command_with_initialize_is_not_initialized_for_it(
@@ -529,7 +529,7 @@ def test_a_command_with_initialize_is_not_initialized_for_it(
         encoding="utf-8",
     )
     mod: Any = build_front_end(wat, f"command_{front_end}")
-    inst = mod.Instance()
+    inst = mod.Instance(mod.Store())
     assert inst.runs() == 0
 
 
@@ -550,7 +550,7 @@ def test_v128_in_signatures_is_16_bytes_in_each_front_end(build_front_end: Build
         return n + 1, b[::-1]
 
     module = build_front_end(DATA / "v128_signatures.wat", f"v128_signatures_{front_end}")
-    i = module.Instance({"env": {"twice": twice, "split": split}})
+    i = module.Instance(module.Store(), imports={"env": {"twice": twice, "split": split}})
     assert i.double(lanes(1, 2, 3, 4)) == lanes(2, 4, 6, 8)
     assert i.double(bytearray(lanes(5, 5, 5, 5))) == lanes(10, 10, 10, 10)  # any bytes-like object
     assert i.pair(7, lanes(1, 1, 1, 1)) == (lanes(1, 1, 1, 1), 7)
@@ -572,6 +572,6 @@ def test_an_imported_function_put_in_a_table_by_an_element_segment_is_called_wit
     def host(x: int) -> int:
         return x + 100
 
-    inst = mod.Instance({"env": {"f": host}})
+    inst = mod.Instance(mod.Store(), imports={"env": {"f": host}})
     assert inst.via_import(5) == 105
     assert inst.via_defined(5) == 10

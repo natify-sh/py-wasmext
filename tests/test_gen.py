@@ -111,7 +111,10 @@ def test_the_stub_describes_the_extension() -> None:
     assert "def fadd(self, arg0: float, arg1: float, /) -> float: ..." in stub
     assert "def nop(self) -> None: ..." in stub
     assert "def mem(self) -> memoryview: ..." in stub
-    assert "'twice': Callable[[float], float]" in stub and "def __init__(self, imports: Imports) -> None: ..." in stub
+    assert (
+        "'twice': Callable[[float], float]" in stub
+        and "def __init__(self, store: Store, imports: Imports) -> None: ..." in stub
+    )
     assert "def pair(self) -> tuple[int, int]: ..." in stub  # several results: a tuple
     assert "def answer(self) -> int: ..." in stub  # an immutable global: a read-only attribute
     assert "def tbl" not in stub and "tbl:" not in stub  # a table is not an attribute of the instance...
@@ -130,7 +133,12 @@ def test_the_stub_of_a_module_without_imports_needs_no_arguments_or_imports() ->
         code(b"\x00\x20\x00\x0b"),
     )
     stub = generate(parse(data), "m").stub
-    assert "def __init__(self) -> None: ..." in stub and "Callable" not in stub and "TypedDict" not in stub
+    assert (
+        "def __init__(self, store: Store) -> None: ..." in stub
+        and "class Store:" in stub
+        and "Callable" not in stub
+        and "TypedDict" not in stub
+    )
 
 
 def test_the_stub_of_a_wasi_program_types_every_key_of_wasi_and_the_exit() -> None:

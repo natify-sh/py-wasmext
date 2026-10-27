@@ -5,7 +5,9 @@ from __future__ import annotations
 import shutil
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
@@ -30,6 +32,11 @@ def test_the_imports_of_wasi_have_protocols_with_the_names_of_the_parameters(stu
     assert "'fd_write': FdWrite," in stub  # the original of the host takes no Caller
     assert "Callable[[int, int, int, int], int]" not in stub
     compile(stub, "wasi_probe.pyi", "exec")
+
+
+def test_the_wrapper_for_ctypes_has_the_same_stub(stub: str, build_ctypes: Callable[..., ModuleType]) -> None:
+    mod = build_ctypes(DATA / "wasi_probe.wat", "wasi_probe", host="wasm32-wasip1")
+    assert Path(str(mod.__file__)).with_suffix(".pyi").read_text(encoding="utf-8") == stub
 
 
 def test_the_protocols_do_not_import_fusedwasi(stub: str) -> None:

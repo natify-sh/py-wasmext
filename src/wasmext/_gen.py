@@ -3886,7 +3886,7 @@ def _stub(
         for protocol in sorted(used):
             classes += [_protocol_text(protocol, False), _protocol_text(protocol, True)]
         lines[anchor:anchor] = [
-            "# The functions that the host of WASI 0.1 answers, with the names of the parameters (from fusedwasi)",
+            "# The functions that the host of WASI answers, with the names of the parameters (from fusedwasi)",
             *classes,
         ]
     if table:
@@ -4005,33 +4005,40 @@ _P1_MODULES = (
 
 
 @functools.cache
-def _wasi_p1_protocols() -> tuple[Any, dict[str, str]] | None:
-    """(the table of WASI 0.1, the text of each Protocol by its name), both from fusedwasi; None when the fusedwasi at hand has no table of signatures."""
+def _wasi_protocols() -> tuple[Any, Any, dict[str, str]] | None:
+    """(the table of WASI 0.1, the table of WASI 0.2, the text of each Protocol by its name), all from fusedwasi; None when the fusedwasi at hand has no table of signatures."""
     try:
         from fusedwasi import get_signatures_path
         from fusedwasi.signatures import load
     except ImportError:
         return None
-    text = (Path(get_signatures_path()) / "wasi_p1_protocols.pyi").read_text(encoding="utf-8")
-    blocks = {
-        m.group(1): m.group(0).rstrip() + "\n"
-        for m in re.finditer(r"^class (\w+)\(Protocol\):\n.*?(?=^class |\Z)", text, re.DOTALL | re.MULTILINE)
-    }
-    return load("p1"), blocks
+    blocks: dict[str, str] = {}
+    for snapshot in ("p1", "p2"):
+        text = (Path(get_signatures_path()) / f"wasi_{snapshot}_protocols.pyi").read_text(encoding="utf-8")
+        blocks |= {
+            m.group(1): m.group(0).rstrip() + "\n"
+            for m in re.finditer(r"^class (\w+)\(Protocol\):\n.*?(?=^class |\Z)", text, re.DOTALL | re.MULTILINE)
+        }
+    return load("p1"), load("p2"), blocks
 
 
 def _protocol_name(module: str, name: str) -> str | None:
-    """The Protocol that fusedwasi has for an import of WASI 0.1, or None (not WASI 0.1, or no table)."""
-    found = _wasi_p1_protocols() if module in _P1_MODULES else None
-    function = found[0].get("wasi_snapshot_preview1", name) if found is not None else None
-    return function.protocol if function is not None and function.protocol in found[1] else None  # type: ignore[union-attr]
+    """The Protocol that fusedwasi has for an import of WASI 0.1 or 0.2, or None (another module, or no table)."""
+    found = _wasi_protocols()
+    if found is None:
+        return None
+    if module in _P1_MODULES:
+        function = found[0].get("wasi_snapshot_preview1", name)
+    else:  # `wasi:cli/exit@0.2.N`: the patch releases agree, the table is of the one it was made from
+        function = found[1].get(re.sub(r"@0\.2\.\d+$", f"@{found[1].api.rsplit('@', 1)[-1]}", module), name)
+    return function.protocol if function is not None and function.protocol in found[2] else None
 
 
 def _protocol_text(protocol: str, with_caller: bool) -> str:
     """The text of a Protocol of fusedwasi; with the Caller first when asked (the class gets `WithCaller`)."""
-    found = _wasi_p1_protocols()
+    found = _wasi_protocols()
     assert found is not None
-    text = found[1][protocol]
+    text = found[2][protocol]
     if not with_caller:
         return text
     text = text.replace(f"class {protocol}(Protocol):", f"class {protocol}WithCaller(Protocol):", 1)

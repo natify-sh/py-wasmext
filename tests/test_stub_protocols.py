@@ -92,3 +92,13 @@ wasi_probe.Instance(wasi_probe.Store(), imports={"wasi_snapshot_preview1": {"fd_
     assert bad.returncode != 0 and "reportArgumentType" in bad.stdout and "(a: int, b: int) -> int" in bad.stdout, (
         bad.stdout[-1500:]
     )
+
+
+def test_the_imports_of_wasi_p2_have_protocols_too() -> None:
+    hello = Path(__file__).parent.parent / "examples" / "wasi2_unbundled" / "src" / "wasi2demo" / "_hello.wasm"
+    stub = generate(parse(hello.read_bytes()), "m", host="wasm32-wasip2").stub
+    assert "class CliStdoutGetStdout(Protocol):" in stub and "class CliStdoutGetStdoutWithCaller(Protocol):" in stub
+    assert "'get-stdout': NotRequired[CliStdoutGetStdout | CliStdoutGetStdoutWithCaller | None]" in stub
+    assert "Callable[[], int]" not in stub  # no import is typed by arity alone
+    assert "fusedwasi" not in stub.replace("(from fusedwasi)", "")
+    compile(stub, "m.pyi", "exec")

@@ -1163,6 +1163,7 @@ def generate(
     add("    PyObject_HEAD")
     add(f"    {last}_instance core;")
     add("    StoreObject *store_obj;  /* the store this instance lives in (a reference) */")
+    add("    PyObject *caller;  /* the Caller that the callables which ask for one are given (made on the first) */")
     add("    PyObject *weakreflist;")
     if tables:
         add(
@@ -1549,6 +1550,7 @@ def generate(
     add("static int Instance_traverse(InstanceObject *self, visitproc visit, void *arg) {")
     add("    Py_VISIT(Py_TYPE((PyObject *)self));")
     add("    Py_VISIT((PyObject *)self->store_obj);")
+    add("    Py_VISIT(self->caller);")
     for i, host in enumerate(hosts):
         add(f"    for (int k = 0; k < {slots.get(host, 0)}; k++) Py_VISIT(self->hold{i}.fn[k]);")
         add(f"    for (int k = 0; k < {slots.get(host, 0)}; k++) Py_VISIT(self->hold{i}.lo[k]);")
@@ -1566,6 +1568,7 @@ def generate(
     add("}")
     add("")
     add("static int Instance_clear(InstanceObject *self) {")
+    add("    Py_CLEAR(self->caller);")
     for i, host in enumerate(hosts):
         add(f"    for (int k = 0; k < {slots.get(host, 0)}; k++) Py_CLEAR(self->hold{i}.fn[k]);")
         add(f"    for (int k = 0; k < {slots.get(host, 0)}; k++) Py_CLEAR(self->hold{i}.lo[k]);")
@@ -1627,6 +1630,83 @@ def generate(
         add("    if (r == NULL) return 0;")
         add("    Py_DECREF(r);")
         add("    return 1;")
+        add("}")
+        add("")
+    if has_imports:
+        add(
+            "/* ---- Caller: what a callable that asks for it (`fn.__wasm_caller__ = True`) is given first, as Wasmtime gives a Caller: the instance that called, its store and its memory ---- */"
+        )
+        add("typedef struct { PyObject_HEAD InstanceObject *instance; } CallerObject;")
+        add("static PyTypeObject *CallerType;")
+        add("static int Caller_traverse(CallerObject *self, visitproc visit, void *arg) {")
+        add("    Py_VISIT(Py_TYPE((PyObject *)self));")
+        add("    Py_VISIT((PyObject *)self->instance);")
+        add("    return 0;")
+        add("}")
+        add("static int Caller_clear(CallerObject *self) {")
+        add("    Py_CLEAR(self->instance);")
+        add("    return 0;")
+        add("}")
+        add("static void Caller_dealloc(CallerObject *self) {")
+        add("    PyTypeObject *tp = Py_TYPE((PyObject *)self);")
+        add("    PyObject_GC_UnTrack(self);")
+        add("    Caller_clear(self);")
+        add("    ((freefunc)PyType_GetSlot(tp, Py_tp_free))((PyObject *)self);")
+        add("    Py_DECREF(tp);")
+        add("}")
+        add("static PyObject *Caller_get_instance(CallerObject *self, void *Py_UNUSED(closure)) {")
+        add("    Py_INCREF((PyObject *)self->instance);")
+        add("    return (PyObject *)self->instance;")
+        add("}")
+        add("static PyObject *Caller_get_store(CallerObject *self, void *Py_UNUSED(closure)) {")
+        add("    Py_INCREF((PyObject *)self->instance->store_obj);")
+        add("    return (PyObject *)self->instance->store_obj;")
+        add("}")
+        add(
+            '/* the memory of the instance that called, or None when the module has none (as `caller.get("memory")` of Wasmtime) */'
+        )
+        add("static PyObject *Caller_get_memory(CallerObject *self, void *Py_UNUSED(closure)) {")
+        add('    PyObject *m = PyObject_GetAttrString((PyObject *)self->instance, "memory");')
+        add("    if (m == NULL && PyErr_ExceptionMatches(PyExc_AttributeError)) {")
+        add("        PyErr_Clear();")
+        add("        Py_RETURN_NONE;")
+        add("    }")
+        add("    return m;")
+        add("}")
+        add("static PyGetSetDef Caller_getset[] = {")
+        add('    {"instance", (getter)Caller_get_instance, NULL, "the instance that called", NULL},')
+        add('    {"store", (getter)Caller_get_store, NULL, "the store of that instance", NULL},')
+        add(
+            '    {"memory", (getter)Caller_get_memory, NULL, "the memory of that instance (a memoryview), or None", NULL},'
+        )
+        add("    {NULL, NULL, NULL, NULL, NULL}")
+        add("};")
+        add(
+            "/* A callable that has `__wasm_caller__` true is called with the Caller first. Done once, when the instance is made: the callable becomes partial(fn, caller), and the call is the same as for any callable. Steals `v`. */"
+        )
+        add("static PyObject *with_caller(InstanceObject *self, PyObject *v) {")
+        add('    PyObject *mark = PyObject_GetAttrString(v, "__wasm_caller__");')
+        add("    if (mark == NULL) { PyErr_Clear(); return v; }")
+        add("    int yes = PyObject_IsTrue(mark);")
+        add("    Py_DECREF(mark);")
+        add("    if (yes <= 0) {")
+        add("        if (yes < 0) { Py_DECREF(v); return NULL; }")
+        add("        return v;")
+        add("    }")
+        add("    if (self->caller == NULL) {")
+        add("        CallerObject *c = (CallerObject *)PyType_GenericAlloc(CallerType, 0);")
+        add("        if (c == NULL) { Py_DECREF(v); return NULL; }")
+        add("        Py_INCREF((PyObject *)self);")
+        add("        c->instance = self;")
+        add("        self->caller = (PyObject *)c;")
+        add("    }")
+        add('    PyObject *functools = PyImport_ImportModule("functools");')
+        add('    PyObject *partial = functools != NULL ? PyObject_GetAttrString(functools, "partial") : NULL;')
+        add("    Py_XDECREF(functools);")
+        add("    PyObject *r = partial != NULL ? PyObject_CallFunctionObjArgs(partial, v, self->caller, NULL) : NULL;")
+        add("    Py_XDECREF(partial);")
+        add("    Py_DECREF(v);")
+        add("    return r;")
         add("}")
         add("")
     add("static PyObject *Instance_new(PyTypeObject *type, PyObject *args, PyObject *kwds) {")
@@ -1745,6 +1825,8 @@ def generate(
             add("            if (PyErr_Occurred()) { Py_DECREF(self); return NULL; }")
             add("        } else if (PyCallable_Check(v)) {")
             add("            Py_XDECREF(ref);")
+            add("            v = with_caller(self, v);")
+            add("            if (v == NULL) { Py_DECREF(self); return NULL; }")
             add(f"            {host}.fn[{imp.slot}] = (void *)py_import{k};")
             add(f"            {host}.user[{imp.slot}] = v;")
             add(f"            {hold}.fn[{imp.slot}] = v;")
@@ -2658,6 +2740,22 @@ def generate(
         "Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC, store_slots};"
     )
     add("")
+    if has_imports:
+        add("static PyType_Slot caller_slots[] = {")
+        add("    {Py_tp_dealloc, Caller_dealloc},")
+        add("    {Py_tp_traverse, Caller_traverse},")
+        add("    {Py_tp_clear, Caller_clear},")
+        add("    {Py_tp_getset, Caller_getset},")
+        add(
+            f"    {{Py_tp_doc, (void *){_c_string('What a callable that asks for it is given first: the instance that called, its store and its memory')}}},"
+        )
+        add("    {0, NULL}")
+        add("};")
+        add(
+            f"static PyType_Spec caller_spec = {{{_c_string(name + '.Caller')}, sizeof(CallerObject), 0, "
+            "Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC | Py_TPFLAGS_DISALLOW_INSTANTIATION, caller_slots};"
+        )
+        add("")
     add("static PyType_Slot instance_slots[] = {")
     add("    {Py_tp_new, Instance_new},")
     add("    {Py_tp_dealloc, Instance_dealloc},")
@@ -2742,6 +2840,8 @@ def generate(
             f'    UncaughtExceptionError = PyErr_NewExceptionWithDoc({_c_string(name + ".UncaughtException")}, "An exception of WebAssembly that nothing caught (.tag, .values)", TrapError, NULL);'
         )
     add("    StoreType = (PyTypeObject *)PyType_FromSpec(&store_spec);")
+    if has_imports:
+        add("    CallerType = (PyTypeObject *)PyType_FromSpec(&caller_spec);")
     add("    InstanceType = (PyTypeObject *)PyType_FromSpec(&instance_spec);")
     if uses_wasi and not wasi2:
         add("    HostType = (PyTypeObject *)PyType_FromSpec(&host_spec);")
@@ -2752,6 +2852,7 @@ def generate(
         add("    FunctionType = (PyTypeObject *)PyType_FromSpec(&function_spec);")
     add(
         "    if (!TrapError || !LinkError || !StoreType || !InstanceType"
+        + (" || !CallerType" if has_imports else "")
         + (" || !WasiTerminatedError || !WasiExitError || !WasiSignalError" if uses_wasi else "")
         + (" || !HostType" if uses_wasi and not wasi2 else "")
         + (" || !MemoryType" if memories else "")
@@ -2771,6 +2872,8 @@ def generate(
     add('    if (PyModule_AddObjectRef(m, "LinkError", LinkError) < 0) goto fail;')
     add(f'    if (PyModule_AddStringConstant(m, "__host__", {_c_string(host_name)}) < 0) goto fail;')
     add('    if (PyModule_AddObjectRef(m, "Store", (PyObject *)StoreType) < 0) goto fail;')
+    if has_imports:
+        add('    if (PyModule_AddObjectRef(m, "Caller", (PyObject *)CallerType) < 0) goto fail;')
     add('    if (PyModule_AddObjectRef(m, "Instance", (PyObject *)InstanceType) < 0) goto fail;')
     if shares_tables:
         add('    if (PyModule_AddObjectRef(m, "Table", (PyObject *)TableType) < 0) goto fail;')
@@ -3600,12 +3703,6 @@ def _usable(name: str) -> bool:
     return name.isidentifier() and not keyword.iskeyword(name) and not _reserved(name)
 
 
-def _callable_type(func: FuncType) -> str:
-    params = ", ".join(_PY_TYPE[t] for t in func.params)
-    result = _result_type(func)
-    return f"Callable[[{params}], {result}]"
-
-
 # `wasi=` as the stub shows it: the same for every module that uses WASI. A key that is absent has its default (worked out by the
 # extension when it is used); None is nothing.
 _WASI_STUB = [
@@ -3778,6 +3875,17 @@ def _stub(
         ]
     if table:
         lines += _TABLE_STUB
+    if imports:
+        lines += [
+            "class Caller:",
+            "    @property",
+            "    def instance(self) -> Instance: ...",
+            "    @property",
+            "    def store(self) -> Store: ...",
+            "    @property",
+            "    def memory(self) -> memoryview | None: ...",
+            "",
+        ]
     lines.append("class Store:")
     lines.append(
         "    def __init__(self, *, wasi: Wasi | None = None) -> None: ..."
@@ -3876,7 +3984,14 @@ def _param_names(func: FuncType, wanted: tuple[str | None, ...]) -> list[str]:
 
 def _import_type(thing: FuncType | GlobalType | Limits | TableType) -> str:
     if isinstance(thing, FuncType):
-        return _callable_type(thing)
+        params = ", ".join(_PY_TYPE[t] for t in thing.params)
+        result = _result_type(thing)
+        # a callable may ask for the Caller first (`fn.__wasm_caller__ = True`)
+        return (
+            f"Callable[[{params}], {result}] | Callable[[Caller, {params}], {result}]"
+            if params
+            else f"Callable[[], {result}] | Callable[[Caller], {result}]"
+        )
     if isinstance(
         thing, (Limits, TableType)
     ):  # a memory or a table: the export of another instance (a table: a Table of any module)

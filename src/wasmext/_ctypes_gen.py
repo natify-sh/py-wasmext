@@ -27,6 +27,7 @@ from __future__ import annotations
 import codecs
 import ctypes
 import errno
+import functools
 import io
 import operator
 import os
@@ -315,6 +316,37 @@ def _store_free(handle: int, lib: Any) -> None:
     lib.@NAME@_store_free(handle)
 
 
+class Caller:
+    """What a callable that asks for it (`fn.__wasm_caller__ = True`) is given first, as Wasmtime gives a Caller: the instance that called, its store and its memory."""
+
+    def __init__(self, instance: Any) -> None:
+        self._instance = instance
+
+    @property
+    def instance(self) -> Any:
+        return self._instance
+
+    @property
+    def store(self) -> Any:
+        return self._instance._store
+
+    @property
+    def memory(self) -> Any:
+        try:
+            return self._instance.memory
+        except AttributeError:
+            return None
+
+
+def _with_caller(instance: Any, function: Any) -> Any:
+    """A callable with `__wasm_caller__` true is called with the Caller first (done once, when the instance is made)."""
+    if not getattr(function, "__wasm_caller__", False):
+        return function
+    if instance._caller is None:
+        instance._caller = Caller(instance)
+    return functools.partial(function, instance._caller)
+
+
 class Store:
     """The host of the instances made in it (who answers the imports of WASI), with its configuration `wasi=`; the library makes the state, this object owns it."""
 
@@ -369,6 +401,7 @@ class Instance:
         self._lib = lib
         self._callbacks: list[Any] = []
         self._pending: BaseException | None = None
+        self._caller: Any = None  # the Caller of the callables that ask for one; made on the first
         if any(not wasi_call for *_, wasi_call in _IMPORTS) or _GLOBAL_IMPORTS or _MEMORY_IMPORTS or _TABLE_IMPORTS:
             if imports is None:
                 raise LinkError("the module has imports: pass imports={module: {name: callable or value}}")
@@ -450,7 +483,7 @@ class Instance:
         if record is None:
             if not callable(value):
                 raise LinkError(f"import '{module}.{field}' is not callable")
-            return value
+            return _with_caller(self, value)
         where = f"{module}.{field}"
         if not _usable(record):
             raise LinkError(f"import {where}: the export is from an incompatible version of wasmext")

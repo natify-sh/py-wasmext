@@ -2090,7 +2090,7 @@ def generate(
         hadd(
             "/* a hook of the state (a stream, the clock, a policy) has no guest: the store is the one the state is in */"
         )
-        hadd(f"static void {last}_wasi_state_trap(fusedwasi_p2_state *s, const char *message) {{")
+        hadd(f"static inline void {last}_wasi_state_trap(fusedwasi_p2_state *s, const char *message) {{")
         hadd(f"    {last}_store *st = ({last}_store *)((char *)s - offsetof({last}_store, wasi));")
         hadd('    snprintf(st->p2_message, sizeof st->p2_message, "%s", message);')
         hadd("    wasm_rt_trap(WASMEXT_TRAP_HOST);")

@@ -6,7 +6,8 @@ from _typeshed import SupportsRead, SupportsWrite
 from collections.abc import Callable, Mapping, Sequence
 from os import PathLike
 from typing import NotRequired, TypedDict
-from typing import Literal
+from types import SimpleNamespace
+from typing import Literal, Protocol
 
 __host__: Literal['wasm32-wasip1']
 
@@ -42,10 +43,321 @@ class WasiP1(TypedDict):
 Wasi = WasiP1  # the configuration of the host of this module (wasm32-wasip1)
 
 
-_Imports_wasi_snapshot_preview1 = TypedDict('_Imports_wasi_snapshot_preview1', {'args_get': NotRequired[Callable[[int, int], int] | None], 'args_sizes_get': NotRequired[Callable[[int, int], int] | None], 'environ_get': NotRequired[Callable[[int, int], int] | None], 'environ_sizes_get': NotRequired[Callable[[int, int], int] | None], 'fd_fdstat_get': NotRequired[Callable[[int, int], int] | None], 'fd_fdstat_set_flags': NotRequired[Callable[[int, int], int] | None], 'fd_prestat_get': NotRequired[Callable[[int, int], int] | None], 'fd_prestat_dir_name': NotRequired[Callable[[int, int, int], int] | None], 'fd_read': NotRequired[Callable[[int, int, int, int], int] | None], 'fd_seek': NotRequired[Callable[[int, int, int, int], int] | None], 'fd_write': NotRequired[Callable[[int, int, int, int], int] | None], 'path_filestat_get': NotRequired[Callable[[int, int, int, int, int], int] | None], 'path_open': NotRequired[Callable[[int, int, int, int, int, int, int, int, int], int] | None], 'proc_exit': NotRequired[Callable[[int], None] | None], 'fd_close': NotRequired[Callable[[int], int] | None]})
+# The functions that the host of WASI answers, with the names of the parameters (from fusedwasi)
+class ArgsGet(Protocol):
+    """Read command-line argument data.
+
+    Import: `wasi_snapshot_preview1` `args_get`.
+    Returns a WASI errno (0 is success).
+    """
+
+    def __call__(self, argv: int, argv_buf: int, /) -> int: ...
+
+class ArgsGetWithCaller(Protocol):
+    """Read command-line argument data.
+
+    Import: `wasi_snapshot_preview1` `args_get`.
+    Returns a WASI errno (0 is success).
+    """
+
+    def __call__(self, caller: Caller, argv: int, argv_buf: int, /) -> int: ...
+
+class ArgsSizesGet(Protocol):
+    """Return command-line argument data sizes.
+
+    Import: `wasi_snapshot_preview1` `args_sizes_get`.
+    Returns a WASI errno (0 is success).
+    Results are written to memory at: `retptr0` (size), `retptr1` (size).
+    """
+
+    def __call__(self, retptr0: int, retptr1: int, /) -> int: ...
+
+class ArgsSizesGetWithCaller(Protocol):
+    """Return command-line argument data sizes.
+
+    Import: `wasi_snapshot_preview1` `args_sizes_get`.
+    Returns a WASI errno (0 is success).
+    Results are written to memory at: `retptr0` (size), `retptr1` (size).
+    """
+
+    def __call__(self, caller: Caller, retptr0: int, retptr1: int, /) -> int: ...
+
+class EnvironGet(Protocol):
+    """Read environment variable data.
+
+    Import: `wasi_snapshot_preview1` `environ_get`.
+    Returns a WASI errno (0 is success).
+    """
+
+    def __call__(self, environ: int, environ_buf: int, /) -> int: ...
+
+class EnvironGetWithCaller(Protocol):
+    """Read environment variable data.
+
+    Import: `wasi_snapshot_preview1` `environ_get`.
+    Returns a WASI errno (0 is success).
+    """
+
+    def __call__(self, caller: Caller, environ: int, environ_buf: int, /) -> int: ...
+
+class EnvironSizesGet(Protocol):
+    """Return environment variable data sizes.
+
+    Import: `wasi_snapshot_preview1` `environ_sizes_get`.
+    Returns a WASI errno (0 is success).
+    Results are written to memory at: `retptr0` (size), `retptr1` (size).
+    """
+
+    def __call__(self, retptr0: int, retptr1: int, /) -> int: ...
+
+class EnvironSizesGetWithCaller(Protocol):
+    """Return environment variable data sizes.
+
+    Import: `wasi_snapshot_preview1` `environ_sizes_get`.
+    Returns a WASI errno (0 is success).
+    Results are written to memory at: `retptr0` (size), `retptr1` (size).
+    """
+
+    def __call__(self, caller: Caller, retptr0: int, retptr1: int, /) -> int: ...
+
+class FdClose(Protocol):
+    """Close a file descriptor.
+
+    Import: `wasi_snapshot_preview1` `fd_close`.
+    Returns a WASI errno (0 is success).
+    """
+
+    def __call__(self, fd: int, /) -> int: ...
+
+class FdCloseWithCaller(Protocol):
+    """Close a file descriptor.
+
+    Import: `wasi_snapshot_preview1` `fd_close`.
+    Returns a WASI errno (0 is success).
+    """
+
+    def __call__(self, caller: Caller, fd: int, /) -> int: ...
+
+class FdFdstatGet(Protocol):
+    """Get the attributes of a file descriptor.
+
+    Import: `wasi_snapshot_preview1` `fd_fdstat_get`.
+    Returns a WASI errno (0 is success).
+    Results are written to memory at: `retptr` (fdstat).
+    """
+
+    def __call__(self, fd: int, retptr: int, /) -> int: ...
+
+class FdFdstatGetWithCaller(Protocol):
+    """Get the attributes of a file descriptor.
+
+    Import: `wasi_snapshot_preview1` `fd_fdstat_get`.
+    Returns a WASI errno (0 is success).
+    Results are written to memory at: `retptr` (fdstat).
+    """
+
+    def __call__(self, caller: Caller, fd: int, retptr: int, /) -> int: ...
+
+class FdFdstatSetFlags(Protocol):
+    """Adjust the flags associated with a file descriptor.
+
+    Import: `wasi_snapshot_preview1` `fd_fdstat_set_flags`.
+    Returns a WASI errno (0 is success).
+    """
+
+    def __call__(self, fd: int, flags: int, /) -> int: ...
+
+class FdFdstatSetFlagsWithCaller(Protocol):
+    """Adjust the flags associated with a file descriptor.
+
+    Import: `wasi_snapshot_preview1` `fd_fdstat_set_flags`.
+    Returns a WASI errno (0 is success).
+    """
+
+    def __call__(self, caller: Caller, fd: int, flags: int, /) -> int: ...
+
+class FdPrestatDirName(Protocol):
+    """Return a description of the given preopened file descriptor.
+
+    Import: `wasi_snapshot_preview1` `fd_prestat_dir_name`.
+    Returns a WASI errno (0 is success).
+    """
+
+    def __call__(self, fd: int, path: int, path_len: int, /) -> int: ...
+
+class FdPrestatDirNameWithCaller(Protocol):
+    """Return a description of the given preopened file descriptor.
+
+    Import: `wasi_snapshot_preview1` `fd_prestat_dir_name`.
+    Returns a WASI errno (0 is success).
+    """
+
+    def __call__(self, caller: Caller, fd: int, path: int, path_len: int, /) -> int: ...
+
+class FdPrestatGet(Protocol):
+    """Return a description of the given preopened file descriptor.
+
+    Import: `wasi_snapshot_preview1` `fd_prestat_get`.
+    Returns a WASI errno (0 is success).
+    Results are written to memory at: `retptr` (prestat).
+    """
+
+    def __call__(self, fd: int, retptr: int, /) -> int: ...
+
+class FdPrestatGetWithCaller(Protocol):
+    """Return a description of the given preopened file descriptor.
+
+    Import: `wasi_snapshot_preview1` `fd_prestat_get`.
+    Returns a WASI errno (0 is success).
+    Results are written to memory at: `retptr` (prestat).
+    """
+
+    def __call__(self, caller: Caller, fd: int, retptr: int, /) -> int: ...
+
+class FdRead(Protocol):
+    """Read from a file descriptor.
+
+    Import: `wasi_snapshot_preview1` `fd_read`.
+    Returns a WASI errno (0 is success).
+    Results are written to memory at: `retptr` (size).
+    """
+
+    def __call__(self, fd: int, iovs: int, iovs_len: int, retptr: int, /) -> int: ...
+
+class FdReadWithCaller(Protocol):
+    """Read from a file descriptor.
+
+    Import: `wasi_snapshot_preview1` `fd_read`.
+    Returns a WASI errno (0 is success).
+    Results are written to memory at: `retptr` (size).
+    """
+
+    def __call__(self, caller: Caller, fd: int, iovs: int, iovs_len: int, retptr: int, /) -> int: ...
+
+class FdSeek(Protocol):
+    """Move the offset of a file descriptor.
+
+    Import: `wasi_snapshot_preview1` `fd_seek`.
+    Returns a WASI errno (0 is success).
+    Results are written to memory at: `retptr` (filesize).
+    """
+
+    def __call__(self, fd: int, offset: int, whence: int, retptr: int, /) -> int: ...
+
+class FdSeekWithCaller(Protocol):
+    """Move the offset of a file descriptor.
+
+    Import: `wasi_snapshot_preview1` `fd_seek`.
+    Returns a WASI errno (0 is success).
+    Results are written to memory at: `retptr` (filesize).
+    """
+
+    def __call__(self, caller: Caller, fd: int, offset: int, whence: int, retptr: int, /) -> int: ...
+
+class FdWrite(Protocol):
+    """Write to a file descriptor.
+
+    Import: `wasi_snapshot_preview1` `fd_write`.
+    Returns a WASI errno (0 is success).
+    Results are written to memory at: `retptr` (size).
+    """
+
+    def __call__(self, fd: int, iovs: int, iovs_len: int, retptr: int, /) -> int: ...
+
+class FdWriteWithCaller(Protocol):
+    """Write to a file descriptor.
+
+    Import: `wasi_snapshot_preview1` `fd_write`.
+    Returns a WASI errno (0 is success).
+    Results are written to memory at: `retptr` (size).
+    """
+
+    def __call__(self, caller: Caller, fd: int, iovs: int, iovs_len: int, retptr: int, /) -> int: ...
+
+class PathFilestatGet(Protocol):
+    """Return the attributes of a file or directory.
+
+    Import: `wasi_snapshot_preview1` `path_filestat_get`.
+    Returns a WASI errno (0 is success).
+    Results are written to memory at: `retptr` (filestat).
+    """
+
+    def __call__(self, fd: int, flags: int, path: int, path_len: int, retptr: int, /) -> int: ...
+
+class PathFilestatGetWithCaller(Protocol):
+    """Return the attributes of a file or directory.
+
+    Import: `wasi_snapshot_preview1` `path_filestat_get`.
+    Returns a WASI errno (0 is success).
+    Results are written to memory at: `retptr` (filestat).
+    """
+
+    def __call__(self, caller: Caller, fd: int, flags: int, path: int, path_len: int, retptr: int, /) -> int: ...
+
+class PathOpen(Protocol):
+    """Open a file or directory.
+
+    Import: `wasi_snapshot_preview1` `path_open`.
+    Returns a WASI errno (0 is success).
+    Results are written to memory at: `retptr` (fd).
+    """
+
+    def __call__(
+        self,
+        fd: int,
+        dirflags: int,
+        path: int,
+        path_len: int,
+        oflags: int,
+        fs_rights_base: int,
+        fs_rights_inheriting: int,
+        fdflags: int,
+        retptr: int,
+        /,
+    ) -> int: ...
+
+class PathOpenWithCaller(Protocol):
+    """Open a file or directory.
+
+    Import: `wasi_snapshot_preview1` `path_open`.
+    Returns a WASI errno (0 is success).
+    Results are written to memory at: `retptr` (fd).
+    """
+
+    def __call__(
+        self,
+        fd: int,
+        dirflags: int,
+        path: int,
+        path_len: int,
+        oflags: int,
+        fs_rights_base: int,
+        fs_rights_inheriting: int,
+        fdflags: int,
+        retptr: int,
+        /,
+    ) -> int: ...
+
+class ProcExit(Protocol):
+    """Terminate the process normally.
+
+    Import: `wasi_snapshot_preview1` `proc_exit`.
+    """
+
+    def __call__(self, rval: int, /) -> None: ...
+
+class ProcExitWithCaller(Protocol):
+    """Terminate the process normally.
+
+    Import: `wasi_snapshot_preview1` `proc_exit`.
+    """
+
+    def __call__(self, caller: Caller, rval: int, /) -> None: ...
+
+_Imports_wasi_snapshot_preview1 = TypedDict('_Imports_wasi_snapshot_preview1', {'args_get': NotRequired[ArgsGet | ArgsGetWithCaller | None], 'args_sizes_get': NotRequired[ArgsSizesGet | ArgsSizesGetWithCaller | None], 'environ_get': NotRequired[EnvironGet | EnvironGetWithCaller | None], 'environ_sizes_get': NotRequired[EnvironSizesGet | EnvironSizesGetWithCaller | None], 'fd_fdstat_get': NotRequired[FdFdstatGet | FdFdstatGetWithCaller | None], 'fd_fdstat_set_flags': NotRequired[FdFdstatSetFlags | FdFdstatSetFlagsWithCaller | None], 'fd_prestat_get': NotRequired[FdPrestatGet | FdPrestatGetWithCaller | None], 'fd_prestat_dir_name': NotRequired[FdPrestatDirName | FdPrestatDirNameWithCaller | None], 'fd_read': NotRequired[FdRead | FdReadWithCaller | None], 'fd_seek': NotRequired[FdSeek | FdSeekWithCaller | None], 'fd_write': NotRequired[FdWrite | FdWriteWithCaller | None], 'path_filestat_get': NotRequired[PathFilestatGet | PathFilestatGetWithCaller | None], 'path_open': NotRequired[PathOpen | PathOpenWithCaller | None], 'proc_exit': NotRequired[ProcExit | ProcExitWithCaller | None], 'fd_close': NotRequired[FdClose | FdCloseWithCaller | None]})
 Imports = TypedDict('Imports', {'wasi_snapshot_preview1': NotRequired[_Imports_wasi_snapshot_preview1]})
 
-_Host_Imports_wasi_snapshot_preview1 = TypedDict('_Host_Imports_wasi_snapshot_preview1', {'args_get': Callable[[int, int], int], 'args_sizes_get': Callable[[int, int], int], 'environ_get': Callable[[int, int], int], 'environ_sizes_get': Callable[[int, int], int], 'fd_fdstat_get': Callable[[int, int], int], 'fd_fdstat_set_flags': Callable[[int, int], int], 'fd_prestat_get': Callable[[int, int], int], 'fd_prestat_dir_name': Callable[[int, int, int], int], 'fd_read': Callable[[int, int, int, int], int], 'fd_seek': Callable[[int, int, int, int], int], 'fd_write': Callable[[int, int, int, int], int], 'path_filestat_get': Callable[[int, int, int, int, int], int], 'path_open': Callable[[int, int, int, int, int, int, int, int, int], int], 'proc_exit': Callable[[int], None], 'fd_close': Callable[[int], int]})
+_Host_Imports_wasi_snapshot_preview1 = TypedDict('_Host_Imports_wasi_snapshot_preview1', {'args_get': ArgsGet, 'args_sizes_get': ArgsSizesGet, 'environ_get': EnvironGet, 'environ_sizes_get': EnvironSizesGet, 'fd_fdstat_get': FdFdstatGet, 'fd_fdstat_set_flags': FdFdstatSetFlags, 'fd_prestat_get': FdPrestatGet, 'fd_prestat_dir_name': FdPrestatDirName, 'fd_read': FdRead, 'fd_seek': FdSeek, 'fd_write': FdWrite, 'path_filestat_get': PathFilestatGet, 'path_open': PathOpen, 'proc_exit': ProcExit, 'fd_close': FdClose})
 _HostImports = TypedDict('_HostImports', {'wasi_snapshot_preview1': _Host_Imports_wasi_snapshot_preview1})
 
 class Host:
@@ -54,8 +366,26 @@ class Host:
     @property
     def __imports__(self) -> _HostImports: ...
 
+class Caller:
+    @property
+    def instance(self) -> Instance: ...
+    @property
+    def store(self) -> Store: ...
+    @property
+    def memory(self) -> memoryview | None: ...
+
+class Store:
+    def __init__(self, *, wasi: Wasi | None = None) -> None: ...
+    def close(self) -> None: ...
+    def __enter__(self) -> Store: ...
+    def __exit__(self, *exc: object) -> None: ...
+    @property
+    def closed(self) -> bool: ...
+    @property
+    def runtime(self) -> SimpleNamespace: ...
+
 class Instance:
-    def __init__(self, imports: Imports | None = None, *, wasi: Wasi | None = None) -> None: ...
+    def __init__(self, store: Store, imports: Imports | None = None) -> None: ...
     @property
     def __exports__(self) -> dict[str, object]: ...
     @property

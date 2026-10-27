@@ -4,30 +4,352 @@
 # fmt: off
 from collections.abc import Callable
 from typing import TypedDict
-from typing import Literal
+from types import SimpleNamespace
+from typing import Literal, Protocol
 
 __host__: Literal['wasm32']
 
 class Trap(RuntimeError): ...
 class LinkError(Exception): ...
 
-_Imports_wasi_io_error_0_2_12 = TypedDict('_Imports_wasi_io_error_0_2_12', {'[resource-drop]error': Callable[[int], None]})
-_Imports_wasi_io_poll_0_2_12 = TypedDict('_Imports_wasi_io_poll_0_2_12', {'[resource-drop]pollable': Callable[[int], None], '[method]pollable.block': Callable[[int], None], 'poll': Callable[[int, int, int], None]})
-_Imports_wasi_io_streams_0_2_12 = TypedDict('_Imports_wasi_io_streams_0_2_12', {'[resource-drop]input-stream': Callable[[int], None], '[resource-drop]output-stream': Callable[[int], None], '[method]output-stream.check-write': Callable[[int, int], None], '[method]output-stream.write': Callable[[int, int, int, int], None], '[method]output-stream.blocking-flush': Callable[[int, int], None], '[method]output-stream.subscribe': Callable[[int], int]})
-_Imports_wasi_cli_terminal_input_0_2_12 = TypedDict('_Imports_wasi_cli_terminal_input_0_2_12', {'[resource-drop]terminal-input': Callable[[int], None]})
-_Imports_wasi_cli_terminal_output_0_2_12 = TypedDict('_Imports_wasi_cli_terminal_output_0_2_12', {'[resource-drop]terminal-output': Callable[[int], None]})
-_Imports_wasi_cli_stdin_0_2_12 = TypedDict('_Imports_wasi_cli_stdin_0_2_12', {'get-stdin': Callable[[], int]})
-_Imports_wasi_cli_stdout_0_2_12 = TypedDict('_Imports_wasi_cli_stdout_0_2_12', {'get-stdout': Callable[[], int]})
-_Imports_wasi_cli_stderr_0_2_12 = TypedDict('_Imports_wasi_cli_stderr_0_2_12', {'get-stderr': Callable[[], int]})
-_Imports_wasi_cli_terminal_stdin_0_2_12 = TypedDict('_Imports_wasi_cli_terminal_stdin_0_2_12', {'get-terminal-stdin': Callable[[int], None]})
-_Imports_wasi_cli_terminal_stdout_0_2_12 = TypedDict('_Imports_wasi_cli_terminal_stdout_0_2_12', {'get-terminal-stdout': Callable[[int], None]})
-_Imports_wasi_cli_terminal_stderr_0_2_12 = TypedDict('_Imports_wasi_cli_terminal_stderr_0_2_12', {'get-terminal-stderr': Callable[[int], None]})
-_Imports_wasi_clocks_monotonic_clock_0_2_12 = TypedDict('_Imports_wasi_clocks_monotonic_clock_0_2_12', {'now': Callable[[], int], 'subscribe-duration': Callable[[int], int]})
-_Imports_wasi_clocks_wall_clock_0_2_12 = TypedDict('_Imports_wasi_clocks_wall_clock_0_2_12', {'now': Callable[[int], None]})
+# The functions that the host of WASI answers, with the names of the parameters (from fusedwasi)
+class CliStderrGetStderr(Protocol):
+    """Import: `wasi:cli/stderr@0.2.12` `get-stderr`."""
+
+    def __call__(self) -> int: ...
+
+class CliStderrGetStderrWithCaller(Protocol):
+    """Import: `wasi:cli/stderr@0.2.12` `get-stderr`."""
+
+    def __call__(self, caller: Caller, /) -> int: ...
+
+class CliStdinGetStdin(Protocol):
+    """Import: `wasi:cli/stdin@0.2.12` `get-stdin`."""
+
+    def __call__(self) -> int: ...
+
+class CliStdinGetStdinWithCaller(Protocol):
+    """Import: `wasi:cli/stdin@0.2.12` `get-stdin`."""
+
+    def __call__(self, caller: Caller, /) -> int: ...
+
+class CliStdoutGetStdout(Protocol):
+    """Import: `wasi:cli/stdout@0.2.12` `get-stdout`."""
+
+    def __call__(self) -> int: ...
+
+class CliStdoutGetStdoutWithCaller(Protocol):
+    """Import: `wasi:cli/stdout@0.2.12` `get-stdout`."""
+
+    def __call__(self, caller: Caller, /) -> int: ...
+
+class CliTerminalInputTerminalInputResourceDrop(Protocol):
+    """Import: `wasi:cli/terminal-input@0.2.12` `[resource-drop]terminal-input`."""
+
+    def __call__(self, self_: int, /) -> None: ...
+
+class CliTerminalInputTerminalInputResourceDropWithCaller(Protocol):
+    """Import: `wasi:cli/terminal-input@0.2.12` `[resource-drop]terminal-input`."""
+
+    def __call__(self, caller: Caller, self_: int, /) -> None: ...
+
+class CliTerminalOutputTerminalOutputResourceDrop(Protocol):
+    """Import: `wasi:cli/terminal-output@0.2.12` `[resource-drop]terminal-output`."""
+
+    def __call__(self, self_: int, /) -> None: ...
+
+class CliTerminalOutputTerminalOutputResourceDropWithCaller(Protocol):
+    """Import: `wasi:cli/terminal-output@0.2.12` `[resource-drop]terminal-output`."""
+
+    def __call__(self, caller: Caller, self_: int, /) -> None: ...
+
+class CliTerminalStderrGetTerminalStderr(Protocol):
+    """If stderr is connected to a terminal, return a `terminal-output` handle allowing further interaction with it.
+
+    Import: `wasi:cli/terminal-stderr@0.2.12` `get-terminal-stderr`.
+    The result `option<terminal-output>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, retptr: int, /) -> None: ...
+
+class CliTerminalStderrGetTerminalStderrWithCaller(Protocol):
+    """If stderr is connected to a terminal, return a `terminal-output` handle allowing further interaction with it.
+
+    Import: `wasi:cli/terminal-stderr@0.2.12` `get-terminal-stderr`.
+    The result `option<terminal-output>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, caller: Caller, retptr: int, /) -> None: ...
+
+class CliTerminalStdinGetTerminalStdin(Protocol):
+    """If stdin is connected to a terminal, return a `terminal-input` handle allowing further interaction with it.
+
+    Import: `wasi:cli/terminal-stdin@0.2.12` `get-terminal-stdin`.
+    The result `option<terminal-input>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, retptr: int, /) -> None: ...
+
+class CliTerminalStdinGetTerminalStdinWithCaller(Protocol):
+    """If stdin is connected to a terminal, return a `terminal-input` handle allowing further interaction with it.
+
+    Import: `wasi:cli/terminal-stdin@0.2.12` `get-terminal-stdin`.
+    The result `option<terminal-input>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, caller: Caller, retptr: int, /) -> None: ...
+
+class CliTerminalStdoutGetTerminalStdout(Protocol):
+    """If stdout is connected to a terminal, return a `terminal-output` handle allowing further interaction with it.
+
+    Import: `wasi:cli/terminal-stdout@0.2.12` `get-terminal-stdout`.
+    The result `option<terminal-output>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, retptr: int, /) -> None: ...
+
+class CliTerminalStdoutGetTerminalStdoutWithCaller(Protocol):
+    """If stdout is connected to a terminal, return a `terminal-output` handle allowing further interaction with it.
+
+    Import: `wasi:cli/terminal-stdout@0.2.12` `get-terminal-stdout`.
+    The result `option<terminal-output>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, caller: Caller, retptr: int, /) -> None: ...
+
+class ClocksMonotonicClockNow(Protocol):
+    """Read the current value of the clock.
+
+    Import: `wasi:clocks/monotonic-clock@0.2.12` `now`.
+    """
+
+    def __call__(self) -> int: ...
+
+class ClocksMonotonicClockNowWithCaller(Protocol):
+    """Read the current value of the clock.
+
+    Import: `wasi:clocks/monotonic-clock@0.2.12` `now`.
+    """
+
+    def __call__(self, caller: Caller, /) -> int: ...
+
+class ClocksMonotonicClockSubscribeDuration(Protocol):
+    """Create a `pollable` that will resolve after the specified duration has elapsed from the time this function is
+    invoked.
+
+    Import: `wasi:clocks/monotonic-clock@0.2.12` `subscribe-duration`.
+    """
+
+    def __call__(self, when: int, /) -> int: ...
+
+class ClocksMonotonicClockSubscribeDurationWithCaller(Protocol):
+    """Create a `pollable` that will resolve after the specified duration has elapsed from the time this function is
+    invoked.
+
+    Import: `wasi:clocks/monotonic-clock@0.2.12` `subscribe-duration`.
+    """
+
+    def __call__(self, caller: Caller, when: int, /) -> int: ...
+
+class ClocksWallClockNow(Protocol):
+    """Read the current value of the clock.
+
+    Import: `wasi:clocks/wall-clock@0.2.12` `now`.
+    The result `datetime` is written to memory at `retptr`.
+    """
+
+    def __call__(self, retptr: int, /) -> None: ...
+
+class ClocksWallClockNowWithCaller(Protocol):
+    """Read the current value of the clock.
+
+    Import: `wasi:clocks/wall-clock@0.2.12` `now`.
+    The result `datetime` is written to memory at `retptr`.
+    """
+
+    def __call__(self, caller: Caller, retptr: int, /) -> None: ...
+
+class IoErrorErrorResourceDrop(Protocol):
+    """Import: `wasi:io/error@0.2.12` `[resource-drop]error`."""
+
+    def __call__(self, self_: int, /) -> None: ...
+
+class IoErrorErrorResourceDropWithCaller(Protocol):
+    """Import: `wasi:io/error@0.2.12` `[resource-drop]error`."""
+
+    def __call__(self, caller: Caller, self_: int, /) -> None: ...
+
+class IoPollPoll(Protocol):
+    """Poll for completion on a set of pollables.
+
+    Import: `wasi:io/poll@0.2.12` `poll`.
+    The result `list<u32>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, in_: int, in_len: int, retptr: int, /) -> None: ...
+
+class IoPollPollWithCaller(Protocol):
+    """Poll for completion on a set of pollables.
+
+    Import: `wasi:io/poll@0.2.12` `poll`.
+    The result `list<u32>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, caller: Caller, in_: int, in_len: int, retptr: int, /) -> None: ...
+
+class IoPollPollableBlock(Protocol):
+    """`block` returns immediately if the pollable is ready, and otherwise blocks until ready.
+
+    Import: `wasi:io/poll@0.2.12` `[method]pollable.block`.
+    """
+
+    def __call__(self, self_: int, /) -> None: ...
+
+class IoPollPollableBlockWithCaller(Protocol):
+    """`block` returns immediately if the pollable is ready, and otherwise blocks until ready.
+
+    Import: `wasi:io/poll@0.2.12` `[method]pollable.block`.
+    """
+
+    def __call__(self, caller: Caller, self_: int, /) -> None: ...
+
+class IoPollPollableResourceDrop(Protocol):
+    """Import: `wasi:io/poll@0.2.12` `[resource-drop]pollable`."""
+
+    def __call__(self, self_: int, /) -> None: ...
+
+class IoPollPollableResourceDropWithCaller(Protocol):
+    """Import: `wasi:io/poll@0.2.12` `[resource-drop]pollable`."""
+
+    def __call__(self, caller: Caller, self_: int, /) -> None: ...
+
+class IoStreamsInputStreamResourceDrop(Protocol):
+    """Import: `wasi:io/streams@0.2.12` `[resource-drop]input-stream`."""
+
+    def __call__(self, self_: int, /) -> None: ...
+
+class IoStreamsInputStreamResourceDropWithCaller(Protocol):
+    """Import: `wasi:io/streams@0.2.12` `[resource-drop]input-stream`."""
+
+    def __call__(self, caller: Caller, self_: int, /) -> None: ...
+
+class IoStreamsOutputStreamBlockingFlush(Protocol):
+    """Request to flush buffered output, and block until flush completes and stream is ready for writing again.
+
+    Import: `wasi:io/streams@0.2.12` `[method]output-stream.blocking-flush`.
+    The result `result<_, stream-error>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, self_: int, retptr: int, /) -> None: ...
+
+class IoStreamsOutputStreamBlockingFlushWithCaller(Protocol):
+    """Request to flush buffered output, and block until flush completes and stream is ready for writing again.
+
+    Import: `wasi:io/streams@0.2.12` `[method]output-stream.blocking-flush`.
+    The result `result<_, stream-error>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, caller: Caller, self_: int, retptr: int, /) -> None: ...
+
+class IoStreamsOutputStreamCheckWrite(Protocol):
+    """Check readiness for writing.
+
+    Import: `wasi:io/streams@0.2.12` `[method]output-stream.check-write`.
+    The result `result<u64, stream-error>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, self_: int, retptr: int, /) -> None: ...
+
+class IoStreamsOutputStreamCheckWriteWithCaller(Protocol):
+    """Check readiness for writing.
+
+    Import: `wasi:io/streams@0.2.12` `[method]output-stream.check-write`.
+    The result `result<u64, stream-error>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, caller: Caller, self_: int, retptr: int, /) -> None: ...
+
+class IoStreamsOutputStreamResourceDrop(Protocol):
+    """Import: `wasi:io/streams@0.2.12` `[resource-drop]output-stream`."""
+
+    def __call__(self, self_: int, /) -> None: ...
+
+class IoStreamsOutputStreamResourceDropWithCaller(Protocol):
+    """Import: `wasi:io/streams@0.2.12` `[resource-drop]output-stream`."""
+
+    def __call__(self, caller: Caller, self_: int, /) -> None: ...
+
+class IoStreamsOutputStreamSubscribe(Protocol):
+    """Create a `pollable` which will resolve once the output-stream is ready for more writing, or an error has
+    occurred.
+
+    Import: `wasi:io/streams@0.2.12` `[method]output-stream.subscribe`.
+    """
+
+    def __call__(self, self_: int, /) -> int: ...
+
+class IoStreamsOutputStreamSubscribeWithCaller(Protocol):
+    """Create a `pollable` which will resolve once the output-stream is ready for more writing, or an error has
+    occurred.
+
+    Import: `wasi:io/streams@0.2.12` `[method]output-stream.subscribe`.
+    """
+
+    def __call__(self, caller: Caller, self_: int, /) -> int: ...
+
+class IoStreamsOutputStreamWrite(Protocol):
+    """Perform a write.
+
+    Import: `wasi:io/streams@0.2.12` `[method]output-stream.write`.
+    The result `result<_, stream-error>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, self_: int, contents: int, contents_len: int, retptr: int, /) -> None: ...
+
+class IoStreamsOutputStreamWriteWithCaller(Protocol):
+    """Perform a write.
+
+    Import: `wasi:io/streams@0.2.12` `[method]output-stream.write`.
+    The result `result<_, stream-error>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, caller: Caller, self_: int, contents: int, contents_len: int, retptr: int, /) -> None: ...
+
+_Imports_wasi_io_error_0_2_12 = TypedDict('_Imports_wasi_io_error_0_2_12', {'[resource-drop]error': IoErrorErrorResourceDrop | IoErrorErrorResourceDropWithCaller})
+_Imports_wasi_io_poll_0_2_12 = TypedDict('_Imports_wasi_io_poll_0_2_12', {'[resource-drop]pollable': IoPollPollableResourceDrop | IoPollPollableResourceDropWithCaller, '[method]pollable.block': IoPollPollableBlock | IoPollPollableBlockWithCaller, 'poll': IoPollPoll | IoPollPollWithCaller})
+_Imports_wasi_io_streams_0_2_12 = TypedDict('_Imports_wasi_io_streams_0_2_12', {'[resource-drop]input-stream': IoStreamsInputStreamResourceDrop | IoStreamsInputStreamResourceDropWithCaller, '[resource-drop]output-stream': IoStreamsOutputStreamResourceDrop | IoStreamsOutputStreamResourceDropWithCaller, '[method]output-stream.check-write': IoStreamsOutputStreamCheckWrite | IoStreamsOutputStreamCheckWriteWithCaller, '[method]output-stream.write': IoStreamsOutputStreamWrite | IoStreamsOutputStreamWriteWithCaller, '[method]output-stream.blocking-flush': IoStreamsOutputStreamBlockingFlush | IoStreamsOutputStreamBlockingFlushWithCaller, '[method]output-stream.subscribe': IoStreamsOutputStreamSubscribe | IoStreamsOutputStreamSubscribeWithCaller})
+_Imports_wasi_cli_terminal_input_0_2_12 = TypedDict('_Imports_wasi_cli_terminal_input_0_2_12', {'[resource-drop]terminal-input': CliTerminalInputTerminalInputResourceDrop | CliTerminalInputTerminalInputResourceDropWithCaller})
+_Imports_wasi_cli_terminal_output_0_2_12 = TypedDict('_Imports_wasi_cli_terminal_output_0_2_12', {'[resource-drop]terminal-output': CliTerminalOutputTerminalOutputResourceDrop | CliTerminalOutputTerminalOutputResourceDropWithCaller})
+_Imports_wasi_cli_stdin_0_2_12 = TypedDict('_Imports_wasi_cli_stdin_0_2_12', {'get-stdin': CliStdinGetStdin | CliStdinGetStdinWithCaller})
+_Imports_wasi_cli_stdout_0_2_12 = TypedDict('_Imports_wasi_cli_stdout_0_2_12', {'get-stdout': CliStdoutGetStdout | CliStdoutGetStdoutWithCaller})
+_Imports_wasi_cli_stderr_0_2_12 = TypedDict('_Imports_wasi_cli_stderr_0_2_12', {'get-stderr': CliStderrGetStderr | CliStderrGetStderrWithCaller})
+_Imports_wasi_cli_terminal_stdin_0_2_12 = TypedDict('_Imports_wasi_cli_terminal_stdin_0_2_12', {'get-terminal-stdin': CliTerminalStdinGetTerminalStdin | CliTerminalStdinGetTerminalStdinWithCaller})
+_Imports_wasi_cli_terminal_stdout_0_2_12 = TypedDict('_Imports_wasi_cli_terminal_stdout_0_2_12', {'get-terminal-stdout': CliTerminalStdoutGetTerminalStdout | CliTerminalStdoutGetTerminalStdoutWithCaller})
+_Imports_wasi_cli_terminal_stderr_0_2_12 = TypedDict('_Imports_wasi_cli_terminal_stderr_0_2_12', {'get-terminal-stderr': CliTerminalStderrGetTerminalStderr | CliTerminalStderrGetTerminalStderrWithCaller})
+_Imports_wasi_clocks_monotonic_clock_0_2_12 = TypedDict('_Imports_wasi_clocks_monotonic_clock_0_2_12', {'now': ClocksMonotonicClockNow | ClocksMonotonicClockNowWithCaller, 'subscribe-duration': ClocksMonotonicClockSubscribeDuration | ClocksMonotonicClockSubscribeDurationWithCaller})
+_Imports_wasi_clocks_wall_clock_0_2_12 = TypedDict('_Imports_wasi_clocks_wall_clock_0_2_12', {'now': ClocksWallClockNow | ClocksWallClockNowWithCaller})
 Imports = TypedDict('Imports', {'wasi:io/error@0.2.12': _Imports_wasi_io_error_0_2_12, 'wasi:io/poll@0.2.12': _Imports_wasi_io_poll_0_2_12, 'wasi:io/streams@0.2.12': _Imports_wasi_io_streams_0_2_12, 'wasi:cli/terminal-input@0.2.12': _Imports_wasi_cli_terminal_input_0_2_12, 'wasi:cli/terminal-output@0.2.12': _Imports_wasi_cli_terminal_output_0_2_12, 'wasi:cli/stdin@0.2.12': _Imports_wasi_cli_stdin_0_2_12, 'wasi:cli/stdout@0.2.12': _Imports_wasi_cli_stdout_0_2_12, 'wasi:cli/stderr@0.2.12': _Imports_wasi_cli_stderr_0_2_12, 'wasi:cli/terminal-stdin@0.2.12': _Imports_wasi_cli_terminal_stdin_0_2_12, 'wasi:cli/terminal-stdout@0.2.12': _Imports_wasi_cli_terminal_stdout_0_2_12, 'wasi:cli/terminal-stderr@0.2.12': _Imports_wasi_cli_terminal_stderr_0_2_12, 'wasi:clocks/monotonic-clock@0.2.12': _Imports_wasi_clocks_monotonic_clock_0_2_12, 'wasi:clocks/wall-clock@0.2.12': _Imports_wasi_clocks_wall_clock_0_2_12})
 
+class Caller:
+    @property
+    def instance(self) -> Instance: ...
+    @property
+    def store(self) -> Store: ...
+    @property
+    def memory(self) -> memoryview | None: ...
+
+class Store:
+    def __init__(self) -> None: ...
+    def close(self) -> None: ...
+    def __enter__(self) -> Store: ...
+    def __exit__(self, *exc: object) -> None: ...
+    @property
+    def closed(self) -> bool: ...
+    @property
+    def runtime(self) -> SimpleNamespace: ...
+
 class Instance:
-    def __init__(self, imports: Imports) -> None: ...
+    def __init__(self, store: Store, imports: Imports) -> None: ...
     @property
     def __exports__(self) -> dict[str, object]: ...
     def __getitem__(self, name: str, /) -> object: ...

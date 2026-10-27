@@ -4,35 +4,1349 @@
 # fmt: off
 from collections.abc import Callable
 from typing import TypedDict
-from typing import Literal
+from types import SimpleNamespace
+from typing import Literal, Protocol
 
 __host__: Literal['wasm32']
 
 class Trap(RuntimeError): ...
 class LinkError(Exception): ...
 
-_Imports_wasi_io_error_0_2_12 = TypedDict('_Imports_wasi_io_error_0_2_12', {'[resource-drop]error': Callable[[int], None]})
-_Imports_wasi_io_poll_0_2_12 = TypedDict('_Imports_wasi_io_poll_0_2_12', {'[resource-drop]pollable': Callable[[int], None], '[method]pollable.block': Callable[[int], None], 'poll': Callable[[int, int, int], None]})
-_Imports_wasi_io_streams_0_2_12 = TypedDict('_Imports_wasi_io_streams_0_2_12', {'[resource-drop]input-stream': Callable[[int], None], '[resource-drop]output-stream': Callable[[int], None], '[method]input-stream.read': Callable[[int, int, int], None], '[method]input-stream.subscribe': Callable[[int], int], '[method]output-stream.check-write': Callable[[int, int], None], '[method]output-stream.write': Callable[[int, int, int, int], None], '[method]output-stream.blocking-flush': Callable[[int, int], None], '[method]output-stream.subscribe': Callable[[int], int]})
-_Imports_wasi_cli_terminal_input_0_2_12 = TypedDict('_Imports_wasi_cli_terminal_input_0_2_12', {'[resource-drop]terminal-input': Callable[[int], None]})
-_Imports_wasi_cli_terminal_output_0_2_12 = TypedDict('_Imports_wasi_cli_terminal_output_0_2_12', {'[resource-drop]terminal-output': Callable[[int], None]})
-_Imports_wasi_sockets_udp_0_2_12 = TypedDict('_Imports_wasi_sockets_udp_0_2_12', {'[resource-drop]udp-socket': Callable[[int], None], '[resource-drop]incoming-datagram-stream': Callable[[int], None], '[resource-drop]outgoing-datagram-stream': Callable[[int], None], '[method]udp-socket.start-bind': Callable[[int, int, int, int, int, int, int, int, int, int, int, int, int, int, int], None], '[method]udp-socket.finish-bind': Callable[[int, int], None], '[method]udp-socket.stream': Callable[[int, int, int, int, int, int, int, int, int, int, int, int, int, int, int], None], '[method]udp-socket.local-address': Callable[[int, int], None], '[method]udp-socket.remote-address': Callable[[int, int], None], '[method]udp-socket.unicast-hop-limit': Callable[[int, int], None], '[method]udp-socket.set-unicast-hop-limit': Callable[[int, int, int], None], '[method]udp-socket.receive-buffer-size': Callable[[int, int], None], '[method]udp-socket.set-receive-buffer-size': Callable[[int, int, int], None], '[method]udp-socket.send-buffer-size': Callable[[int, int], None], '[method]udp-socket.set-send-buffer-size': Callable[[int, int, int], None], '[method]udp-socket.subscribe': Callable[[int], int], '[method]incoming-datagram-stream.receive': Callable[[int, int, int], None], '[method]incoming-datagram-stream.subscribe': Callable[[int], int], '[method]outgoing-datagram-stream.check-send': Callable[[int, int], None], '[method]outgoing-datagram-stream.send': Callable[[int, int, int, int], None], '[method]outgoing-datagram-stream.subscribe': Callable[[int], int]})
-_Imports_wasi_sockets_tcp_0_2_12 = TypedDict('_Imports_wasi_sockets_tcp_0_2_12', {'[resource-drop]tcp-socket': Callable[[int], None], '[method]tcp-socket.start-bind': Callable[[int, int, int, int, int, int, int, int, int, int, int, int, int, int, int], None], '[method]tcp-socket.finish-bind': Callable[[int, int], None], '[method]tcp-socket.start-connect': Callable[[int, int, int, int, int, int, int, int, int, int, int, int, int, int, int], None], '[method]tcp-socket.finish-connect': Callable[[int, int], None], '[method]tcp-socket.start-listen': Callable[[int, int], None], '[method]tcp-socket.finish-listen': Callable[[int, int], None], '[method]tcp-socket.accept': Callable[[int, int], None], '[method]tcp-socket.local-address': Callable[[int, int], None], '[method]tcp-socket.remote-address': Callable[[int, int], None], '[method]tcp-socket.is-listening': Callable[[int], int], '[method]tcp-socket.set-listen-backlog-size': Callable[[int, int, int], None], '[method]tcp-socket.keep-alive-enabled': Callable[[int, int], None], '[method]tcp-socket.set-keep-alive-enabled': Callable[[int, int, int], None], '[method]tcp-socket.keep-alive-idle-time': Callable[[int, int], None], '[method]tcp-socket.set-keep-alive-idle-time': Callable[[int, int, int], None], '[method]tcp-socket.keep-alive-interval': Callable[[int, int], None], '[method]tcp-socket.set-keep-alive-interval': Callable[[int, int, int], None], '[method]tcp-socket.keep-alive-count': Callable[[int, int], None], '[method]tcp-socket.set-keep-alive-count': Callable[[int, int, int], None], '[method]tcp-socket.hop-limit': Callable[[int, int], None], '[method]tcp-socket.set-hop-limit': Callable[[int, int, int], None], '[method]tcp-socket.receive-buffer-size': Callable[[int, int], None], '[method]tcp-socket.set-receive-buffer-size': Callable[[int, int, int], None], '[method]tcp-socket.send-buffer-size': Callable[[int, int], None], '[method]tcp-socket.set-send-buffer-size': Callable[[int, int, int], None], '[method]tcp-socket.subscribe': Callable[[int], int], '[method]tcp-socket.shutdown': Callable[[int, int, int], None]})
-_Imports_wasi_cli_stdin_0_2_12 = TypedDict('_Imports_wasi_cli_stdin_0_2_12', {'get-stdin': Callable[[], int]})
-_Imports_wasi_cli_stdout_0_2_12 = TypedDict('_Imports_wasi_cli_stdout_0_2_12', {'get-stdout': Callable[[], int]})
-_Imports_wasi_cli_stderr_0_2_12 = TypedDict('_Imports_wasi_cli_stderr_0_2_12', {'get-stderr': Callable[[], int]})
-_Imports_wasi_cli_terminal_stdin_0_2_12 = TypedDict('_Imports_wasi_cli_terminal_stdin_0_2_12', {'get-terminal-stdin': Callable[[int], None]})
-_Imports_wasi_cli_terminal_stdout_0_2_12 = TypedDict('_Imports_wasi_cli_terminal_stdout_0_2_12', {'get-terminal-stdout': Callable[[int], None]})
-_Imports_wasi_cli_terminal_stderr_0_2_12 = TypedDict('_Imports_wasi_cli_terminal_stderr_0_2_12', {'get-terminal-stderr': Callable[[int], None]})
-_Imports_wasi_clocks_monotonic_clock_0_2_12 = TypedDict('_Imports_wasi_clocks_monotonic_clock_0_2_12', {'now': Callable[[], int], 'subscribe-duration': Callable[[int], int]})
-_Imports_wasi_clocks_wall_clock_0_2_12 = TypedDict('_Imports_wasi_clocks_wall_clock_0_2_12', {'now': Callable[[int], None]})
-_Imports_wasi_sockets_instance_network_0_2_12 = TypedDict('_Imports_wasi_sockets_instance_network_0_2_12', {'instance-network': Callable[[], int]})
-_Imports_wasi_sockets_udp_create_socket_0_2_12 = TypedDict('_Imports_wasi_sockets_udp_create_socket_0_2_12', {'create-udp-socket': Callable[[int, int], None]})
-_Imports_wasi_sockets_tcp_create_socket_0_2_12 = TypedDict('_Imports_wasi_sockets_tcp_create_socket_0_2_12', {'create-tcp-socket': Callable[[int, int], None]})
+# The functions that the host of WASI answers, with the names of the parameters (from fusedwasi)
+class CliStderrGetStderr(Protocol):
+    """Import: `wasi:cli/stderr@0.2.12` `get-stderr`."""
+
+    def __call__(self) -> int: ...
+
+class CliStderrGetStderrWithCaller(Protocol):
+    """Import: `wasi:cli/stderr@0.2.12` `get-stderr`."""
+
+    def __call__(self, caller: Caller, /) -> int: ...
+
+class CliStdinGetStdin(Protocol):
+    """Import: `wasi:cli/stdin@0.2.12` `get-stdin`."""
+
+    def __call__(self) -> int: ...
+
+class CliStdinGetStdinWithCaller(Protocol):
+    """Import: `wasi:cli/stdin@0.2.12` `get-stdin`."""
+
+    def __call__(self, caller: Caller, /) -> int: ...
+
+class CliStdoutGetStdout(Protocol):
+    """Import: `wasi:cli/stdout@0.2.12` `get-stdout`."""
+
+    def __call__(self) -> int: ...
+
+class CliStdoutGetStdoutWithCaller(Protocol):
+    """Import: `wasi:cli/stdout@0.2.12` `get-stdout`."""
+
+    def __call__(self, caller: Caller, /) -> int: ...
+
+class CliTerminalInputTerminalInputResourceDrop(Protocol):
+    """Import: `wasi:cli/terminal-input@0.2.12` `[resource-drop]terminal-input`."""
+
+    def __call__(self, self_: int, /) -> None: ...
+
+class CliTerminalInputTerminalInputResourceDropWithCaller(Protocol):
+    """Import: `wasi:cli/terminal-input@0.2.12` `[resource-drop]terminal-input`."""
+
+    def __call__(self, caller: Caller, self_: int, /) -> None: ...
+
+class CliTerminalOutputTerminalOutputResourceDrop(Protocol):
+    """Import: `wasi:cli/terminal-output@0.2.12` `[resource-drop]terminal-output`."""
+
+    def __call__(self, self_: int, /) -> None: ...
+
+class CliTerminalOutputTerminalOutputResourceDropWithCaller(Protocol):
+    """Import: `wasi:cli/terminal-output@0.2.12` `[resource-drop]terminal-output`."""
+
+    def __call__(self, caller: Caller, self_: int, /) -> None: ...
+
+class CliTerminalStderrGetTerminalStderr(Protocol):
+    """If stderr is connected to a terminal, return a `terminal-output` handle allowing further interaction with it.
+
+    Import: `wasi:cli/terminal-stderr@0.2.12` `get-terminal-stderr`.
+    The result `option<terminal-output>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, retptr: int, /) -> None: ...
+
+class CliTerminalStderrGetTerminalStderrWithCaller(Protocol):
+    """If stderr is connected to a terminal, return a `terminal-output` handle allowing further interaction with it.
+
+    Import: `wasi:cli/terminal-stderr@0.2.12` `get-terminal-stderr`.
+    The result `option<terminal-output>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, caller: Caller, retptr: int, /) -> None: ...
+
+class CliTerminalStdinGetTerminalStdin(Protocol):
+    """If stdin is connected to a terminal, return a `terminal-input` handle allowing further interaction with it.
+
+    Import: `wasi:cli/terminal-stdin@0.2.12` `get-terminal-stdin`.
+    The result `option<terminal-input>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, retptr: int, /) -> None: ...
+
+class CliTerminalStdinGetTerminalStdinWithCaller(Protocol):
+    """If stdin is connected to a terminal, return a `terminal-input` handle allowing further interaction with it.
+
+    Import: `wasi:cli/terminal-stdin@0.2.12` `get-terminal-stdin`.
+    The result `option<terminal-input>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, caller: Caller, retptr: int, /) -> None: ...
+
+class CliTerminalStdoutGetTerminalStdout(Protocol):
+    """If stdout is connected to a terminal, return a `terminal-output` handle allowing further interaction with it.
+
+    Import: `wasi:cli/terminal-stdout@0.2.12` `get-terminal-stdout`.
+    The result `option<terminal-output>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, retptr: int, /) -> None: ...
+
+class CliTerminalStdoutGetTerminalStdoutWithCaller(Protocol):
+    """If stdout is connected to a terminal, return a `terminal-output` handle allowing further interaction with it.
+
+    Import: `wasi:cli/terminal-stdout@0.2.12` `get-terminal-stdout`.
+    The result `option<terminal-output>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, caller: Caller, retptr: int, /) -> None: ...
+
+class ClocksMonotonicClockNow(Protocol):
+    """Read the current value of the clock.
+
+    Import: `wasi:clocks/monotonic-clock@0.2.12` `now`.
+    """
+
+    def __call__(self) -> int: ...
+
+class ClocksMonotonicClockNowWithCaller(Protocol):
+    """Read the current value of the clock.
+
+    Import: `wasi:clocks/monotonic-clock@0.2.12` `now`.
+    """
+
+    def __call__(self, caller: Caller, /) -> int: ...
+
+class ClocksMonotonicClockSubscribeDuration(Protocol):
+    """Create a `pollable` that will resolve after the specified duration has elapsed from the time this function is
+    invoked.
+
+    Import: `wasi:clocks/monotonic-clock@0.2.12` `subscribe-duration`.
+    """
+
+    def __call__(self, when: int, /) -> int: ...
+
+class ClocksMonotonicClockSubscribeDurationWithCaller(Protocol):
+    """Create a `pollable` that will resolve after the specified duration has elapsed from the time this function is
+    invoked.
+
+    Import: `wasi:clocks/monotonic-clock@0.2.12` `subscribe-duration`.
+    """
+
+    def __call__(self, caller: Caller, when: int, /) -> int: ...
+
+class ClocksWallClockNow(Protocol):
+    """Read the current value of the clock.
+
+    Import: `wasi:clocks/wall-clock@0.2.12` `now`.
+    The result `datetime` is written to memory at `retptr`.
+    """
+
+    def __call__(self, retptr: int, /) -> None: ...
+
+class ClocksWallClockNowWithCaller(Protocol):
+    """Read the current value of the clock.
+
+    Import: `wasi:clocks/wall-clock@0.2.12` `now`.
+    The result `datetime` is written to memory at `retptr`.
+    """
+
+    def __call__(self, caller: Caller, retptr: int, /) -> None: ...
+
+class IoErrorErrorResourceDrop(Protocol):
+    """Import: `wasi:io/error@0.2.12` `[resource-drop]error`."""
+
+    def __call__(self, self_: int, /) -> None: ...
+
+class IoErrorErrorResourceDropWithCaller(Protocol):
+    """Import: `wasi:io/error@0.2.12` `[resource-drop]error`."""
+
+    def __call__(self, caller: Caller, self_: int, /) -> None: ...
+
+class IoPollPoll(Protocol):
+    """Poll for completion on a set of pollables.
+
+    Import: `wasi:io/poll@0.2.12` `poll`.
+    The result `list<u32>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, in_: int, in_len: int, retptr: int, /) -> None: ...
+
+class IoPollPollWithCaller(Protocol):
+    """Poll for completion on a set of pollables.
+
+    Import: `wasi:io/poll@0.2.12` `poll`.
+    The result `list<u32>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, caller: Caller, in_: int, in_len: int, retptr: int, /) -> None: ...
+
+class IoPollPollableBlock(Protocol):
+    """`block` returns immediately if the pollable is ready, and otherwise blocks until ready.
+
+    Import: `wasi:io/poll@0.2.12` `[method]pollable.block`.
+    """
+
+    def __call__(self, self_: int, /) -> None: ...
+
+class IoPollPollableBlockWithCaller(Protocol):
+    """`block` returns immediately if the pollable is ready, and otherwise blocks until ready.
+
+    Import: `wasi:io/poll@0.2.12` `[method]pollable.block`.
+    """
+
+    def __call__(self, caller: Caller, self_: int, /) -> None: ...
+
+class IoPollPollableResourceDrop(Protocol):
+    """Import: `wasi:io/poll@0.2.12` `[resource-drop]pollable`."""
+
+    def __call__(self, self_: int, /) -> None: ...
+
+class IoPollPollableResourceDropWithCaller(Protocol):
+    """Import: `wasi:io/poll@0.2.12` `[resource-drop]pollable`."""
+
+    def __call__(self, caller: Caller, self_: int, /) -> None: ...
+
+class IoStreamsInputStreamRead(Protocol):
+    """Perform a non-blocking read from the stream.
+
+    Import: `wasi:io/streams@0.2.12` `[method]input-stream.read`.
+    The result `result<list<u8>, stream-error>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, self_: int, len: int, retptr: int, /) -> None: ...
+
+class IoStreamsInputStreamReadWithCaller(Protocol):
+    """Perform a non-blocking read from the stream.
+
+    Import: `wasi:io/streams@0.2.12` `[method]input-stream.read`.
+    The result `result<list<u8>, stream-error>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, caller: Caller, self_: int, len: int, retptr: int, /) -> None: ...
+
+class IoStreamsInputStreamResourceDrop(Protocol):
+    """Import: `wasi:io/streams@0.2.12` `[resource-drop]input-stream`."""
+
+    def __call__(self, self_: int, /) -> None: ...
+
+class IoStreamsInputStreamResourceDropWithCaller(Protocol):
+    """Import: `wasi:io/streams@0.2.12` `[resource-drop]input-stream`."""
+
+    def __call__(self, caller: Caller, self_: int, /) -> None: ...
+
+class IoStreamsInputStreamSubscribe(Protocol):
+    """Create a `pollable` which will resolve once either the specified stream has bytes available to read or the
+    other end of the stream has been closed.
+
+    Import: `wasi:io/streams@0.2.12` `[method]input-stream.subscribe`.
+    """
+
+    def __call__(self, self_: int, /) -> int: ...
+
+class IoStreamsInputStreamSubscribeWithCaller(Protocol):
+    """Create a `pollable` which will resolve once either the specified stream has bytes available to read or the
+    other end of the stream has been closed.
+
+    Import: `wasi:io/streams@0.2.12` `[method]input-stream.subscribe`.
+    """
+
+    def __call__(self, caller: Caller, self_: int, /) -> int: ...
+
+class IoStreamsOutputStreamBlockingFlush(Protocol):
+    """Request to flush buffered output, and block until flush completes and stream is ready for writing again.
+
+    Import: `wasi:io/streams@0.2.12` `[method]output-stream.blocking-flush`.
+    The result `result<_, stream-error>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, self_: int, retptr: int, /) -> None: ...
+
+class IoStreamsOutputStreamBlockingFlushWithCaller(Protocol):
+    """Request to flush buffered output, and block until flush completes and stream is ready for writing again.
+
+    Import: `wasi:io/streams@0.2.12` `[method]output-stream.blocking-flush`.
+    The result `result<_, stream-error>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, caller: Caller, self_: int, retptr: int, /) -> None: ...
+
+class IoStreamsOutputStreamCheckWrite(Protocol):
+    """Check readiness for writing.
+
+    Import: `wasi:io/streams@0.2.12` `[method]output-stream.check-write`.
+    The result `result<u64, stream-error>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, self_: int, retptr: int, /) -> None: ...
+
+class IoStreamsOutputStreamCheckWriteWithCaller(Protocol):
+    """Check readiness for writing.
+
+    Import: `wasi:io/streams@0.2.12` `[method]output-stream.check-write`.
+    The result `result<u64, stream-error>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, caller: Caller, self_: int, retptr: int, /) -> None: ...
+
+class IoStreamsOutputStreamResourceDrop(Protocol):
+    """Import: `wasi:io/streams@0.2.12` `[resource-drop]output-stream`."""
+
+    def __call__(self, self_: int, /) -> None: ...
+
+class IoStreamsOutputStreamResourceDropWithCaller(Protocol):
+    """Import: `wasi:io/streams@0.2.12` `[resource-drop]output-stream`."""
+
+    def __call__(self, caller: Caller, self_: int, /) -> None: ...
+
+class IoStreamsOutputStreamSubscribe(Protocol):
+    """Create a `pollable` which will resolve once the output-stream is ready for more writing, or an error has
+    occurred.
+
+    Import: `wasi:io/streams@0.2.12` `[method]output-stream.subscribe`.
+    """
+
+    def __call__(self, self_: int, /) -> int: ...
+
+class IoStreamsOutputStreamSubscribeWithCaller(Protocol):
+    """Create a `pollable` which will resolve once the output-stream is ready for more writing, or an error has
+    occurred.
+
+    Import: `wasi:io/streams@0.2.12` `[method]output-stream.subscribe`.
+    """
+
+    def __call__(self, caller: Caller, self_: int, /) -> int: ...
+
+class IoStreamsOutputStreamWrite(Protocol):
+    """Perform a write.
+
+    Import: `wasi:io/streams@0.2.12` `[method]output-stream.write`.
+    The result `result<_, stream-error>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, self_: int, contents: int, contents_len: int, retptr: int, /) -> None: ...
+
+class IoStreamsOutputStreamWriteWithCaller(Protocol):
+    """Perform a write.
+
+    Import: `wasi:io/streams@0.2.12` `[method]output-stream.write`.
+    The result `result<_, stream-error>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, caller: Caller, self_: int, contents: int, contents_len: int, retptr: int, /) -> None: ...
+
+class SocketsInstanceNetworkInstanceNetwork(Protocol):
+    """Get a handle to the default network.
+
+    Import: `wasi:sockets/instance-network@0.2.12` `instance-network`.
+    """
+
+    def __call__(self) -> int: ...
+
+class SocketsInstanceNetworkInstanceNetworkWithCaller(Protocol):
+    """Get a handle to the default network.
+
+    Import: `wasi:sockets/instance-network@0.2.12` `instance-network`.
+    """
+
+    def __call__(self, caller: Caller, /) -> int: ...
+
+class SocketsTcpCreateSocketCreateTcpSocket(Protocol):
+    """Create a new TCP socket.
+
+    Import: `wasi:sockets/tcp-create-socket@0.2.12` `create-tcp-socket`.
+    The result `result<tcp-socket, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, address_family: int, retptr: int, /) -> None: ...
+
+class SocketsTcpCreateSocketCreateTcpSocketWithCaller(Protocol):
+    """Create a new TCP socket.
+
+    Import: `wasi:sockets/tcp-create-socket@0.2.12` `create-tcp-socket`.
+    The result `result<tcp-socket, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, caller: Caller, address_family: int, retptr: int, /) -> None: ...
+
+class SocketsTcpTcpSocketAccept(Protocol):
+    """Accept a new client socket.
+
+    Import: `wasi:sockets/tcp@0.2.12` `[method]tcp-socket.accept`.
+    The result `result<tuple<tcp-socket, input-stream, output-stream>, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, self_: int, retptr: int, /) -> None: ...
+
+class SocketsTcpTcpSocketAcceptWithCaller(Protocol):
+    """Accept a new client socket.
+
+    Import: `wasi:sockets/tcp@0.2.12` `[method]tcp-socket.accept`.
+    The result `result<tuple<tcp-socket, input-stream, output-stream>, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, caller: Caller, self_: int, retptr: int, /) -> None: ...
+
+class SocketsTcpTcpSocketFinishBind(Protocol):
+    """Import: `wasi:sockets/tcp@0.2.12` `[method]tcp-socket.finish-bind`.
+    The result `result<_, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, self_: int, retptr: int, /) -> None: ...
+
+class SocketsTcpTcpSocketFinishBindWithCaller(Protocol):
+    """Import: `wasi:sockets/tcp@0.2.12` `[method]tcp-socket.finish-bind`.
+    The result `result<_, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, caller: Caller, self_: int, retptr: int, /) -> None: ...
+
+class SocketsTcpTcpSocketFinishConnect(Protocol):
+    """Import: `wasi:sockets/tcp@0.2.12` `[method]tcp-socket.finish-connect`.
+    The result `result<tuple<input-stream, output-stream>, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, self_: int, retptr: int, /) -> None: ...
+
+class SocketsTcpTcpSocketFinishConnectWithCaller(Protocol):
+    """Import: `wasi:sockets/tcp@0.2.12` `[method]tcp-socket.finish-connect`.
+    The result `result<tuple<input-stream, output-stream>, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, caller: Caller, self_: int, retptr: int, /) -> None: ...
+
+class SocketsTcpTcpSocketFinishListen(Protocol):
+    """Import: `wasi:sockets/tcp@0.2.12` `[method]tcp-socket.finish-listen`.
+    The result `result<_, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, self_: int, retptr: int, /) -> None: ...
+
+class SocketsTcpTcpSocketFinishListenWithCaller(Protocol):
+    """Import: `wasi:sockets/tcp@0.2.12` `[method]tcp-socket.finish-listen`.
+    The result `result<_, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, caller: Caller, self_: int, retptr: int, /) -> None: ...
+
+class SocketsTcpTcpSocketHopLimit(Protocol):
+    """Equivalent to the IP_TTL & IPV6_UNICAST_HOPS socket options.
+
+    Import: `wasi:sockets/tcp@0.2.12` `[method]tcp-socket.hop-limit`.
+    The result `result<u8, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, self_: int, retptr: int, /) -> None: ...
+
+class SocketsTcpTcpSocketHopLimitWithCaller(Protocol):
+    """Equivalent to the IP_TTL & IPV6_UNICAST_HOPS socket options.
+
+    Import: `wasi:sockets/tcp@0.2.12` `[method]tcp-socket.hop-limit`.
+    The result `result<u8, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, caller: Caller, self_: int, retptr: int, /) -> None: ...
+
+class SocketsTcpTcpSocketIsListening(Protocol):
+    """Whether the socket is in the `listening` state.
+
+    Import: `wasi:sockets/tcp@0.2.12` `[method]tcp-socket.is-listening`.
+    """
+
+    def __call__(self, self_: int, /) -> int: ...
+
+class SocketsTcpTcpSocketIsListeningWithCaller(Protocol):
+    """Whether the socket is in the `listening` state.
+
+    Import: `wasi:sockets/tcp@0.2.12` `[method]tcp-socket.is-listening`.
+    """
+
+    def __call__(self, caller: Caller, self_: int, /) -> int: ...
+
+class SocketsTcpTcpSocketKeepAliveCount(Protocol):
+    """The maximum amount of keepalive packets TCP should send before aborting the connection.
+
+    Import: `wasi:sockets/tcp@0.2.12` `[method]tcp-socket.keep-alive-count`.
+    The result `result<u32, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, self_: int, retptr: int, /) -> None: ...
+
+class SocketsTcpTcpSocketKeepAliveCountWithCaller(Protocol):
+    """The maximum amount of keepalive packets TCP should send before aborting the connection.
+
+    Import: `wasi:sockets/tcp@0.2.12` `[method]tcp-socket.keep-alive-count`.
+    The result `result<u32, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, caller: Caller, self_: int, retptr: int, /) -> None: ...
+
+class SocketsTcpTcpSocketKeepAliveEnabled(Protocol):
+    """Enables or disables keepalive.
+
+    Import: `wasi:sockets/tcp@0.2.12` `[method]tcp-socket.keep-alive-enabled`.
+    The result `result<bool, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, self_: int, retptr: int, /) -> None: ...
+
+class SocketsTcpTcpSocketKeepAliveEnabledWithCaller(Protocol):
+    """Enables or disables keepalive.
+
+    Import: `wasi:sockets/tcp@0.2.12` `[method]tcp-socket.keep-alive-enabled`.
+    The result `result<bool, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, caller: Caller, self_: int, retptr: int, /) -> None: ...
+
+class SocketsTcpTcpSocketKeepAliveIdleTime(Protocol):
+    """Amount of time the connection has to be idle before TCP starts sending keepalive packets.
+
+    Import: `wasi:sockets/tcp@0.2.12` `[method]tcp-socket.keep-alive-idle-time`.
+    The result `result<duration, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, self_: int, retptr: int, /) -> None: ...
+
+class SocketsTcpTcpSocketKeepAliveIdleTimeWithCaller(Protocol):
+    """Amount of time the connection has to be idle before TCP starts sending keepalive packets.
+
+    Import: `wasi:sockets/tcp@0.2.12` `[method]tcp-socket.keep-alive-idle-time`.
+    The result `result<duration, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, caller: Caller, self_: int, retptr: int, /) -> None: ...
+
+class SocketsTcpTcpSocketKeepAliveInterval(Protocol):
+    """The time between keepalive packets.
+
+    Import: `wasi:sockets/tcp@0.2.12` `[method]tcp-socket.keep-alive-interval`.
+    The result `result<duration, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, self_: int, retptr: int, /) -> None: ...
+
+class SocketsTcpTcpSocketKeepAliveIntervalWithCaller(Protocol):
+    """The time between keepalive packets.
+
+    Import: `wasi:sockets/tcp@0.2.12` `[method]tcp-socket.keep-alive-interval`.
+    The result `result<duration, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, caller: Caller, self_: int, retptr: int, /) -> None: ...
+
+class SocketsTcpTcpSocketLocalAddress(Protocol):
+    """Get the bound local address.
+
+    Import: `wasi:sockets/tcp@0.2.12` `[method]tcp-socket.local-address`.
+    The result `result<ip-socket-address, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, self_: int, retptr: int, /) -> None: ...
+
+class SocketsTcpTcpSocketLocalAddressWithCaller(Protocol):
+    """Get the bound local address.
+
+    Import: `wasi:sockets/tcp@0.2.12` `[method]tcp-socket.local-address`.
+    The result `result<ip-socket-address, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, caller: Caller, self_: int, retptr: int, /) -> None: ...
+
+class SocketsTcpTcpSocketReceiveBufferSize(Protocol):
+    """The kernel buffer space reserved for sends/receives on this socket.
+
+    Import: `wasi:sockets/tcp@0.2.12` `[method]tcp-socket.receive-buffer-size`.
+    The result `result<u64, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, self_: int, retptr: int, /) -> None: ...
+
+class SocketsTcpTcpSocketReceiveBufferSizeWithCaller(Protocol):
+    """The kernel buffer space reserved for sends/receives on this socket.
+
+    Import: `wasi:sockets/tcp@0.2.12` `[method]tcp-socket.receive-buffer-size`.
+    The result `result<u64, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, caller: Caller, self_: int, retptr: int, /) -> None: ...
+
+class SocketsTcpTcpSocketRemoteAddress(Protocol):
+    """Get the remote address.
+
+    Import: `wasi:sockets/tcp@0.2.12` `[method]tcp-socket.remote-address`.
+    The result `result<ip-socket-address, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, self_: int, retptr: int, /) -> None: ...
+
+class SocketsTcpTcpSocketRemoteAddressWithCaller(Protocol):
+    """Get the remote address.
+
+    Import: `wasi:sockets/tcp@0.2.12` `[method]tcp-socket.remote-address`.
+    The result `result<ip-socket-address, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, caller: Caller, self_: int, retptr: int, /) -> None: ...
+
+class SocketsTcpTcpSocketResourceDrop(Protocol):
+    """Import: `wasi:sockets/tcp@0.2.12` `[resource-drop]tcp-socket`."""
+
+    def __call__(self, self_: int, /) -> None: ...
+
+class SocketsTcpTcpSocketResourceDropWithCaller(Protocol):
+    """Import: `wasi:sockets/tcp@0.2.12` `[resource-drop]tcp-socket`."""
+
+    def __call__(self, caller: Caller, self_: int, /) -> None: ...
+
+class SocketsTcpTcpSocketSendBufferSize(Protocol):
+    """Import: `wasi:sockets/tcp@0.2.12` `[method]tcp-socket.send-buffer-size`.
+    The result `result<u64, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, self_: int, retptr: int, /) -> None: ...
+
+class SocketsTcpTcpSocketSendBufferSizeWithCaller(Protocol):
+    """Import: `wasi:sockets/tcp@0.2.12` `[method]tcp-socket.send-buffer-size`.
+    The result `result<u64, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, caller: Caller, self_: int, retptr: int, /) -> None: ...
+
+class SocketsTcpTcpSocketSetHopLimit(Protocol):
+    """Import: `wasi:sockets/tcp@0.2.12` `[method]tcp-socket.set-hop-limit`.
+    The result `result<_, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, self_: int, value: int, retptr: int, /) -> None: ...
+
+class SocketsTcpTcpSocketSetHopLimitWithCaller(Protocol):
+    """Import: `wasi:sockets/tcp@0.2.12` `[method]tcp-socket.set-hop-limit`.
+    The result `result<_, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, caller: Caller, self_: int, value: int, retptr: int, /) -> None: ...
+
+class SocketsTcpTcpSocketSetKeepAliveCount(Protocol):
+    """Import: `wasi:sockets/tcp@0.2.12` `[method]tcp-socket.set-keep-alive-count`.
+    The result `result<_, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, self_: int, value: int, retptr: int, /) -> None: ...
+
+class SocketsTcpTcpSocketSetKeepAliveCountWithCaller(Protocol):
+    """Import: `wasi:sockets/tcp@0.2.12` `[method]tcp-socket.set-keep-alive-count`.
+    The result `result<_, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, caller: Caller, self_: int, value: int, retptr: int, /) -> None: ...
+
+class SocketsTcpTcpSocketSetKeepAliveEnabled(Protocol):
+    """Import: `wasi:sockets/tcp@0.2.12` `[method]tcp-socket.set-keep-alive-enabled`.
+    The result `result<_, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, self_: int, value: int, retptr: int, /) -> None: ...
+
+class SocketsTcpTcpSocketSetKeepAliveEnabledWithCaller(Protocol):
+    """Import: `wasi:sockets/tcp@0.2.12` `[method]tcp-socket.set-keep-alive-enabled`.
+    The result `result<_, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, caller: Caller, self_: int, value: int, retptr: int, /) -> None: ...
+
+class SocketsTcpTcpSocketSetKeepAliveIdleTime(Protocol):
+    """Import: `wasi:sockets/tcp@0.2.12` `[method]tcp-socket.set-keep-alive-idle-time`.
+    The result `result<_, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, self_: int, value: int, retptr: int, /) -> None: ...
+
+class SocketsTcpTcpSocketSetKeepAliveIdleTimeWithCaller(Protocol):
+    """Import: `wasi:sockets/tcp@0.2.12` `[method]tcp-socket.set-keep-alive-idle-time`.
+    The result `result<_, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, caller: Caller, self_: int, value: int, retptr: int, /) -> None: ...
+
+class SocketsTcpTcpSocketSetKeepAliveInterval(Protocol):
+    """Import: `wasi:sockets/tcp@0.2.12` `[method]tcp-socket.set-keep-alive-interval`.
+    The result `result<_, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, self_: int, value: int, retptr: int, /) -> None: ...
+
+class SocketsTcpTcpSocketSetKeepAliveIntervalWithCaller(Protocol):
+    """Import: `wasi:sockets/tcp@0.2.12` `[method]tcp-socket.set-keep-alive-interval`.
+    The result `result<_, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, caller: Caller, self_: int, value: int, retptr: int, /) -> None: ...
+
+class SocketsTcpTcpSocketSetListenBacklogSize(Protocol):
+    """Hints the desired listen queue size.
+
+    Import: `wasi:sockets/tcp@0.2.12` `[method]tcp-socket.set-listen-backlog-size`.
+    The result `result<_, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, self_: int, value: int, retptr: int, /) -> None: ...
+
+class SocketsTcpTcpSocketSetListenBacklogSizeWithCaller(Protocol):
+    """Hints the desired listen queue size.
+
+    Import: `wasi:sockets/tcp@0.2.12` `[method]tcp-socket.set-listen-backlog-size`.
+    The result `result<_, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, caller: Caller, self_: int, value: int, retptr: int, /) -> None: ...
+
+class SocketsTcpTcpSocketSetReceiveBufferSize(Protocol):
+    """Import: `wasi:sockets/tcp@0.2.12` `[method]tcp-socket.set-receive-buffer-size`.
+    The result `result<_, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, self_: int, value: int, retptr: int, /) -> None: ...
+
+class SocketsTcpTcpSocketSetReceiveBufferSizeWithCaller(Protocol):
+    """Import: `wasi:sockets/tcp@0.2.12` `[method]tcp-socket.set-receive-buffer-size`.
+    The result `result<_, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, caller: Caller, self_: int, value: int, retptr: int, /) -> None: ...
+
+class SocketsTcpTcpSocketSetSendBufferSize(Protocol):
+    """Import: `wasi:sockets/tcp@0.2.12` `[method]tcp-socket.set-send-buffer-size`.
+    The result `result<_, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, self_: int, value: int, retptr: int, /) -> None: ...
+
+class SocketsTcpTcpSocketSetSendBufferSizeWithCaller(Protocol):
+    """Import: `wasi:sockets/tcp@0.2.12` `[method]tcp-socket.set-send-buffer-size`.
+    The result `result<_, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, caller: Caller, self_: int, value: int, retptr: int, /) -> None: ...
+
+class SocketsTcpTcpSocketShutdown(Protocol):
+    """Initiate a graceful shutdown.
+
+    Import: `wasi:sockets/tcp@0.2.12` `[method]tcp-socket.shutdown`.
+    The result `result<_, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, self_: int, shutdown_type: int, retptr: int, /) -> None: ...
+
+class SocketsTcpTcpSocketShutdownWithCaller(Protocol):
+    """Initiate a graceful shutdown.
+
+    Import: `wasi:sockets/tcp@0.2.12` `[method]tcp-socket.shutdown`.
+    The result `result<_, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, caller: Caller, self_: int, shutdown_type: int, retptr: int, /) -> None: ...
+
+class SocketsTcpTcpSocketStartBind(Protocol):
+    """Bind the socket to a specific network on the provided IP address and port.
+
+    Import: `wasi:sockets/tcp@0.2.12` `[method]tcp-socket.start-bind`.
+    The result `result<_, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(
+        self,
+        self_: int,
+        network: int,
+        local_address_tag: int,
+        local_address_val0: int,
+        local_address_val1: int,
+        local_address_val2: int,
+        local_address_val3: int,
+        local_address_val4: int,
+        local_address_val5: int,
+        local_address_val6: int,
+        local_address_val7: int,
+        local_address_val8: int,
+        local_address_val9: int,
+        local_address_val10: int,
+        retptr: int,
+        /,
+    ) -> None: ...
+
+class SocketsTcpTcpSocketStartBindWithCaller(Protocol):
+    """Bind the socket to a specific network on the provided IP address and port.
+
+    Import: `wasi:sockets/tcp@0.2.12` `[method]tcp-socket.start-bind`.
+    The result `result<_, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(
+        self,
+        self_: int,
+        network: int,
+        local_address_tag: int,
+        local_address_val0: int,
+        local_address_val1: int,
+        local_address_val2: int,
+        local_address_val3: int,
+        local_address_val4: int,
+        local_address_val5: int,
+        local_address_val6: int,
+        local_address_val7: int,
+        local_address_val8: int,
+        local_address_val9: int,
+        local_address_val10: int,
+        retptr: int,
+        /,
+    ) -> None: ...
+
+class SocketsTcpTcpSocketStartConnect(Protocol):
+    """Connect to a remote endpoint.
+
+    Import: `wasi:sockets/tcp@0.2.12` `[method]tcp-socket.start-connect`.
+    The result `result<_, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(
+        self,
+        self_: int,
+        network: int,
+        remote_address_tag: int,
+        remote_address_val0: int,
+        remote_address_val1: int,
+        remote_address_val2: int,
+        remote_address_val3: int,
+        remote_address_val4: int,
+        remote_address_val5: int,
+        remote_address_val6: int,
+        remote_address_val7: int,
+        remote_address_val8: int,
+        remote_address_val9: int,
+        remote_address_val10: int,
+        retptr: int,
+        /,
+    ) -> None: ...
+
+class SocketsTcpTcpSocketStartConnectWithCaller(Protocol):
+    """Connect to a remote endpoint.
+
+    Import: `wasi:sockets/tcp@0.2.12` `[method]tcp-socket.start-connect`.
+    The result `result<_, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(
+        self,
+        self_: int,
+        network: int,
+        remote_address_tag: int,
+        remote_address_val0: int,
+        remote_address_val1: int,
+        remote_address_val2: int,
+        remote_address_val3: int,
+        remote_address_val4: int,
+        remote_address_val5: int,
+        remote_address_val6: int,
+        remote_address_val7: int,
+        remote_address_val8: int,
+        remote_address_val9: int,
+        remote_address_val10: int,
+        retptr: int,
+        /,
+    ) -> None: ...
+
+class SocketsTcpTcpSocketStartListen(Protocol):
+    """Start listening for new connections.
+
+    Import: `wasi:sockets/tcp@0.2.12` `[method]tcp-socket.start-listen`.
+    The result `result<_, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, self_: int, retptr: int, /) -> None: ...
+
+class SocketsTcpTcpSocketStartListenWithCaller(Protocol):
+    """Start listening for new connections.
+
+    Import: `wasi:sockets/tcp@0.2.12` `[method]tcp-socket.start-listen`.
+    The result `result<_, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, caller: Caller, self_: int, retptr: int, /) -> None: ...
+
+class SocketsTcpTcpSocketSubscribe(Protocol):
+    """Create a `pollable` which can be used to poll for, or block on, completion of any of the asynchronous
+    operations of this socket.
+
+    Import: `wasi:sockets/tcp@0.2.12` `[method]tcp-socket.subscribe`.
+    """
+
+    def __call__(self, self_: int, /) -> int: ...
+
+class SocketsTcpTcpSocketSubscribeWithCaller(Protocol):
+    """Create a `pollable` which can be used to poll for, or block on, completion of any of the asynchronous
+    operations of this socket.
+
+    Import: `wasi:sockets/tcp@0.2.12` `[method]tcp-socket.subscribe`.
+    """
+
+    def __call__(self, caller: Caller, self_: int, /) -> int: ...
+
+class SocketsUdpCreateSocketCreateUdpSocket(Protocol):
+    """Create a new UDP socket.
+
+    Import: `wasi:sockets/udp-create-socket@0.2.12` `create-udp-socket`.
+    The result `result<udp-socket, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, address_family: int, retptr: int, /) -> None: ...
+
+class SocketsUdpCreateSocketCreateUdpSocketWithCaller(Protocol):
+    """Create a new UDP socket.
+
+    Import: `wasi:sockets/udp-create-socket@0.2.12` `create-udp-socket`.
+    The result `result<udp-socket, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, caller: Caller, address_family: int, retptr: int, /) -> None: ...
+
+class SocketsUdpIncomingDatagramStreamReceive(Protocol):
+    """Receive messages on the socket.
+
+    Import: `wasi:sockets/udp@0.2.12` `[method]incoming-datagram-stream.receive`.
+    The result `result<list<incoming-datagram>, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, self_: int, max_results: int, retptr: int, /) -> None: ...
+
+class SocketsUdpIncomingDatagramStreamReceiveWithCaller(Protocol):
+    """Receive messages on the socket.
+
+    Import: `wasi:sockets/udp@0.2.12` `[method]incoming-datagram-stream.receive`.
+    The result `result<list<incoming-datagram>, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, caller: Caller, self_: int, max_results: int, retptr: int, /) -> None: ...
+
+class SocketsUdpIncomingDatagramStreamResourceDrop(Protocol):
+    """Import: `wasi:sockets/udp@0.2.12` `[resource-drop]incoming-datagram-stream`."""
+
+    def __call__(self, self_: int, /) -> None: ...
+
+class SocketsUdpIncomingDatagramStreamResourceDropWithCaller(Protocol):
+    """Import: `wasi:sockets/udp@0.2.12` `[resource-drop]incoming-datagram-stream`."""
+
+    def __call__(self, caller: Caller, self_: int, /) -> None: ...
+
+class SocketsUdpIncomingDatagramStreamSubscribe(Protocol):
+    """Create a `pollable` which will resolve once the stream is ready to receive again.
+
+    Import: `wasi:sockets/udp@0.2.12` `[method]incoming-datagram-stream.subscribe`.
+    """
+
+    def __call__(self, self_: int, /) -> int: ...
+
+class SocketsUdpIncomingDatagramStreamSubscribeWithCaller(Protocol):
+    """Create a `pollable` which will resolve once the stream is ready to receive again.
+
+    Import: `wasi:sockets/udp@0.2.12` `[method]incoming-datagram-stream.subscribe`.
+    """
+
+    def __call__(self, caller: Caller, self_: int, /) -> int: ...
+
+class SocketsUdpOutgoingDatagramStreamCheckSend(Protocol):
+    """Check readiness for sending.
+
+    Import: `wasi:sockets/udp@0.2.12` `[method]outgoing-datagram-stream.check-send`.
+    The result `result<u64, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, self_: int, retptr: int, /) -> None: ...
+
+class SocketsUdpOutgoingDatagramStreamCheckSendWithCaller(Protocol):
+    """Check readiness for sending.
+
+    Import: `wasi:sockets/udp@0.2.12` `[method]outgoing-datagram-stream.check-send`.
+    The result `result<u64, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, caller: Caller, self_: int, retptr: int, /) -> None: ...
+
+class SocketsUdpOutgoingDatagramStreamResourceDrop(Protocol):
+    """Import: `wasi:sockets/udp@0.2.12` `[resource-drop]outgoing-datagram-stream`."""
+
+    def __call__(self, self_: int, /) -> None: ...
+
+class SocketsUdpOutgoingDatagramStreamResourceDropWithCaller(Protocol):
+    """Import: `wasi:sockets/udp@0.2.12` `[resource-drop]outgoing-datagram-stream`."""
+
+    def __call__(self, caller: Caller, self_: int, /) -> None: ...
+
+class SocketsUdpOutgoingDatagramStreamSend(Protocol):
+    """Send messages on the socket.
+
+    Import: `wasi:sockets/udp@0.2.12` `[method]outgoing-datagram-stream.send`.
+    The result `result<u64, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, self_: int, datagrams: int, datagrams_len: int, retptr: int, /) -> None: ...
+
+class SocketsUdpOutgoingDatagramStreamSendWithCaller(Protocol):
+    """Send messages on the socket.
+
+    Import: `wasi:sockets/udp@0.2.12` `[method]outgoing-datagram-stream.send`.
+    The result `result<u64, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, caller: Caller, self_: int, datagrams: int, datagrams_len: int, retptr: int, /) -> None: ...
+
+class SocketsUdpOutgoingDatagramStreamSubscribe(Protocol):
+    """Create a `pollable` which will resolve once the stream is ready to send again.
+
+    Import: `wasi:sockets/udp@0.2.12` `[method]outgoing-datagram-stream.subscribe`.
+    """
+
+    def __call__(self, self_: int, /) -> int: ...
+
+class SocketsUdpOutgoingDatagramStreamSubscribeWithCaller(Protocol):
+    """Create a `pollable` which will resolve once the stream is ready to send again.
+
+    Import: `wasi:sockets/udp@0.2.12` `[method]outgoing-datagram-stream.subscribe`.
+    """
+
+    def __call__(self, caller: Caller, self_: int, /) -> int: ...
+
+class SocketsUdpUdpSocketFinishBind(Protocol):
+    """Import: `wasi:sockets/udp@0.2.12` `[method]udp-socket.finish-bind`.
+    The result `result<_, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, self_: int, retptr: int, /) -> None: ...
+
+class SocketsUdpUdpSocketFinishBindWithCaller(Protocol):
+    """Import: `wasi:sockets/udp@0.2.12` `[method]udp-socket.finish-bind`.
+    The result `result<_, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, caller: Caller, self_: int, retptr: int, /) -> None: ...
+
+class SocketsUdpUdpSocketLocalAddress(Protocol):
+    """Get the current bound address.
+
+    Import: `wasi:sockets/udp@0.2.12` `[method]udp-socket.local-address`.
+    The result `result<ip-socket-address, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, self_: int, retptr: int, /) -> None: ...
+
+class SocketsUdpUdpSocketLocalAddressWithCaller(Protocol):
+    """Get the current bound address.
+
+    Import: `wasi:sockets/udp@0.2.12` `[method]udp-socket.local-address`.
+    The result `result<ip-socket-address, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, caller: Caller, self_: int, retptr: int, /) -> None: ...
+
+class SocketsUdpUdpSocketReceiveBufferSize(Protocol):
+    """The kernel buffer space reserved for sends/receives on this socket.
+
+    Import: `wasi:sockets/udp@0.2.12` `[method]udp-socket.receive-buffer-size`.
+    The result `result<u64, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, self_: int, retptr: int, /) -> None: ...
+
+class SocketsUdpUdpSocketReceiveBufferSizeWithCaller(Protocol):
+    """The kernel buffer space reserved for sends/receives on this socket.
+
+    Import: `wasi:sockets/udp@0.2.12` `[method]udp-socket.receive-buffer-size`.
+    The result `result<u64, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, caller: Caller, self_: int, retptr: int, /) -> None: ...
+
+class SocketsUdpUdpSocketRemoteAddress(Protocol):
+    """Get the address the socket is currently streaming to.
+
+    Import: `wasi:sockets/udp@0.2.12` `[method]udp-socket.remote-address`.
+    The result `result<ip-socket-address, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, self_: int, retptr: int, /) -> None: ...
+
+class SocketsUdpUdpSocketRemoteAddressWithCaller(Protocol):
+    """Get the address the socket is currently streaming to.
+
+    Import: `wasi:sockets/udp@0.2.12` `[method]udp-socket.remote-address`.
+    The result `result<ip-socket-address, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, caller: Caller, self_: int, retptr: int, /) -> None: ...
+
+class SocketsUdpUdpSocketResourceDrop(Protocol):
+    """Import: `wasi:sockets/udp@0.2.12` `[resource-drop]udp-socket`."""
+
+    def __call__(self, self_: int, /) -> None: ...
+
+class SocketsUdpUdpSocketResourceDropWithCaller(Protocol):
+    """Import: `wasi:sockets/udp@0.2.12` `[resource-drop]udp-socket`."""
+
+    def __call__(self, caller: Caller, self_: int, /) -> None: ...
+
+class SocketsUdpUdpSocketSendBufferSize(Protocol):
+    """Import: `wasi:sockets/udp@0.2.12` `[method]udp-socket.send-buffer-size`.
+    The result `result<u64, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, self_: int, retptr: int, /) -> None: ...
+
+class SocketsUdpUdpSocketSendBufferSizeWithCaller(Protocol):
+    """Import: `wasi:sockets/udp@0.2.12` `[method]udp-socket.send-buffer-size`.
+    The result `result<u64, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, caller: Caller, self_: int, retptr: int, /) -> None: ...
+
+class SocketsUdpUdpSocketSetReceiveBufferSize(Protocol):
+    """Import: `wasi:sockets/udp@0.2.12` `[method]udp-socket.set-receive-buffer-size`.
+    The result `result<_, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, self_: int, value: int, retptr: int, /) -> None: ...
+
+class SocketsUdpUdpSocketSetReceiveBufferSizeWithCaller(Protocol):
+    """Import: `wasi:sockets/udp@0.2.12` `[method]udp-socket.set-receive-buffer-size`.
+    The result `result<_, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, caller: Caller, self_: int, value: int, retptr: int, /) -> None: ...
+
+class SocketsUdpUdpSocketSetSendBufferSize(Protocol):
+    """Import: `wasi:sockets/udp@0.2.12` `[method]udp-socket.set-send-buffer-size`.
+    The result `result<_, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, self_: int, value: int, retptr: int, /) -> None: ...
+
+class SocketsUdpUdpSocketSetSendBufferSizeWithCaller(Protocol):
+    """Import: `wasi:sockets/udp@0.2.12` `[method]udp-socket.set-send-buffer-size`.
+    The result `result<_, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, caller: Caller, self_: int, value: int, retptr: int, /) -> None: ...
+
+class SocketsUdpUdpSocketSetUnicastHopLimit(Protocol):
+    """Import: `wasi:sockets/udp@0.2.12` `[method]udp-socket.set-unicast-hop-limit`.
+    The result `result<_, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, self_: int, value: int, retptr: int, /) -> None: ...
+
+class SocketsUdpUdpSocketSetUnicastHopLimitWithCaller(Protocol):
+    """Import: `wasi:sockets/udp@0.2.12` `[method]udp-socket.set-unicast-hop-limit`.
+    The result `result<_, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, caller: Caller, self_: int, value: int, retptr: int, /) -> None: ...
+
+class SocketsUdpUdpSocketStartBind(Protocol):
+    """Bind the socket to a specific network on the provided IP address and port.
+
+    Import: `wasi:sockets/udp@0.2.12` `[method]udp-socket.start-bind`.
+    The result `result<_, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(
+        self,
+        self_: int,
+        network: int,
+        local_address_tag: int,
+        local_address_val0: int,
+        local_address_val1: int,
+        local_address_val2: int,
+        local_address_val3: int,
+        local_address_val4: int,
+        local_address_val5: int,
+        local_address_val6: int,
+        local_address_val7: int,
+        local_address_val8: int,
+        local_address_val9: int,
+        local_address_val10: int,
+        retptr: int,
+        /,
+    ) -> None: ...
+
+class SocketsUdpUdpSocketStartBindWithCaller(Protocol):
+    """Bind the socket to a specific network on the provided IP address and port.
+
+    Import: `wasi:sockets/udp@0.2.12` `[method]udp-socket.start-bind`.
+    The result `result<_, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(
+        self,
+        self_: int,
+        network: int,
+        local_address_tag: int,
+        local_address_val0: int,
+        local_address_val1: int,
+        local_address_val2: int,
+        local_address_val3: int,
+        local_address_val4: int,
+        local_address_val5: int,
+        local_address_val6: int,
+        local_address_val7: int,
+        local_address_val8: int,
+        local_address_val9: int,
+        local_address_val10: int,
+        retptr: int,
+        /,
+    ) -> None: ...
+
+class SocketsUdpUdpSocketStream(Protocol):
+    """Set up inbound & outbound communication channels, optionally to a specific peer.
+
+    Import: `wasi:sockets/udp@0.2.12` `[method]udp-socket.stream`.
+    The result `result<tuple<incoming-datagram-stream, outgoing-datagram-stream>, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(
+        self,
+        self_: int,
+        remote_address_tag: int,
+        remote_address_val0: int,
+        remote_address_val1: int,
+        remote_address_val2: int,
+        remote_address_val3: int,
+        remote_address_val4: int,
+        remote_address_val5: int,
+        remote_address_val6: int,
+        remote_address_val7: int,
+        remote_address_val8: int,
+        remote_address_val9: int,
+        remote_address_val10: int,
+        remote_address_val11: int,
+        retptr: int,
+        /,
+    ) -> None: ...
+
+class SocketsUdpUdpSocketStreamWithCaller(Protocol):
+    """Set up inbound & outbound communication channels, optionally to a specific peer.
+
+    Import: `wasi:sockets/udp@0.2.12` `[method]udp-socket.stream`.
+    The result `result<tuple<incoming-datagram-stream, outgoing-datagram-stream>, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(
+        self,
+        self_: int,
+        remote_address_tag: int,
+        remote_address_val0: int,
+        remote_address_val1: int,
+        remote_address_val2: int,
+        remote_address_val3: int,
+        remote_address_val4: int,
+        remote_address_val5: int,
+        remote_address_val6: int,
+        remote_address_val7: int,
+        remote_address_val8: int,
+        remote_address_val9: int,
+        remote_address_val10: int,
+        remote_address_val11: int,
+        retptr: int,
+        /,
+    ) -> None: ...
+
+class SocketsUdpUdpSocketSubscribe(Protocol):
+    """Create a `pollable` which will resolve once the socket is ready for I/O.
+
+    Import: `wasi:sockets/udp@0.2.12` `[method]udp-socket.subscribe`.
+    """
+
+    def __call__(self, self_: int, /) -> int: ...
+
+class SocketsUdpUdpSocketSubscribeWithCaller(Protocol):
+    """Create a `pollable` which will resolve once the socket is ready for I/O.
+
+    Import: `wasi:sockets/udp@0.2.12` `[method]udp-socket.subscribe`.
+    """
+
+    def __call__(self, caller: Caller, self_: int, /) -> int: ...
+
+class SocketsUdpUdpSocketUnicastHopLimit(Protocol):
+    """Equivalent to the IP_TTL & IPV6_UNICAST_HOPS socket options.
+
+    Import: `wasi:sockets/udp@0.2.12` `[method]udp-socket.unicast-hop-limit`.
+    The result `result<u8, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, self_: int, retptr: int, /) -> None: ...
+
+class SocketsUdpUdpSocketUnicastHopLimitWithCaller(Protocol):
+    """Equivalent to the IP_TTL & IPV6_UNICAST_HOPS socket options.
+
+    Import: `wasi:sockets/udp@0.2.12` `[method]udp-socket.unicast-hop-limit`.
+    The result `result<u8, error-code>` is written to memory at `retptr`.
+    """
+
+    def __call__(self, caller: Caller, self_: int, retptr: int, /) -> None: ...
+
+_Imports_wasi_io_error_0_2_12 = TypedDict('_Imports_wasi_io_error_0_2_12', {'[resource-drop]error': IoErrorErrorResourceDrop | IoErrorErrorResourceDropWithCaller})
+_Imports_wasi_io_poll_0_2_12 = TypedDict('_Imports_wasi_io_poll_0_2_12', {'[resource-drop]pollable': IoPollPollableResourceDrop | IoPollPollableResourceDropWithCaller, '[method]pollable.block': IoPollPollableBlock | IoPollPollableBlockWithCaller, 'poll': IoPollPoll | IoPollPollWithCaller})
+_Imports_wasi_io_streams_0_2_12 = TypedDict('_Imports_wasi_io_streams_0_2_12', {'[resource-drop]input-stream': IoStreamsInputStreamResourceDrop | IoStreamsInputStreamResourceDropWithCaller, '[resource-drop]output-stream': IoStreamsOutputStreamResourceDrop | IoStreamsOutputStreamResourceDropWithCaller, '[method]input-stream.read': IoStreamsInputStreamRead | IoStreamsInputStreamReadWithCaller, '[method]input-stream.subscribe': IoStreamsInputStreamSubscribe | IoStreamsInputStreamSubscribeWithCaller, '[method]output-stream.check-write': IoStreamsOutputStreamCheckWrite | IoStreamsOutputStreamCheckWriteWithCaller, '[method]output-stream.write': IoStreamsOutputStreamWrite | IoStreamsOutputStreamWriteWithCaller, '[method]output-stream.blocking-flush': IoStreamsOutputStreamBlockingFlush | IoStreamsOutputStreamBlockingFlushWithCaller, '[method]output-stream.subscribe': IoStreamsOutputStreamSubscribe | IoStreamsOutputStreamSubscribeWithCaller})
+_Imports_wasi_cli_terminal_input_0_2_12 = TypedDict('_Imports_wasi_cli_terminal_input_0_2_12', {'[resource-drop]terminal-input': CliTerminalInputTerminalInputResourceDrop | CliTerminalInputTerminalInputResourceDropWithCaller})
+_Imports_wasi_cli_terminal_output_0_2_12 = TypedDict('_Imports_wasi_cli_terminal_output_0_2_12', {'[resource-drop]terminal-output': CliTerminalOutputTerminalOutputResourceDrop | CliTerminalOutputTerminalOutputResourceDropWithCaller})
+_Imports_wasi_sockets_udp_0_2_12 = TypedDict('_Imports_wasi_sockets_udp_0_2_12', {'[resource-drop]udp-socket': SocketsUdpUdpSocketResourceDrop | SocketsUdpUdpSocketResourceDropWithCaller, '[resource-drop]incoming-datagram-stream': SocketsUdpIncomingDatagramStreamResourceDrop | SocketsUdpIncomingDatagramStreamResourceDropWithCaller, '[resource-drop]outgoing-datagram-stream': SocketsUdpOutgoingDatagramStreamResourceDrop | SocketsUdpOutgoingDatagramStreamResourceDropWithCaller, '[method]udp-socket.start-bind': SocketsUdpUdpSocketStartBind | SocketsUdpUdpSocketStartBindWithCaller, '[method]udp-socket.finish-bind': SocketsUdpUdpSocketFinishBind | SocketsUdpUdpSocketFinishBindWithCaller, '[method]udp-socket.stream': SocketsUdpUdpSocketStream | SocketsUdpUdpSocketStreamWithCaller, '[method]udp-socket.local-address': SocketsUdpUdpSocketLocalAddress | SocketsUdpUdpSocketLocalAddressWithCaller, '[method]udp-socket.remote-address': SocketsUdpUdpSocketRemoteAddress | SocketsUdpUdpSocketRemoteAddressWithCaller, '[method]udp-socket.unicast-hop-limit': SocketsUdpUdpSocketUnicastHopLimit | SocketsUdpUdpSocketUnicastHopLimitWithCaller, '[method]udp-socket.set-unicast-hop-limit': SocketsUdpUdpSocketSetUnicastHopLimit | SocketsUdpUdpSocketSetUnicastHopLimitWithCaller, '[method]udp-socket.receive-buffer-size': SocketsUdpUdpSocketReceiveBufferSize | SocketsUdpUdpSocketReceiveBufferSizeWithCaller, '[method]udp-socket.set-receive-buffer-size': SocketsUdpUdpSocketSetReceiveBufferSize | SocketsUdpUdpSocketSetReceiveBufferSizeWithCaller, '[method]udp-socket.send-buffer-size': SocketsUdpUdpSocketSendBufferSize | SocketsUdpUdpSocketSendBufferSizeWithCaller, '[method]udp-socket.set-send-buffer-size': SocketsUdpUdpSocketSetSendBufferSize | SocketsUdpUdpSocketSetSendBufferSizeWithCaller, '[method]udp-socket.subscribe': SocketsUdpUdpSocketSubscribe | SocketsUdpUdpSocketSubscribeWithCaller, '[method]incoming-datagram-stream.receive': SocketsUdpIncomingDatagramStreamReceive | SocketsUdpIncomingDatagramStreamReceiveWithCaller, '[method]incoming-datagram-stream.subscribe': SocketsUdpIncomingDatagramStreamSubscribe | SocketsUdpIncomingDatagramStreamSubscribeWithCaller, '[method]outgoing-datagram-stream.check-send': SocketsUdpOutgoingDatagramStreamCheckSend | SocketsUdpOutgoingDatagramStreamCheckSendWithCaller, '[method]outgoing-datagram-stream.send': SocketsUdpOutgoingDatagramStreamSend | SocketsUdpOutgoingDatagramStreamSendWithCaller, '[method]outgoing-datagram-stream.subscribe': SocketsUdpOutgoingDatagramStreamSubscribe | SocketsUdpOutgoingDatagramStreamSubscribeWithCaller})
+_Imports_wasi_sockets_tcp_0_2_12 = TypedDict('_Imports_wasi_sockets_tcp_0_2_12', {'[resource-drop]tcp-socket': SocketsTcpTcpSocketResourceDrop | SocketsTcpTcpSocketResourceDropWithCaller, '[method]tcp-socket.start-bind': SocketsTcpTcpSocketStartBind | SocketsTcpTcpSocketStartBindWithCaller, '[method]tcp-socket.finish-bind': SocketsTcpTcpSocketFinishBind | SocketsTcpTcpSocketFinishBindWithCaller, '[method]tcp-socket.start-connect': SocketsTcpTcpSocketStartConnect | SocketsTcpTcpSocketStartConnectWithCaller, '[method]tcp-socket.finish-connect': SocketsTcpTcpSocketFinishConnect | SocketsTcpTcpSocketFinishConnectWithCaller, '[method]tcp-socket.start-listen': SocketsTcpTcpSocketStartListen | SocketsTcpTcpSocketStartListenWithCaller, '[method]tcp-socket.finish-listen': SocketsTcpTcpSocketFinishListen | SocketsTcpTcpSocketFinishListenWithCaller, '[method]tcp-socket.accept': SocketsTcpTcpSocketAccept | SocketsTcpTcpSocketAcceptWithCaller, '[method]tcp-socket.local-address': SocketsTcpTcpSocketLocalAddress | SocketsTcpTcpSocketLocalAddressWithCaller, '[method]tcp-socket.remote-address': SocketsTcpTcpSocketRemoteAddress | SocketsTcpTcpSocketRemoteAddressWithCaller, '[method]tcp-socket.is-listening': SocketsTcpTcpSocketIsListening | SocketsTcpTcpSocketIsListeningWithCaller, '[method]tcp-socket.set-listen-backlog-size': SocketsTcpTcpSocketSetListenBacklogSize | SocketsTcpTcpSocketSetListenBacklogSizeWithCaller, '[method]tcp-socket.keep-alive-enabled': SocketsTcpTcpSocketKeepAliveEnabled | SocketsTcpTcpSocketKeepAliveEnabledWithCaller, '[method]tcp-socket.set-keep-alive-enabled': SocketsTcpTcpSocketSetKeepAliveEnabled | SocketsTcpTcpSocketSetKeepAliveEnabledWithCaller, '[method]tcp-socket.keep-alive-idle-time': SocketsTcpTcpSocketKeepAliveIdleTime | SocketsTcpTcpSocketKeepAliveIdleTimeWithCaller, '[method]tcp-socket.set-keep-alive-idle-time': SocketsTcpTcpSocketSetKeepAliveIdleTime | SocketsTcpTcpSocketSetKeepAliveIdleTimeWithCaller, '[method]tcp-socket.keep-alive-interval': SocketsTcpTcpSocketKeepAliveInterval | SocketsTcpTcpSocketKeepAliveIntervalWithCaller, '[method]tcp-socket.set-keep-alive-interval': SocketsTcpTcpSocketSetKeepAliveInterval | SocketsTcpTcpSocketSetKeepAliveIntervalWithCaller, '[method]tcp-socket.keep-alive-count': SocketsTcpTcpSocketKeepAliveCount | SocketsTcpTcpSocketKeepAliveCountWithCaller, '[method]tcp-socket.set-keep-alive-count': SocketsTcpTcpSocketSetKeepAliveCount | SocketsTcpTcpSocketSetKeepAliveCountWithCaller, '[method]tcp-socket.hop-limit': SocketsTcpTcpSocketHopLimit | SocketsTcpTcpSocketHopLimitWithCaller, '[method]tcp-socket.set-hop-limit': SocketsTcpTcpSocketSetHopLimit | SocketsTcpTcpSocketSetHopLimitWithCaller, '[method]tcp-socket.receive-buffer-size': SocketsTcpTcpSocketReceiveBufferSize | SocketsTcpTcpSocketReceiveBufferSizeWithCaller, '[method]tcp-socket.set-receive-buffer-size': SocketsTcpTcpSocketSetReceiveBufferSize | SocketsTcpTcpSocketSetReceiveBufferSizeWithCaller, '[method]tcp-socket.send-buffer-size': SocketsTcpTcpSocketSendBufferSize | SocketsTcpTcpSocketSendBufferSizeWithCaller, '[method]tcp-socket.set-send-buffer-size': SocketsTcpTcpSocketSetSendBufferSize | SocketsTcpTcpSocketSetSendBufferSizeWithCaller, '[method]tcp-socket.subscribe': SocketsTcpTcpSocketSubscribe | SocketsTcpTcpSocketSubscribeWithCaller, '[method]tcp-socket.shutdown': SocketsTcpTcpSocketShutdown | SocketsTcpTcpSocketShutdownWithCaller})
+_Imports_wasi_cli_stdin_0_2_12 = TypedDict('_Imports_wasi_cli_stdin_0_2_12', {'get-stdin': CliStdinGetStdin | CliStdinGetStdinWithCaller})
+_Imports_wasi_cli_stdout_0_2_12 = TypedDict('_Imports_wasi_cli_stdout_0_2_12', {'get-stdout': CliStdoutGetStdout | CliStdoutGetStdoutWithCaller})
+_Imports_wasi_cli_stderr_0_2_12 = TypedDict('_Imports_wasi_cli_stderr_0_2_12', {'get-stderr': CliStderrGetStderr | CliStderrGetStderrWithCaller})
+_Imports_wasi_cli_terminal_stdin_0_2_12 = TypedDict('_Imports_wasi_cli_terminal_stdin_0_2_12', {'get-terminal-stdin': CliTerminalStdinGetTerminalStdin | CliTerminalStdinGetTerminalStdinWithCaller})
+_Imports_wasi_cli_terminal_stdout_0_2_12 = TypedDict('_Imports_wasi_cli_terminal_stdout_0_2_12', {'get-terminal-stdout': CliTerminalStdoutGetTerminalStdout | CliTerminalStdoutGetTerminalStdoutWithCaller})
+_Imports_wasi_cli_terminal_stderr_0_2_12 = TypedDict('_Imports_wasi_cli_terminal_stderr_0_2_12', {'get-terminal-stderr': CliTerminalStderrGetTerminalStderr | CliTerminalStderrGetTerminalStderrWithCaller})
+_Imports_wasi_clocks_monotonic_clock_0_2_12 = TypedDict('_Imports_wasi_clocks_monotonic_clock_0_2_12', {'now': ClocksMonotonicClockNow | ClocksMonotonicClockNowWithCaller, 'subscribe-duration': ClocksMonotonicClockSubscribeDuration | ClocksMonotonicClockSubscribeDurationWithCaller})
+_Imports_wasi_clocks_wall_clock_0_2_12 = TypedDict('_Imports_wasi_clocks_wall_clock_0_2_12', {'now': ClocksWallClockNow | ClocksWallClockNowWithCaller})
+_Imports_wasi_sockets_instance_network_0_2_12 = TypedDict('_Imports_wasi_sockets_instance_network_0_2_12', {'instance-network': SocketsInstanceNetworkInstanceNetwork | SocketsInstanceNetworkInstanceNetworkWithCaller})
+_Imports_wasi_sockets_udp_create_socket_0_2_12 = TypedDict('_Imports_wasi_sockets_udp_create_socket_0_2_12', {'create-udp-socket': SocketsUdpCreateSocketCreateUdpSocket | SocketsUdpCreateSocketCreateUdpSocketWithCaller})
+_Imports_wasi_sockets_tcp_create_socket_0_2_12 = TypedDict('_Imports_wasi_sockets_tcp_create_socket_0_2_12', {'create-tcp-socket': SocketsTcpCreateSocketCreateTcpSocket | SocketsTcpCreateSocketCreateTcpSocketWithCaller})
 Imports = TypedDict('Imports', {'wasi:io/error@0.2.12': _Imports_wasi_io_error_0_2_12, 'wasi:io/poll@0.2.12': _Imports_wasi_io_poll_0_2_12, 'wasi:io/streams@0.2.12': _Imports_wasi_io_streams_0_2_12, 'wasi:cli/terminal-input@0.2.12': _Imports_wasi_cli_terminal_input_0_2_12, 'wasi:cli/terminal-output@0.2.12': _Imports_wasi_cli_terminal_output_0_2_12, 'wasi:sockets/udp@0.2.12': _Imports_wasi_sockets_udp_0_2_12, 'wasi:sockets/tcp@0.2.12': _Imports_wasi_sockets_tcp_0_2_12, 'wasi:cli/stdin@0.2.12': _Imports_wasi_cli_stdin_0_2_12, 'wasi:cli/stdout@0.2.12': _Imports_wasi_cli_stdout_0_2_12, 'wasi:cli/stderr@0.2.12': _Imports_wasi_cli_stderr_0_2_12, 'wasi:cli/terminal-stdin@0.2.12': _Imports_wasi_cli_terminal_stdin_0_2_12, 'wasi:cli/terminal-stdout@0.2.12': _Imports_wasi_cli_terminal_stdout_0_2_12, 'wasi:cli/terminal-stderr@0.2.12': _Imports_wasi_cli_terminal_stderr_0_2_12, 'wasi:clocks/monotonic-clock@0.2.12': _Imports_wasi_clocks_monotonic_clock_0_2_12, 'wasi:clocks/wall-clock@0.2.12': _Imports_wasi_clocks_wall_clock_0_2_12, 'wasi:sockets/instance-network@0.2.12': _Imports_wasi_sockets_instance_network_0_2_12, 'wasi:sockets/udp-create-socket@0.2.12': _Imports_wasi_sockets_udp_create_socket_0_2_12, 'wasi:sockets/tcp-create-socket@0.2.12': _Imports_wasi_sockets_tcp_create_socket_0_2_12})
 
+class Caller:
+    @property
+    def instance(self) -> Instance: ...
+    @property
+    def store(self) -> Store: ...
+    @property
+    def memory(self) -> memoryview | None: ...
+
+class Store:
+    def __init__(self) -> None: ...
+    def close(self) -> None: ...
+    def __enter__(self) -> Store: ...
+    def __exit__(self, *exc: object) -> None: ...
+    @property
+    def closed(self) -> bool: ...
+    @property
+    def runtime(self) -> SimpleNamespace: ...
+
 class Instance:
-    def __init__(self, imports: Imports) -> None: ...
+    def __init__(self, store: Store, imports: Imports) -> None: ...
     @property
     def __exports__(self) -> dict[str, object]: ...
     def __getitem__(self, name: str, /) -> object: ...

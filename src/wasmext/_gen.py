@@ -18,10 +18,12 @@ Not yet: reference types, imported memories/tables and mutable globals, exported
 
 from __future__ import annotations
 
+import functools
 import keyword
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from ._wasi_p2_table import FUNCS as _P2_FUNCS
@@ -3807,7 +3809,7 @@ def _stub(
         lines += ["from collections.abc import Callable"] + (["from typing import TypedDict"] if imports else [])
     names = [t for t in (tables or ()) if _usable(t)]
     lines.append("from types import SimpleNamespace")
-    lines.append("from typing import Literal, overload" if names else "from typing import Literal")
+    lines.append("from typing import Literal, Protocol, overload" if names else "from typing import Literal, Protocol")
     lines += [
         "",
         f"__host__: Literal[{_py_string(host)}]",
@@ -3843,13 +3845,19 @@ def _stub(
     for imp in imports:
         by_module.setdefault(imp.module, []).append(imp)
     type_names = _imports_type_names(list(by_module))
+    used: set[str] = set()  # the Protocols of fusedwasi that the types below use
+    anchor = len(lines)
+
+    def kind(module_name: str, m: Import, with_caller: bool = True) -> str:
+        return _import_type(m.type, _protocol_name(module_name, m.name), used, with_caller)
+
     for module_name, members in by_module.items():
         type_name = type_names[module_name]
         if module_name in bound:  # the host answers these: each is a replacement, none is asked for
-            items = ", ".join(f"{_py_string(m.name)}: NotRequired[{_import_type(m.type)} | None]" for m in members)
+            items = ", ".join(f"{_py_string(m.name)}: NotRequired[{kind(module_name, m)} | None]" for m in members)
             lines.append(f"{type_name} = TypedDict('{type_name}', {{{items}}})")
         else:
-            items = ", ".join(f"{_py_string(m.name)}: {_import_type(m.type)}" for m in members)
+            items = ", ".join(f"{_py_string(m.name)}: {kind(module_name, m)}" for m in members)
             lines.append(f"{type_name} = TypedDict('{type_name}', {{{items}}})")
     asked = any(m not in bound for m in by_module)  # a module of the caller's makes `imports` required
     if by_module:
@@ -3860,7 +3868,7 @@ def _stub(
     if wasi and not wasi2:  # the host answers some imports: its originals, as the calls of wasmext have them
         host_names = {m: f"_Host{type_names[m]}" for m in by_module if m in bound}
         for module_name, type_name in host_names.items():
-            items = ", ".join(f"{_py_string(m.name)}: {_import_type(m.type)}" for m in by_module[module_name])
+            items = ", ".join(f"{_py_string(m.name)}: {kind(module_name, m, False)}" for m in by_module[module_name])
             lines.append(f"{type_name} = TypedDict('{type_name}', {{{items}}})")
         fields = ", ".join(f"{_py_string(m)}: {t}" for m, t in host_names.items())
         lines += [
@@ -3872,6 +3880,14 @@ def _stub(
             "    @property",
             "    def __imports__(self) -> _HostImports: ...",
             "",
+        ]
+    if used:
+        classes: list[str] = []
+        for protocol in sorted(used):
+            classes += [_protocol_text(protocol, False), _protocol_text(protocol, True)]
+        lines[anchor:anchor] = [
+            "# The functions that the host of WASI 0.1 answers, with the names of the parameters (from fusedwasi)",
+            *classes,
         ]
     if table:
         lines += _TABLE_STUB
@@ -3982,7 +3998,58 @@ def _param_names(func: FuncType, wanted: tuple[str | None, ...]) -> list[str]:
     return [n for n in wanted if n is not None]
 
 
-def _import_type(thing: FuncType | GlobalType | Limits | TableType) -> str:
+_P1_MODULES = (
+    "wasi_snapshot_preview1",
+    "wasi_unstable",
+)  # the first snapshot has the names and the parameters of the second
+
+
+@functools.cache
+def _wasi_p1_protocols() -> tuple[Any, dict[str, str]] | None:
+    """(the table of WASI 0.1, the text of each Protocol by its name), both from fusedwasi; None when the fusedwasi at hand has no table of signatures."""
+    try:
+        from fusedwasi import get_signatures_path
+        from fusedwasi.signatures import load
+    except ImportError:
+        return None
+    text = (Path(get_signatures_path()) / "wasi_p1_protocols.pyi").read_text(encoding="utf-8")
+    blocks = {
+        m.group(1): m.group(0).rstrip() + "\n"
+        for m in re.finditer(r"^class (\w+)\(Protocol\):\n.*?(?=^class |\Z)", text, re.DOTALL | re.MULTILINE)
+    }
+    return load("p1"), blocks
+
+
+def _protocol_name(module: str, name: str) -> str | None:
+    """The Protocol that fusedwasi has for an import of WASI 0.1, or None (not WASI 0.1, or no table)."""
+    found = _wasi_p1_protocols() if module in _P1_MODULES else None
+    function = found[0].get("wasi_snapshot_preview1", name) if found is not None else None
+    return function.protocol if function is not None and function.protocol in found[1] else None  # type: ignore[union-attr]
+
+
+def _protocol_text(protocol: str, with_caller: bool) -> str:
+    """The text of a Protocol of fusedwasi; with the Caller first when asked (the class gets `WithCaller`)."""
+    found = _wasi_p1_protocols()
+    assert found is not None
+    text = found[1][protocol]
+    if not with_caller:
+        return text
+    text = text.replace(f"class {protocol}(Protocol):", f"class {protocol}WithCaller(Protocol):", 1)
+    if "def __call__(self)" in text:
+        return text.replace("def __call__(self)", "def __call__(self, caller: Caller, /)", 1)
+    return text.replace("def __call__(self, ", "def __call__(self, caller: Caller, ", 1)
+
+
+def _import_type(
+    thing: FuncType | GlobalType | Limits | TableType,
+    protocol: str | None = None,
+    used: set[str] | None = None,
+    with_caller: bool = True,
+) -> str:
+    """The type of an import. `protocol` is the Protocol that fusedwasi has for it (named parameters), added to `used` to be written into the stub."""
+    if isinstance(thing, FuncType) and protocol is not None and used is not None:
+        used.add(protocol)
+        return f"{protocol} | {protocol}WithCaller" if with_caller else protocol
     if isinstance(thing, FuncType):
         params = ", ".join(_PY_TYPE[t] for t in thing.params)
         result = _result_type(thing)

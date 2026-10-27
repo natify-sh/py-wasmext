@@ -240,7 +240,7 @@ FUNCS: dict[str, tuple[str, bool, tuple[str, ...], str]] = {
     "fusedwasi_wasi_http_types_response_outparam_set": (
         "wasi_p2_http.h",
         True,
-        ("i32", "i32", "i64", "i64", "i64", "i64", "i64", "i64", "i64"),
+        ("i32", "i32", "i32", "i32", "i64", "i32", "i32", "i32", "i32"),
         "",
     ),
     "fusedwasi_wasi_io_error_error_drop": ("wasi_p2_io.h", False, ("i32",), ""),

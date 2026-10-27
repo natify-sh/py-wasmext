@@ -40,6 +40,8 @@ def main(include: Path, out: Path) -> None:
                 types.append(C_TYPES[ctype])
             result = "" if ret.strip() == "void" else C_TYPES[ret.strip()]
             funcs[name] = (path.name, has_comp, tuple(types), result)
+    if not funcs:  # a wrong directory must not wipe the table that is committed
+        raise SystemExit(f"no function of WASI 0.2 found in {p2}: the table is not written")
     lines = [
         '"""The functions of WASI 0.2 that fusedwasi has in C, made by tools/make_wasi_p2_table.py from the headers of fusedwasi: do not edit."""',
         "",

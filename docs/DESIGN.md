@@ -36,7 +36,9 @@ There are two kinds of access on an instance, with different jobs:
 ```python
 B.Instance(B.Store(), imports={"env": a})  # a shelf from an instance: all of it
 B.Instance(B.Store(), imports={"env": {"log": print}})  # a dict: by keys, as now
-B.Instance(B.Store(), imports={"env": {**a.__exports__, "log": print}})  # everything of a, and log from Python (the later key wins)
+B.Instance(
+    B.Store(), imports={"env": {**a.__exports__, "log": print}}
+)  # everything of a, and log from Python (the later key wins)
 B.Instance(B.Store(), imports={"env": {"counter": a["counter"], "log": print}})  # one export of a, and log from Python
 ```
 

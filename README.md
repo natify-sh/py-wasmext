@@ -89,7 +89,9 @@ another kind (a hand-written C one) goes with the table. [`examples/quickjs`](ex
 ```python
 import mypkg.fast  # src/mypkg/fast.wasm
 
-inst = mypkg.fast.Instance(mypkg.fast.Store())  # Instance(store, imports={"env": {"log": print}}) if the module imports functions; the store is made by hand, always
+inst = mypkg.fast.Instance(
+    mypkg.fast.Store()
+)  # Instance(store, imports={"env": {"log": print}}) if the module imports functions; the store is made by hand, always
 inst.add(2, 3)  # the exports are methods; an exported memory is a memoryview attribute
 ```
 
@@ -144,8 +146,12 @@ as a C function, a memory and a global are the very same ones. This works betwee
 
 ```python
 a = mypkg.lib.Instance(mypkg.lib.Store())
-b = mypkg.app.Instance(mypkg.app.Store(), imports={"env": a})  # the whole shelf: everything that `a` exports, under its names
-b = mypkg.app.Instance(mypkg.app.Store(), imports={"env": {**a.__exports__, "log": print}})  # or by names, with what only Python can give
+b = mypkg.app.Instance(
+    mypkg.app.Store(), imports={"env": a}
+)  # the whole shelf: everything that `a` exports, under its names
+b = mypkg.app.Instance(
+    mypkg.app.Store(), imports={"env": {**a.__exports__, "log": print}}
+)  # or by names, with what only Python can give
 b = mypkg.app.Instance(mypkg.app.Store(), imports={"env": {"add": a.add, "counter": a["counter"], "memory": a.memory}})
 ```
 
@@ -164,7 +170,9 @@ imports, and the program is started as an export:
 ```python
 import mypkg.lua  # lua.wasm, a command built for WASI
 
-lua = mypkg.lua.Instance(mypkg.lua.Store(wasi={"args": ["lua", "/hello.lua"], "preopens": {"/": "scripts"}, "readonly": True}))
+lua = mypkg.lua.Instance(
+    mypkg.lua.Store(wasi={"args": ["lua", "/hello.lua"], "preopens": {"/": "scripts"}, "readonly": True})
+)
 try:
     lua._start()
 except mypkg.lua.WasiExit as exit:  # proc_exit(code): the program is over, and what it opened is closed

@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=77", "setuptools-scm>=8"]
+requires = ["setuptools>=84", "setuptools-scm>=8"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -92,12 +92,14 @@ dev = [
     "pytest-cov>=6",
     "pyright>=1.1.400",
     "ruff>=0.16.0",
-    "setuptools>=77",
+    "setuptools>=84",
     "setuptools-scm>=8",
 ]
 # only to make examples/coremark/src/coremark/_core.wasm again (build_wasm.py); not installed by `uv sync`/`uv run`
 wasm = [
-    "ziglang>=0.17.0",
+    # below 0.17: ziglang 0.17.0 (PyPI, 2026-10-08) has no wheel for Windows, so `uv sync` fails on windows-latest; 0.16.0 and the releases before it have win32, win_amd64 and win_arm64.
+    # Until a release has a Windows wheel again.
+    "ziglang>=0.16.0,<0.17",
 ]
 
 [tool.uv.sources]

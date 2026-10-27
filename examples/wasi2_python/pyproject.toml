@@ -1,6 +1,6 @@
 [build-system]
 # wasmext turns the .wasm file into an extension (see setup.py); it brings wasm2c with it (wabt-package).
-requires = ["setuptools>=77", "wasmext"]
+requires = ["setuptools>=84", "wasmext"]
 build-backend = "setuptools.build_meta"
 
 [project]

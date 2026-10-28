@@ -97,7 +97,13 @@ From `FEATURES.md`, `TABLES_PLAN.md` and the plans: `funcref` in an import and `
    8. **Shared store across separately built modules** (C7, decision 6): after 4-7, so that the layout of the record is not changed twice.
    9. **Lazy collector** (C8): last; needs the registry and the shared store.
 
-   Removed from the plans: threads/atomics, custom page sizes, `.wat` as a source, other build backends. Free-threaded declaration stays the last item, after an audit of the Python side. All tested from C against small `.wat` modules.
+   10. **Custom page sizes**: at the end of layer 1 (the owner, 2026-10-28).
+   11. **Threads and atomics**: after 10, same.
+
+   **Free-threaded is a requirement of layer 1, not a last item** (the owner): the store depends on it. From step 2 the store, the registry and the counters are thread-safe by design (one locking rule, atomic counts, no lock held across a call outward), and the C tests include concurrent use. The declaration `Py_MOD_GIL_NOT_USED` is made by the extension front end once its audit is done.
+
+   Removed from the plans: `.wat` as a source, other build backends. **Android arm64** and **Pyodide** already build in CI; Android is to be tested in an emulator in CI (a task of the front-end phase). All tested from C against small `.wat` modules.
+
 2. **Shared glue (layer 2): one C API, the same for every module, FFI-neutral** (no Python types, no callbacks that need a GIL, plain structs and function pointers, owners as opaque handles with retain/release). The descriptor of the module is read at run time. Tested from C; this API is the product for every host language.
 3. **Front ends (layer 3)**, one after another over the finished API: ctypes glue (a static `wasmext_ctypes.py`), the executable, the extension. Old logic of the generators is deleted in the same step.
 

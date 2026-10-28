@@ -1,6 +1,6 @@
-# Step 1 of layer 1: the model and the descriptor (a design, for review)
+# Step 1 of layer 1: the model and the descriptor
 
-Status: **written 2026-10-28; nothing of it is built.** It is step 1 of the order in [layers.md](layers.md). Facts below are read in the code of 2026-10-28.
+Status: **built 2026-10-28** (`_model.py`, `_descriptor.py`, `c/wasmext_descriptor.h`, `tests/c/dump_descriptor.c`, `tests/test_descriptor.py`). The real header is the reference; the sketch below is the design. Function types are inline in each import and export (no table of types). Parameter names are in the descriptor (the owner's answer). It is step 1 of the order in [layers.md](layers.md). Facts below are read in the code of 2026-10-28.
 
 ## What there is
 
@@ -28,7 +28,6 @@ typedef struct {
   uint32_t version, size;               /* of this struct: a reader checks both */
   const char *name;                     /* the module */
   uint32_t flags;                       /* share_tables, uses_wasi, 64-bit memory... */
-  uint32_t n_types;   const wasmext_functype *types;     /* params/results as value-type bytes of the binary format */
   uint32_t n_imports; const wasmext_import_desc *imports;/* module, name, kind, index in kind, type */
   uint32_t n_exports; const wasmext_export_desc *exports;/* name, kind, index in kind, type */
   uint32_t n_memories; const wasmext_limits *memories;

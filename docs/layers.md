@@ -56,7 +56,7 @@ The descriptor removes the generated tables from the wrapper and the per-import 
 | Front end | Emits | Does |
 | --- | --- | --- |
 | **pyglue** (CPython extension) | a small `<name>_py.c` from the model + the static `wasmext_pyext.h` | converts Python values, keeps Python objects as owners (retain/release = INCREF/DECREF), calls a Python host function, maps the code of the core to its exception, `tp_traverse` through the owner list of the core; abi3 or native; later free-threaded |
-| **ctypes glue** | one **static** `wasmext_ctypes.py` + a small stub with the names | the same through `dlopen`; every entry that can release an owner goes through `PyDLL` or the core queues the release |
+| **ctypes glue** | one **static** `wasmext_ctypes.py` + a small stub with the names | the same through `dlopen`; the library is loaded with `CDLL` (never `PyDLL`: the GIL is released during a call, as the free-threaded work needs); a release of an owner that needs the interpreter is done by the front end taking the GIL itself (`PyGILState_Ensure`) or by the core queuing the release |
 | **exe glue** | `<name>_main.c` | options, the store made through the API |
 
 The extension does **not** reimplement what layer 2 has: it links `<name>_shared.c` into the module. (Whether this compiles as it is, with the extension's flags, on all platforms, is not yet tried.)

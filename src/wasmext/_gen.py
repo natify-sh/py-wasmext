@@ -1257,6 +1257,46 @@ def generate(
         add("}")
         add("")
     add(
+        "/* what a code of a trap becomes in Python, once for every place that tells it: `foreign` is a function of another module that was called from here (its tags and its program are not"
+    )
+    add("   ours: an exception that nothing caught is told in words) */")
+    add("static void raise_described(int code, int foreign) {")
+    add("    if (code == (int)WASMEXT_TRAP_HOST) {")
+    add(
+        '        if (!PyErr_Occurred()) PyErr_SetString(TrapError, "a host function of the WebAssembly module failed");'
+    )
+    add("        return;")
+    add("    }")
+    add('    if (code == (int)WASMEXT_TRAP_CLOSED) PyErr_SetString(PyExc_ValueError, "the store is closed");')
+    add("    else if (code == (int)WASMEXT_TRAP_NO_MEMORY) PyErr_NoMemory();")
+    add(
+        '    else if (foreign && code == (int)WASM_RT_TRAP_UNCAUGHT_EXCEPTION) PyErr_SetString(TrapError, "an exception of WebAssembly that nothing caught");'
+    )
+    add("    else PyErr_SetString(TrapError, wasm_rt_strerror((wasm_rt_trap_t)code));")
+    add("}")
+    add("")
+    if hosts:
+        add(
+            "/* a function of another instance that this one calls through a link failed in its own host function: if that instance keeps the exception (the wrapper for ctypes does,"
+        )
+        add("   in `_pending`), it is raised (1) */")
+        add("static int raise_pending(PyObject *owner) {")
+        add('    PyObject *kept = owner != NULL ? PyObject_GetAttrString(owner, "_pending") : NULL;')
+        add("    if (kept != NULL && kept != Py_None && PyExceptionInstance_Check(kept)) {")
+        add(
+            "        /* the attribute is cleared first and the exception is set last: a call of Python with an exception set may run a finalizer or the collector, and lose it */"
+        )
+        add('        if (PyObject_SetAttrString(owner, "_pending", Py_None) < 0) PyErr_Clear();')
+        add("        PyErr_SetObject((PyObject *)Py_TYPE(kept), kept);")
+        add("        Py_DECREF(kept);")
+        add("        return 1;")
+        add("    }")
+        add("    Py_XDECREF(kept);")
+        add("    PyErr_Clear();")
+        add("    return 0;")
+        add("}")
+        add("")
+    add(
         "/* what a code of a trap becomes in Python (the code of a host function that failed means its exception is set already) */"
     )
     add("static void raise_trap_code(InstanceObject *self, int code) {")
@@ -1273,34 +1313,22 @@ def generate(
         add(
             "        if (self->core.store->p2_message[0]) { PyErr_SetString(TrapError, self->core.store->p2_message); self->core.store->p2_message[0] = 0; return; }"
         )
-    add(
-        "        /* a function of another instance that this one calls through a link failed in its own host function: if that instance keeps the exception"
-    )
-    add("           (the wrapper for ctypes does, in `_pending`), it is the one to raise */")
-    for i, host in enumerate(hosts):
-        add(f"        for (int k = 0; k < {max(slots.get(host, 0), 1)}; k++) {{")
-        add(f"            PyObject *owner = self->hold{i}.lo[k];")
-        add('            PyObject *kept = owner != NULL ? PyObject_GetAttrString(owner, "_pending") : NULL;')
-        add("            if (kept != NULL && kept != Py_None && PyExceptionInstance_Check(kept)) {")
+    if hosts:
         add(
-            "                /* the attribute is cleared first and the exception is set last: a call of Python with an exception set may run a finalizer or the collector, and lose it */"
+            "        /* a function of another instance that this one calls through a link failed in its own host function: if that instance keeps the exception"
         )
-        add('                if (PyObject_SetAttrString(owner, "_pending", Py_None) < 0) PyErr_Clear();')
-        add("                PyErr_SetObject((PyObject *)Py_TYPE(kept), kept);")
-        add("                Py_DECREF(kept);")
-        add("                return;")
-        add("            }")
-        add("            Py_XDECREF(kept);")
-        add("            PyErr_Clear();")
-        add("        }")
-    add('        PyErr_SetString(TrapError, "a host function of the WebAssembly module failed");')
-    add("        return;")
+        add("           (the wrapper for ctypes does, in `_pending`), it is the one to raise */")
+        holders = ", ".join(f"self->hold{i}.lo" for i in range(len(hosts)))
+        counts = ", ".join(str(max(slots.get(host, 0), 1)) for host in hosts)
+        add(f"        PyObject **const held[] = {{{holders}}};")
+        add(f"        static const int counts[] = {{{counts}}};")
+        add(f"        for (int g = 0; g < {len(hosts)}; g++)")
+        add("            for (int k = 0; k < counts[g]; k++)")
+        add("                if (raise_pending(held[g][k])) return;")
     add("    }")
     if tags:
         add("    if (code == (int)WASM_RT_TRAP_UNCAUGHT_EXCEPTION) { raise_uncaught(); return; }")
-    add('    if (code == (int)WASMEXT_TRAP_CLOSED) PyErr_SetString(PyExc_ValueError, "the store is closed");')
-    add("    else if (code == (int)WASMEXT_TRAP_NO_MEMORY) PyErr_NoMemory();")
-    add("    else PyErr_SetString(TrapError, wasm_rt_strerror((wasm_rt_trap_t)code));")
+    add("    raise_described(code, 0);")
     add("}")
     add(
         "/* a call that trapped always leaves an exception: a function that returns NULL without one is a SystemError, which says nothing of the trap */"
@@ -1636,6 +1664,18 @@ def generate(
         add("}")
         add("")
         add(_FUNCTION_HOLDER)
+        if shares_tables:
+            add(_EXPORT_FUNCREF)
+        if imports:
+            add(
+                "/* What a function import is given, as the reference to an export of another instance (a new reference): the capsule that `v` is or gives, or the export of the instance whose"
+            )
+            add("   method `v` is; NULL with no error if it is none (then `v` is a callable of the caller). */")
+            add("static PyObject *import_ref(PyObject *v) {")
+            add("    PyObject *ref = as_export_ref(v);")
+            add("    return ref != NULL ? ref : method_export(v);")
+            add("}")
+            add("")
         if uses_funcref:
             add(_funcref_values_c(funcref_args))
     if table_imports:
@@ -1806,22 +1846,9 @@ def generate(
                     f"        PyObject *v = lookup_import(imports, {_c_string(imp.module)}, {_c_string(imp.field)}, 0);"
                 )
                 add("        if (v == NULL) { Py_DECREF(self); return NULL; }")
-            add("        PyObject *ref = as_export_ref(v);  /* the reference to an export of another instance */")
             add(
-                "        if (ref == NULL) {  /* a method of an instance of a wasmext extension stands for its export */"
+                "        PyObject *ref = import_ref(v);  /* the reference to an export of another instance (a method of an instance of a wasmext extension stands for its export) */"
             )
-            add('            PyObject *owner = PyObject_GetAttrString(v, "__self__");')
-            add('            PyObject *name = owner != NULL ? PyObject_GetAttrString(v, "__name__") : NULL;')
-            add('            PyObject *exports = name != NULL ? PyObject_GetAttrString(owner, "__exports__") : NULL;')
-            add("            if (exports != NULL && PyDict_Check(exports)) {")
-            add("                ref = PyDict_GetItemWithError(exports, name);")
-            add("                Py_XINCREF(ref);")
-            add("            }")
-            add("            Py_XDECREF(exports);")
-            add("            Py_XDECREF(name);")
-            add("            Py_XDECREF(owner);")
-            add("            PyErr_Clear();")
-            add("        }")
             add("        if (ref != NULL && PyCapsule_IsValid(ref, WASMEXT_EXPORT)) {")
             add("            wasmext_export *e = (wasmext_export *)PyCapsule_GetPointer(ref, WASMEXT_EXPORT);")
             add("            char message[512];")
@@ -3068,20 +3095,7 @@ def _function_type_c(last: str, ref_types: list[FuncType]) -> str:
     add(
         "/* a trap of a function of another module that was called from here: its exception is this module's Trap (the tags and the program of that module are not ours) */"
     )
-    add("static void raise_foreign_trap(int code) {")
-    add("    if (code == (int)WASMEXT_TRAP_HOST) {")
-    add(
-        '        if (!PyErr_Occurred()) PyErr_SetString(TrapError, "a host function of the WebAssembly module failed");'
-    )
-    add("        return;")
-    add("    }")
-    add('    if (code == (int)WASMEXT_TRAP_CLOSED) PyErr_SetString(PyExc_ValueError, "the store is closed");')
-    add("    else if (code == (int)WASMEXT_TRAP_NO_MEMORY) PyErr_NoMemory();")
-    add(
-        '    else if (code == (int)WASM_RT_TRAP_UNCAUGHT_EXCEPTION) PyErr_SetString(TrapError, "an exception of WebAssembly that nothing caught");'
-    )
-    add("    else PyErr_SetString(TrapError, wasm_rt_strerror((wasm_rt_trap_t)code));")
-    add("}")
+    add("static void raise_foreign_trap(int code) { raise_described(code, 1); }")
     add("")
     add("static PyObject *Function_make(const wasm_rt_funcref_t *ref, PyObject *keeper) {")
     add("    FunctionObject *f = (FunctionObject *)PyType_GenericAlloc(FunctionType, 0);")
@@ -3297,16 +3311,9 @@ def _emit_funcrefs(hadd: Callable[[str], None], last: str, prefix: str, funcs: l
     hadd("")
 
 
-_FUNCTION_HOLDER = r"""/* What stands for the export that `v` is (a new reference): `v` itself if it is one or gives one as its `__wasmext_ref__`, or, for a method of an instance of a wasmext
-   module, the reference that the instance gives for its export of that name; NULL with no error if there is none. The reference of a wrapper for ctypes is an object that
-   owns its record, so the caller keeps this until it is done with the capsule that as_export_ref makes of it. */
-static PyObject *function_holder(PyObject *v) {
-    PyObject *cap = as_export_ref(v);
-    if (cap != NULL) {
-        Py_DECREF(cap);
-        Py_INCREF(v);
-        return v;
-    }
+_FUNCTION_HOLDER = r"""/* The export that the method `v` of an instance of a wasmext module stands for: what the `__exports__` of that instance gives under the name of the method (a new
+   reference); NULL with no error if `v` is no such method. */
+static PyObject *method_export(PyObject *v) {
     PyObject *holder = NULL;
     PyObject *owner = PyObject_GetAttrString(v, "__self__");
     PyObject *name = owner != NULL ? PyObject_GetAttrString(v, "__name__") : NULL;
@@ -3320,6 +3327,50 @@ static PyObject *function_holder(PyObject *v) {
     Py_XDECREF(owner);
     PyErr_Clear();
     return holder;
+}
+
+/* What stands for the export that `v` is (a new reference): `v` itself if it is one or gives one as its `__wasmext_ref__`, or, for a method of an instance of a wasmext
+   module, the reference that the instance gives for its export of that name; NULL with no error if there is none. The reference of a wrapper for ctypes is an object that
+   owns its record, so the caller keeps this until it is done with the capsule that as_export_ref makes of it. */
+static PyObject *function_holder(PyObject *v) {
+    PyObject *cap = as_export_ref(v);
+    if (cap != NULL) {
+        Py_DECREF(cap);
+        Py_INCREF(v);
+        return v;
+    }
+    return method_export(v);
+}
+"""
+
+
+_EXPORT_FUNCREF = r"""/* The funcref of the record `e` of an export, if a function of it can be put in a table (`for_table`, Table.set) or given as a parameter of type funcref: the same record
+   and the same rule, but each says its own refusal. NULL if it cannot, with the class of the exception and its text in `*kind` and `*why`: the caller raises it (Table.set
+   lets go of what it holds first, funcref_arg after). */
+static const wasm_rt_funcref_t *export_funcref(const wasmext_export *e, int for_table, PyObject **kind, const char **why) {
+    if (e == NULL || !wasmext_export_ok(e)) {
+        *kind = LinkError;
+        *why = "the function is from an incompatible version of wasmext";
+        return NULL;
+    }
+    const wasm_rt_funcref_t *fr = (const wasm_rt_funcref_t *)e->funcref;
+    if (for_table) {
+        if (e->kind != WASMEXT_FUNC || fr == NULL || fr->func == NULL || fr->func_type == NULL) {
+            *kind = PyExc_TypeError;
+            *why = "set() takes a function: this export is not one, or its module does not give it for a table";
+            return NULL;
+        }
+        if (!(e->flags & 16u)) {
+            *kind = PyExc_TypeError;
+            *why = "the module of this function does not share tables, so a trap in it could not come back to the caller through a table: only a module that shares tables (has a funcref table, or is built with share_tables) can put functions in a table";
+            return NULL;
+        }
+    } else if (e->kind != WASMEXT_FUNC || fr == NULL || fr->func == NULL || !(e->flags & 16u)) {
+        *kind = PyExc_TypeError;
+        *why = "a funcref takes a function of a module that shares tables (it has a funcref table, or is built with share_tables)";
+        return NULL;
+    }
+    return fr;
 }
 """
 
@@ -3360,23 +3411,13 @@ static PyObject *Table_set(PyObject *self, PyObject *args) {
         return NULL;
     }
     wasmext_export *e = (wasmext_export *)PyCapsule_GetPointer(ref, WASMEXT_EXPORT);
-    if (e == NULL || !wasmext_export_ok(e)) {
+    PyObject *kind = NULL;
+    const char *why = NULL;
+    const wasm_rt_funcref_t *fr = export_funcref(e, 1, &kind, &why);
+    if (fr == NULL) {
         Py_DECREF(ref);
         Py_DECREF(holder);
-        PyErr_SetString(LinkError, "the function is from an incompatible version of wasmext");
-        return NULL;
-    }
-    const wasm_rt_funcref_t *fr = (const wasm_rt_funcref_t *)e->funcref;
-    if (e->kind != WASMEXT_FUNC || fr == NULL || fr->func == NULL || fr->func_type == NULL) {
-        Py_DECREF(ref);
-        Py_DECREF(holder);
-        PyErr_SetString(PyExc_TypeError, "set() takes a function: this export is not one, or its module does not give it for a table");
-        return NULL;
-    }
-    if (!(e->flags & 16u)) {
-        Py_DECREF(ref);
-        Py_DECREF(holder);
-        PyErr_SetString(PyExc_TypeError, "the module of this function does not share tables, so a trap in it could not come back to the caller through a table: only a module that shares tables (has a funcref table, or is built with share_tables) can put functions in a table");
+        PyErr_SetString(kind, why);
         return NULL;
     }
     PyObject *keeper = (PyObject *)e->owner;
@@ -3475,14 +3516,14 @@ static wasm_rt_funcref_t funcref_arg(InstanceObject *self, PyObject *v) {
         return null_;
     }
     const wasmext_export *e = (const wasmext_export *)PyCapsule_GetPointer(ref, WASMEXT_EXPORT);
-    const wasm_rt_funcref_t *fr = e != NULL ? (const wasm_rt_funcref_t *)e->funcref : NULL;
+    PyObject *kind = NULL;
+    const char *why = NULL;
+    const wasm_rt_funcref_t *fr = export_funcref(e, 0, &kind, &why);
     wasm_rt_funcref_t out = null_;
     PyObject *owner = e != NULL ? (PyObject *)e->owner : NULL;
     (void)owner;
-    if (e == NULL || !wasmext_export_ok(e)) {
-        PyErr_SetString(LinkError, "the function is from an incompatible version of wasmext");
-    } else if (e->kind != WASMEXT_FUNC || fr == NULL || fr->func == NULL || !(e->flags & 16u)) {
-        PyErr_SetString(PyExc_TypeError, "a funcref takes a function of a module that shares tables (it has a funcref table, or is built with share_tables)");
+    if (fr == NULL) {
+        PyErr_SetString(kind, why);
     } else {
         out = *fr;
 """

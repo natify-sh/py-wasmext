@@ -309,3 +309,18 @@ def test_a_record_is_refused_by_a_reader_below_its_floor(modules: Callable[..., 
         b_mod.Instance(b_mod.Store(), imports=imports)
     record.floor = ABI  # this one
     b_mod.Instance(b_mod.Store(), imports=imports)
+
+
+def test_the_name_of_an_import_with_percent_quote_and_backslash_is_in_the_message_as_it_is(
+    modules: Callable[..., tuple[Any, ...]],
+) -> None:
+    """The message of a link that fails is made by C from a format string: a name with `%`, `"` or `\\` must not change the format or break the C."""
+    a_mod, b_mod = modules(
+        a='(module (func (export "note") (param i32)))',
+        b=r'(module (import "env" "we%s\22ird\5c%d" (func (param i32 i32) (result i32))) (func (export "go") (result i32) i32.const 0 i32.const 0 call 0))',
+    )
+    refs = a_mod.Instance(a_mod.Store()).__exports__
+    name = 'we%s"ird\\%d'
+    with pytest.raises(b_mod.LinkError) as raised:
+        b_mod.Instance(b_mod.Store(), imports={"env": {name: refs["note"]}})
+    assert f"import env.{name} is a function ii>i" in str(raised.value)

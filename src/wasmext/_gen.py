@@ -149,6 +149,11 @@ def _c_string(text: str) -> str:
     return "".join(out)
 
 
+def _c_fmt(text: str) -> str:
+    """The inside of a C string literal that is used as a FORMAT of `snprintf`: as `_c_string`, and a `%` is written `%%`, so that a name from the module cannot change the format."""
+    return _c_string(text.replace("%", "%%"))[1:-1]
+
+
 def _signature_code(func: FuncType) -> str:
     """The parameters, '>', the results as one letter each: what two extensions compare before one calls the other."""
     return "".join(_MULTI_CODE[t] for t in func.params) + ">" + "".join(_MULTI_CODE[t] for t in func.results)
@@ -360,7 +365,7 @@ def _emit_links(
         )
         hadd(f"    if (strcmp(e->signature, {_c_string(_signature_code(imp.func))}) != 0) {{")
         hadd(
-            f'        snprintf(msg, cap, "import {where} is a function {_signature_code(imp.func)}: the export given is another one (%s)", e->signature);'
+            f'        snprintf(msg, cap, "import {_c_fmt(where)} is a function {_signature_code(imp.func)}: the export given is another one (%s)", e->signature);'
         )
         hadd("        return 1;")
         hadd("    }")
@@ -415,14 +420,14 @@ def _emit_links(
         )
         hadd(f"    if (tab->size < {lim.min}u) {{")
         hadd(
-            f'        snprintf(msg, cap, "import {where}: the table has %lu elements, the module needs at least {lim.min}", (unsigned long)tab->size);'
+            f'        snprintf(msg, cap, "import {_c_fmt(where)}: the table has %lu elements, the module needs at least {lim.min}", (unsigned long)tab->size);'
         )
         hadd("        return 1;")
         hadd("    }")
         if lim.max is not None:
             hadd(f"    if (tab->max_size > {lim.max}u) {{")
             hadd(
-                f'        snprintf(msg, cap, "import {where}: the table may grow to %lu elements, the module allows {lim.max}", (unsigned long)tab->max_size);'
+                f'        snprintf(msg, cap, "import {_c_fmt(where)}: the table may grow to %lu elements, the module allows {lim.max}", (unsigned long)tab->max_size);'
             )
             hadd("        return 1;")
             hadd("    }")
@@ -474,14 +479,14 @@ def _emit_links(
         )
         hadd(f"    if (mem->pages < {lim.min}ULL) {{")
         hadd(
-            f'        snprintf(msg, cap, "import {where}: the memory has %llu pages, the module needs at least {lim.min}", (unsigned long long)mem->pages);'
+            f'        snprintf(msg, cap, "import {_c_fmt(where)}: the memory has %llu pages, the module needs at least {lim.min}", (unsigned long long)mem->pages);'
         )
         hadd("        return 1;")
         hadd("    }")
         if lim.max is not None:
             hadd(f"    if (mem->max_pages > {lim.max}ULL) {{")
             hadd(
-                f'        snprintf(msg, cap, "import {where}: the memory may grow to %llu pages, the module allows {lim.max}", (unsigned long long)mem->max_pages);'
+                f'        snprintf(msg, cap, "import {_c_fmt(where)}: the memory may grow to %llu pages, the module allows {lim.max}", (unsigned long long)mem->max_pages);'
             )
             hadd("        return 1;")
             hadd("    }")

@@ -107,6 +107,8 @@ From `FEATURES.md`, `TABLES_PLAN.md` and the plans: `funcref` in an import and `
 2. **Shared glue (layer 2): one C API, the same for every module, FFI-neutral** (no Python types, no callbacks that need a GIL, plain structs and function pointers, owners as opaque handles with retain/release). The descriptor of the module is read at run time. Tested from C; this API is the product for every host language.
 3. **Front ends (layer 3)**, one after another over the finished API: ctypes glue (a static `wasmext_ctypes.py`), the executable, the extension. Old logic of the generators is deleted in the same step.
 
+**Rule (the owner): existing code is not patched on the side.** If something already built needs a change, it is not fixed in passing or half-way; it is taken when the plan reaches its step and done there once. The same goes for the known bugs of the old layers (`Function.__call__` and `_pending`, the GIL `Trap` between the extension and ctypes): they are not fixed in the old shape, they disappear or are fixed in the step that owns them.
+
 The ABI is **changed freely** (policy "Alpha does not keep the ABI"); `abi/current.json` and the fingerprint are renewed once at the end of each step. No step starts before the one below is complete and green.
 
 **Done when** (measured): every rule of the table above is written in one place; the C tests of layers 1 and 2 cover the whole API; the suite is green on all platforms; the generated front-end glue holds conversions only (the number is to be fixed in review); the hot path of the benchmark of `context_concept.md` loses no more than a number we agree on.

@@ -1,6 +1,6 @@
 # The architecture of the project: what it is to be at the end
 
-Status: **written 2026-10-28**, at the owner's request, from what is built and from the plans ([WASI_TARGET_PLAN.md](WASI_TARGET_PLAN.md), [thin_glue.md](thin_glue.md), [thin_glue_plan.md](thin_glue_plan.md), [owners_registry.md](owners_registry.md), [context_concept.md](context_concept.md), [why_wasi_p2.md](why_wasi_p2.md)). Every element is marked: **[built]** it exists and is tested, **[planned]** it is decided and has a place in the plan, **[proposed]** it is my synthesis, to be agreed. Where the target differs from today, the section "From here to there" says what moves.
+Status: **written 2026-10-28**, at the owner's request, from what is built and from the plans ([WASI_TARGET_PLAN.md](WASI_TARGET_PLAN.md), layers.md, layers.md, [owners_registry.md](owners_registry.md), [context_concept.md](context_concept.md), [why_wasi_p2.md](why_wasi_p2.md)). Every element is marked: **[built]** it exists and is tested, **[planned]** it is decided and has a place in the plan, **[proposed]** it is my synthesis, to be agreed. Where the target differs from today, the section "From here to there" says what moves.
 
 > **How the library is cut to get this picture is in [layers.md](layers.md)** (the owner's decision: front-end glue -> shared glue -> wasmext glue, one rework of the whole library, not small moves). The table of results R1-R5 at the end of this page is about the *features* that are written once on top of that, after it; it is not the way to the cut.
 
@@ -66,7 +66,7 @@ Each does only: **convert** a value (Python `int`/`float`/`bytes`/`Function`/`me
 
 | Front end | Form | Status |
 | --- | --- | --- |
-| **Extension for CPython** (`--extension`) | `<name>_py.c`: the type objects (`Instance`, `Table`, `Function`, `Store`, `Host`, `Caller`), argument parsing, GC support (`tp_traverse` through the core's owner list), abi3 or native; declares free-threaded support once the Python side is audited | built, but carries logic that belongs below [thin_glue.md] |
+| **Extension for CPython** (`--extension`) | `<name>_py.c`: the type objects (`Instance`, `Table`, `Function`, `Store`, `Host`, `Caller`), argument parsing, GC support (`tp_traverse` through the core's owner list), abi3 or native; declares free-threaded support once the Python side is audited | built, but carries logic that belongs below layers.md |
 | **Wrapper for ctypes** (`--shared`) | the shared library with the C API, and a Python wrapper: *one static file* plus a small generated stub with the names and signatures (instead of a 800-1000 line template) | built as a template; static file [proposed] |
 | **Executable** (`--exe`) | `<name>_main.c`: `main`, options, the store made through the API | built, but it fills the state of fusedwasi by hand instead of the API [to fix] |
 

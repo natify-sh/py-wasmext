@@ -1,10 +1,12 @@
-# Audit of the extension side (generated `<name>_py.c`) against docs/thin_glue.md
+> Measurement of 2026-10-28. Its plan (moving pieces one at a time) is replaced by [../layers.md](../layers.md); the numbers and the lists of what each front end must provide stay valid.
+
+# Audit of the extension side (generated `<name>_py.c`) against the former thin_glue note
 
 Read-only audit of `/home/user/py-wasmext` (branch dev). Nothing in the repo was changed. Scratch output (extra generated modules, scripts) is in `/tmp/claude-0/audit/` (`v/` = extra natify builds, `tally.py` = the line counter used below).
 
 ## 0. What I read, what I ran, how the numbers were made
 
-Read in full: `docs/thin_glue.md`, `docs/owners_registry.md` (first 50 lines = all of it), `/tmp/claude-0/glue/c_rich/rich/rich_py.c` (all 1288 lines), `rich_glue.h` (the typed core part), `rich_api.h` (the public C API), `src/wasmext/c/wasmext_glue.h` lines 105-215, and the template side of `_gen.py` by grep/sample (the line ranges below come from grepping the `add("static ...")` definitions; the bodies I read are the ones visible in the generated output).
+Read in full: `the former thin_glue note`, `docs/owners_registry.md` (first 50 lines = all of it), `/tmp/claude-0/glue/c_rich/rich/rich_py.c` (all 1288 lines), `rich_glue.h` (the typed core part), `rich_api.h` (the public C API), `src/wasmext/c/wasmext_glue.h` lines 105-215, and the template side of `_gen.py` by grep/sample (the line ranges below come from grepping the `add("static ...")` definitions; the bodies I read are the ones visible in the generated output).
 
 Generated and read (parts): extra modules built with `uv run wasmext natify -q -f` from tests/data and /tmp/claude-0/glue:
 
@@ -21,7 +23,7 @@ Generated and read (parts): extra modules built with `uv run wasmext natify -q -
 | fr.wat (mine) | `funcref` parameter and result: `funcref_arg`, `funcref_result`, `refs` | 1049 |
 | ti.wat (mine) | an imported table: `keep_alive`, `scrub_tables` | 1120 |
 
-Not run: the test-suite (I was told read-only; `uv run` was used only for `natify`). Not read: the bodies of `wasi_python.h`/`wasi2_python.h` (I read their header comment and the list of their functions), `rich_shared.c`, `_shared.py`, `_ctypes_gen.py`, `_natify.py`. So every statement about the ctypes wrapper or the shared library below is from `rich_api.h` and `thin_glue.md`, not from their code.
+Not run: the test-suite (I was told read-only; `uv run` was used only for `natify`). Not read: the bodies of `wasi_python.h`/`wasi2_python.h` (I read their header comment and the list of their functions), `rich_shared.c`, `_shared.py`, `_ctypes_gen.py`, `_natify.py`. So every statement about the ctypes wrapper or the shared library below is from `rich_api.h` and `the former thin_glue note`, not from their code.
 
 How the line counts were made (`/tmp/claude-0/audit/tally.py`): the generated file is cut into top-level units (a function, a struct, a method table, a comment block); each unit counted by its non-blank lines (blank lines are 38 / 101 / 97 in add / rich / tbl). A unit gets ONE primary category by name. For eleven mixed functions I split the unit by a fraction that I measured by hand-reading rich (`Instance_new`, `Table_set`, `Table_get`, `table_find_function`, `Store_close`, `export_ref`, `Memory_getbuffer`, `Memory_releasebuffer`, `Table_new`, `wasmext_py_thread_setup_`, `attach_traps`). The fractions are estimates (a line with `PyErr_SetString(...)` inside a check counts as the check, i.e. LOGIC). The totals are therefore good to a few percent, not exact; section 3 gives both the "primary only" and the "split" figures so the effect of the estimate can be seen.
 
@@ -196,7 +198,7 @@ Host-function failure that crosses instances (replaces `_pending`):
 void  wasmext_host_error_set(void *error, void (*release)(void *));   /* thread-local cell; front end stores its exception handle */
 void *wasmext_host_error_take(void);                                 /* the failed call returns the handle; NULL if none */
 ```
-Owners (the main design question of thin_glue.md): opaque handle plus retain/release supplied by the front end:
+Owners (the main design question of the former thin_glue note): opaque handle plus retain/release supplied by the front end:
 ```c
 typedef struct { void (*retain)(void *owner); void (*release)(void *owner); } wasmext_owner_ops;
 void wasmext_store_set_owner_ops(<name>_store *st, const wasmext_owner_ops *ops);  /* extension: Py_INCREF/DECREF thunks; exe: NULL */
@@ -243,7 +245,7 @@ int  wasmext_thread_setup(void);              /* 1 if a thread-exit hook must be
 int  wasmext_traps_attach(void *(*get)(const char *key), int (*put)(const char *key, const void *p));
 int  wasmext_runtime_init(void);              /* wasm_rt_init, stack limit, chain handler: the 7 init lines of PyInit */
 ```
-What the front ends must provide (the answer to the "Open" question in thin_glue.md about logic that cannot leave Python):
+What the front ends must provide (the answer to the "Open" question in the former thin_glue note about logic that cannot leave Python):
 - retain/release of an owner (`wasmext_owner_ops`), and the `tp_traverse` visit of the owners the core lists;
 - creating the exception object for a core `wasmext_error`/`wasmext_trap_info`, and the `wasmext_host_error` handle;
 - a host function as a Python callable: the trampoline (`py_importN` or one dynamic one) and the GIL rule: the front end's trampoline must acquire what its runtime needs before calling Python (the known failing scenario of `test_a_python_callback_in_a_table_function`: the ctypes front end releases the GIL, the extension does not; put the rule in one named hook `host_enter/host_leave` of the ops table);
@@ -271,7 +273,7 @@ Each step keeps behavior and tests; each is one commit's worth. "Tests" are the 
 | 11 | (behavior change, not part of "same tests") one place for the rule "who holds the GIL when a host function is called" (`host_enter/host_leave` in the ops table). This is the fix for the known divergence, so it needs a new/changed test. | small | high | `test_wasi_across_instances.py::test_a_python_callback_in_a_table_function` |
 | 12 | Last: generic `<name>_callref_dyn` and `<name>_type_info_at` so `Function_call` and `Function_signature` lose their per-type switch, and a dynamic `py_import_dyn`. Only if the benchmark of `docs/context_concept.md` shows no loss on the hot path; keep the typed `Instance_fN`/`py_importN` fast paths regardless. | about 40 lines + the 17-copy `py_importN` | medium: speed | benchmark + test_extension |
 
-Order logic: 1 (dedupe) first because it makes every later diff small and gives the first real numbers; 2-3 are the free ones (no ownership); 4-6 are about decisions and records; 7-8 are the ownership change that the whole of thin_glue.md hangs on; 9-10 are the smaller state moves; 11 and 12 are separate because one changes behavior and the other may cost speed.
+Order logic: 1 (dedupe) first because it makes every later diff small and gives the first real numbers; 2-3 are the free ones (no ownership); 4-6 are about decisions and records; 7-8 are the ownership change that the whole of the former thin_glue note hangs on; 9-10 are the smaller state moves; 11 and 12 are separate because one changes behavior and the other may cost speed.
 
 ## 6. What I could not determine
 

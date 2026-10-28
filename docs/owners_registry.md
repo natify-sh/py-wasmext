@@ -2,7 +2,7 @@
 
 Status: **written 2026-10-28, for the owner's review; nothing of this is built.** It takes what is already decided in [TABLES_PLAN.md](TABLES_PLAN.md) ("Not built, and what it would take") and in [context_concept.md](context_concept.md) (the arena, the locking), and says in one place what the first piece of work is. What is not decided is under "Open".
 
-**Where it lives (2026-10-28):** the logic of the registry is in the core (plain C, shared by the three targets), not in the extension and again in the wrapper for ctypes: see [thin_glue.md](thin_glue.md). Where this note says "the glue of the built modules", read it as that core; the extension and the wrapper only give the registry a retain and a release for their own kind of owner.
+**Where it lives (2026-10-28):** the logic of the registry is in the core (plain C, shared by the three targets), not in the extension and again in the wrapper for ctypes: see [layers.md](layers.md). Where this note says "the glue of the built modules", read it as that core; the extension and the wrapper only give the registry a retain and a release for their own kind of owner.
 
 ## The problem, in plain words
 

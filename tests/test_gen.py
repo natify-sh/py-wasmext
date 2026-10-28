@@ -101,6 +101,17 @@ def test_everything_in_the_glue_header_is_inside_its_include_guard() -> None:
     assert header.index("fast_glue_initialize") < header.rindex("#endif")
 
 
+def test_the_c_that_links_a_function_import_does_not_read_a_missing_signature() -> None:
+    """The record of an export is filled by a C host by hand; a function with a NULL signature went to `strcmp`. (A text test: the record cannot be made from outside.)"""
+    data = module(
+        section(1, vec(functype([I32], []))),
+        section(2, vec(name("env") + name("f") + b"\x00" + leb(0))),
+    )
+    header = generate(parse(data), "m").header
+    assert "e->signature == NULL || strcmp(e->signature," in header
+    assert 'e->signature != NULL ? e->signature : ""' in header
+
+
 def test_the_dotted_name_is_the_type_name_and_the_last_part_the_init_function() -> None:
     data = module(section(1, vec(functype([], []))), HEADER_FUNC, code(b"\x00\x0b"))
     glue = generate(parse(data), "pkg.sub.fast")

@@ -363,9 +363,9 @@ def _emit_links(
         hadd(
             f"    if (e->kind != WASMEXT_FUNC) return wasmext_link_fail(msg, cap, {_c_string(f'import {where} is a function: the export given is not')});"
         )
-        hadd(f"    if (strcmp(e->signature, {_c_string(_signature_code(imp.func))}) != 0) {{")
+        hadd(f"    if (e->signature == NULL || strcmp(e->signature, {_c_string(_signature_code(imp.func))}) != 0) {{")
         hadd(
-            f'        snprintf(msg, cap, "import {_c_fmt(where)} is a function {_signature_code(imp.func)}: the export given is another one (%s)", e->signature);'
+            f'        snprintf(msg, cap, "import {_c_fmt(where)} is a function {_signature_code(imp.func)}: the export given is another one (%s)", e->signature != NULL ? e->signature : "");'
         )
         hadd("        return 1;")
         hadd("    }")

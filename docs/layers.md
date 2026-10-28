@@ -49,6 +49,16 @@ Today each generator re-reads the parsed module and decides again what is export
 | errors, traps | `error_describe(code)` -> kind, text, exit value, signal, whether it is an exception of WebAssembly; the cell for the error of a host function; one rule for who holds the lock when a host function is called |
 | host calls | one uniform callback `host_fn(user, args[], results[])` for every import, and `call` the same way, with typed fast paths kept (the hot path of the benchmark of `context_concept.md` is the criterion) |
 
+**Rules for the header of layer 2 (so that a standard binding generator, `bindgen`, `cbindgen`, `ffigen`, ctypes, can read it with no hand edits):**
+
+- opaque handle types for store, instance, owner; no pointer to an internal struct in a signature;
+- plain structs; a value is a tagged `wasmext_val { type; union { i32, i64, f32, f64, v128[16], ref } }`, and **a union (or a struct that holds one) is passed only by pointer or in an array, never by value**; `v128` the same;
+- no variadic functions: a call takes `args[]`/`results[]` with their counts (the arity of a function is its signature, read from the descriptor);
+- no macros in signatures; error codes as return values, no exception, `longjmp` or trap across the API;
+- one callback shape for every host function: `host_fn(user, args[], results[])`.
+
+The test of the rule: the header goes through a standard generator and the result builds, with no edit.
+
 The descriptor removes the generated tables from the wrapper and the per-import entry points from the API; **how the library describes itself is the first thing to settle in review.**
 
 ## Layer 3: the front ends

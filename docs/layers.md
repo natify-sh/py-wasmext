@@ -86,7 +86,18 @@ From `FEATURES.md`, `TABLES_PLAN.md` and the plans: `funcref` in an import and `
 
 **Build the lower layer completely before the one above it.** Layers 1 and 2 are plain C with no FFI in mind: any language that can call C (Python `ctypes`/CPython, Rust, Go, Node, a C host) is a front end. So they are tested **directly from C**, with a small C test harness (`tests/c/`, built by the same toolchain as the modules, run by `pytest` and by CI on every platform, with the sanitizers). The Python front ends are written last and add no logic; their tests stay as the check that nothing was lost.
 
-1. **Wasmext glue (layer 1), complete.** The whole WebAssembly API and every feature of the "begun and not finished" list, finished or removed: functions, memories, tables, globals, tags, `funcref`/`externref`, the registry of owners, traps and errors, memory pin, and the **shared store** (C7) that the runtime and the host both use. Tested from C against small `.wat` modules.
+1. **Wasmext glue (layer 1), complete**, in this order (each step depends on the one before; its C test is written first):
+   1. **Model and descriptor**: the data every later step reads.
+   2. **Store**: arena, `close`, config (WASI from fusedwasi), error codes and description, trap stack (C2a part 1 exists).
+   3. **Instances**: exports of functions, memories, globals; imports by index; one host-callback shape; `memory_pin`.
+   4. **Registry of owners** (C2b/C2c): opaque handle with retain/release.
+   5. **Tables and `funcref`** (C4): `funcref` in imports and parameters, `Function`, host functions in tables.
+   6. **`externref`** (C5): rests on the owners of step 4.
+   7. **Tags and exceptions across instances** (C6): one identity of a tag in a store.
+   8. **Shared store across separately built modules** (C7, decision 6): after 4-7, so that the layout of the record is not changed twice.
+   9. **Lazy collector** (C8): last; needs the registry and the shared store.
+
+   Removed from the plans: threads/atomics, custom page sizes, `.wat` as a source, other build backends. Free-threaded declaration stays the last item, after an audit of the Python side. All tested from C against small `.wat` modules.
 2. **Shared glue (layer 2): one C API, the same for every module, FFI-neutral** (no Python types, no callbacks that need a GIL, plain structs and function pointers, owners as opaque handles with retain/release). The descriptor of the module is read at run time. Tested from C; this API is the product for every host language.
 3. **Front ends (layer 3)**, one after another over the finished API: ctypes glue (a static `wasmext_ctypes.py`), the executable, the extension. Old logic of the generators is deleted in the same step.
 

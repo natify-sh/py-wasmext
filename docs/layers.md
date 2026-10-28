@@ -82,31 +82,30 @@ The extension does **not** reimplement what layer 2 has: it links `<name>_shared
 
 From `FEATURES.md`, `TABLES_PLAN.md` and the plans: `funcref` in an import and `Function` with a `funcref` parameter (refused); `externref` (refused); host functions as table members (refused); exported tags (not yet); the public store across modules (a `Store` of another module is a `TypeError`; C7); `host_full` and the shared runtime across artifacts (C7); the lazy collector (C8); threads/atomics and custom page sizes (not yet); `.wat` as a source (declined); other build backends (partly); Android arm64 (built, not tested); the free-threaded declaration (not made until the Python side is audited). For each one the decision is **finish it in the new layers, or remove it**; none is carried over half-made.
 
-## How it is done: one rework, not many small moves
+## How it is done: bottom-up, tested from C (the owner, 2026-10-28)
 
-On a branch, with the whole suite as the net (about 250 tests run on both front ends through the `front_end` fixture, plus the sanitizers, the Windows/macOS/Linux matrix, the official WASI tests and the examples). The ABI is **changed freely** (policy "Alpha does not keep the ABI"): `abi/current.json` and the fingerprint of `src/wasmext/c/` are renewed once, at the end of each step.
+**Build the lower layer completely before the one above it.** Layers 1 and 2 are plain C with no FFI in mind: any language that can call C (Python `ctypes`/CPython, Rust, Go, Node, a C host) is a front end. So they are tested **directly from C**, with a small C test harness (`tests/c/`, built by the same toolchain as the modules, run by `pytest` and by CI on every platform, with the sanitizers). The Python front ends are written last and add no logic; their tests stay as the check that nothing was lost.
 
-1. **The model and the descriptor** (layer 2's `describe`, the model read by every emitter). Nothing else changes yet.
-2. **Layer 2 and its implementation in the core**, tested through the ctypes wrapper first (it already goes through a C API), written once; the old shape of the API is replaced.
-3. **The executable** over the API.
-4. **The extension** over the same API, the shared glue built in; the old logic deleted in the same step.
-5. **Delete** the old emitters' logic and the tests that tested the old shape; port what they guarded.
-6. Then the unfinished list above, each item written once on top.
+1. **Wasmext glue (layer 1), complete.** The whole WebAssembly API and every feature of the "begun and not finished" list, finished or removed: functions, memories, tables, globals, tags, `funcref`/`externref`, the registry of owners, traps and errors, memory pin, and the **shared store** (C7) that the runtime and the host both use. Tested from C against small `.wat` modules.
+2. **Shared glue (layer 2): one C API, the same for every module, FFI-neutral** (no Python types, no callbacks that need a GIL, plain structs and function pointers, owners as opaque handles with retain/release). The descriptor of the module is read at run time. Tested from C; this API is the product for every host language.
+3. **Front ends (layer 3)**, one after another over the finished API: ctypes glue (a static `wasmext_ctypes.py`), the executable, the extension. Old logic of the generators is deleted in the same step.
 
-**Done when** (measured): every rule of the table above is written in one place; the suite is green on all platforms; the generated front-end glue is a fraction of today's (a number to fix in review: the target is that the extension's `_py.c` and the wrapper hold conversions only); the hot path of the benchmark of `context_concept.md` loses no more than a number we agree on; the audit of `thin_glue.md` shows no *logic* in layer 3.
+The ABI is **changed freely** (policy "Alpha does not keep the ABI"); `abi/current.json` and the fingerprint are renewed once at the end of each step. No step starts before the one below is complete and green.
+
+**Done when** (measured): every rule of the table above is written in one place; the C tests of layers 1 and 2 cover the whole API; the suite is green on all platforms; the generated front-end glue holds conversions only (the number is to be fixed in review); the hot path of the benchmark of `context_concept.md` loses no more than a number we agree on.
 
 ## Risks and what is not known
 
-- Whether the extension can link the shared glue statically, with its flags, on Windows (MSVC), macOS, Pyodide, Android: **not tried**; the first thing to test.
-- Speed of the generic `call`/host callback against the typed paths: **not measured**.
+- Whether the extension can link the shared glue statically, with its flags, on Windows (MSVC), macOS, Pyodide, Android: **not tried**; test it when step 3 starts.
+- Speed of the generic `call`/host callback against the typed paths: **not measured**; measure from the C harness.
 - Free-threaded builds and sub-interpreters with owners held by the core: **not tried**.
-- A rework of this size touches most of the generator; the tests of the old shape (message texts, the generated names) have to be ported, not skipped.
-- The thin-glue stage 1 on the branch `thin-glue` (dedupe inside the templates) is a small step in the same direction; it is replaced by this rework if the review accepts it.
+- A rework of this size touches most of the generator; the tests of the old shape have to be ported, not skipped.
+- The thin-glue stage 1 on the branch `thin-glue` is superseded by this rework and is not to be merged.
 
 ## Decisions I need
 
-1. The cut itself: three layers, the extension over the same C API as the others.
-2. The descriptor: the library describes itself at run time, imports bound by index with one callback shape (typed fast paths kept for exports).
-3. Alpha: the C API and the records may be changed freely for this rework.
+1. The bottom-up order above, with the C test harness.
+2. The cut: three layers; the extension over the same C API as the others.
+3. The descriptor: the library describes itself at run time; imports bound by index with one callback shape; typed fast paths kept for exports.
 4. The list of "begun and not finished": for each, finish or remove.
-5. The acceptance numbers: the size of the front-end glue, the allowed loss on the hot path.
+5. The acceptance numbers: size of the front-end glue, allowed loss on the hot path.

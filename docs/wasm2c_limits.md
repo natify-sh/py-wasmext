@@ -17,7 +17,7 @@ What `wasm-opt` can do is read from the source of Binaryen (`version_133`, the l
 
 **Who needs it.** Mostly the modules that also use GC (the languages that compile to WasmGC). Alone it is rare. So its value depends on the section below.
 
-**Verdict.** Wait for WABT. A rewrite is possible but not planned. The ways in full, with what was found in the session of 2026-10-22 (`wasmext inspect` says "can be wrapped" for a module that `natify` then cannot build), are in [typed_function_references_concept.md](typed_function_references_concept.md).
+**Verdict.** Wait for WABT. A rewrite is possible but not planned. The ways in full, with what was found in the session of 2026-10-22 (`wasmext inspect` says "can be wrapped" for a module that `natify` then cannot build), are in typed_function_references_concept.md.
 
 ## Garbage collection (WasmGC)
 

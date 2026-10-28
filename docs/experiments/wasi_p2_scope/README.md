@@ -1,7 +1,7 @@
 # What a host of WASI 0.2 has to implement
 
 `scope.py` counts the functions of the WIT of WASI 0.2 (tag `v0.2.12` of `WebAssembly/WASI`, stable items only) and sets them against the imports of four programs (git, git with sockets, hello, CPython with OpenSSL) and
-against what the hosts in `examples/wasi2_unbundled` and `examples/wasi2_python` implement. The report is [../../wasi_p2_host_scope.md](../../wasi_p2_host_scope.md); `table.md` is the output.
+against what the hosts in `examples/wasi2_unbundled` and `examples/wasi2_python` implement. The report is ../../wasi_p2_host_scope.md; `table.md` is the output.
 
 ```sh
 git clone --depth 1 --branch v0.2.12 https://github.com/WebAssembly/WASI wasi

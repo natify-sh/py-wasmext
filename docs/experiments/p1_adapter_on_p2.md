@@ -1,6 +1,6 @@
 # Experiment: a WASI 0.1 program on the WASI 0.2 host through Wasmtime's wasm adapter ("variant 1")
 
-Date 2026-10-26. Done by a subagent in `/tmp/claude-0/exp_adapter` (scripts: `work/pipe.sh`, `fix.py`, `build.py`, `suite.py`, `bench.py`); nothing in the repositories was changed. The numbers are the agent's, read from its report; the explanations marked *(inferred)* were not checked against a source. The owner's decision stands: this is an **experiment, not the path** (`fusedwasi_unification.md`, "Decision"); the useful result is what it showed about the p2 host.
+Date 2026-10-26. Done by a subagent in `/tmp/claude-0/exp_adapter` (scripts: `work/pipe.sh`, `fix.py`, `build.py`, `suite.py`, `bench.py`); nothing in the repositories was changed. The numbers are the agent's, read from its report; the explanations marked *(inferred)* were not checked against a source. The owner's decision stands: this is an **experiment, not the path** (a removed note, "Decision"); the useful result is what it showed about the p2 host.
 
 ## What it is
 

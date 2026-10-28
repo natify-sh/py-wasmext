@@ -1,7 +1,7 @@
 # One runtime for modules built apart: master and slave (an alternative, to be investigated)
 
 Status: **an idea; a first experiment says it is possible (see "What the first experiment showed" below); not decided, nothing built in wasmext.** Written 2026-10-22 after the finding that two autonomous modules in one process disagree about the one handler of signals
-([where_we_stopped_2026-10-22.md](where_we_stopped_2026-10-22.md), "Found and not solved"; `tests/test_two_modules.py`). How a fact is known: **[run]** run here, **[read]** read in sources (WABT `0086e24`, this repository), **[estimate]** a judgement.
+(where_we_stopped_2026-10-22.md, "Found and not solved"; `tests/test_two_modules.py`). How a fact is known: **[run]** run here, **[read]** read in sources (WABT `0086e24`, this repository), **[estimate]** a judgement.
 The first thing to do with it is **to find out whether it is possible at all**; the list of what to find out is below, and nothing should be built before it is answered.
 
 ## The idea

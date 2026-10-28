@@ -24,7 +24,13 @@ Where the logic is (the largest functions of `rich`):
 - extension: `Instance_new` (74 lines; makes the instance, binds the imports), `Table_set` (52), `Function_call` (40), `lookup_import` (31), `table_find_function`, `function_holder`, `export_ref`, `attach_traps`, `raise_trap_code`;
 - wrapper for ctypes: class `Instance` (344), `Table` (119), `_set_import` (75), `Function` (68), `_share_traps`, `Store`.
 
+**How tangled it is** (a rough count on the generated C of the extension, by function: references to the Python API, `Py*`): in `add` 4 % of the lines are in functions with no reference to Python, in `rich` 2 %, in a module with a shared table 3 %; 86 to 89 % are in functions with four or more. A reference is also a plain conversion (`PyLong_AsLong`), so the count is coarse, but it says the logic **cannot be lifted out as it is**: it has to be unpicked from the handling of Python objects first.
+
 A first consequence is already known: the same scenario (a function of a table that calls a Python callback) works on one pair of front ends and traps on another (`tests/test_wasi_across_instances.py`, `test_a_python_callback_in_a_table_function`; the cause is that `CDLL` of the wrapper releases the GIL and the extension calls Python without it). With one core there would be one place for that rule.
+
+## The decision of the owner (2026-10-28)
+
+**First level what exists, before anything is added.** No new feature of the store (the registry of owners, `funcref` in imports, `externref`, tags) is built until the audit below is done and the first pieces are in the core. The order of the plan is changed to that.
 
 ## The way (proposed, not decided)
 

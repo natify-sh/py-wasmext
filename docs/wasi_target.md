@@ -2,6 +2,8 @@
 
 Status: **agreed in principle on 2026-10-23, not built.** Nothing here is in the code. It is written down so that it is not only in a conversation. Open points are at the end.
 
+Why the target `wasm32-wasip2` is supported at all: [why_wasi_p2.md](why_wasi_p2.md).
+
 ## The problem
 
 A module imports functions, and a part of them wasmext can answer by itself: the calls of WASI 0.1 are in C in every module that imports them, and `wasi=` holds their configuration (arguments, environment, files, streams, clocks). The WASI 0.2 imports are today ordinary imports: the stub has a `TypedDict` for each module (`_Imports0`, `_Imports1`, …, numbered by the order of the import section) and the caller writes the functions, or takes them from a host such as the Python one of fusedwasi.

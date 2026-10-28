@@ -2,6 +2,8 @@
 
 Status: **stages 0-6 are built and green on all platforms; the context (C0-C8, the end of this file) and then stage 7 are what is left.** The concept and the reasons are in [wasi_target.md](wasi_target.md); this file is the order of the work. Each stage is a separate change that leaves the tests green. No stage changes the C ABI (`WASMEXT_ABI`) unless it says so. The numbers in brackets are the items of the agreed list.
 
+Why WASI 0.2 at all (the principle "run an unmodified module", the evidence from git and CPython, the price): [why_wasi_p2.md](why_wasi_p2.md). The plan of the sister library after this one: `ROADMAP.md` of py-wasmhost.
+
 ## Stage 0: measure and check (no code in the product)
 
 - Measure the crossing C to Python to C twice (a wrapper of an import that calls the original), to know whether a reference to the original can be a thin object made on demand. Decides the shape of stage 4. [39]

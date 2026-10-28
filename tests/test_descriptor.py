@@ -52,28 +52,49 @@ MODULES: dict[str, str] = {
 }
 
 
-@pytest.fixture(scope="module")
-def cc() -> str:
-    exe = shutil.which(os.environ.get("CC", "cc")) or shutil.which("gcc") or shutil.which("clang")
-    if exe is None:
+def _compile(sources: list[Path], exe: Path, last: str) -> None:
+    """Builds the C reader with `cc`, or with the compiler of Python (MSVC on Windows), the way the other tests build."""
+    cc = (
+        None
+        if os.name == "nt"
+        else shutil.which(os.environ.get("CC", "cc")) or shutil.which("gcc") or shutil.which("clang")
+    )
+    if cc is not None:
+        extra = shlex.split(os.environ.get("WASMEXT_TEST_CFLAGS", ""))
+        subprocess.run(
+            [cc, "-std=c99", "-Wall", "-Wextra", "-Werror", *extra, f"-DDESCRIBE={last}_describe", f"-I{WASMEXT_C}",
+             *map(str, sources), "-o", str(exe)],
+            check=True,
+        )  # fmt: skip
+        return
+    from setuptools._distutils.errors import DistutilsPlatformError  # pyright: ignore[reportMissingTypeStubs]
+    from setuptools._distutils.ccompiler import new_compiler  # pyright: ignore[reportMissingTypeStubs]
+
+    compiler = new_compiler()
+    initialize = getattr(compiler, "initialize", None)  # the MSVC compiler looks for Visual Studio here
+    try:
+        if initialize is not None:
+            initialize()
+    except DistutilsPlatformError:
         pytest.skip("no C compiler")
-    return exe
+    objects = compiler.compile(  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
+        [str(x) for x in sources],
+        output_dir=str(exe.parent / (exe.stem + "_obj")),
+        include_dirs=[str(WASMEXT_C)],
+        macros=[("DESCRIBE", f"{last}_describe")],
+    )
+    compiler.link_executable(objects, exe.stem, output_dir=str(exe.parent))  # pyright: ignore[reportUnknownMemberType]
 
 
 @pytest.fixture(scope="module")
-def dump_c(cc: str, tmp_path_factory: pytest.TempPathFactory) -> Callable[[str, str, str], str]:
+def dump_c(tmp_path_factory: pytest.TempPathFactory) -> Callable[[str, str, str], str]:
     out = tmp_path_factory.mktemp("descriptor")
 
     def run(descriptor_c: str, last: str, key: str) -> str:
         src = out / f"{key}_descriptor.c"
         src.write_text(descriptor_c, encoding="utf-8")
-        exe = out / f"{key}.exe"
-        extra = shlex.split(os.environ.get("WASMEXT_TEST_CFLAGS", ""))
-        subprocess.run(
-            [cc, "-std=c99", "-Wall", "-Wextra", "-Werror", *extra, f"-DDESCRIBE={last}_describe", f"-I{WASMEXT_C}",
-             str(C_DIR / "dump_descriptor.c"), str(src), "-o", str(exe)],
-            check=True,
-        )  # fmt: skip
+        exe = out / (f"{key}.exe" if os.name == "nt" else key)
+        _compile([C_DIR / "dump_descriptor.c", src], exe, last)
         return subprocess.run([str(exe)], check=True, capture_output=True, text=True).stdout
 
     return run
@@ -112,16 +133,12 @@ def test_parameter_names_are_in_the_model(wabt: Path, tmp_path: Path) -> None:
     assert "names " in model.dump()
 
 
-def test_a_reader_refuses_another_version(cc: str, wabt: Path, tmp_path: Path) -> None:
+def test_a_reader_refuses_another_version(dump_c: Callable[[str, str, str], str], wabt: Path, tmp_path: Path) -> None:
     model = build_model(parse(_binary(wabt, MODULES["add"], tmp_path, "add")), "add")
     source = generate_descriptor(model).replace(
         "WASMEXT_DESCRIPTOR_VERSION, sizeof", "WASMEXT_DESCRIPTOR_VERSION + 1u, sizeof"
     )
-    (tmp_path / "d.c").write_text(source, encoding="utf-8")
-    subprocess.run(
-        [cc, f"-DDESCRIBE={model.last}_describe", f"-I{WASMEXT_C}", str(C_DIR / "dump_descriptor.c"), str(tmp_path / "d.c"), "-o", str(tmp_path / "d")],
-        check=True,
-    )  # fmt: skip
-    result = subprocess.run([str(tmp_path / "d")], check=False, capture_output=True, text=True)
-    assert result.returncode == 2
-    assert "descriptor version" in result.stderr
+    with pytest.raises(subprocess.CalledProcessError) as raised:
+        dump_c(source, model.last, "other_version")
+    assert raised.value.returncode == 2
+    assert "descriptor version" in raised.value.stderr

@@ -23,9 +23,13 @@ program needs a CA bundle (pip's own `certifi` is inside the pip wheel and is fo
 ## Build and run
 
 ```sh
-# 1. the program: CPython and OpenSSL for wasm32-wasip2 (see ../../docs/experiments/wasi_p1_p2_cpython/: opensslbuild.sh, then cpbuild.sh host p2 with --with-openssl)
+# 1. the program: CPython and OpenSSL for wasm32-wasip2 (see ../../docs/experiments/wasi_p1_p2_cpython/: opensslbuild.sh, then cpbuild.sh). For p2 the compiler has to be named: without
+#    CC, CPP and CXX the build makes a core module for WASI 0.1 under the name of a component, and build_wasm.py below fails (no unbundled-module0.wasm). The extra arguments go after `--`:
+#      cpbuild.sh host p2 -- "CC=$SDK/bin/clang --target=wasm32-wasip2" "CPP=$SDK/bin/clang --target=wasm32-wasip2 -E" \
+#          "CXX=$SDK/bin/clang++ --target=wasm32-wasip2" --with-openssl=$OPENSSL
+#    (remove cross-build/wasm32-wasip2 of the CPython checkout first if it was configured for another compiler)
 # 2. the module out of the component, and the standard library
-python build_wasm.py /path/to/cpython/cross-build/wasm32-wasip2/python.wasm       # src/wasi2python/_python.wasm, 36 MB, not in git
+python build_wasm.py /path/to/cpython/cross-build/wasm32-wasip2/python.wasm       # src/wasi2python/_python.wasm, 36 MB, and _imports.py (its imports), not in git
 python tools/make_stdlib.py /path/to/cpython /tmp/pyroot                           # /tmp/pyroot/lib/python3.15 (+ wasi_pip)
 # 3. the extension (wasm2c + a C compiler: several minutes), then run
 uv sync --reinstall

@@ -5,7 +5,7 @@
 [wasmext](../..): a package with no WebAssembly engine at run time.
 
 ```sh
-# wasmext (and with it wabt-package) is a build requirement, and a C compiler is needed. wasmext is not on PyPI yet.
+# wasmext (and with it wabt-package) is a build requirement, and a C compiler is needed. The wasmext on PyPI is older than this repository (uv takes it from the root of the repository).
 # From a checkout, uv takes wasmext from the root of the repository (`[tool.uv.sources]` in pyproject.toml). This is the way to
 # build the example:
 uv sync --reinstall      # --reinstall: build the extension again (uv keeps what it built before)

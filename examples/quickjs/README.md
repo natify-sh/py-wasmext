@@ -5,7 +5,7 @@
 time, and a JavaScript engine that reads and writes files through the WASI that wasmext compiles into the module.
 
 ```sh
-# wasmext (and with it wabt-package) is a build requirement, and a C compiler is needed. wasmext is not on PyPI yet, so uv takes it
+# wasmext (and with it wabt-package) is a build requirement, and a C compiler is needed. The wasmext on PyPI is older than this repository, so uv takes it
 # from the root of the repository (`[tool.uv.sources]` in pyproject.toml). This is the way to build the example:
 uv sync --reinstall                                   # --reinstall: build the extension again (uv keeps what it built before)
 uv run python -m qjswasm -e "console.log(2 ** 10)"   # 1024

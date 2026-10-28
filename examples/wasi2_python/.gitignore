@@ -1,2 +1,4 @@
 # the core module of CPython (about 36 MB): made by build_wasm.py
 src/wasi2python/_python.wasm
+# the imports of that module, by module name: made by build_wasm.py
+src/wasi2python/_imports.py

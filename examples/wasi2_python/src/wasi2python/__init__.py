@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
-import importlib.resources
 import io
 from collections.abc import Mapping, Sequence
 
@@ -22,25 +20,25 @@ def run(
     stderr: io.RawIOBase | io.BufferedIOBase | None = None,
 ) -> int:
     """Run `python ARGUMENTS...`; `preopens` is [(directory of the host, name for the program)]. Returns the exit code."""
-    from wasmext import parse
-
     from . import _python  # type: ignore[attr-defined]
+    from ._imports import IMPORTS  # type: ignore[import-not-found]  # made by build_wasm.py with _python.wasm
 
     host = NetHost(["python", *arguments], dict(environment or {}), list(preopens), stdout=stdout, stderr=stderr)
     given, table = host.imports(), host.table()
     imports: dict[str, dict[str, object]] = {}
-    for item in parse(importlib.resources.files(__package__).joinpath("_python.wasm").read_bytes()).imports:
-        key = (item.module.split("@")[0], item.name)
-        function = table.get(key) or given.get(item.module, {}).get(item.name)
-        if item.name.startswith("[resource-drop]"):
-            function = host.drop
-        if function is None:
-            label = f"{key[0]}.{item.name}"
+    for module, names in IMPORTS.items():
+        for name in names:
+            key = (module.split("@")[0], name)
+            function = table.get(key) or given.get(module, {}).get(name)
+            if name.startswith("[resource-drop]"):
+                function = host.drop
+            if function is None:
+                label = f"{key[0]}.{name}"
 
-            def function(*_a: int, label: str = label) -> None:  # type: ignore[misc]
-                raise NotImplementedError(label)
+                def function(*_a: int, label: str = label) -> None:  # type: ignore[misc]
+                    raise NotImplementedError(label)
 
-        imports.setdefault(item.module, {})[item.name] = function
+            imports.setdefault(module, {})[name] = function
     instance = _python.Instance(_python.Store(), imports=imports)
     host.bind(instance)
     try:

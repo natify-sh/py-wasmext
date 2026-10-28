@@ -20,7 +20,7 @@ include-package-data = false
 wasi2demo = ["py.typed", "*.pyi"]
 
 [tool.uv.sources]
-# For `uv build` / `uv sync` in a checkout: wasmext (not on PyPI yet) comes from the root of this repository, build requirement included.
+# For `uv build` / `uv sync` in a checkout: wasmext (the one on PyPI is older than this repository) comes from the root of this repository, build requirement included.
 wasmext = { path = "../..", editable = false }
 
 [dependency-groups]

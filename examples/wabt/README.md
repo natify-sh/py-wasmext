@@ -5,7 +5,7 @@ CPython extensions: `wat2wasm` (text to binary) and `wasm2c` (binary to C) as WA
 each), with no engine and no WABT binary at run time. A test that the C-to-extension pipeline can run on its own output.
 
 ```sh
-# wasmext (and with it wabt-package) is a build requirement, and a C compiler is needed. wasmext is not on PyPI yet, so uv takes it
+# wasmext (and with it wabt-package) is a build requirement, and a C compiler is needed. The wasmext on PyPI is older than this repository, so uv takes it
 # from the root of the repository (`[tool.uv.sources]` in pyproject.toml). This is the way to build the example:
 uv sync --reinstall                       # --reinstall: build the extensions again (uv keeps what it built before)
 uv run pytest

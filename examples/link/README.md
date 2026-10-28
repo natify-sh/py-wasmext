@@ -5,7 +5,7 @@ Two WebAssembly modules built into two native CPython extensions that **use each
 calls `bump` of `_counter` as a C function, and reads and writes the same bytes and the same variable.
 
 ```sh
-# a C compiler is needed; wasmext is not on PyPI yet, so uv takes it from the root of the repository
+# a C compiler is needed; the wasmext on PyPI is older than this repository, so uv takes it from the root of the repository
 # (`[tool.uv.sources]` in pyproject.toml). This is the way to build the example:
 uv sync --reinstall      # --reinstall: build the extensions again (uv keeps what it built before)
 uv run python -m linkdemo

@@ -10,7 +10,7 @@ written in Python** (`wasi2demo.host.Host`). Nothing in wasmext knows WASI 0.2: 
 | `c/sock.c` → `_sock` | connects to a TCP server, sends `ping`, prints the reply (`pong`) | 401 KB | 74 |
 
 ```sh
-# a C compiler is needed; wasmext is not on PyPI yet, so uv takes it from the root of the repository
+# a C compiler is needed; the wasmext on PyPI is older than this repository, so uv takes it from the root of the repository
 # (`[tool.uv.sources]` in pyproject.toml)
 uv sync --reinstall      # --reinstall: build the extensions again (uv keeps what it built before)
 uv run pytest

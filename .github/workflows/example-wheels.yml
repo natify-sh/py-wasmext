@@ -45,18 +45,6 @@ jobs:
         run: uv build --wheel --out-dir dist
         shell: bash
 
-      # wasmext depends on fusedwasi, which is not released (0.0.0 on PyPI is an empty placeholder): the revision that uv.lock pins is built here and put beside the wheel
-      # of wasmext, with the local version 0.0.0+ci so that pip takes it before the placeholder (the examples are built with --find-links on this folder).
-      - name: Build the wheel of fusedwasi (the revision of uv.lock)
-        shell: bash
-        run: |
-          rev=$(python3 -c "import tomllib; d = tomllib.load(open('uv.lock', 'rb')); print(next(p['source']['git'] for p in d['package'] if p['name'] == 'fusedwasi').split('#')[1])")
-          git clone https://github.com/natify-sh/fusedwasi "$RUNNER_TEMP/fusedwasi"
-          git -C "$RUNNER_TEMP/fusedwasi" checkout "$rev"
-          sed -i 's/^version = "0.0.0"$/version = "0.0.0+ci"/' "$RUNNER_TEMP/fusedwasi/pyproject.toml"
-          uv build --wheel --out-dir dist "$RUNNER_TEMP/fusedwasi"
-          ls dist
-
       - name: Upload the wheel
         uses: actions/upload-artifact@v7
         with:

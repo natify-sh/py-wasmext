@@ -1,4 +1,4 @@
-> **Moved (2026-10-23): the host of WASI 0.2 is in [natify-sh/fusedwasi](https://github.com/natify-sh/fusedwasi)** (branch `wasi-p2`): the C in `src/fusedwasi/include/fusedwasi/p2/`, the Python in `src/fusedwasi/p2/`, the tests, `tools/wasi_p2_audit` and `tools/wasi_p2_conformance`. wasmext has it as a dev dependency (`uv.sources`). The paths below are those of before the move (`src/wasmext/c/p2/`, `src/wasmext/p2/`, `tests/test_wasi_p2_*.py`, `docs/experiments/wasi_p2_*`).
+> **Moved (2026-10-23): the host of WASI 0.2 is in [natify-sh/fusedwasi](https://github.com/natify-sh/fusedwasi)** (released on PyPI as `fusedwasi`, from 0.1.0a1; the branch `wasi-p2` is gone): the C in `src/fusedwasi/include/fusedwasi/p2/`, the Python in `src/fusedwasi/p2/`, the tests, `tools/wasi_p2_audit` and `tools/wasi_p2_conformance`. wasmext depends on it (`fusedwasi>=0.1.0a1`). The paths below are those of before the move (`src/wasmext/c/p2/`, `src/wasmext/p2/`, `tests/test_wasi_p2_*.py`, `docs/experiments/wasi_p2_*`).
 
 # The size of a host of WASI 0.2
 

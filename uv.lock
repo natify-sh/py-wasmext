@@ -136,8 +136,12 @@ toml = [
 
 [[package]]
 name = "fusedwasi"
-version = "0.0.1.dev112+g9bcaaa947"
-source = { git = "https://github.com/natify-sh/fusedwasi?branch=wasi-p2#9bcaaa9477dae2740807986899528b78a1118b25" }
+version = "0.1.0a1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/2d/e7/656d7b2541d5a8bf04fcc00aa1b52b681a7fb91a1087a1ea86be93175ef9/fusedwasi-0.1.0a1.tar.gz", hash = "sha256:173f34c7ade2a678ab593e1fe28f63f20ee2e97157094b2e8bcf46a2cfb39fe9", size = 560763, upload-time = "2026-10-28T10:29:23.816Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a9/e0/de8908b55ecc336fdaaeadd52529590e5a026899b943fdddf232712e984c/fusedwasi-0.1.0a1-py3-none-any.whl", hash = "sha256:600e24ca2e2166a450ff2504689d29ea2009f173fe2faccbda6bc640dbe52d1b", size = 220737, upload-time = "2026-10-28T10:29:22.478Z" },
+]
 
 [[package]]
 name = "iniconfig"
@@ -420,7 +424,7 @@ wasm = [
 
 [package.metadata]
 requires-dist = [
-    { name = "fusedwasi", git = "https://github.com/natify-sh/fusedwasi?branch=wasi-p2" },
+    { name = "fusedwasi", specifier = ">=0.1.0a1" },
     { name = "setuptools", specifier = ">=84" },
     { name = "wabt-package", specifier = ">=1.0.42.0" },
 ]

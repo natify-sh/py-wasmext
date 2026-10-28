@@ -37,7 +37,7 @@ dependencies = [
     # the platform), whichever backend a project has; the lower bound is the version the suite runs with (uv.lock)
     "setuptools>=84",
     # the WASI 0.1 (and 0.2) of the modules: its C headers are copied beside the C of a module (fusedwasi.get_include())
-    "fusedwasi",
+    "fusedwasi>=0.1.0a1",  # a pre-release: the specifier names one, so pip and uv take it without --pre
 ]
 dynamic = ["version"]
 
@@ -102,6 +102,3 @@ wasm = [
     "ziglang>=0.16.0,<0.17",
 ]
 
-[tool.uv.sources]
-# not released yet (0.0.0 on PyPI is a placeholder): the branch with the WASI 0.1 and 0.2 that wasmext is built with
-fusedwasi = { git = "https://github.com/natify-sh/fusedwasi", branch = "wasi-p2" }

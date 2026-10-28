@@ -2,6 +2,8 @@
 
 Status: **written 2026-10-28**, at the owner's request, from what is built and from the plans ([WASI_TARGET_PLAN.md](WASI_TARGET_PLAN.md), [thin_glue.md](thin_glue.md), [thin_glue_plan.md](thin_glue_plan.md), [owners_registry.md](owners_registry.md), [context_concept.md](context_concept.md), [why_wasi_p2.md](why_wasi_p2.md)). Every element is marked: **[built]** it exists and is tested, **[planned]** it is decided and has a place in the plan, **[proposed]** it is my synthesis, to be agreed. Where the target differs from today, the section "From here to there" says what moves.
 
+> **How the library is cut to get this picture is in [layers.md](layers.md)** (the owner's decision: front-end glue -> shared glue -> wasmext glue, one rework of the whole library, not small moves). The table of results R1-R5 at the end of this page is about the *features* that are written once on top of that, after it; it is not the way to the cut.
+
 ## What the project is for
 
 **Take an unmodified WebAssembly module, built for a standard target, and run it** (the owner's principle): as a native CPython extension, as a shared library with a wrapper for ctypes, or as an executable, with WASI (0.1 and 0.2) answered by a host that is ours, so that nobody is told how to patch the sources. Three repositories:

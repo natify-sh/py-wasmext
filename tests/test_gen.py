@@ -92,6 +92,15 @@ def test_the_module_name_must_be_an_identifier() -> None:
             generate(parse(data), bad)
 
 
+def test_everything_in_the_glue_header_is_inside_its_include_guard() -> None:
+    """`<name>_glue_initialize` was written after the `#endif` of the guard: a second include of the header defined it twice."""
+    data = module(section(1, vec(functype([], []))), HEADER_FUNC, code(b"\x00\x0b"))
+    header = generate(parse(data), "fast").header
+    lines = [line for line in header.splitlines() if line.strip()]
+    assert lines[-1] == "#endif" and sum(line.startswith("#ifndef WASMEXT_GLUE_") for line in lines) == 1
+    assert header.index("fast_glue_initialize") < header.rindex("#endif")
+
+
 def test_the_dotted_name_is_the_type_name_and_the_last_part_the_init_function() -> None:
     data = module(section(1, vec(functype([], []))), HEADER_FUNC, code(b"\x00\x0b"))
     glue = generate(parse(data), "pkg.sub.fast")

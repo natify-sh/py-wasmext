@@ -2278,7 +2278,6 @@ def generate(
     )  # what the Python layer needs from the module and has no Python call in (the exports, the getters of memories and tables...) goes here, inside the guard
     glue_more: list[str] = []
     gadd = glue_more.append
-    hadd("#endif")
 
     # ---- the exported functions in Python: the arguments to C, the call, the result (or the trap) to Python ----
     for i, (exp_name, func) in enumerate(funcs):
@@ -3006,6 +3005,7 @@ def generate(
     add("    return NULL;")
     add("}")
     h[glue_at:glue_at] = glue_more
+    hadd("#endif")  # closes the include guard: everything the header holds, `<name>_glue_initialize` too, is inside it
     stub_imports = list(module.imports)  # those of a bound module are replacements the stub still shows (NotRequired)
     from ._shared import generate_shared, unsupported
 

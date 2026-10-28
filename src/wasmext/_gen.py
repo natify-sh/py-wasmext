@@ -1200,7 +1200,7 @@ def generate(
         add("    PyObject_HEAD")
         add("    InstanceObject *owner;")
         add(f"    wasm_rt_memory_t *(*get)(w2c_{prefix} *);")
-        add("    int export_index;  /* its place in export_table: the reference to it is made from that */")
+        add("    int export_index;  /* its place in the exports of the glue: the reference to it is made from that */")
         add("    size_t which;  /* which of the exported memories */")
         add("} MemoryObject;")
         add("")
@@ -1210,7 +1210,7 @@ def generate(
         add("    wasm_rt_funcref_table_t own;  /* the table of a Table that no module owns */")
         add("    wasm_rt_funcref_table_t *table;  /* &own, or a table of the module of `owner` */")
         add("    InstanceObject *owner;  /* the instance whose table this is; NULL for a table of its own */")
-        add("    int export_index;  /* a table of an instance: its place in export_table */")
+        add("    int export_index;  /* a table of an instance: its place in the exports of the glue */")
         add(
             "    PyObject *writers;  /* a table of its own: the instances that imported it and may have put functions of their own in it: they live as long as it does */"
         )
@@ -2268,6 +2268,11 @@ def generate(
         hadd("")
     if shares_tables:
         _emit_refcalls(hadd, last, prefix, ref_types)
+    glue_at = len(
+        h
+    )  # what the Python layer needs from the module and has no Python call in (the exports, the getters of memories and tables...) goes here, inside the guard
+    glue_more: list[str] = []
+    gadd = glue_more.append
     hadd("#endif")
 
     # ---- the exported functions in Python: the arguments to C, the call, the result (or the trap) to Python ----
@@ -2315,10 +2320,21 @@ def generate(
     mapped: list[tuple[str, int, int | str, int | str, str, str, str, int]] = []
     for i, (exp_name, glob) in enumerate(globals_):
         accessor = f"w2c_{prefix}_{mangle(exp_name)}"
-        add(f"static void *export_address{i}(InstanceObject *self) {{ return (void *){accessor}(&self->core.inst); }}")
-        mapped.append((exp_name, 3, _TYPE_CODE[glob.type], int(glob.mutable), f"export_address{i}", "NULL", "NULL", -1))
-    if globals_:
-        add("")
+        gadd(
+            f"static inline void *{last}_glue_export_address{i}({last}_instance *self) {{ return (void *){accessor}(&self->inst); }}"
+        )
+        mapped.append(
+            (
+                exp_name,
+                3,
+                _TYPE_CODE[glob.type],
+                int(glob.mutable),
+                f"{last}_glue_export_address{i}",
+                "NULL",
+                "NULL",
+                -1,
+            )
+        )
     for i, (exp_name, func) in enumerate(funcs):
         # what another Python extension calls: the typed function of the glue, and a trap becomes an exception of THIS extension (its
         # Trap, its WASI program that is over) before it is answered through `trapped`, as the contract of the link says
@@ -2370,22 +2386,41 @@ def generate(
     memory_base = len(mapped)
     for i, (exp_name, lim) in enumerate(zip(memories, memory_limits, strict=True)):
         accessor = f"w2c_{prefix}_{mangle(exp_name)}"
-        add(f"static void *export_memory{i}(InstanceObject *self) {{ return (void *){accessor}(&self->core.inst); }}")
+        gadd(
+            f"static inline void *{last}_glue_export_memory{i}({last}_instance *self) {{ return (void *){accessor}(&self->inst); }}"
+        )
         flags = f"({2 * int(lim.is64)}u | (WASM_RT_MEMCHECK_GUARD_PAGES ? 4u : 0u))"
         mapped.append(
-            (exp_name, 2, "(uint32_t)sizeof(wasm_rt_memory_t)", flags, f"export_memory{i}", "NULL", "NULL", -1)
+            (
+                exp_name,
+                2,
+                "(uint32_t)sizeof(wasm_rt_memory_t)",
+                flags,
+                f"{last}_glue_export_memory{i}",
+                "NULL",
+                "NULL",
+                -1,
+            )
         )
-    if memories:
-        add("")
     tables_base = len(mapped)
     for i, exp_name in enumerate(tables):
         accessor = f"w2c_{prefix}_{mangle(exp_name)}"
-        add(f"static void *export_table{i}(InstanceObject *self) {{ return (void *){accessor}(&self->core.inst); }}")
+        gadd(
+            f"static inline void *{last}_glue_export_table{i}({last}_instance *self) {{ return (void *){accessor}(&self->inst); }}"
+        )
         mapped.append(
-            (exp_name, 1, "(uint32_t)sizeof(wasm_rt_funcref_table_t)", 0, f"export_table{i}", "NULL", "NULL", -1)
+            (
+                exp_name,
+                1,
+                "(uint32_t)sizeof(wasm_rt_funcref_table_t)",
+                0,
+                f"{last}_glue_export_table{i}",
+                "NULL",
+                "NULL",
+                -1,
+            )
         )
     if tables:
-        add("")
         add(
             "/* instance.__wasmext_keep__(other): `other` imported a table of this instance, so it may have put functions of its own in it: this instance keeps it alive */"
         )
@@ -2395,13 +2430,48 @@ def generate(
         add("    Py_RETURN_NONE;")
         add("}")
         add("")
-    add(
-        "static const struct { const char *name; uint32_t kind, type, flags; void *(*address)(InstanceObject *); "
-        "void *function; const char *signature; int fn; } export_table[] = {"
+    if tables:
+        gadd(f"static wasm_rt_funcref_table_t *(*const {last}_glue_table_getters[])(w2c_{prefix} *) = {{")
+        for exp_name in tables:
+            gadd(f"    w2c_{prefix}_{mangle(exp_name)},")
+        gadd("    NULL")
+        gadd("};")
+        gadd("")
+    if shares_tables:
+        gadd(
+            "/* the identity of a function that a table holds, and a hash of it: the function and the instance it belongs to (no Python) */"
+        )
+        gadd("static inline int wasmext_funcref_same(const wasm_rt_funcref_t *x, const wasm_rt_funcref_t *y) {")
+        gadd("    return x->func == y->func && x->module_instance == y->module_instance;")
+        gadd("}")
+        gadd("static inline uintptr_t wasmext_funcref_hash(const wasm_rt_funcref_t *x) {")
+        gadd("    return (uintptr_t)x->func ^ ((uintptr_t)x->module_instance >> 4);")
+        gadd("}")
+        gadd("")
+    # the exports as data (no Python): the glue has the table, the Python layer the functions it calls for a link (`py_link`), by the same index
+    exports = f"{last}_glue_exports"
+    gadd("")
+    gadd(
+        "/* The exports of the module, as data: name, kind, type, flags, the address of a global, a memory or a table, the signature of a function and its place as an element"
+    )
+    gadd(
+        "   of a table (-1: none). `instance['name']` and the references to the exports of the Python layer are made from it. */"
+    )
+    gadd(
+        f"static const struct {{ const char *name; uint32_t kind, type, flags; void *(*address)({last}_instance *); const char *signature; int fn; }} {exports}[] = {{"
     )
     for exp_name, kind, type_code, flags, address, function, signature, fn in mapped:
-        add(f"    {{{_c_string(exp_name)}, {kind}, {type_code}, {flags}, {address}, {function}, {signature}, {fn}}},")
-    add("    {NULL, 0, 0, 0, NULL, NULL, NULL, -1}")
+        gadd(f"    {{{_c_string(exp_name)}, {kind}, {type_code}, {flags}, {address}, {signature}, {fn}}},")
+    gadd("    {NULL, 0, 0, 0, NULL, NULL, -1}")
+    gadd("};")
+    gadd("")
+    add(
+        "/* what another Python extension calls for the export of the same place in the exports of the glue (NULL: the export has an address, not a function) */"
+    )
+    add("static void *const export_function[] = {")
+    for exp_name, kind, type_code, flags, address, function, signature, fn in mapped:
+        add(f"    {function},")
+    add("    NULL")
     add("};")
     add("")
     add("static void export_free(PyObject *capsule) {")
@@ -2414,17 +2484,17 @@ def generate(
     add("    if (e == NULL) return PyErr_NoMemory();")
     add("    e->size = sizeof(wasmext_export);")
     add("    e->abi = WASMEXT_ABI;")
-    add("    e->kind = export_table[k].kind;")
-    add("    e->type = export_table[k].type;")
-    add("    e->flags = export_table[k].flags;")
+    add(f"    e->kind = {exports}[k].kind;")
+    add(f"    e->type = {exports}[k].type;")
+    add(f"    e->flags = {exports}[k].flags;")
     add(
-        "    e->address = export_table[k].address != NULL ? export_table[k].address((InstanceObject *)self) : export_table[k].function;"
+        f"    e->address = {exports}[k].address != NULL ? {exports}[k].address(&((InstanceObject *)self)->core) : export_function[k];"
     )
     add("    e->instance = &((InstanceObject *)self)->core.inst;")
-    add("    e->signature = export_table[k].signature;")
+    add(f"    e->signature = {exports}[k].signature;")
     add("    e->runtime = WASMEXT_RUNTIME;")
     add(
-        f"    e->funcref = export_table[k].fn >= 0 ? (const void *){last}_glue_funcref(&((InstanceObject *)self)->core, export_table[k].fn) : NULL;"
+        f"    e->funcref = {exports}[k].fn >= 0 ? (const void *){last}_glue_funcref(&((InstanceObject *)self)->core, {exports}[k].fn) : NULL;"
     )
     add("    Py_INCREF(self);")
     add("    e->owner = self;")
@@ -2436,11 +2506,11 @@ def generate(
     add("")
     if shares_tables:
         add(_function_type_c(last, ref_types))
-        add(_table_type_c(prefix, tables, tables_base))
+        add(_table_type_c(last, tables, tables_base))
     add("/* instance['name'] and instance.__exports__ give the reference to an export; a table is given as a Table */")
     add("static PyObject *export_value(PyObject *self, int k) {")
     if tables:
-        add("    if (export_table[k].kind == WASMEXT_TABLE) return Table_of(self, k);")
+        add(f"    if ({exports}[k].kind == WASMEXT_TABLE) return Table_of(self, k);")
     add("    return export_ref(self, k);")
     add("}")
     add("")
@@ -2453,8 +2523,8 @@ def generate(
     add("        PyErr_SetObject(PyExc_KeyError, key);")
     add("        return NULL;")
     add("    }")
-    add("    for (int k = 0; export_table[k].name != NULL; k++) {")
-    add("        if (strcmp(name, export_table[k].name) == 0) return export_value(self, k);")
+    add(f"    for (int k = 0; {exports}[k].name != NULL; k++) {{")
+    add(f"        if (strcmp(name, {exports}[k].name) == 0) return export_value(self, k);")
     add("    }")
     add("    PyErr_SetObject(PyExc_KeyError, key);")
     add("    return NULL;")
@@ -2465,8 +2535,8 @@ def generate(
     add("    (void)closure;")
     add("    PyObject *result = PyDict_New();")
     add("    if (result == NULL) return NULL;")
-    add("    for (int k = 0; export_table[k].name != NULL; k++) {")
-    add("        PyObject *name = PyUnicode_FromString(export_table[k].name);")
+    add(f"    for (int k = 0; {exports}[k].name != NULL; k++) {{")
+    add(f"        PyObject *name = PyUnicode_FromString({exports}[k].name);")
     add("        PyObject *ref = name != NULL ? export_value(self, k) : NULL;")
     add("        int bad = ref == NULL || PyDict_SetItem(result, name, ref) != 0;")
     add("        Py_XDECREF(name);")
@@ -2494,24 +2564,30 @@ def generate(
 
     # the exported memories: an attribute that is a memoryview, held by an object that keeps the instance alive
     if memories:
-        add(
+        gadd(
             "/* A memory that the runtime allocates with calloc (no guard pages, or memory64, or another page size) is moved by realloc when it grows, and a"
         )
-        add(
+        gadd(
             "   buffer would then point to freed memory. While a buffer of such a memory is alive, `memory.grow` fails (-1, which WebAssembly allows at any time):"
         )
-        add(
+        gadd(
             "   the maximum is made the present size, as bytearray refuses to be resized while it is exported. With guard pages the memory does not move. */"
         )
-        add("static int memory_can_move(const wasm_rt_memory_t *mem) {")
-        add("#if WASM_RT_USE_MMAP")
-        add("    return mem->is64 || mem->page_size != WASM_DEFAULT_PAGE_SIZE;")
-        add("#else")
-        add("    (void)mem;")
-        add("    return 1;")
-        add("#endif")
-        add("}")
-        add("")
+        gadd(f"static inline int {last}_glue_memory_can_move(const wasm_rt_memory_t *mem) {{")
+        gadd("#if WASM_RT_USE_MMAP")
+        gadd("    return mem->is64 || mem->page_size != WASM_DEFAULT_PAGE_SIZE;")
+        gadd("#else")
+        gadd("    (void)mem;")
+        gadd("    return 1;")
+        gadd("#endif")
+        gadd("}")
+        gadd("")
+        gadd(f"static wasm_rt_memory_t *(*const {last}_glue_memory_getters[])(w2c_{prefix} *) = {{")
+        for exp_name in memories:
+            gadd(f"    w2c_{prefix}_{mangle(exp_name)},")
+        gadd("    NULL")
+        gadd("};")
+        gadd("")
         add("static int Memory_getbuffer(PyObject *self, Py_buffer *view, int flags) {")
         add("    MemoryObject *m = (MemoryObject *)self;")
         add("    wasm_rt_memory_t *mem = m->get(&m->owner->core.inst);")
@@ -2520,7 +2596,7 @@ def generate(
         add("        return -1;")
         add("    }")
         add("    if (PyBuffer_FillInfo(view, self, mem->data, (Py_ssize_t)mem->size, 0, flags) < 0) return -1;")
-        add("    if (memory_can_move(mem)) {")
+        add(f"    if ({last}_glue_memory_can_move(mem)) {{")
         add("        if (m->owner->mem_pins[m->which]++ == 0) {")
         add("            m->owner->mem_max_pages[m->which] = mem->max_pages;")
         add("            mem->max_pages = mem->pages;")
@@ -2560,12 +2636,6 @@ def generate(
         add("    Py_DECREF(tp);")
         add("}")
         add("")
-        add(f"static wasm_rt_memory_t *(*const memory_getters[])(w2c_{prefix} *) = {{")
-        for exp_name in memories:
-            add(f"    w2c_{prefix}_{mangle(exp_name)},")
-        add("    NULL")
-        add("};")
-        add("")
         add("static PyObject *Instance_memory(InstanceObject *self, void *closure) {")
         add("#if WABT_BIG_ENDIAN")
         add("    /* wasm2c keeps the memory reversed on a big-endian host: there is no plain buffer to give */")
@@ -2580,7 +2650,7 @@ def generate(
         add("    if (m == NULL) return NULL;")
         add("    Py_INCREF((PyObject *)self);")
         add("    m->owner = self;")
-        add("    m->get = memory_getters[(size_t)closure];")
+        add(f"    m->get = {last}_glue_memory_getters[(size_t)closure];")
         add("    m->which = (size_t)closure;")
         add(f"    m->export_index = {memory_base} + (int)(size_t)closure;")
         add("    view = PyMemoryView_FromObject((PyObject *)m);")
@@ -2930,6 +3000,7 @@ def generate(
     add("    Py_DECREF(m);")
     add("    return NULL;")
     add("}")
+    h[glue_at:glue_at] = glue_more
     stub_imports = list(module.imports)  # those of a bound module are replacements the stub still shows (NotRequired)
     from ._shared import generate_shared, unsupported
 
@@ -3227,14 +3298,14 @@ def _function_type_c(last: str, ref_types: list[FuncType]) -> str:
     add("static PyObject *Function_richcompare(PyObject *a, PyObject *b, int op) {")
     add("    if ((op != Py_EQ && op != Py_NE) || Py_TYPE(a) != Py_TYPE(b)) Py_RETURN_NOTIMPLEMENTED;")
     add("    const wasm_rt_funcref_t *x = &((FunctionObject *)a)->ref, *y = &((FunctionObject *)b)->ref;")
-    add("    int same = x->func == y->func && x->module_instance == y->module_instance;")
+    add("    int same = wasmext_funcref_same(x, y);")
     add("    if (same == (op == Py_EQ)) Py_RETURN_TRUE;")
     add("    Py_RETURN_FALSE;")
     add("}")
     add("")
     add("static Py_hash_t Function_hash(PyObject *self) {")
     add("    const wasm_rt_funcref_t *x = &((FunctionObject *)self)->ref;")
-    add("    Py_hash_t h = (Py_hash_t)((uintptr_t)x->func ^ ((uintptr_t)x->module_instance >> 4));")
+    add("    Py_hash_t h = (Py_hash_t)wasmext_funcref_hash(x);")
     add("    return h == -1 ? -2 : h;")
     add("}")
     add("")
@@ -3543,24 +3614,22 @@ static PyObject *funcref_result(wasm_rt_funcref_t f, PyObject *keeper) {
     return head + keep + tail
 
 
-def _table_type_c(prefix: str, tables: list[str], tables_base: int) -> str:
+def _table_type_c(last: str, tables: list[str], tables_base: int) -> str:
     """The C of the type `Table` of an extension: a table of `funcref` that no module owns (`Table(initial, maximum=None)`), and the handle that `instance['name']`
     gives for a table the module exports. Both are the same object to Python and to another module: they give the capsule of the record (`__wasmext_ref__`)."""
-    getters = "".join(f"    w2c_{prefix}_{mangle(n)},\n" for n in tables)
     keep = (
         "    if (t->owner != NULL) return Instance_keep((PyObject *)t->owner, other);  /* the instance keeps its importers */\n"
         if tables
         else ""
     )
     getters_c = (
-        f"static wasm_rt_funcref_table_t *(*const table_getters[])(w2c_{prefix} *) = {{\n{getters}    NULL\n}};\n\n"
-        "/* the handle of the table k of export_table, a table of the module of `self` */\n"
+        "/* the handle of the table k of the exports of the glue, a table of the module of `self` */\n"
         "static PyObject *Table_of(PyObject *self, int k) {\n"
         "    TableObject *t = (TableObject *)PyType_GenericAlloc(TableType, 0);\n"
         "    if (t == NULL) return NULL;\n"
         "    Py_INCREF(self);\n"
         "    t->owner = (InstanceObject *)self;\n"
-        f"    t->table = table_getters[k - {tables_base}](&t->owner->core.inst);\n"
+        f"    t->table = {last}_glue_table_getters[k - {tables_base}](&t->owner->core.inst);\n"
         "    t->export_index = k;\n"
         "    return (PyObject *)t;\n"
         "}\n\n"

@@ -2,6 +2,8 @@
 
 Status: **written 2026-10-28, for the owner's review; nothing of this is built.** It takes what is already decided in [TABLES_PLAN.md](TABLES_PLAN.md) ("Not built, and what it would take") and in [context_concept.md](context_concept.md) (the arena, the locking), and says in one place what the first piece of work is. What is not decided is under "Open".
 
+**Where it lives (2026-10-28):** the logic of the registry is in the core (plain C, shared by the three targets), not in the extension and again in the wrapper for ctypes: see [thin_glue.md](thin_glue.md). Where this note says "the glue of the built modules", read it as that core; the extension and the wrapper only give the registry a retain and a release for their own kind of owner.
+
 ## The problem, in plain words
 
 A function reference (`funcref`) in the module is two pointers: the code (`func`) and the instance that code belongs to (`module_instance`). **Nothing tells who owns that instance.** If a function of instance A is put in a table that instance B uses, and A is dropped by Python, B calls into freed memory. So whoever receives a bare `funcref` has to find A and keep it alive. Today that is done by hand, in several places, and where it cannot be done the feature is refused.

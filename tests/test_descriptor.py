@@ -67,8 +67,8 @@ def _compile(sources: list[Path], exe: Path, last: str) -> None:
             check=True,
         )  # fmt: skip
         return
-    from setuptools._distutils.errors import DistutilsPlatformError  # pyright: ignore[reportMissingTypeStubs]
     from setuptools._distutils.ccompiler import new_compiler  # pyright: ignore[reportMissingTypeStubs]
+    from setuptools._distutils.errors import DistutilsPlatformError  # pyright: ignore[reportMissingTypeStubs]
 
     compiler = new_compiler()
     initialize = getattr(compiler, "initialize", None)  # the MSVC compiler looks for Visual Studio here

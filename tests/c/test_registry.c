@@ -31,7 +31,7 @@ static const wasmext_owner_ops ops = {m_retain, m_release, m_unlink, m_close};
 static void test_basics(void) {
     wasmext_store *s = wasmext_store_new();
     member_t a = {1, 0, 0, 0, 0}, b = {2, 0, 0, 0, 0}, c = {3, 0, 0, 0, 0};
-    int ka, kb, kc;
+    int ka = 0, kb = 0, kc = 0;
     wasmext_owner oa, ob, found;
     void *object;
     CHECK(wasmext_store_register(s, &ka, &a, &ops, &oa) == WASMEXT_STORE_OK && oa != 0);
@@ -61,7 +61,7 @@ static void test_basics(void) {
 static void test_other_stores(void) {
     wasmext_store *s1 = wasmext_store_new(), *s2 = wasmext_store_new(), *s3;
     member_t a = {1, 0, 0, 0, 0}, b = {2, 0, 0, 0, 0};
-    int k;
+    int k = 0;
     wasmext_owner o1, o2;
     void *object;
     CHECK(wasmext_store_register(s1, &k, &a, &ops, &o1) == WASMEXT_STORE_OK);
@@ -120,7 +120,7 @@ static void arena_release(void *o) { order[order_n++] = 4000 + *(int *)o; }
 static void test_close_order(void) {
     wasmext_store *s = wasmext_store_new();
     member_t m[3];
-    int keys[3], arena_a = 1, arena_b = 2;
+    int keys[3] = {0, 0, 0}, arena_a = 1, arena_b = 2;
     wasmext_owner o;
     order_n = 0;
     for (int i = 0; i < 3; i++) {
@@ -147,7 +147,7 @@ static void count_visit(void *object, void *arg) { (void)object; (void)arg; visi
 static void test_each_and_adopt(void) {
     wasmext_store *s = wasmext_store_new();
     member_t a = {1, 0, 0, 0, 0}, b = {2, 0, 0, 0, 0};
-    int ka, kb, thing = 0;
+    int ka = 0, kb = 0, thing = 0;
     wasmext_owner o;
     CHECK(wasmext_store_register(s, &ka, &a, NULL, &o) == WASMEXT_STORE_OK && wasmext_store_register(s, &kb, &b, NULL, &o) == WASMEXT_STORE_OK);
     CHECK(wasmext_store_own(s, &thing, NULL) == WASMEXT_STORE_OK);

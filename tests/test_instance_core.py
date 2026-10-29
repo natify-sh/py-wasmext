@@ -38,6 +38,23 @@ OPS = """(module
   (func $s global.get $g i32.const 1 i32.add global.set $g)
   (start $s))"""
 SIMD = """(module (func (export "double") (param v128) (result v128) local.get 0 local.get 0 i32x4.add))"""
+IMPORTS = """(module
+  (import "env" "f" (func $f (param i32 i64) (result i32)))
+  (import "env" "multi" (func $m (param f32) (result i32 f64)))
+  (import "env" "log" (func $log (param i32)))
+  (import "env" "again" (func $again (param i32) (result i32)))
+  (import "env" "again0" (func $again0 (param i32)))
+  (import "vec" "inc" (func $inc (param v128) (result v128)))
+  (func (export "run") (param i32) (result i32) local.get 0 i64.const 7 call $f)
+  (func (export "twice") (param f32) (result i32 f64) local.get 0 call $m)
+  (func (export "say") (param i32) local.get 0 call $log)
+  (func (export "vec") (param v128) (result v128) local.get 0 call $inc)
+  (func (export "viaagain") (param i32) (result i32) local.get 0 call $again)
+  (func (export "viaagain0") (param i32) local.get 0 call $again0)
+  (func (export "add") (param i32 i32) (result i32) local.get 0 local.get 1 i32.add)
+  (func (export "div") (param i32 i32) (result i32) local.get 0 local.get 1 i32.div_s)
+  (func $start i32.const 99 call $log)
+  (start $start))"""
 START_TRAP = """(module (func $s unreachable) (start $s) (func (export "f") (result i32) i32.const 1))"""
 
 
@@ -94,14 +111,45 @@ def test_a_trap_in_the_start_function(build: Callable[..., Path]) -> None:
     _run(build(START_TRAP, "starttrap", "test_instance_start_trap.c"))
 
 
-def test_the_binding_is_refused_for_a_module_with_imports(wabt: Path, tmp_path: Path) -> None:
+def test_function_imports_by_index(build: Callable[..., Path]) -> None:
+    _run(build(IMPORTS, "imports", "test_imports.c"))
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="ThreadSanitizer is checked on Linux")
+def test_function_imports_under_sanitizers(build: Callable[..., Path]) -> None:
+    if SANITIZED or not supports_flag("-fsanitize=address,undefined"):
+        pytest.skip("no sanitizers, or one is on for the whole run")
+    _run(
+        build(
+            IMPORTS,
+            "imports",
+            "test_imports.c",
+            flags=["-fsanitize=address,undefined", "-fno-sanitize-recover=all", "-g"],
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    ("wat", "host", "message"),
+    [
+        ('(module (import "env" "m" (memory 1)) (func (export "g")))', "wasm32", "step 3d"),
+        ('(module (import "env" "g" (global i32)) (func (export "f")))', "wasm32", "step 3d"),
+        (
+            '(module (import "wasi_snapshot_preview1" "proc_exit" (func (param i32))) (func (export "f")))',
+            "wasm32-wasip1",
+            "step 3b2",
+        ),
+        ('(module (import "env" "r" (func (param funcref))) (func (export "f")))', "wasm32", "reference type"),
+    ],
+    ids=["memory", "global", "wasi", "funcref"],
+)
+def test_what_the_binding_does_not_carry_yet(wabt: Path, tmp_path: Path, wat: str, host: str, message: str) -> None:
     from wasmext._gen import GenError
 
-    wat = tmp_path / "i.wat"
-    wat.write_text('(module (import "env" "f" (func)) (func (export "g") call 0))', encoding="utf-8")
-    subprocess.run([wabt / "bin" / "wat2wasm", wat, "-o", tmp_path / "i.wasm"], check=True)
-    with pytest.raises(GenError, match="step 3b"):
-        generate_binding(build_model(parse((tmp_path / "i.wasm").read_bytes()), "i"))
+    (tmp_path / "i.wat").write_text(wat, encoding="utf-8")
+    subprocess.run([wabt / "bin" / "wat2wasm", tmp_path / "i.wat", "-o", tmp_path / "i.wasm"], check=True)
+    with pytest.raises(GenError, match=message):
+        generate_binding(build_model(parse((tmp_path / "i.wasm").read_bytes()), "i", host=host))
 
 
 def test_a_v128_crosses_as_16_bytes(build: Callable[..., Path]) -> None:

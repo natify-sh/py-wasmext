@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from fusedwasi import get_include
 
 from wasmext._toolchain import find_toolchain  # pyright: ignore[reportPrivateUsage]
 
@@ -64,5 +65,27 @@ def test_the_table_of_errors(tmp_path: Path) -> None:
         include_dirs=[WASMEXT_C, runtime],
         strict=False,
         std=None,
+    )
+    _run(exe)
+
+
+@pytest.mark.parametrize("p1", [False, True], ids=["wasi-0.2", "wasi-0.1"])
+def test_the_host_of_wasi(tmp_path: Path, p1: bool) -> None:
+    """wasmext_host.h over the headers of fusedwasi and the runtime of wasm2c: the configuration, the hooks, the trap of a failed hook, and the store that owns the host."""
+    runtime = find_toolchain().runtime
+    exe = tmp_path / f"test_host{EXE}"
+    compile_c(
+        [
+            C_DIR / "test_host.c",
+            runtime / "wasm-rt-impl.c",
+            runtime / "wasm-rt-mem-impl.c",
+            runtime / "wasm-rt-exceptions-impl.c",
+        ],
+        exe,
+        include_dirs=[WASMEXT_C, Path(get_include()), runtime],
+        defines=["WASMEXT_HOST_P1"] if p1 else [],
+        strict=False,
+        std=None,
+        threads=True,
     )
     _run(exe)

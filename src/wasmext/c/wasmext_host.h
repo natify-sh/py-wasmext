@@ -27,7 +27,7 @@
 typedef struct {
     const char *const *args; size_t nargs;  /* NULL: the name of the module; not NULL with nargs 0: no arguments */
     const char *const *env; size_t nenv;    /* "NAME=value", cut at the first '='; an item with no '=' or with an empty NAME is EINVAL */
-    const char *const *dirs; size_t ndirs;  /* "host::guest" (the guest name is "/" when it is left out); an empty host path is EINVAL */
+    const char *const *dirs; size_t ndirs;  /* "host::guest", both parts not empty; anything else is EINVAL */
     const int *dirs_readonly;               /* NULL, or a flag for each dir: 1 for a directory that the program cannot change */
     int (*stdin_read)(void *user, uint8_t *buf, size_t cap, size_t *got);
     int (*stdout_write)(void *user, int fd, const uint8_t *buf, size_t n);  /* fd 1 or 2 */
@@ -181,7 +181,7 @@ static inline void wasmext_host_free(void *host) {
 }
 
 /* Makes the host from `config` (it may be NULL). `program` is the name of the module: the first argument when the configuration gives none. NULL with `*error` (an errno) when it
-   cannot be made: ENOMEM, EINVAL for an array that is NULL with a count, a NULL item, an environment item with no '=' or no name, or a directory with no host path, or the errno of a directory of WASI 0.1 that cannot be opened. */
+   cannot be made: ENOMEM, EINVAL for an array that is NULL with a count, a NULL item, an environment item with no '=' or no name, or a directory that is not `host::guest` with both parts, or the errno of a directory of WASI 0.1 that cannot be opened. */
 static inline wasmext_host *wasmext_host_new(const wasmext_config *config, const char *program, int *error) {
     int ignored;
     wasmext_host *h;
@@ -197,8 +197,8 @@ static inline wasmext_host *wasmext_host_new(const wasmext_config *config, const
         if (eq == NULL || eq == config->env[i]) { *error = EINVAL; return NULL; }  /* NULL, no '=', or no NAME */
     }
     for (size_t i = 0; config != NULL && i < ndirs; i++) {
-        const char *item = config->dirs[i];
-        if (item == NULL || item[0] == '\0' || (item[0] == ':' && item[1] == ':')) { *error = EINVAL; return NULL; }  /* NULL or no host path */
+        const char *item = config->dirs[i], *sep = item != NULL ? strstr(item, "::") : NULL;
+        if (sep == NULL || sep == item || sep[2] == '\0') { *error = EINVAL; return NULL; }  /* NULL, or not host::guest with both parts */
     }
     for (size_t i = 0; config != NULL && config->args != NULL && i < nargs; i++) if (config->args[i] == NULL) { *error = EINVAL; return NULL; }
     h = (wasmext_host *)calloc(1, sizeof *h);
@@ -243,14 +243,14 @@ static inline wasmext_host *wasmext_host_new(const wasmext_config *config, const
         h->nenv_v = i + 1;
     }
     for (size_t i = 0; i < ndirs; i++) {
-        const char *item = config->dirs[i], *sep = strstr(item, "::");
-        size_t host_len = sep != NULL ? (size_t)(sep - item) : strlen(item);
+        const char *item = config->dirs[i], *sep = strstr(item, "::");  /* checked above: both parts are there */
+        size_t host_len = (size_t)(sep - item);
         char *path = (char *)malloc(host_len + 1);
         if (path == NULL) goto nomem;
         memcpy(path, item, host_len);
         path[host_len] = '\0';
         h->preopens[i].path = path;
-        h->preopens[i].name = wasmext_host_dup_(sep != NULL && sep[2] != '\0' ? sep + 2 : "/");
+        h->preopens[i].name = wasmext_host_dup_(sep + 2);
         h->preopens[i].writable = !(config->dirs_readonly != NULL && config->dirs_readonly[i] != 0);
         h->npreopens = i + 1;
         if (h->preopens[i].name == NULL) goto nomem;

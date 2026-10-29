@@ -51,7 +51,7 @@ static void test_defaults(void) {
 static void test_copied_configuration(void) {
     const char *args[] = {"a", "b c"};
     const char *env[] = {"K=V", "EMPTY=", "A=B=C"};
-    const char *dirs[] = {"/tmp::/data", "/x", "/y::", "/z::/w"};
+    const char *dirs[] = {"/tmp::/data", "/x::/", "/y::/y", "/z::/w"};
     const int ro[] = {0, 1, 0, 1};
     wasmext_config c;
     wasmext_host *h;
@@ -60,7 +60,7 @@ static void test_copied_configuration(void) {
     c.args = args; c.nargs = 2; c.env = env; c.nenv = 3; c.dirs = dirs; c.ndirs = 4; c.dirs_readonly = ro;
     h = wasmext_host_new(&c, "prog", &err);
 #ifdef WASMEXT_HOST_P1
-    CHECK(h == NULL && err != 0); /* WASI 0.1 opens the directories now: /x does not exist */
+    CHECK(h == NULL && err != 0 && err != EINVAL); /* WASI 0.1 opens the directories now: /x does not exist */
     return;
 #endif
     CHECK(h != NULL && err == 0);
@@ -73,7 +73,7 @@ static void test_copied_configuration(void) {
     CHECK(h->wasi.preopen_count == 4);
     CHECK(strcmp(h->wasi.preopens[0].path, "/tmp") == 0 && strcmp(h->wasi.preopens[0].name, "/data") == 0 && h->wasi.preopens[0].writable);
     CHECK(strcmp(h->wasi.preopens[1].path, "/x") == 0 && strcmp(h->wasi.preopens[1].name, "/") == 0 && !h->wasi.preopens[1].writable);
-    CHECK(strcmp(h->wasi.preopens[2].path, "/y") == 0 && strcmp(h->wasi.preopens[2].name, "/") == 0 && h->wasi.preopens[2].writable);
+    CHECK(strcmp(h->wasi.preopens[2].path, "/y") == 0 && strcmp(h->wasi.preopens[2].name, "/y") == 0 && h->wasi.preopens[2].writable);
     CHECK(strcmp(h->wasi.preopens[3].name, "/w") == 0 && !h->wasi.preopens[3].writable);
     wasmext_host_free(h);
     c.nargs = 0; /* not NULL with no arguments: no arguments */
@@ -95,7 +95,7 @@ static void test_bad_configuration(void) {
     CHECK(wasmext_host_new(&c, "p", &err) == NULL && err == EINVAL);
     {
         const char *no_equals[] = {"ONLY_NAME"}, *no_name[] = {"=value"}, *empty[] = {""};
-        const char *no_host[] = {"::/guest"}, *empty_dir[] = {""}, *null_dir[] = {NULL};
+        const char *no_host[] = {"::/guest"}, *empty_dir[] = {""}, *null_dir[] = {NULL}, *no_sep[] = {"/x"}, *no_guest[] = {"/x::"};
         c.env = no_equals; c.nenv = 1; /* an environment item with no '=' is a mistake, not a variable with no value */
         CHECK(wasmext_host_new(&c, "p", &err) == NULL && err == EINVAL);
         c.env = no_name;
@@ -108,6 +108,10 @@ static void test_bad_configuration(void) {
         c.dirs = empty_dir;
         CHECK(wasmext_host_new(&c, "p", &err) == NULL && err == EINVAL);
         c.dirs = null_dir;
+        CHECK(wasmext_host_new(&c, "p", &err) == NULL && err == EINVAL);
+        c.dirs = no_sep; /* the guest name is always given */
+        CHECK(wasmext_host_new(&c, "p", &err) == NULL && err == EINVAL);
+        c.dirs = no_guest;
         CHECK(wasmext_host_new(&c, "p", &err) == NULL && err == EINVAL);
     }
 }

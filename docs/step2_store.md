@@ -21,7 +21,7 @@ Not in this step: instances (step 3), owners (4), the registry, tags, anything t
 
 ## Where the code lives, and how it reaches an artifact
 
-The core is **header code compiled into each artifact** (each built module has its own copy, as the runtime of wasm2c does), so a header with the functions `static` or `WASMEXT_API`, one translation unit per artifact. Layer 2 later puts the module prefix on the names (`<last>_store_new` calls `wasmext_store_new`). Open: the exact form (one `wasmext_store.h` with an `IMPLEMENTATION` switch, or a `.h` plus a `.c` that natify copies beside the glue, as `write_shared_headers` copies the WASI headers today).
+The core is **header code compiled into each artifact** (each built module has its own copy, as the runtime of wasm2c does), written as `static inline` functions in a header, the way `wasmext_glue.h` is: no switch, no separate `.c`. Layer 2 later puts the module prefix on the names (`<last>_store_new` calls `wasmext_store_new`) in the generated file.
 
 ## The tests (C first)
 
@@ -37,6 +37,5 @@ The old shape is not patched; the generated store of `_shared.py` and the wrappe
 
 ## Open (for the owner)
 
-1. The form of the static code (above): one header with an implementation switch, or header + `.c`?
-2. **Free-threaded:** the split counter is built now with C11 atomics (a requirement of layer 1, from the owner), the plain form where there is one thread. The cost of the sum and of choosing a line is not measured; `docs/experiments/context_bench/` is the place to measure it before the choice is final.
-3. Is the state of fusedwasi (`fusedwasi_p2_state`, and p1 over it) allocated inside the store as now, or by the host that makes the store? I propose inside, as now.
+1. **Free-threaded:** the split counter is built now with C11 atomics (a requirement of layer 1, from the owner), the plain form where there is one thread. The cost of the sum and of choosing a line is not measured; `docs/experiments/context_bench/` is the place to measure it before the choice is final.
+2. Is the state of fusedwasi (`fusedwasi_p2_state`, and p1 over it) allocated inside the store as now, or by the host that makes the store? I propose inside, as now.

@@ -89,6 +89,8 @@ typedef struct {
     wasmext_counter closed;  /* 1 once the arena is let go */
     WASMEXT_MUTEX_T mutex;
     wasmext_arena_node *arena; /* the last owned first */
+    void *host;      /* the host of WASI (wasmext_host.h), opaque here: set once; the store owns it through the arena */
+    void *host_lock; /* its lock (wasmext_rlock.h), for the code that calls into the host from the instance */
     char error[WASMEXT_STORE_ERROR_SIZE];
 } wasmext_store;
 
@@ -145,6 +147,39 @@ static inline int wasmext_store_own(wasmext_store *s, void *object, void (*relea
     s->arena = node;
     WASMEXT_UNLOCK(&s->mutex);
     return WASMEXT_STORE_OK;
+}
+
+/* The store has one host. It is given once: WASMEXT_STORE_BUSY if there is one already (nothing is changed), the refusals of `wasmext_store_own` otherwise (then the
+   host is not owned and the caller frees it). `release` is called at the close, as for any owned object; `lock` is the lock of the host (may be NULL). */
+static inline int wasmext_store_set_host(wasmext_store *s, void *host, void (*release)(void *object), void *lock) {
+    int rc;
+    WASMEXT_LOCK(&s->mutex);
+    if (s->host != NULL) {
+        WASMEXT_UNLOCK(&s->mutex);
+        return WASMEXT_STORE_BUSY;
+    }
+    WASMEXT_UNLOCK(&s->mutex);
+    rc = wasmext_store_own(s, host, release);
+    if (rc != WASMEXT_STORE_OK) return rc;
+    WASMEXT_LOCK(&s->mutex);
+    s->host = host;
+    s->host_lock = lock;
+    WASMEXT_UNLOCK(&s->mutex);
+    return WASMEXT_STORE_OK;
+}
+static inline void *wasmext_store_host(wasmext_store *s) {
+    void *host;
+    WASMEXT_LOCK(&s->mutex);
+    host = s->host;
+    WASMEXT_UNLOCK(&s->mutex);
+    return host;
+}
+static inline void *wasmext_store_host_lock(wasmext_store *s) {
+    void *lock;
+    WASMEXT_LOCK(&s->mutex);
+    lock = s->host_lock;
+    WASMEXT_UNLOCK(&s->mutex);
+    return lock;
 }
 
 /* The text of the last refusal (cut to fit), and a copy of it for the caller. */

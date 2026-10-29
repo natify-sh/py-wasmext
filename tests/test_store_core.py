@@ -22,7 +22,7 @@ EXE = ".exe" if os.name == "nt" else ""
 
 
 def _run(exe: Path) -> None:
-    result = subprocess.run([str(exe)], check=False, capture_output=True, text=True)
+    result = subprocess.run([str(exe)], check=False, capture_output=True, text=True, timeout=300)
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "ok"
 
@@ -88,4 +88,19 @@ def test_the_host_of_wasi(tmp_path: Path, p1: bool) -> None:
         std=None,
         threads=True,
     )
+    _run(exe)
+
+
+def test_the_recursive_lock(tmp_path: Path) -> None:
+    exe = tmp_path / f"test_rlock{EXE}"
+    compile_c([C_DIR / "test_rlock.c"], exe, include_dirs=[WASMEXT_C], threads=True)
+    _run(exe)
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="ThreadSanitizer is checked on Linux")
+def test_the_recursive_lock_under_threadsanitizer(tmp_path: Path) -> None:
+    if SANITIZED or find_cc() is None or not supports_flag("-fsanitize=thread"):
+        pytest.skip("no ThreadSanitizer, or another sanitizer is on for the whole run")
+    exe = tmp_path / "test_rlock_tsan"
+    compile_c([C_DIR / "test_rlock.c"], exe, include_dirs=[WASMEXT_C], flags=["-fsanitize=thread", "-g"], threads=True)
     _run(exe)

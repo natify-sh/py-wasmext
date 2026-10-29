@@ -10,6 +10,7 @@
 #include <errno.h>
 #include "wasmext_errors.h"
 #include "wasmext_glue.h"
+#include "wasmext_rlock.h"
 #include "wasmext_store.h"
 #include "wasmext_descriptor.h"
 
@@ -62,10 +63,13 @@ typedef struct {
 typedef struct {
     const wasmext_descriptor *descriptor;
     size_t instance_size;                   /* sizeof the structure of the instance that wasm2c made */
-    int (*instantiate)(void *instance);     /* wasm2c's instantiate, a trap caught: 0, or the code (the instance is then freed and cleared) */
+    int (*instantiate)(void *instance, void *host); /* wasm2c's instantiate, a trap caught: 0, or the code (the instance is then freed and cleared). `host` is the host of the
+                                                       store (wasmext_host.h) for a module that has imports the core answers, else NULL */
     void (*release)(void *instance);        /* wasm2c's free */
     const wasmext_export_binding *exports;  /* descriptor->n_exports entries */
     wasmext_import_slot *(*import_slot)(void *instance, uint32_t import);  /* the slot of the import (of the descriptor); NULL when the module has none */
+    void (*call_begin)(void *instance);     /* before each call: forgets how the last one ended (the end of a WASI program is what a call leaves); NULL when the module has no WASI */
+    int (*wasi_end)(void *instance, uint32_t *value); /* how the last call ended the WASI program: WASMEXT_END_NONE, EXIT (the code) or SIGNAL (the number); NULL when no WASI */
 } wasmext_binding;
 
 typedef struct {
@@ -165,6 +169,9 @@ static inline int wasmext_instance_bind_typed(wasmext_instance *i, uint32_t impo
    WASMEXT_TRAP_LINK_ERROR, before anything runs, with the name in the text of the store (`wasmext_store_error`): bind it and try again. */
 static inline int wasmext_instance_instantiate(wasmext_instance *i) {
     int line, rc;
+    void *host = NULL;
+    wasmext_rlock *lock;
+    long level;
     if (i->instantiated) return 0;
     for (uint32_t k = 0; k < i->binding->descriptor->n_imports; k++) {
         const wasmext_import_desc *m = &i->binding->descriptor->imports[k];
@@ -175,10 +182,20 @@ static inline int wasmext_instance_instantiate(wasmext_instance *i) {
             return (int)WASMEXT_TRAP_LINK_ERROR;
         }
     }
+    if (i->binding->descriptor->flags & WASMEXT_DESC_USES_CORE) {
+        host = wasmext_store_host(i->store);
+        if (host == NULL) {
+            wasmext_store_set_error(i->store, "the store has no host for the WASI imports of the module");
+            return (int)WASMEXT_TRAP_LINK_ERROR;
+        }
+    }
     line = wasmext_store_enter(i->store);
     if (line < 0) return (int)WASMEXT_TRAP_CLOSED;
     wasmext_thread_ready();
-    rc = i->binding->instantiate(i->module);
+    lock = (wasmext_rlock *)wasmext_store_host_lock(i->store);
+    level = lock != NULL ? wasmext_rlock_depth(lock) : 0;
+    rc = i->binding->instantiate(i->module, host);
+    if (lock != NULL) wasmext_rlock_release_to(lock, level); /* a trap left the unlocks of fusedwasi behind */
     wasmext_store_leave(i->store, line);
     wasmext_atomic_store(&i->status, rc);
     if (rc == 0) i->instantiated = 1;
@@ -202,6 +219,8 @@ static inline int wasmext_instance_call(wasmext_instance *i, uint32_t index, con
     const wasmext_export_desc *e;
     const wasmext_export_binding *b;
     int line, rc;
+    wasmext_rlock *lock;
+    long level;
     if (index >= d->n_exports || d->exports[index].kind != WASMEXT_DESC_FUNC) return WASMEXT_INST_BAD_EXPORT;
     e = &d->exports[index];
     b = &i->binding->exports[index];
@@ -213,10 +232,23 @@ static inline int wasmext_instance_call(wasmext_instance *i, uint32_t index, con
     line = wasmext_store_enter(i->store);
     if (line < 0) return (int)WASMEXT_TRAP_CLOSED;
     wasmext_thread_ready();
+    lock = (wasmext_rlock *)wasmext_store_host_lock(i->store);
+    level = lock != NULL ? wasmext_rlock_depth(lock) : 0;
+    if (i->binding->call_begin != NULL) i->binding->call_begin(i->module);
     rc = b->adapter(i->module, b->function, args, results);
+    if (lock != NULL) wasmext_rlock_release_to(lock, level); /* a trap left the unlocks of fusedwasi behind */
     wasmext_store_leave(i->store, line);
     wasmext_atomic_store(&i->status, rc);
     return rc;
+}
+
+/* How the last call ended the WASI program of the module: WASMEXT_END_NONE, WASMEXT_END_EXIT (`*value` is the code of proc_exit) or WASMEXT_END_SIGNAL (the number of
+   proc_raise). The call answered WASMEXT_TRAP_HOST. The end is what a call leaves: the next call forgets it, and the instance can be called again. */
+static inline int wasmext_instance_wasi_end(const wasmext_instance *i, uint32_t *value) {
+    uint32_t ignored;
+    if (value == NULL) value = &ignored;
+    *value = 0;
+    return i->binding->wasi_end != NULL ? i->binding->wasi_end(i->module, value) : WASMEXT_END_NONE;
 }
 
 /* The answer of the last call of the instance: 0, or the code of the trap. */

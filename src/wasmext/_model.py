@@ -4,11 +4,21 @@ It adds to `wasmext.Module` only facts about the build, decided once: who answer
 all of it, one fact per line; the C reader of the descriptor (`tests/c/dump_descriptor.c`) prints the same text, so the two readers of the
 facts must agree."""
 
+# pyright: reportPrivateUsage=false
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ._gen import _ident, check_host  # pyright: ignore[reportPrivateUsage]
+from ._gen import (  # pyright: ignore[reportPrivateUsage]
+    _WASI_HEADERS,
+    _WASI_SIGNATURES,
+    _WASI_UNSTABLE,
+    _WASI_UNSTABLE_OWN,
+    GenError,
+    _ident,
+    _signature_code,
+    check_host,
+)
 from ._wasm import ExternKind, FuncType, GlobalType, Limits, Module, TableType, ValType
 
 __all__ = ["ExportFact", "ImportFact", "ModuleModel", "build_model"]
@@ -40,6 +50,12 @@ class ImportFact:
     index: int  # among the imports of its kind
     type: Type
     core: bool  # the core answers it, the caller gives nothing
+    core_call: str | None = (
+        None  # the function of fusedwasi that answers it (WASI 0.1 only for now: step 3b2a), e.g. `fusedwasi_p1_fd_write`
+    )
+    core_header: str | None = (
+        None  # the header of fusedwasi that has it, in the tree below `fusedwasi/` (`p1/wasi_p1.h`)
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,9 +115,9 @@ def build_model(module: Module, name: str, *, host: str = "wasm32", share_tables
     for imp in module.imports:
         index = seen.get(imp.kind, 0)
         seen[imp.kind] = index + 1
-        imports.append(
-            ImportFact(imp.module, imp.name, imp.kind, index, imp.type, _answered_by_core(host, imp.module, imp.kind))
-        )
+        core = _answered_by_core(host, imp.module, imp.kind)
+        call, header = _core_call(host, imp.module, imp.name, imp.type) if core else (None, None)
+        imports.append(ImportFact(imp.module, imp.name, imp.kind, index, imp.type, core, call, header))
     spaces: dict[ExternKind, list[Type]] = {
         "func": list(module.all_functions),
         "table": list(module.all_tables),
@@ -129,6 +145,21 @@ def _answered_by_core(host: str, module: str, kind: ExternKind) -> bool:
     if host == "wasm32-wasip2":
         return module.startswith("wasi:") and "@0.2." in module
     return False
+
+
+def _core_call(host: str, module: str, name: str, type_: Type) -> tuple[str | None, str | None]:
+    """The function of fusedwasi that answers an import and the header that has it, or a GenError for a function it does not have or has with another signature.
+    WASI 0.2 is (None, None) until step 3b2b."""
+    if host != "wasm32-wasip1":
+        return None, None
+    assert isinstance(type_, FuncType)
+    wanted = _WASI_SIGNATURES[module].get(name)
+    if wanted is None:
+        raise GenError(f"import {module}.{name} is not a function of {module}")
+    if _signature_code(type_) != wanted:
+        raise GenError(f"import {module}.{name} is {_signature_code(type_)}, {module} says {wanted}")
+    own = module == _WASI_UNSTABLE and name in _WASI_UNSTABLE_OWN
+    return f"fusedwasi_p1_{'unstable_' if own else ''}{name}", "p1/" + _WASI_HEADERS[module]
 
 
 def _q(text: str) -> str:

@@ -14,6 +14,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "wasmext_glue.h"
+#include "wasmext_rlock.h"
 #include "fusedwasi/p2/wasi_p2_core.h"
 #include "fusedwasi/p2/wasi_p2_io.h"
 #ifdef WASMEXT_HOST_P1
@@ -62,6 +63,7 @@ typedef struct wasmext_host {
     fusedwasi_p2_stream streams[3];
     char message[160];  /* why the host trapped, when it did not say with an exception of the front end */
     void (*wait)(fusedwasi_p2_guest *g);  /* the `wait` for the guests of this host (NULL: the default of fusedwasi) */
+    wasmext_rlock lock;  /* taken around each call into fusedwasi from an instance: the state has no lock of its own, by design (see wasmext_rlock.h) */
 } wasmext_host;
 
 static inline wasmext_host *wasmext_host_of_(fusedwasi_p2_state *s) { return (wasmext_host *)s->user; }
@@ -177,6 +179,7 @@ static inline void wasmext_host_free(void *host) {
     if (h == NULL) return;
     fusedwasi_p2_free(&h->wasi);
     wasmext_host_release_copies_(h);
+    wasmext_rlock_destroy(&h->lock);
     free(h);
 }
 
@@ -203,6 +206,7 @@ static inline wasmext_host *wasmext_host_new(const wasmext_config *config, const
     for (size_t i = 0; config != NULL && config->args != NULL && i < nargs; i++) if (config->args[i] == NULL) { *error = EINVAL; return NULL; }
     h = (wasmext_host *)calloc(1, sizeof *h);
     if (h == NULL) { *error = ENOMEM; return NULL; }
+    wasmext_rlock_init(&h->lock);
     fusedwasi_p2_init(&h->wasi);
     s = &h->wasi;
     s->user = h;

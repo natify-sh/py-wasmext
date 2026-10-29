@@ -147,8 +147,31 @@ static void test_threads(void) {
     }
 }
 
+static int host_released;
+static void host_release(void *host) { (void)host; host_released++; }
+
+static void test_host_slot(void) {
+    wasmext_store *s = wasmext_store_new();
+    int host_a, host_b, lock;
+    CHECK(wasmext_store_host(s) == NULL && wasmext_store_host_lock(s) == NULL);
+    CHECK(wasmext_store_set_host(s, &host_a, host_release, &lock) == WASMEXT_STORE_OK);
+    CHECK(wasmext_store_host(s) == &host_a && wasmext_store_host_lock(s) == &lock);
+    CHECK(wasmext_store_set_host(s, &host_b, host_release, NULL) == WASMEXT_STORE_BUSY); /* once */
+    CHECK(wasmext_store_host(s) == &host_a);
+    CHECK(host_released == 0);
+    CHECK(wasmext_store_close(s) == WASMEXT_STORE_OK);
+    CHECK(host_released == 1); /* the store lets it go, once */
+    wasmext_store_free(s);
+    s = wasmext_store_new();
+    wasmext_store_close(s);
+    CHECK(wasmext_store_set_host(s, &host_b, host_release, NULL) == WASMEXT_STORE_CLOSED); /* refused: not owned */
+    CHECK(wasmext_store_host(s) == NULL && host_released == 1);
+    wasmext_store_free(s);
+}
+
 int main(void) {
     test_lifecycle();
+    test_host_slot();
     test_arena();
     test_calls();
     test_error_text();

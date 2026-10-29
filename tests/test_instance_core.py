@@ -55,6 +55,24 @@ IMPORTS = """(module
   (func (export "div") (param i32 i32) (result i32) local.get 0 local.get 1 i32.div_s)
   (func $start i32.const 99 call $log)
   (start $start))"""
+WASI1 = """(module
+  (import "wasi_snapshot_preview1" "fd_write" (func $fd_write (param i32 i32 i32 i32) (result i32)))
+  (import "wasi_snapshot_preview1" "proc_exit" (func $proc_exit (param i32)))
+  (import "wasi_snapshot_preview1" "proc_raise" (func $proc_raise (param i32) (result i32)))
+  (import "wasi_snapshot_preview1" "args_sizes_get" (func $args_sizes_get (param i32 i32) (result i32)))
+  (import "wasi_snapshot_preview1" "environ_sizes_get" (func $environ_sizes_get (param i32 i32) (result i32)))
+  (import "wasi_snapshot_preview1" "clock_time_get" (func $clock_time_get (param i32 i64 i32) (result i32)))
+  (import "wasi_snapshot_preview1" "random_get" (func $random_get (param i32 i32) (result i32)))
+  (memory (export "memory") 1)
+  (data (i32.const 16) "hi\\0a")
+  (data (i32.const 32) "\\10\\00\\00\\00\\03\\00\\00\\00")  ;; an iovec: pointer 16, length 3
+  (func (export "hello") (result i32) i32.const 1 i32.const 32 i32.const 1 i32.const 64 call $fd_write)
+  (func (export "exit") (param i32) local.get 0 call $proc_exit)
+  (func (export "raise") (param i32) (result i32) local.get 0 call $proc_raise)
+  (func (export "argc") (result i32) i32.const 128 i32.const 132 call $args_sizes_get drop i32.const 128 i32.load)
+  (func (export "environc") (result i32) i32.const 128 i32.const 132 call $environ_sizes_get drop i32.const 128 i32.load)
+  (func (export "time") (result i64) i32.const 0 i64.const 1 i32.const 160 call $clock_time_get drop i32.const 160 i64.load)
+  (func (export "random") (result i32) i32.const 192 i32.const 4 call $random_get drop i32.const 192 i32.load))"""
 START_TRAP = """(module (func $s unreachable) (start $s) (func (export "f") (result i32) i32.const 1))"""
 
 
@@ -66,14 +84,14 @@ def build(wabt: Path, tmp_path_factory: pytest.TempPathFactory) -> Callable[...,
     runtime = toolchain.runtime
     simde = [toolchain.include] if toolchain.include is not None and (toolchain.include / "simde").is_dir() else []
 
-    def run(wat: str, name: str, test: str, flags: Sequence[str] = ()) -> Path:
+    def run(wat: str, name: str, test: str, flags: Sequence[str] = (), host: str = "wasm32") -> Path:
         (out / f"{name}.wat").write_text(wat, encoding="utf-8")
         wasm = out / f"{name}.wasm"
         subprocess.run([wabt / "bin" / "wat2wasm", out / f"{name}.wat", "-o", wasm], check=True)
         subprocess.run(
             [wabt / "bin" / "wasm2c", wasm, "-o", out / f"{name}_w2c.c", f"--module-name={name}"], check=True
         )
-        model = build_model(parse(wasm.read_bytes()), name)
+        model = build_model(parse(wasm.read_bytes()), name, host=host)
         (out / f"{name}_descriptor.c").write_text(generate_descriptor(model), encoding="utf-8")
         (out / f"{name}_binding.c").write_text(generate_binding(model), encoding="utf-8")
         exe = (
@@ -98,7 +116,9 @@ def build(wabt: Path, tmp_path_factory: pytest.TempPathFactory) -> Callable[...,
 
 
 def _run(exe: Path) -> None:
-    result = subprocess.run([str(exe)], check=False, capture_output=True, text=True)
+    result = subprocess.run(
+        [str(exe)], check=False, capture_output=True, text=True, timeout=300
+    )  # a lock that a trap did not let go would hang here
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "ok"
 
@@ -135,13 +155,28 @@ def test_function_imports_under_sanitizers(build: Callable[..., Path]) -> None:
         ('(module (import "env" "m" (memory 1)) (func (export "g")))', "wasm32", "step 3d"),
         ('(module (import "env" "g" (global i32)) (func (export "f")))', "wasm32", "step 3d"),
         (
+            '(module (import "wasi:cli/exit@0.2.0" "exit" (func (param i32))) (memory (export "memory") 1) (func (export "f")))',
+            "wasm32-wasip2",
+            "step 3b2b",
+        ),
+        (
             '(module (import "wasi_snapshot_preview1" "proc_exit" (func (param i32))) (func (export "f")))',
             "wasm32-wasip1",
-            "step 3b2",
+            "exports its memory",
+        ),
+        (
+            '(module (import "wasi_snapshot_preview1" "no_such_call" (func)) (memory (export "memory") 1) (func (export "f")))',
+            "wasm32-wasip1",
+            "not a function of wasi_snapshot_preview1",
+        ),
+        (
+            '(module (import "wasi_snapshot_preview1" "fd_close" (func (param i64) (result i32))) (memory (export "memory") 1) (func (export "f")))',
+            "wasm32-wasip1",
+            "fd_close is",
         ),
         ('(module (import "env" "r" (func (param funcref))) (func (export "f")))', "wasm32", "reference type"),
     ],
-    ids=["memory", "global", "wasi", "funcref"],
+    ids=["memory", "global", "wasi-0.2", "no-memory", "unknown-call", "wrong-signature", "funcref"],
 )
 def test_what_the_binding_does_not_carry_yet(wabt: Path, tmp_path: Path, wat: str, host: str, message: str) -> None:
     from wasmext._gen import GenError
@@ -161,3 +196,14 @@ def test_the_instance_under_threadsanitizer(build: Callable[..., Path]) -> None:
     if SANITIZED or not supports_flag("-fsanitize=thread"):
         pytest.skip("no ThreadSanitizer, or another sanitizer is on for the whole run")
     _run(build(OPS, "ops", "test_instance.c", flags=["-fsanitize=thread", "-g"]))
+
+
+def test_wasi_imports_answered_by_the_host(build: Callable[..., Path]) -> None:
+    _run(build(WASI1, "wasi1", "test_wasi_imports.c", host="wasm32-wasip1"))
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="ThreadSanitizer is checked on Linux")
+def test_wasi_imports_under_threadsanitizer(build: Callable[..., Path]) -> None:
+    if SANITIZED or not supports_flag("-fsanitize=thread"):
+        pytest.skip("no ThreadSanitizer, or another sanitizer is on for the whole run")
+    _run(build(WASI1, "wasi1", "test_wasi_imports.c", flags=["-fsanitize=thread", "-g"], host="wasm32-wasip1"))

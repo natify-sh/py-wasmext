@@ -44,6 +44,7 @@ def compile_c(
     flags: Sequence[str] = (),
     strict: bool = True,
     threads: bool = False,
+    math: bool = False,  # the C of wasm2c calls the library of mathematics (-lm off Windows)
     std: str | None = "c99",  # the runtime of wasm2c needs the defaults of the compiler (POSIX names)
 ) -> None:
     """Builds `exe` from `sources`; skips the test where there is no compiler. `flags` are for `cc` only (a sanitizer)."""
@@ -53,7 +54,7 @@ def compile_c(
         warn = ["-Wall", "-Wextra", "-Werror"] if strict else ["-w"]
         subprocess.run(
             [cc, *([f"-std={std}"] if std else []), *warn, *extra, *flags, *(["-pthread"] if threads else []), *(f"-D{d}" for d in defines),
-             *(f"-I{d}" for d in include_dirs), *map(str, sources), "-o", str(exe)],
+             *(f"-I{d}" for d in include_dirs), *map(str, sources), *(["-lm"] if math else []), "-o", str(exe)],
             check=True,
         )  # fmt: skip
         return

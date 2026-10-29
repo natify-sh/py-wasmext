@@ -1,6 +1,6 @@
 # Step 3 of layer 1: instances (a design, for review)
 
-Status: **written 2026-10-29; nothing of it is built.** Step 3 of the order in [layers.md](layers.md). Read in the code of 2026-10-29. Builds on step 1 (the model and the descriptor) and step 2 (the store, the errors, the host).
+Status: **3a built 2026-10-29** (`wasmext_instance.h`, `_binding.py`, `tests/c/test_instance*.c`, `tests/test_instance_core.py`: function exports, `instantiate` with a trap in the start function, the generic `call` for i32/i64/f32/f64/v128, several results, no result, the closed store, threads; under ASan/UBSan/TSan; ThreadSanitizer found a real race on `status`, now atomic). 3b-3d are not built. The owner accepted the four points below on 2026-10-29. Step 3 of the order in [layers.md](layers.md). Read in the code of 2026-10-29. Builds on step 1 (the model and the descriptor) and step 2 (the store, the errors, the host).
 
 ## What there is
 

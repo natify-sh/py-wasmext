@@ -100,7 +100,7 @@ def generate_descriptor(model: ModuleModel) -> str:
             body.append(f"#define {p}_{name} 0")
     body += [
         "",
-        f"static const wasmext_descriptor {p} = {{",
+        f"const wasmext_descriptor {model.last}_descriptor = {{",
         "  WASMEXT_DESCRIPTOR_VERSION, sizeof(wasmext_descriptor),",
         f"  {_str(model.name)},",
         f"  {model.flags}u,",
@@ -113,7 +113,7 @@ def generate_descriptor(model: ModuleModel) -> str:
         f"  {-1 if m.start is None else m.start}",
         "};",
         "",
-        f"const wasmext_descriptor *{model.last}_describe(void) {{ return &{p}; }}",
+        f"const wasmext_descriptor *{model.last}_describe(void) {{ return &{model.last}_descriptor; }}",
         "",
     ]
     return "\n".join(body)

@@ -123,6 +123,20 @@ The ABI is **changed freely** (policy "Alpha does not keep the ABI"); `abi/curre
 
 **Done when** (measured): every rule of the table above is written in one place; the C tests of layers 1 and 2 cover the whole API; the suite is green on all platforms; the generated front-end glue holds conversions only (the number is to be fixed in review); the hot path of the benchmark of `context_concept.md` loses no more than a number we agree on.
 
+## Old code that a step replaces (the register of duplicates)
+
+A step builds the new thing in the static core and leaves the old generated copy until the step that owns it takes over (rule: no side patches). This table is what has to disappear, so that it is not forgotten; a guard test keeps each pair from drifting while both exist.
+
+| What is written twice | Old place | New place | Removed in | Guard |
+| --- | --- | --- | --- | --- |
+| the store (arena, close, active calls) | `<last>_store_t` in `_shared.py`, `store` in the glue of `_gen.py` | `wasmext_store.h` | layer 2 (shared glue), layer 3 | - |
+| the configuration of WASI and the copy of it | `<last>_config`, `_p2_new` in `_shared.py` | `wasmext_config` in `wasmext_host.h` | layer 2 | - |
+| the hooks of streams, clocks, random, sleep, network policies | `_p2_helpers` in `_shared.py`; `wasi_python.h`, `wasi2_python.h` | `wasmext_host.h` (the Python side gives plain C hooks) | layer 2, the extension step | - |
+| the table of codes of errors | `_trap_message` in `_shared.py`, `raise_trap_code` in `_gen.py`, the wrapper | `wasmext_errors.h` | layers 2 and 3 | - |
+| the instance, its imports and exports | `<last>_instance`, `<last>_call<i>`, `set_import<k>` in `_gen.py`/`_shared.py` | `wasmext_instance.h` + `_binding.py` | layers 2 and 3 | - |
+| which import is answered by the host, and by which function of fusedwasi | `_P2_FUNCS`, `_p2_cname`, `_WASI_SIGNATURES`, `_WASI_UNSTABLE_OWN` and the loops in `_gen.py` | `ImportFact` in `_model.py` | layer 3 (extension) | `tests/test_model_wasi_mapping.py` (3b2) |
+| the descriptive facts of a module (`_Import*`, `ApiModel`, `BuildFlags`) | `_gen.py`, `_shared.py`, `_exe.py` | `_model.py` | layers 2 and 3 | - |
+
 ## Risks and what is not known
 
 - Whether the extension can link the shared glue statically, with its flags, on Windows (MSVC), macOS, Pyodide, Android: **not tried**; test it when step 3 starts.

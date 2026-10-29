@@ -244,12 +244,16 @@ def generate_binding(model: ModuleModel) -> str:
             assert isinstance(ft, FuncType)
             if _supported(ft):
                 rows.append(
-                    f"{{{adapters[(ft.params, ft.results)]}, (void *)(void (*)(void))w2c_{prefix}_{mangle(e.name)}}}"
+                    f"{{{adapters[(ft.params, ft.results)]}, (void *)(void (*)(void))w2c_{prefix}_{mangle(e.name)}, 0}}"
                 )
                 continue
-        rows.append("{0, 0}")
+        elif e.kind in ("memory", "global"):
+            # wasm2c's accessor: `wasm_rt_memory_t *f(w2c_<p> *)` for a memory, `T *f(w2c_<p> *)` for a global (the pointer to its value)
+            rows.append(f"{{0, 0, (void *(*)(void *))w2c_{prefix}_{mangle(e.name)}}}")
+            continue
+        rows.append("{0, 0, 0}")
     out.append(f"static const wasmext_export_binding {last}_export_bindings[] = {{")
-    out += [f"    {r}," for r in rows] or ["    {0, 0},"]
+    out += [f"    {r}," for r in rows] or ["    {0, 0, 0},"]
     out += [
         "};",
         "",

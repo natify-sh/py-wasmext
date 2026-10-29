@@ -92,6 +92,23 @@ WASI2 = """(module
   (func (export "rand") (result i64) call $rand)
   (func (export "argc") (result i32) i32.const 256 call $args i32.const 260 i32.load)
   (func (export "hello") (result i32) call $stdout i32.const 16 i32.const 3 i32.const 512 call $write i32.const 512 i32.load8_u))"""
+MEMORY_GLOBALS = """(module
+  (memory (export "mem") 1 4)
+  (data (i32.const 8) "wasm")
+  (global $gm (export "gm") (mut i32) (i32.const 5))
+  (global (export "gc") i64 (i64.const 9))
+  (global (export "gf") (mut f32) (f32.const 1.5))
+  (global (export "gd") (mut f64) (f64.const 2.5))
+  (global (export "gv") (mut v128) (v128.const i32x4 1 2 3 4))
+  (func (export "grow") (param i32) (result i32) local.get 0 memory.grow)
+  (func (export "load") (param i32) (result i32) local.get 0 i32.load8_u)
+  (func (export "store") (param i32 i32) local.get 0 local.get 1 i32.store8)
+  (func (export "bump") (result i32) global.get $gm i32.const 1 i32.add global.set $gm global.get $gm))"""
+MEMORY64 = """(module
+  (memory (export "mem") i64 1 4)
+  (func (export "grow") (param i32) (result i32) local.get 0 i64.extend_i32_u memory.grow i32.wrap_i64)
+  (func (export "load") (param i32) (result i32) local.get 0 i64.extend_i32_u i32.load8_u)
+  (func (export "store") (param i32 i32) local.get 0 i64.extend_i32_u local.get 1 i32.store8))"""
 START_TRAP = """(module (func $s unreachable) (start $s) (func (export "f") (result i32) i32.const 1))"""
 
 
@@ -103,7 +120,9 @@ def build(wabt: Path, tmp_path_factory: pytest.TempPathFactory) -> Callable[...,
     runtime = toolchain.runtime
     simde = [toolchain.include] if toolchain.include is not None and (toolchain.include / "simde").is_dir() else []
 
-    def run(wat: str, name: str, test: str, flags: Sequence[str] = (), host: str = "wasm32") -> Path:
+    def run(
+        wat: str, name: str, test: str, flags: Sequence[str] = (), host: str = "wasm32", defines: Sequence[str] = ()
+    ) -> Path:
         (out / f"{name}.wat").write_text(wat, encoding="utf-8")
         wasm = out / f"{name}.wasm"
         subprocess.run([wabt / "bin" / "wat2wasm", out / f"{name}.wat", "-o", wasm], check=True)
@@ -123,7 +142,7 @@ def build(wabt: Path, tmp_path_factory: pytest.TempPathFactory) -> Callable[...,
             exe,
             include_dirs=[WASMEXT_C, Path(get_include()), runtime, out, *simde],
             flags=flags,
-            defines=[f"MODULE={name}"],
+            defines=[f"MODULE={name}", *defines],
             strict=False,
             std=None,
             threads=True,
@@ -268,3 +287,27 @@ def test_a_binding_for_every_function_of_wasi_compiles(build: Callable[..., Path
     lines.append('  (memory (export "memory") 1))')
     wat = "\n".join(lines).replace("(param )", "").replace("(result )", "")
     _run(build(wat, f"all{host[-1]}", "test_binding_links.c", host=host))
+
+
+def test_memories_and_globals(build: Callable[..., Path]) -> None:
+    _run(build(MEMORY_GLOBALS, "memglob", "test_memory_globals.c"))
+
+
+def test_a_memory64_that_the_runtime_moves(build: Callable[..., Path]) -> None:
+    _run(build(MEMORY64, "mem64", "test_memory_globals.c", defines=["MEMORY64=1"]))
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="the sanitizers are checked on Linux")
+def test_memories_and_globals_under_sanitizers(build: Callable[..., Path]) -> None:
+    if SANITIZED or not supports_flag("-fsanitize=thread") or not supports_flag("-fsanitize=address,undefined"):
+        pytest.skip("no sanitizers, or one is on for the whole run")
+    # a 32-bit memory with guard pages never moves, so a pin does nothing there: the pins from threads are checked for races on the memory64
+    _run(
+        build(
+            MEMORY_GLOBALS,
+            "memglob",
+            "test_memory_globals.c",
+            flags=["-fsanitize=address,undefined", "-fno-sanitize-recover=all", "-g"],
+        )
+    )
+    _run(build(MEMORY64, "mem64", "test_memory_globals.c", flags=["-fsanitize=thread", "-g"], defines=["MEMORY64=1"]))

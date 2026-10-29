@@ -37,7 +37,8 @@ enum {
     WASMEXT_INST_UNSUPPORTED = -4,   /* a type that the core does not carry yet (a reference) */
     WASMEXT_INST_NOMEM = -5,
     WASMEXT_INST_BAD_IMPORT = -6,    /* an index out of range, an import that is not a function, or one that the core answers */
-    WASMEXT_INST_TOO_LATE = -7       /* the instance is made already: imports are bound before `instantiate` */
+    WASMEXT_INST_TOO_LATE = -7,      /* the instance is made already: imports are bound before `instantiate` */
+    WASMEXT_INST_IMMUTABLE = -8      /* a global that cannot be set */
 };
 
 /* The host function of an import, one shape for every import: `args` and `results` are arrays of the counts and the types of its signature (the descriptor
@@ -57,6 +58,7 @@ typedef struct {
 typedef struct {
     int (*adapter)(void *instance, void *function, const wasmext_val *args, wasmext_val *results); /* 0 or a trap code; NULL: no call (not a function, or unsupported) */
     void *function;
+    void *(*address)(void *instance); /* a memory: its wasm_rt_memory_t *; a global: the pointer to its value (wasm2c's accessor); NULL for the others */
 } wasmext_export_binding;
 
 /* What the generated code gives the core for a module. Constant data and the functions that name the symbols of wasm2c. */
@@ -77,6 +79,9 @@ typedef struct {
     wasmext_store *store;
     void *module; /* the structure of wasm2c (and, after it, the slots of the imports) */
     unsigned char *bound; /* for each import of the descriptor: 1 once it has a host function */
+    wasmext_counter *pins;  /* for each export of the descriptor (a memory): how many pins it has */
+    uint64_t *saved_max;    /* ... and the maximum it had before the first pin */
+    WASMEXT_MUTEX_T pin_mutex;
     int instantiated;
     wasmext_counter status; /* the answer of the last call: 0, or the code of the trap. Atomic: with calls from several threads it is the answer of one of them; use the result of the call */
 } wasmext_instance;
@@ -110,6 +115,10 @@ static inline wasmext_instance *wasmext_instance_new(wasmext_store *store, const
     if (i->module == NULL) { free(i); *error = ENOMEM; return NULL; }
     i->bound = (unsigned char *)calloc(binding->descriptor->n_imports ? binding->descriptor->n_imports : 1, 1);
     if (i->bound == NULL) { free(i->module); free(i); *error = ENOMEM; return NULL; }
+    i->pins = (wasmext_counter *)calloc(binding->descriptor->n_exports ? binding->descriptor->n_exports : 1, sizeof(wasmext_counter));
+    i->saved_max = (uint64_t *)calloc(binding->descriptor->n_exports ? binding->descriptor->n_exports : 1, sizeof(uint64_t));
+    if (i->pins == NULL || i->saved_max == NULL) { free(i->pins); free(i->saved_max); free(i->bound); free(i->module); free(i); *error = ENOMEM; return NULL; }
+    WASMEXT_MUTEX_INIT(&i->pin_mutex);
     i->binding = binding;
     i->store = store;
     *error = 0;
@@ -251,14 +260,142 @@ static inline int wasmext_instance_wasi_end(const wasmext_instance *i, uint32_t 
     return i->binding->wasi_end != NULL ? i->binding->wasi_end(i->module, value) : WASMEXT_END_NONE;
 }
 
+/* ---- memories ---- */
+
+/* The bytes of an exported memory at this moment: valid until the module grows it (a `memory.grow` of the module, or `wasmext_instance_memory_grow`), or for good while it is pinned. */
+typedef struct {
+    uint8_t *base;
+    uint64_t size;      /* bytes */
+    uint64_t pages;
+    uint64_t max_pages; /* what the memory may grow to (while pinned: what it has) */
+    uint32_t page_size;
+    int is64;
+} wasmext_memory_view;
+
+static inline wasm_rt_memory_t *wasmext_instance_memory_of_(const wasmext_instance *i, uint32_t index, int *rc) {
+    const wasmext_descriptor *d = i->binding->descriptor;
+    if (index >= d->n_exports || d->exports[index].kind != WASMEXT_DESC_MEMORY || i->binding->exports[index].address == NULL) { *rc = WASMEXT_INST_BAD_EXPORT; return NULL; }
+    if (!i->instantiated) { *rc = WASMEXT_INST_NOT_INSTANTIATED; return NULL; }
+    if (wasmext_store_closed(i->store)) { *rc = (int)WASMEXT_TRAP_CLOSED; return NULL; }
+    *rc = 0;
+    return (wasm_rt_memory_t *)i->binding->exports[index].address(i->module);
+}
+
+static inline int wasmext_instance_memory(wasmext_instance *i, uint32_t index, wasmext_memory_view *out) {
+    int rc;
+    wasm_rt_memory_t *m = wasmext_instance_memory_of_(i, index, &rc);
+    if (m == NULL) return rc;
+    out->base = m->data;
+    out->size = m->size;
+    out->pages = m->pages;
+    out->max_pages = m->max_pages;
+    out->page_size = m->page_size;
+    out->is64 = m->is64;
+    return 0;
+}
+
+/* Pins (pin != 0) or unpins an exported memory; pins count. While it is pinned, `memory.grow` answers -1 where the runtime would move the memory (a memory64, or no
+   guard pages), so that the bytes stay where they are; the memory of a default 32-bit memory with guard pages never moves and pinning it does nothing. */
+static inline int wasmext_instance_memory_pin(wasmext_instance *i, uint32_t index, int pin) {
+    int rc;
+    wasm_rt_memory_t *m = wasmext_instance_memory_of_(i, index, &rc);
+    int moves;
+    if (m == NULL) return rc;
+#if WASM_RT_USE_MMAP
+    moves = m->is64 || m->page_size != WASM_DEFAULT_PAGE_SIZE;
+#else
+    moves = 1;
+#endif
+    if (!moves) return 0;
+    WASMEXT_LOCK(&i->pin_mutex);
+    if (pin) {
+        if (i->pins[index]++ == 0) {
+            i->saved_max[index] = m->max_pages;
+            m->max_pages = m->pages;
+        }
+    } else if (i->pins[index] > 0 && --i->pins[index] == 0) {
+        m->max_pages = i->saved_max[index];
+    }
+    WASMEXT_UNLOCK(&i->pin_mutex);
+    return 0;
+}
+
+/* Grows an exported memory by `delta` pages: the number of pages it had, or -1 when it cannot (its maximum, the memory, or a pin that would be broken by a move); a negative
+   code of the API otherwise. The host asks it when no call of the module is growing the same memory. */
+static inline int64_t wasmext_instance_memory_grow(wasmext_instance *i, uint32_t index, uint64_t delta) {
+    int rc, line;
+    uint64_t old;
+    wasm_rt_memory_t *m = wasmext_instance_memory_of_(i, index, &rc);
+    if (m == NULL) return rc;
+    line = wasmext_store_enter(i->store);
+    if (line < 0) return (int64_t)WASMEXT_TRAP_CLOSED;
+    WASMEXT_LOCK(&i->pin_mutex);
+    old = wasm_rt_grow_memory(m, delta);
+    WASMEXT_UNLOCK(&i->pin_mutex);
+    wasmext_store_leave(i->store, line);
+    return old == (uint64_t)-1 ? -1 : (int64_t)old;
+}
+
+/* ---- globals ---- */
+
+static inline int wasmext_instance_global_check_(const wasmext_instance *i, uint32_t index, void **address, const wasmext_global_desc **desc) {
+    const wasmext_descriptor *d = i->binding->descriptor;
+    if (index >= d->n_exports || d->exports[index].kind != WASMEXT_DESC_GLOBAL || i->binding->exports[index].address == NULL) return WASMEXT_INST_BAD_EXPORT;
+    *desc = &d->globals[d->exports[index].index];
+    if ((*desc)->type == 0x70 || (*desc)->type == 0x6F) return WASMEXT_INST_UNSUPPORTED;
+    if (!i->instantiated) return WASMEXT_INST_NOT_INSTANTIATED;
+    if (wasmext_store_closed(i->store)) return (int)WASMEXT_TRAP_CLOSED;
+    *address = i->binding->exports[index].address(i->module);
+    return 0;
+}
+
+/* Reads an exported global into `out` (with its type). */
+static inline int wasmext_instance_global_get(wasmext_instance *i, uint32_t index, wasmext_val *out) {
+    void *p;
+    const wasmext_global_desc *g;
+    int rc = wasmext_instance_global_check_(i, index, &p, &g);
+    if (rc != 0) return rc;
+    memset(out, 0, sizeof *out);
+    out->type = g->type;
+    switch (g->type) {
+        case 0x7F: out->as.i32 = (int32_t)*(uint32_t *)p; break;
+        case 0x7E: out->as.i64 = (int64_t)*(uint64_t *)p; break;
+        case 0x7D: out->as.f32 = *(float *)p; break;
+        case 0x7C: out->as.f64 = *(double *)p; break;
+        default: memcpy(out->as.v128, p, 16); break;
+    }
+    return 0;
+}
+
+/* Sets a mutable exported global; the value must have its type. */
+static inline int wasmext_instance_global_set(wasmext_instance *i, uint32_t index, const wasmext_val *value) {
+    void *p;
+    const wasmext_global_desc *g;
+    int rc = wasmext_instance_global_check_(i, index, &p, &g);
+    if (rc != 0) return rc;
+    if (!g->is_mutable) return WASMEXT_INST_IMMUTABLE;
+    if (value->type != g->type) return WASMEXT_INST_BAD_ARGS;
+    switch (g->type) {
+        case 0x7F: *(uint32_t *)p = (uint32_t)value->as.i32; break;
+        case 0x7E: *(uint64_t *)p = (uint64_t)value->as.i64; break;
+        case 0x7D: *(float *)p = value->as.f32; break;
+        case 0x7C: *(double *)p = value->as.f64; break;
+        default: memcpy(p, value->as.v128, 16); break;
+    }
+    return 0;
+}
+
 /* The answer of the last call of the instance: 0, or the code of the trap. */
 static inline int wasmext_instance_status(const wasmext_instance *i) { return (int)wasmext_atomic_load((wasmext_counter *)&i->status); }
 
 static inline void wasmext_instance_free(wasmext_instance *i) {
     if (i == NULL) return;
     if (i->instantiated) i->binding->release(i->module);
+    WASMEXT_MUTEX_DESTROY(&i->pin_mutex);
     free(i->module);
     free(i->bound);
+    free(i->pins);
+    free(i->saved_max);
     free(i);
 }
 

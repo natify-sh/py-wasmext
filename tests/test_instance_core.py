@@ -39,12 +39,12 @@ OPS = """(module
   (start $s))"""
 SIMD = """(module (func (export "double") (param v128) (result v128) local.get 0 local.get 0 i32x4.add))"""
 IMPORTS = """(module
+  (import "vec" "inc" (func $inc (param v128) (result v128)))  ;; the modules are not in the order of their names: wasm2c sorts them
   (import "env" "f" (func $f (param i32 i64) (result i32)))
   (import "env" "multi" (func $m (param f32) (result i32 f64)))
   (import "env" "log" (func $log (param i32)))
   (import "env" "again" (func $again (param i32) (result i32)))
   (import "env" "again0" (func $again0 (param i32)))
-  (import "vec" "inc" (func $inc (param v128) (result v128)))
   (func (export "run") (param i32) (result i32) local.get 0 i64.const 7 call $f)
   (func (export "twice") (param f32) (result i32 f64) local.get 0 call $m)
   (func (export "say") (param i32) local.get 0 call $log)
@@ -73,6 +73,25 @@ WASI1 = """(module
   (func (export "environc") (result i32) i32.const 128 i32.const 132 call $environ_sizes_get drop i32.const 128 i32.load)
   (func (export "time") (result i64) i32.const 0 i64.const 1 i32.const 160 call $clock_time_get drop i32.const 160 i64.load)
   (func (export "random") (result i32) i32.const 192 i32.const 4 call $random_get drop i32.const 192 i32.load))"""
+WASI2 = """(module
+  (import "wasi:cli/exit@0.2.0" "exit" (func $exit (param i32)))
+  (import "wasi:clocks/monotonic-clock@0.2.0" "now" (func $now (result i64)))
+  (import "wasi:random/random@0.2.0" "get-random-u64" (func $rand (result i64)))
+  (import "wasi:cli/environment@0.2.0" "get-arguments" (func $args (param i32)))
+  (import "wasi:cli/stdout@0.2.0" "get-stdout" (func $stdout (result i32)))
+  (import "wasi:io/streams@0.2.0" "[method]output-stream.blocking-write-and-flush" (func $write (param i32 i32 i32 i32)))
+  (memory (export "memory") 1)
+  (data (i32.const 16) "hi\\0a")
+  (global $heap (mut i32) (i32.const 4096))
+  (func (export "cabi_realloc") (param i32 i32 i32 i32) (result i32) (local $p i32)
+    global.get $heap local.get 2 i32.add i32.const 1 i32.sub i32.const 0 local.get 2 i32.sub i32.and local.tee 4
+    local.get 3 i32.add global.set $heap
+    local.get 4)
+  (func (export "exit") (param i32) local.get 0 call $exit)
+  (func (export "now") (result i64) call $now)
+  (func (export "rand") (result i64) call $rand)
+  (func (export "argc") (result i32) i32.const 256 call $args i32.const 260 i32.load)
+  (func (export "hello") (result i32) call $stdout i32.const 16 i32.const 3 i32.const 512 call $write i32.const 512 i32.load8_u))"""
 START_TRAP = """(module (func $s unreachable) (start $s) (func (export "f") (result i32) i32.const 1))"""
 
 
@@ -157,7 +176,7 @@ def test_function_imports_under_sanitizers(build: Callable[..., Path]) -> None:
         (
             '(module (import "wasi:cli/exit@0.2.0" "exit" (func (param i32))) (memory (export "memory") 1) (func (export "f")))',
             "wasm32-wasip2",
-            "step 3b2b",
+            "exports cabi_realloc",
         ),
         (
             '(module (import "wasi_snapshot_preview1" "proc_exit" (func (param i32))) (func (export "f")))',
@@ -176,7 +195,7 @@ def test_function_imports_under_sanitizers(build: Callable[..., Path]) -> None:
         ),
         ('(module (import "env" "r" (func (param funcref))) (func (export "f")))', "wasm32", "reference type"),
     ],
-    ids=["memory", "global", "wasi-0.2", "no-memory", "unknown-call", "wrong-signature", "funcref"],
+    ids=["memory", "global", "wasi-0.2-no-realloc", "no-memory", "unknown-call", "wrong-signature", "funcref"],
 )
 def test_what_the_binding_does_not_carry_yet(wabt: Path, tmp_path: Path, wat: str, host: str, message: str) -> None:
     from wasmext._gen import GenError
@@ -207,3 +226,45 @@ def test_wasi_imports_under_threadsanitizer(build: Callable[..., Path]) -> None:
     if SANITIZED or not supports_flag("-fsanitize=thread"):
         pytest.skip("no ThreadSanitizer, or another sanitizer is on for the whole run")
     _run(build(WASI1, "wasi1", "test_wasi_imports.c", flags=["-fsanitize=thread", "-g"], host="wasm32-wasip1"))
+
+
+def test_wasi_2_imports_answered_by_the_host(build: Callable[..., Path]) -> None:
+    _run(build(WASI2, "wasi2", "test_wasi2_imports.c", host="wasm32-wasip2"))
+
+
+def test_wasi_2_imports_under_sanitizers(build: Callable[..., Path]) -> None:
+    if SANITIZED or not sys.platform.startswith("linux") or not supports_flag("-fsanitize=address,undefined"):
+        pytest.skip("no sanitizers, or one is on for the whole run")
+    _run(
+        build(
+            WASI2,
+            "wasi2",
+            "test_wasi2_imports.c",
+            flags=["-fsanitize=address,undefined", "-fno-sanitize-recover=all", "-g"],
+            host="wasm32-wasip2",
+        )
+    )
+
+
+@pytest.mark.parametrize("host", ["wasm32-wasip1", "wasm32-wasip2"])
+def test_a_binding_for_every_function_of_wasi_compiles(build: Callable[..., Path], host: str) -> None:
+    """The binding answers all the functions of the table (46 of each snapshot of 0.1, 201 of 0.2) and is compiled and linked as C: the typed functions, the headers, the signatures."""
+    from wasmext._gen import _P2_FUNCS, _P2_IMPORTS, _WASI_SIGNATURES  # pyright: ignore[reportPrivateUsage]
+
+    types = {"i": "i32", "j": "i64", "f": "f32", "d": "f64"}
+    lines = ["(module"]
+    if host == "wasm32-wasip1":
+        for module, sigs in _WASI_SIGNATURES.items():
+            for name, code in sigs.items():
+                params, results = code.split(">")
+                lines.append(
+                    f'  (import "{module}" "{name}" (func (param {" ".join(types[c] for c in params)}) (result {" ".join(types[c] for c in results)})))'
+                )
+    else:
+        for (module, name), cname in sorted(_P2_IMPORTS.items()):
+            _header, _comp, ptypes, rtype = _P2_FUNCS[cname]
+            lines.append(f'  (import "{module}@0.2.0" "{name}" (func (param {" ".join(ptypes)}) (result {rtype})))')
+        lines.append('  (func (export "cabi_realloc") (param i32 i32 i32 i32) (result i32) i32.const 0)')
+    lines.append('  (memory (export "memory") 1))')
+    wat = "\n".join(lines).replace("(param )", "").replace("(result )", "")
+    _run(build(wat, f"all{host[-1]}", "test_binding_links.c", host=host))

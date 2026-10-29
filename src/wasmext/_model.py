@@ -10,12 +10,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ._gen import (  # pyright: ignore[reportPrivateUsage]
+    _P2_FUNCS,
     _WASI_HEADERS,
     _WASI_SIGNATURES,
     _WASI_UNSTABLE,
     _WASI_UNSTABLE_OWN,
     GenError,
     _ident,
+    _p2_cname,
     _signature_code,
     check_host,
 )
@@ -50,12 +52,10 @@ class ImportFact:
     index: int  # among the imports of its kind
     type: Type
     core: bool  # the core answers it, the caller gives nothing
-    core_call: str | None = (
-        None  # the function of fusedwasi that answers it (WASI 0.1 only for now: step 3b2a), e.g. `fusedwasi_p1_fd_write`
-    )
-    core_header: str | None = (
-        None  # the header of fusedwasi that has it, in the tree below `fusedwasi/` (`p1/wasi_p1.h`)
-    )
+    # what answers it when the core does (the function of fusedwasi, its header below `fusedwasi/`, and for WASI 0.2 whether it takes the index of the component)
+    core_call: str | None = None
+    core_header: str | None = None
+    core_comp: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,8 +116,8 @@ def build_model(module: Module, name: str, *, host: str = "wasm32", share_tables
         index = seen.get(imp.kind, 0)
         seen[imp.kind] = index + 1
         core = _answered_by_core(host, imp.module, imp.kind)
-        call, header = _core_call(host, imp.module, imp.name, imp.type) if core else (None, None)
-        imports.append(ImportFact(imp.module, imp.name, imp.kind, index, imp.type, core, call, header))
+        call, header, comp = _core_call(host, imp.module, imp.name, imp.type) if core else (None, None, False)
+        imports.append(ImportFact(imp.module, imp.name, imp.kind, index, imp.type, core, call, header, comp))
     spaces: dict[ExternKind, list[Type]] = {
         "func": list(module.all_functions),
         "table": list(module.all_tables),
@@ -147,19 +147,30 @@ def _answered_by_core(host: str, module: str, kind: ExternKind) -> bool:
     return False
 
 
-def _core_call(host: str, module: str, name: str, type_: Type) -> tuple[str | None, str | None]:
-    """The function of fusedwasi that answers an import and the header that has it, or a GenError for a function it does not have or has with another signature.
-    WASI 0.2 is (None, None) until step 3b2b."""
-    if host != "wasm32-wasip1":
-        return None, None
+def _core_call(host: str, module: str, name: str, type_: Type) -> tuple[str | None, str | None, bool]:
+    """The function of fusedwasi that answers an import, the header that has it, and whether it takes the index of the component; a GenError for a function it does not
+    have or has with another signature."""
     assert isinstance(type_, FuncType)
+    if host == "wasm32-wasip2":
+        cname = _p2_cname(module, name)
+        entry = _P2_FUNCS.get(cname) if cname is not None else None
+        if cname is None or entry is None:
+            raise GenError(f"import {module}.{name} is not a function of WASI 0.2 that fusedwasi has")
+        header, comp, ptypes, rtype = entry
+        if tuple(str(t) for t in type_.params) != ptypes or tuple(str(t) for t in type_.results) != (
+            (rtype,) if rtype else ()
+        ):
+            raise GenError(
+                f"import {module}.{name} is {_signature_code(type_)}, fusedwasi says ({', '.join(ptypes)}) -> ({rtype})"
+            )
+        return cname, "p2/" + header, comp
     wanted = _WASI_SIGNATURES[module].get(name)
     if wanted is None:
         raise GenError(f"import {module}.{name} is not a function of {module}")
     if _signature_code(type_) != wanted:
         raise GenError(f"import {module}.{name} is {_signature_code(type_)}, {module} says {wanted}")
     own = module == _WASI_UNSTABLE and name in _WASI_UNSTABLE_OWN
-    return f"fusedwasi_p1_{'unstable_' if own else ''}{name}", "p1/" + _WASI_HEADERS[module]
+    return f"fusedwasi_p1_{'unstable_' if own else ''}{name}", "p1/" + _WASI_HEADERS[module], False
 
 
 def _q(text: str) -> str:

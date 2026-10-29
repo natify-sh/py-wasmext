@@ -82,7 +82,7 @@ static void test_unbound_and_bad_binds(void) {
     /* an import nobody answers: the code, the name in the text of the store, nothing runs */
     CHECK(wasmext_instance_instantiate(i) == (int)WASMEXT_TRAP_LINK_ERROR);
     wasmext_store_error(s, text, sizeof text);
-    CHECK(strstr(text, "is not bound") != NULL && strstr(text, "env.") != NULL);
+    CHECK(strstr(text, "is not bound") != NULL && strstr(text, "vec.inc") != NULL);
     CHECK(wasmext_error_describe((int)WASMEXT_TRAP_LINK_ERROR).kind == WASMEXT_ERR_LINK);
     CHECK(log_calls == 0);
     /* binds that are refused */

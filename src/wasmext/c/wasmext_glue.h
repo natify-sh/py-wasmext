@@ -14,9 +14,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#if defined(_WIN32) && !defined(WIN32_LEAN_AND_MEAN)
-#define WIN32_LEAN_AND_MEAN /* wasm-rt.h includes windows.h; without this it brings winsock.h, which winsock2.h (the sockets of fusedwasi) does not go with */
-#endif
 #include "wasm-rt.h"
 #include "wasm-rt-impl.h"
 #include "wasm-rt-exceptions.h"

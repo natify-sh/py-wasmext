@@ -1,6 +1,6 @@
 # Step 2 of layer 1: the store (a design, for review)
 
-Status: **written 2026-10-28; nothing of it is built.** Step 2 of the order in [layers.md](layers.md). It rests on what the owner already decided in [context_concept.md](context_concept.md) (the arena, the hard close, the counter of active calls, the lock; "context" there is the store) and on [WASI_TARGET_PLAN.md](WASI_TARGET_PLAN.md). Facts are read in the code of 2026-10-28.
+Status: **part 2a built 2026-10-28** (`wasmext_store.h`, `wasmext_errors.h`, `tests/c/test_store.c`, `tests/c/test_errors.c`, `tests/test_store_core.py`): the arena, the counter of active calls with the flag, the lock, the text of an error, `close`/`free`, and the table of errors. **Part 2b is not built:** `wasmext_config` and the state of the host of WASI (fusedwasi) inside the store, which is moved out of the generated C of `_shared.py` and `_gen.py` (the hooks of streams, clocks, random and the network policies are generated there with the names of the module). Item 5 (the record `wasmext_store`) waits for step 8: a field is not added before the step that tests it. `close` returns BUSY, never waits. Step 2 of the order in [layers.md](layers.md). It rests on what the owner already decided in [context_concept.md](context_concept.md) (the arena, the hard close, the counter of active calls, the lock; "context" there is the store) and on [WASI_TARGET_PLAN.md](WASI_TARGET_PLAN.md). Facts are read in the code of 2026-10-28.
 
 ## What there is
 

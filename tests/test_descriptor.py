@@ -4,8 +4,6 @@
 from __future__ import annotations
 
 import os
-import shlex
-import shutil
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
@@ -15,6 +13,8 @@ import pytest
 from wasmext import parse
 from wasmext._descriptor import generate_descriptor
 from wasmext._model import build_model
+
+from .c_build import compile_c
 
 HERE = Path(__file__).parent
 C_DIR = HERE / "c"
@@ -52,40 +52,6 @@ MODULES: dict[str, str] = {
 }
 
 
-def _compile(sources: list[Path], exe: Path, last: str) -> None:
-    """Builds the C reader with `cc`, or with the compiler of Python (MSVC on Windows), the way the other tests build."""
-    cc = (
-        None
-        if os.name == "nt"
-        else shutil.which(os.environ.get("CC", "cc")) or shutil.which("gcc") or shutil.which("clang")
-    )
-    if cc is not None:
-        extra = shlex.split(os.environ.get("WASMEXT_TEST_CFLAGS", ""))
-        subprocess.run(
-            [cc, "-std=c99", "-Wall", "-Wextra", "-Werror", *extra, f"-DDESCRIBE={last}_describe", f"-I{WASMEXT_C}",
-             *map(str, sources), "-o", str(exe)],
-            check=True,
-        )  # fmt: skip
-        return
-    from setuptools._distutils.ccompiler import new_compiler  # pyright: ignore[reportMissingTypeStubs]
-    from setuptools._distutils.errors import DistutilsPlatformError  # pyright: ignore[reportMissingTypeStubs]
-
-    compiler = new_compiler()
-    initialize = getattr(compiler, "initialize", None)  # the MSVC compiler looks for Visual Studio here
-    try:
-        if initialize is not None:
-            initialize()
-    except DistutilsPlatformError:
-        pytest.skip("no C compiler")
-    objects = compiler.compile(  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
-        [str(x) for x in sources],
-        output_dir=str(exe.parent / (exe.stem + "_obj")),
-        include_dirs=[str(WASMEXT_C)],
-        macros=[("DESCRIBE", f"{last}_describe")],
-    )
-    compiler.link_executable(objects, exe.stem, output_dir=str(exe.parent))  # pyright: ignore[reportUnknownMemberType]
-
-
 @pytest.fixture(scope="module")
 def dump_c(tmp_path_factory: pytest.TempPathFactory) -> Callable[[str, str, str], str]:
     out = tmp_path_factory.mktemp("descriptor")
@@ -94,7 +60,9 @@ def dump_c(tmp_path_factory: pytest.TempPathFactory) -> Callable[[str, str, str]
         src = out / f"{key}_descriptor.c"
         src.write_text(descriptor_c, encoding="utf-8")
         exe = out / (f"{key}.exe" if os.name == "nt" else key)
-        _compile([C_DIR / "dump_descriptor.c", src], exe, last)
+        compile_c(
+            [C_DIR / "dump_descriptor.c", src], exe, include_dirs=[WASMEXT_C], defines=[f"DESCRIBE={last}_describe"]
+        )
         return subprocess.run([str(exe)], check=True, capture_output=True, text=True).stdout
 
     return run

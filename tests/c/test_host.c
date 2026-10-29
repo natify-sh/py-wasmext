@@ -50,14 +50,14 @@ static void test_defaults(void) {
 
 static void test_copied_configuration(void) {
     const char *args[] = {"a", "b c"};
-    const char *env[] = {"K=V", "ONLY_NAME", "EMPTY=", "A=B=C"};
+    const char *env[] = {"K=V", "EMPTY=", "A=B=C"};
     const char *dirs[] = {"/tmp::/data", "/x", "/y::", "/z::/w"};
     const int ro[] = {0, 1, 0, 1};
     wasmext_config c;
     wasmext_host *h;
     int err = -1;
     memset(&c, 0, sizeof c);
-    c.args = args; c.nargs = 2; c.env = env; c.nenv = 4; c.dirs = dirs; c.ndirs = 4; c.dirs_readonly = ro;
+    c.args = args; c.nargs = 2; c.env = env; c.nenv = 3; c.dirs = dirs; c.ndirs = 4; c.dirs_readonly = ro;
     h = wasmext_host_new(&c, "prog", &err);
 #ifdef WASMEXT_HOST_P1
     CHECK(h == NULL && err != 0); /* WASI 0.1 opens the directories now: /x does not exist */
@@ -66,11 +66,10 @@ static void test_copied_configuration(void) {
     CHECK(h != NULL && err == 0);
     CHECK(h->wasi.arg_count == 2 && strcmp(h->wasi.args[0], "a") == 0 && strcmp(h->wasi.args[1], "b c") == 0);
     CHECK(h->wasi.args[0] != args[0]); /* a copy: the caller may drop its strings */
-    CHECK(h->wasi.env_count == 4);
+    CHECK(h->wasi.env_count == 3);
     CHECK(strcmp(h->wasi.env_names[0], "K") == 0 && strcmp(h->wasi.env_values[0], "V") == 0);
-    CHECK(strcmp(h->wasi.env_names[1], "ONLY_NAME") == 0 && strcmp(h->wasi.env_values[1], "") == 0);
-    CHECK(strcmp(h->wasi.env_names[2], "EMPTY") == 0 && strcmp(h->wasi.env_values[2], "") == 0);
-    CHECK(strcmp(h->wasi.env_names[3], "A") == 0 && strcmp(h->wasi.env_values[3], "B=C") == 0); /* cut at the first '=' */
+    CHECK(strcmp(h->wasi.env_names[1], "EMPTY") == 0 && strcmp(h->wasi.env_values[1], "") == 0); /* an empty value is fine */
+    CHECK(strcmp(h->wasi.env_names[2], "A") == 0 && strcmp(h->wasi.env_values[2], "B=C") == 0); /* cut at the first '=' */
     CHECK(h->wasi.preopen_count == 4);
     CHECK(strcmp(h->wasi.preopens[0].path, "/tmp") == 0 && strcmp(h->wasi.preopens[0].name, "/data") == 0 && h->wasi.preopens[0].writable);
     CHECK(strcmp(h->wasi.preopens[1].path, "/x") == 0 && strcmp(h->wasi.preopens[1].name, "/") == 0 && !h->wasi.preopens[1].writable);
@@ -94,6 +93,23 @@ static void test_bad_configuration(void) {
     CHECK(wasmext_host_new(&c, "p", &err) == NULL && err == EINVAL);
     c.ndirs = 0; c.env = env_null; c.nenv = 2; /* an item that is NULL */
     CHECK(wasmext_host_new(&c, "p", &err) == NULL && err == EINVAL);
+    {
+        const char *no_equals[] = {"ONLY_NAME"}, *no_name[] = {"=value"}, *empty[] = {""};
+        const char *no_host[] = {"::/guest"}, *empty_dir[] = {""}, *null_dir[] = {NULL};
+        c.env = no_equals; c.nenv = 1; /* an environment item with no '=' is a mistake, not a variable with no value */
+        CHECK(wasmext_host_new(&c, "p", &err) == NULL && err == EINVAL);
+        c.env = no_name;
+        CHECK(wasmext_host_new(&c, "p", &err) == NULL && err == EINVAL);
+        c.env = empty;
+        CHECK(wasmext_host_new(&c, "p", &err) == NULL && err == EINVAL);
+        c.env = NULL; c.nenv = 0; c.ndirs = 1;
+        c.dirs = no_host;
+        CHECK(wasmext_host_new(&c, "p", &err) == NULL && err == EINVAL); /* a directory with no host path */
+        c.dirs = empty_dir;
+        CHECK(wasmext_host_new(&c, "p", &err) == NULL && err == EINVAL);
+        c.dirs = null_dir;
+        CHECK(wasmext_host_new(&c, "p", &err) == NULL && err == EINVAL);
+    }
 }
 
 static void test_hooks(void) {

@@ -26,8 +26,8 @@
 /* Every field may be 0. A hook answers 0, an errno of WASI, or WASMEXT_HOOK_TRAP; without one the core uses the descriptors 0, 1 and 2 and the system. */
 typedef struct {
     const char *const *args; size_t nargs;  /* NULL: the name of the module; not NULL with nargs 0: no arguments */
-    const char *const *env; size_t nenv;    /* "NAME=value", cut at the first '=' */
-    const char *const *dirs; size_t ndirs;  /* "host::guest" (the guest name is "/" when it is left out) */
+    const char *const *env; size_t nenv;    /* "NAME=value", cut at the first '='; an item with no '=' or with an empty NAME is EINVAL */
+    const char *const *dirs; size_t ndirs;  /* "host::guest" (the guest name is "/" when it is left out); an empty host path is EINVAL */
     const int *dirs_readonly;               /* NULL, or a flag for each dir: 1 for a directory that the program cannot change */
     int (*stdin_read)(void *user, uint8_t *buf, size_t cap, size_t *got);
     int (*stdout_write)(void *user, int fd, const uint8_t *buf, size_t n);  /* fd 1 or 2 */
@@ -181,7 +181,7 @@ static inline void wasmext_host_free(void *host) {
 }
 
 /* Makes the host from `config` (it may be NULL). `program` is the name of the module: the first argument when the configuration gives none. NULL with `*error` (an errno) when it
-   cannot be made: ENOMEM, EINVAL for an array that is NULL with a count, or the errno of a directory of WASI 0.1 that cannot be opened. */
+   cannot be made: ENOMEM, EINVAL for an array that is NULL with a count, a NULL item, an environment item with no '=' or no name, or a directory with no host path, or the errno of a directory of WASI 0.1 that cannot be opened. */
 static inline wasmext_host *wasmext_host_new(const wasmext_config *config, const char *program, int *error) {
     int ignored;
     wasmext_host *h;
@@ -192,8 +192,14 @@ static inline wasmext_host *wasmext_host_new(const wasmext_config *config, const
     nenv = config != NULL ? config->nenv : 0;
     ndirs = config != NULL ? config->ndirs : 0;
     if (config != NULL && ((nenv != 0 && config->env == NULL) || (ndirs != 0 && config->dirs == NULL))) { *error = EINVAL; return NULL; }
-    for (size_t i = 0; config != NULL && i < nenv; i++) if (config->env[i] == NULL) { *error = EINVAL; return NULL; }
-    for (size_t i = 0; config != NULL && i < ndirs; i++) if (config->dirs[i] == NULL) { *error = EINVAL; return NULL; }
+    for (size_t i = 0; config != NULL && i < nenv; i++) {
+        const char *eq = config->env[i] != NULL ? strchr(config->env[i], '=') : NULL;
+        if (eq == NULL || eq == config->env[i]) { *error = EINVAL; return NULL; }  /* NULL, no '=', or no NAME */
+    }
+    for (size_t i = 0; config != NULL && i < ndirs; i++) {
+        const char *item = config->dirs[i];
+        if (item == NULL || item[0] == '\0' || (item[0] == ':' && item[1] == ':')) { *error = EINVAL; return NULL; }  /* NULL or no host path */
+    }
     for (size_t i = 0; config != NULL && config->args != NULL && i < nargs; i++) if (config->args[i] == NULL) { *error = EINVAL; return NULL; }
     h = (wasmext_host *)calloc(1, sizeof *h);
     if (h == NULL) { *error = ENOMEM; return NULL; }
@@ -226,13 +232,13 @@ static inline wasmext_host *wasmext_host_new(const wasmext_config *config, const
         h->nargs_v = i + 1;
     }
     for (size_t i = 0; i < nenv; i++) {
-        const char *item = config->env[i], *eq = strchr(item, '=');
-        size_t name_len = eq != NULL ? (size_t)(eq - item) : strlen(item);
+        const char *item = config->env[i], *eq = strchr(item, '=');  /* checked above: there is one, and a name before it */
+        size_t name_len = (size_t)(eq - item);
         h->env_n[i] = (char *)malloc(name_len + 1);
         if (h->env_n[i] == NULL) goto nomem;
         memcpy(h->env_n[i], item, name_len);
         h->env_n[i][name_len] = '\0';
-        h->env_v[i] = wasmext_host_dup_(eq != NULL ? eq + 1 : "");
+        h->env_v[i] = wasmext_host_dup_(eq + 1);
         if (h->env_v[i] == NULL) goto nomem;
         h->nenv_v = i + 1;
     }

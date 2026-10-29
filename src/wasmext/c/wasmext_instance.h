@@ -38,7 +38,8 @@ enum {
     WASMEXT_INST_NOMEM = -5,
     WASMEXT_INST_BAD_IMPORT = -6,    /* an index out of range, an import that is not a function, or one that the core answers */
     WASMEXT_INST_TOO_LATE = -7,      /* the instance is made already: imports are bound before `instantiate` */
-    WASMEXT_INST_IMMUTABLE = -8      /* a global that cannot be set */
+    WASMEXT_INST_IMMUTABLE = -8,     /* a global that cannot be set */
+    WASMEXT_INST_LINK_FAILED = -9    /* an export given for an import does not fit: the text, naming the import, is in the store (`wasmext_store_error`) */
 };
 
 /* The host function of an import, one shape for every import: `args` and `results` are arrays of the counts and the types of its signature (the descriptor
@@ -59,6 +60,9 @@ typedef struct {
     int (*adapter)(void *instance, void *function, const wasmext_val *args, wasmext_val *results); /* 0 or a trap code; NULL: no call (not a function, or unsupported) */
     void *function;
     void *(*address)(void *instance); /* a memory: its wasm_rt_memory_t *; a global: the pointer to its value (wasm2c's accessor); NULL for the others */
+    void *shim;                       /* a function: `result f(void *wasmext_instance, parameters..., int *trapped)` for the record that another instance imports; a trap of this
+                                         instance is answered as WASMEXT_TRAP_LINKED + its code. NULL for the others, and for a function with a reference in its signature */
+    const char *signature;            /* a function: its signature as the record says it (the parameters, '>', the results: i j f d o) */
 } wasmext_export_binding;
 
 /* What the generated code gives the core for a module. Constant data and the functions that name the symbols of wasm2c. */
@@ -69,7 +73,8 @@ typedef struct {
                                                        store (wasmext_host.h) for a module that has imports the core answers, else NULL */
     void (*release)(void *instance);        /* wasm2c's free */
     const wasmext_export_binding *exports;  /* descriptor->n_exports entries */
-    wasmext_import_slot *(*import_slot)(void *instance, uint32_t import);  /* the slot of the import (of the descriptor); NULL when the module has none */
+    wasmext_import_slot *(*import_slot)(void *instance, uint32_t import);  /* the slot of a function import (of the descriptor); NULL when the module has none */
+    void **(*ref_slot)(void *instance, uint32_t import);  /* the pointer that wasm2c reads for a memory or global import (of the descriptor); NULL when the module has none */
     void (*call_begin)(void *instance);     /* before each call: forgets how the last one ended (the end of a WASI program is what a call leaves); NULL when the module has no WASI */
     int (*wasi_end)(void *instance, uint32_t *value); /* how the last call ended the WASI program: WASMEXT_END_NONE, EXIT (the code) or SIGNAL (the number); NULL when no WASI */
 } wasmext_binding;
@@ -79,6 +84,8 @@ typedef struct {
     wasmext_store *store;
     void *module; /* the structure of wasm2c (and, after it, the slots of the imports) */
     unsigned char *bound; /* for each import of the descriptor: 1 once it has a host function */
+    void **owners;          /* for each import of the descriptor: the `owner` of the record it was linked to (what keeps the exporter alive: the host's business) */
+    uint64_t (*values)[2];  /* for each import of the descriptor: room for the value of an immutable global that the host gives (16 bytes) */
     wasmext_counter *pins;  /* for each export of the descriptor (a memory): how many pins it has */
     uint64_t *saved_max;    /* ... and the maximum it had before the first pin */
     WASMEXT_MUTEX_T pin_mutex;
@@ -86,8 +93,14 @@ typedef struct {
     wasmext_counter status; /* the answer of the last call: 0, or the code of the trap. Atomic: with calls from several threads it is the answer of one of them; use the result of the call */
 } wasmext_instance;
 
-/* the runtime of wasm2c is set up once for each thread that calls into a module */
-static WASM_RT_THREAD_LOCAL int wasmext_thread_ready_;
+/* The runtime of wasm2c is set up once for each thread that calls into a module. The flag is one for the artifact, not one for each file that includes this header (a
+   binding and the code that calls it would each set the thread up, and the runtime aborts on the second): exactly one file of an artifact defines it, by defining
+   WASMEXT_DEFINE_THREAD_STATE before it includes this header (the file with the front end; a test defines it in its main file). (`wasm_rt_is_initialized` is not used: a
+   sanitizer installs an alternate stack of its own in every thread and the runtime then takes the thread for set up.) */
+extern WASM_RT_THREAD_LOCAL int wasmext_thread_ready_;
+#ifdef WASMEXT_DEFINE_THREAD_STATE
+WASM_RT_THREAD_LOCAL int wasmext_thread_ready_;
+#endif
 static inline void wasmext_thread_ready(void) {
     if (!wasmext_thread_ready_) {
         wasm_rt_init();
@@ -115,9 +128,11 @@ static inline wasmext_instance *wasmext_instance_new(wasmext_store *store, const
     if (i->module == NULL) { free(i); *error = ENOMEM; return NULL; }
     i->bound = (unsigned char *)calloc(binding->descriptor->n_imports ? binding->descriptor->n_imports : 1, 1);
     if (i->bound == NULL) { free(i->module); free(i); *error = ENOMEM; return NULL; }
+    i->owners = (void **)calloc(binding->descriptor->n_imports ? binding->descriptor->n_imports : 1, sizeof(void *));
+    i->values = (uint64_t (*)[2])calloc(binding->descriptor->n_imports ? binding->descriptor->n_imports : 1, sizeof(uint64_t[2]));
     i->pins = (wasmext_counter *)calloc(binding->descriptor->n_exports ? binding->descriptor->n_exports : 1, sizeof(wasmext_counter));
     i->saved_max = (uint64_t *)calloc(binding->descriptor->n_exports ? binding->descriptor->n_exports : 1, sizeof(uint64_t));
-    if (i->pins == NULL || i->saved_max == NULL) { free(i->pins); free(i->saved_max); free(i->bound); free(i->module); free(i); *error = ENOMEM; return NULL; }
+    if (i->owners == NULL || i->values == NULL || i->pins == NULL || i->saved_max == NULL) { free(i->owners); free(i->values); free(i->pins); free(i->saved_max); free(i->bound); free(i->module); free(i); *error = ENOMEM; return NULL; }
     WASMEXT_MUTEX_INIT(&i->pin_mutex);
     i->binding = binding;
     i->store = store;
@@ -174,6 +189,192 @@ static inline int wasmext_instance_bind_typed(wasmext_instance *i, uint32_t impo
     return 0;
 }
 
+/* ---- links between instances: the record of an export, and an import given one ---- */
+
+static inline int wasmext_instance_link_fail_(wasmext_instance *i, const wasmext_import_desc *m, const char *what, const char *detail) {
+    char text[WASMEXT_STORE_ERROR_SIZE];
+    snprintf(text, sizeof text, "import %.*s.%.*s %s%s", (int)m->module.n, m->module.p, (int)m->name.n, m->name.p, what, detail);
+    wasmext_store_set_error(i->store, text);
+    return WASMEXT_INST_LINK_FAILED;
+}
+
+/* the signature as a record says it: the parameters, '>', the results, a letter each (i j f d o) */
+static inline void wasmext_instance_signature_(const wasmext_functype *t, char *out, size_t cap) {
+    size_t n = 0;
+    for (uint32_t k = 0; k < t->n_params + t->n_results + 1 && n + 1 < cap; k++) {
+        if (k == t->n_params) { out[n++] = '>'; continue; }
+        {
+            uint8_t b = k < t->n_params ? t->params[k] : t->results[k - t->n_params - 1];
+            out[n++] = b == 0x7F ? 'i' : b == 0x7E ? 'j' : b == 0x7D ? 'f' : b == 0x7C ? 'd' : b == 0x7B ? 'o' : 'r';
+        }
+    }
+    out[n] = 0;
+}
+
+/* The record of an exported function, memory or global, for another instance to import (`wasmext_export` of wasmext_glue.h: public, versioned). `owner` is whatever keeps this
+   instance alive for as long as the record is used: the host's business, which the core only passes on. The record is valid as long as this instance is. */
+static inline int wasmext_instance_export_record(wasmext_instance *i, uint32_t index, void *owner, wasmext_export *out) {
+    const wasmext_descriptor *d = i->binding->descriptor;
+    const wasmext_export_binding *b;
+    if (index >= d->n_exports) return WASMEXT_INST_BAD_EXPORT;
+    b = &i->binding->exports[index];
+    if (!i->instantiated) return WASMEXT_INST_NOT_INSTANTIATED;
+    if (wasmext_store_closed(i->store)) return (int)WASMEXT_TRAP_CLOSED;
+    memset(out, 0, sizeof *out);
+    out->size = sizeof *out;
+    out->abi = WASMEXT_ABI;
+    out->owner = owner;
+    out->runtime = WASMEXT_RUNTIME;
+    switch (d->exports[index].kind) {
+        case WASMEXT_DESC_FUNC:
+            if (b->shim == NULL) return WASMEXT_INST_UNSUPPORTED;
+            out->kind = WASMEXT_FUNC;
+            out->flags = 8u; /* callable with no Python */
+            out->address = b->shim;
+            out->instance = i;
+            out->signature = b->signature;
+            break;
+        case WASMEXT_DESC_MEMORY: {
+            wasm_rt_memory_t *m = (wasm_rt_memory_t *)b->address(i->module);
+            out->kind = WASMEXT_MEMORY;
+            out->type = (uint32_t)sizeof(wasm_rt_memory_t);
+            out->flags = (m->is64 ? 2u : 0u) | (WASM_RT_MEMCHECK_GUARD_PAGES ? 4u : 0u);
+            out->address = m;
+            break;
+        }
+        case WASMEXT_DESC_GLOBAL: {
+            const wasmext_global_desc *g = &d->globals[d->exports[index].index];
+            if (g->type == 0x70 || g->type == 0x6F) return WASMEXT_INST_UNSUPPORTED;
+            out->kind = WASMEXT_GLOBAL;
+            out->type = g->type;
+            out->flags = g->is_mutable ? 1u : 0u;
+            out->address = b->address(i->module);
+            break;
+        }
+        default:
+            return WASMEXT_INST_UNSUPPORTED; /* a table: step 5; a tag: step 7 */
+    }
+    wasmext_export_seal(out);
+    return 0;
+}
+
+/* Gives an import the record of an export of another instance (of this store or another). The checks are those that the old glue made for each import, once, from the
+   descriptor: the record is of a version this reader can use, of the kind of the import, and fits it (the signature of a function; the type and the mutability of a global;
+   the runtime, the 64-bit and the guard pages of a memory, and its pages against what the import needs). WASMEXT_INST_LINK_FAILED, with the reason in the text of the store, when it does not. */
+static inline int wasmext_instance_bind_export(wasmext_instance *i, uint32_t import, const wasmext_export *e) {
+    const wasmext_descriptor *d = i->binding->descriptor;
+    const wasmext_import_desc *m;
+    if (i->instantiated) return WASMEXT_INST_TOO_LATE;
+    if (import >= d->n_imports || d->imports[import].core) return WASMEXT_INST_BAD_IMPORT;
+    m = &d->imports[import];
+    if (!wasmext_export_ok(e)) return wasmext_instance_link_fail_(i, m, "is linked to an export from an incompatible version of wasmext", "");
+    switch (m->kind) {
+        case WASMEXT_DESC_FUNC: {
+            char want[160];
+            wasmext_import_slot *slot;
+            wasmext_instance_signature_(&m->type, want, sizeof want);
+            if (e->kind != WASMEXT_FUNC || e->address == NULL) return wasmext_instance_link_fail_(i, m, "is a function: the export given is not", "");
+            if (e->signature == NULL || strcmp(e->signature, want) != 0) {
+                char detail[200];
+                snprintf(detail, sizeof detail, " %s: the export given is another one (%s)", want, e->signature != NULL ? e->signature : "none");
+                return wasmext_instance_link_fail_(i, m, "is a function", detail);
+            }
+            if (i->binding->import_slot == NULL) return WASMEXT_INST_BAD_IMPORT;
+            slot = i->binding->import_slot(i->module, import);
+            slot->host = NULL;
+            slot->typed = e->address;
+            slot->user = e->instance;
+            break;
+        }
+        case WASMEXT_DESC_MEMORY: {
+            const wasmext_limits *lim = &d->memories[m->index];
+            const wasm_rt_memory_t *mem = (const wasm_rt_memory_t *)e->address;
+            if (e->kind != WASMEXT_MEMORY || mem == NULL) return wasmext_instance_link_fail_(i, m, "is a memory: the export given is not", "");
+            if (e->type != sizeof(wasm_rt_memory_t)) return wasmext_instance_link_fail_(i, m, ": the memory is from an incompatible runtime of wasm2c", "");
+            if (((e->flags >> 1) & 1u) != (uint32_t)lim->is64) return wasmext_instance_link_fail_(i, m, " is a memory64 the other way: memory64 differs", "");
+            if (((e->flags >> 2) & 1u) != (WASM_RT_MEMCHECK_GUARD_PAGES ? 1u : 0u))
+                return wasmext_instance_link_fail_(i, m, ": one module is built with guard pages and the other without (--no-guard-pages)", "");
+            if (mem->pages < lim->min) {
+                char detail[120];
+                snprintf(detail, sizeof detail, ": the memory has %llu pages, the module needs at least %llu", (unsigned long long)mem->pages, (unsigned long long)lim->min);
+                return wasmext_instance_link_fail_(i, m, "", detail);
+            }
+            if (lim->has_max && mem->max_pages > lim->max) {
+                char detail[120];
+                snprintf(detail, sizeof detail, ": the memory may grow to %llu pages, the module allows %llu", (unsigned long long)mem->max_pages, (unsigned long long)lim->max);
+                return wasmext_instance_link_fail_(i, m, "", detail);
+            }
+            if (i->binding->ref_slot == NULL) return WASMEXT_INST_BAD_IMPORT;
+            *i->binding->ref_slot(i->module, import) = (void *)mem;
+            break;
+        }
+        case WASMEXT_DESC_GLOBAL: {
+            const wasmext_global_desc *g = &d->globals[m->index];
+            if (e->kind != WASMEXT_GLOBAL || e->address == NULL) return wasmext_instance_link_fail_(i, m, "is a global: the export given is not", "");
+            if (e->type != g->type || (e->flags & 1u) != (uint32_t)g->is_mutable)
+                return wasmext_instance_link_fail_(i, m, "is a global of another type or mutability than the export given", "");
+            if (i->binding->ref_slot == NULL) return WASMEXT_INST_BAD_IMPORT;
+            *i->binding->ref_slot(i->module, import) = e->address;
+            break;
+        }
+        default:
+            return WASMEXT_INST_UNSUPPORTED; /* a table: step 5; a tag: step 7 */
+    }
+    i->bound[import] = 1;
+    i->owners[import] = e->owner;
+    return 0;
+}
+
+/* Gives an immutable global import a value of the host (a number). */
+static inline int wasmext_instance_bind_global_value(wasmext_instance *i, uint32_t import, const wasmext_val *v) {
+    const wasmext_descriptor *d = i->binding->descriptor;
+    const wasmext_import_desc *m;
+    const wasmext_global_desc *g;
+    void *cell;
+    if (i->instantiated) return WASMEXT_INST_TOO_LATE;
+    if (import >= d->n_imports || d->imports[import].core || d->imports[import].kind != WASMEXT_DESC_GLOBAL || i->binding->ref_slot == NULL) return WASMEXT_INST_BAD_IMPORT;
+    m = &d->imports[import];
+    g = &d->globals[m->index];
+    if (g->is_mutable) return WASMEXT_INST_IMMUTABLE; /* a mutable global is the global of another instance */
+    if (g->type == 0x70 || g->type == 0x6F) return WASMEXT_INST_UNSUPPORTED;
+    if (v->type != g->type) return WASMEXT_INST_BAD_ARGS;
+    cell = i->values[import];
+    switch (g->type) {
+        case 0x7F: *(uint32_t *)cell = (uint32_t)v->as.i32; break;
+        case 0x7E: *(uint64_t *)cell = (uint64_t)v->as.i64; break;
+        case 0x7D: *(float *)cell = v->as.f32; break;
+        case 0x7C: *(double *)cell = v->as.f64; break;
+        default: memcpy(cell, v->as.v128, 16); break;
+    }
+    *i->binding->ref_slot(i->module, import) = cell;
+    i->bound[import] = 1;
+    return 0;
+}
+
+/* the `owner` of the record that an import was linked to (what keeps the exporter alive), or NULL */
+static inline void *wasmext_instance_import_owner(const wasmext_instance *i, uint32_t import) {
+    return import < i->binding->descriptor->n_imports ? i->owners[import] : NULL;
+}
+
+/* For the typed function of an export that another instance calls (<name>_binding.c): enter this instance's store and the host lock level; the answer is 0, or the trap code
+   to give the caller (as WASMEXT_TRAP_LINKED + it). `wasmext_instance_end_` lets go of what a trap left. */
+static inline int wasmext_instance_begin_(wasmext_instance *i, int *line, long *level) {
+    wasmext_rlock *lock;
+    if (!i->instantiated) return (int)WASMEXT_TRAP_HOST;
+    *line = wasmext_store_enter(i->store);
+    if (*line < 0) return (int)WASMEXT_TRAP_CLOSED;
+    wasmext_thread_ready();
+    lock = (wasmext_rlock *)wasmext_store_host_lock(i->store);
+    *level = lock != NULL ? wasmext_rlock_depth(lock) : 0;
+    if (i->binding->call_begin != NULL) i->binding->call_begin(i->module);
+    return 0;
+}
+static inline void wasmext_instance_end_(wasmext_instance *i, int line, long level) {
+    wasmext_rlock *lock = (wasmext_rlock *)wasmext_store_host_lock(i->store);
+    if (lock != NULL) wasmext_rlock_release_to(lock, level);
+    wasmext_store_leave(i->store, line);
+}
+
 /* Runs the start function: 0, or the code of a trap (then the instance is not usable and can only be freed). An import that nobody answers is
    WASMEXT_TRAP_LINK_ERROR, before anything runs, with the name in the text of the store (`wasmext_store_error`): bind it and try again. */
 static inline int wasmext_instance_instantiate(wasmext_instance *i) {
@@ -184,7 +385,7 @@ static inline int wasmext_instance_instantiate(wasmext_instance *i) {
     if (i->instantiated) return 0;
     for (uint32_t k = 0; k < i->binding->descriptor->n_imports; k++) {
         const wasmext_import_desc *m = &i->binding->descriptor->imports[k];
-        if (m->kind == WASMEXT_DESC_FUNC && !m->core && !i->bound[k]) {
+        if (!m->core && !i->bound[k]) {
             char text[WASMEXT_STORE_ERROR_SIZE];
             snprintf(text, sizeof text, "the import %.*s.%.*s is not bound", (int)m->module.n, m->module.p, (int)m->name.n, m->name.p);
             wasmext_store_set_error(i->store, text);
@@ -394,6 +595,8 @@ static inline void wasmext_instance_free(wasmext_instance *i) {
     WASMEXT_MUTEX_DESTROY(&i->pin_mutex);
     free(i->module);
     free(i->bound);
+    free(i->owners);
+    free(i->values);
     free(i->pins);
     free(i->saved_max);
     free(i);

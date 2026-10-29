@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from ._gen import _CTYPE, _MULTI_CODE, GenError, _p2_headers, mangle, module_prefix  # pyright: ignore[reportPrivateUsage]
 from ._model import VALTYPE_BYTES, ImportFact, ModuleModel
-from ._wasm import FuncType, ValType
+from ._wasm import FuncType, GlobalType, Limits, ValType
 
 __all__ = ["binding_headers", "generate_binding"]
 
@@ -126,14 +126,18 @@ def _forwarder(c_module: str, c_name: str, slot: int, ft: FuncType) -> list[str]
 def generate_binding(model: ModuleModel) -> str:
     """The C source of `<last>_binding.c`: `extern const wasmext_binding <last>_binding`. The descriptor is `<last>_descriptor` (see _descriptor.py)."""
     for imp in model.imports:
-        if imp.kind != "func":
+        if imp.kind in ("table", "tag"):
+            step = "step 5" if imp.kind == "table" else "step 7"
             raise GenError(
-                f"{model.name}: the import {imp.module}.{imp.name} is a {imp.kind}; those are linked in step 3d of docs/step3_instances.md"
+                f"{model.name}: the import {imp.module}.{imp.name} is a {imp.kind}; that is {step} of docs/step3_instances.md"
             )
-        assert isinstance(imp.type, FuncType)
-        if not _supported(imp.type):
+        if isinstance(imp.type, FuncType) and not _supported(imp.type):
             raise GenError(
                 f"{model.name}: the import {imp.module}.{imp.name} has a reference type in its signature; that is step 5 or 6 of docs/step3_instances.md"
+            )
+        if isinstance(imp.type, GlobalType) and imp.type.type in _REFS:
+            raise GenError(
+                f"{model.name}: the import {imp.module}.{imp.name} is a global of {imp.type.type}; that is step 5 or 6 of docs/step3_instances.md"
             )
     last = model.last
     prefix = module_prefix(model.name)
@@ -174,8 +178,11 @@ def generate_binding(model: ModuleModel) -> str:
         by_module.setdefault(imp.module, []).append(imp)
     modules = sorted(by_module, key=lambda m: m.encode("utf-8"))
     c_mod = {m: f"w2c_{mangle(m, module=True)}" for m in modules}
+    fslot, rslot = _layout(model)
     for m in modules:
-        out.append(f"struct {c_mod[m]} {{ wasmext_import_slot slot[{len(by_module[m])}]; }};")
+        nf = sum(1 for imp in by_module[m] if imp.kind == "func")
+        nr = len(by_module[m]) - nf
+        out.append(f"struct {c_mod[m]} {{ wasmext_import_slot slot[{max(nf, 1)}]; void *ref[{max(nr, 1)}]; }};")
     out += [
         f"struct {last}_block {{",
         f"    {inst_t} inst;  /* first: the pointer to the instance of wasm2c is the pointer to the block */",
@@ -194,10 +201,21 @@ def generate_binding(model: ModuleModel) -> str:
     ]
     if core:
         out += _core_functions(model, last, prefix, modules, by_module)
-    for m in modules:
-        for slot, imp in enumerate(by_module[m]):
+    for k, imp in enumerate(model.imports):
+        c_name = f"{c_mod[imp.module]}_{mangle(imp.name)}"
+        if imp.kind == "func":
             assert isinstance(imp.type, FuncType)
-            out += _forwarder(c_mod[m], f"{c_mod[m]}_{mangle(imp.name)}", slot, imp.type)
+            out += _forwarder(c_mod[imp.module], c_name, fslot[k][1], imp.type)
+        else:
+            if isinstance(imp.type, GlobalType):
+                ctype = _CTYPE[imp.type.type]
+            else:
+                assert isinstance(imp.type, Limits)
+                ctype = "wasm_rt_memory_t"
+            out.append(
+                f"{ctype} *{c_name}(struct {c_mod[imp.module]} *h) {{ return ({ctype} *)h->ref[{rslot[k][1]}]; }}"
+            )
+    out.append("")
     adapters: dict[tuple[tuple[ValType, ...], tuple[ValType, ...]], str] = {}
     for e in model.exports:
         if e.kind == "func":
@@ -207,6 +225,14 @@ def generate_binding(model: ModuleModel) -> str:
             if _supported(ft) and key not in adapters:
                 adapters[key] = f"{last}_adapt{len(adapters)}"
                 out += _adapter(adapters[key], ft, reentrant)
+    shims: dict[int, str] = {}
+    for n, e in enumerate(model.exports):
+        if e.kind == "func":
+            ft = e.type
+            assert isinstance(ft, FuncType)
+            if _supported(ft):
+                shims[n] = f"{last}_shim{n}"
+                out += _shim(shims[n], last, prefix, e.name, ft)
     enter = "WASMEXT_ENTER_REENTRANT" if reentrant else "WASMEXT_ENTER_PLAIN"
     leave = "WASMEXT_LEAVE_REENTRANT" if reentrant else "WASMEXT_LEAVE_PLAIN"
     wasm_args = "".join(f", &b->m{n}" for n in range(len(modules)))
@@ -226,44 +252,116 @@ def generate_binding(model: ModuleModel) -> str:
         f"static void {last}_release(void *block) {{ wasm2c_{prefix}_free(&((struct {last}_block *)block)->inst); }}",
         "",
     ]
-    if model.imports:
+    if fslot:
         out += [
             f"static wasmext_import_slot *{last}_import_slot(void *block, uint32_t k) {{",
             f"    struct {last}_block *b = (struct {last}_block *)block;",
             "    switch (k) {",
+            *[f"    case {k}: return &b->m{n_mod}.slot[{slot}];" for k, (n_mod, slot) in sorted(fslot.items())],
+            "    default: return 0;",
+            "    }",
+            "}",
+            "",
         ]
-        for k, imp in enumerate(model.imports):
-            out.append(
-                f"    case {k}: return &b->m{modules.index(imp.module)}.slot[{by_module[imp.module].index(imp)}];"
-            )
-        out += ["    default: return 0;", "    }", "}", ""]
+    if rslot:
+        out += [
+            f"static void **{last}_ref_slot(void *block, uint32_t k) {{",
+            f"    struct {last}_block *b = (struct {last}_block *)block;",
+            "    switch (k) {",
+            *[f"    case {k}: return &b->m{n_mod}.ref[{slot}];" for k, (n_mod, slot) in sorted(rslot.items())],
+            "    default: return 0;",
+            "    }",
+            "}",
+            "",
+        ]
     rows: list[str] = []
-    for e in model.exports:
+    for n, e in enumerate(model.exports):
         if e.kind == "func":
             ft = e.type
             assert isinstance(ft, FuncType)
             if _supported(ft):
+                sig = "".join(_MULTI_CODE[t] for t in ft.params) + ">" + "".join(_MULTI_CODE[t] for t in ft.results)
                 rows.append(
-                    f"{{{adapters[(ft.params, ft.results)]}, (void *)(void (*)(void))w2c_{prefix}_{mangle(e.name)}, 0}}"
+                    f"{{{adapters[(ft.params, ft.results)]}, (void *)(void (*)(void))w2c_{prefix}_{mangle(e.name)}, 0, (void *){shims[n]}, {_c_lit(sig)}}}"
                 )
                 continue
         elif e.kind in ("memory", "global"):
             # wasm2c's accessor: `wasm_rt_memory_t *f(w2c_<p> *)` for a memory, `T *f(w2c_<p> *)` for a global (the pointer to its value)
-            rows.append(f"{{0, 0, (void *(*)(void *))w2c_{prefix}_{mangle(e.name)}}}")
+            rows.append(f"{{0, 0, (void *(*)(void *))w2c_{prefix}_{mangle(e.name)}, 0, 0}}")
             continue
-        rows.append("{0, 0, 0}")
+        rows.append("{0, 0, 0, 0, 0}")
     out.append(f"static const wasmext_export_binding {last}_export_bindings[] = {{")
-    out += [f"    {r}," for r in rows] or ["    {0, 0, 0},"]
+    out += [f"    {r}," for r in rows] or ["    {0, 0, 0, 0, 0},"]
     out += [
         "};",
         "",
         f"const wasmext_binding {last}_binding = {{&{last}_descriptor, sizeof(struct {last}_block), {last}_instantiate, {last}_release, {last}_export_bindings, "
-        + (f"{last}_import_slot" if model.imports else "0")
+        + (f"{last}_import_slot" if fslot else "0")
+        + (f", {last}_ref_slot" if rslot else ", 0")
         + (f", {last}_call_begin, {last}_wasi_end" if core else ", 0, 0")
         + "};",
         "",
     ]
     return "\n".join(out)
+
+
+def _shim(name: str, last: str, prefix: str, export: str, ft: FuncType) -> list[str]:
+    """The typed function that another instance calls through the record of this export: it enters the store of this instance, catches a trap of its own module and answers
+    it as WASMEXT_TRAP_LINKED + its code, so the trap goes through the caller as one of its own (the buffer of the caller is put back: the entry is the reentrant one)."""
+    ret = _ret(ft)
+    params = "".join(f", {_CTYPE[t]} a{k}" for k, t in enumerate(ft.params))
+    args = "".join(f", a{k}" for k in range(len(ft.params)))
+    give = "return zero;" if ft.results else "return;"
+    out = [
+        f"static {ret} {name}(void *self_{params}, int *trapped) {{",
+        "    wasmext_instance *self = (wasmext_instance *)self_;",
+        f"    struct {last}_block *b = (struct {last}_block *)self->module;",
+        "    int line, rc;",
+        "    long level;",
+    ]
+    if ft.results:
+        out += [f"    {ret} zero;", "    memset(&zero, 0, sizeof zero);"]
+    out += [
+        "    rc = wasmext_instance_begin_(self, &line, &level);",
+        f"    if (rc) {{ *trapped = (int)WASMEXT_TRAP_LINKED + rc; {give} }}",
+        f"    WASMEXT_ENTER_REENTRANT(trap_, {{ wasmext_instance_end_(self, line, level); *trapped = (int)WASMEXT_TRAP_LINKED + (int)trap_; {give} }})",
+    ]
+    call = f"w2c_{prefix}_{mangle(export)}(&b->inst{args})"
+    if ft.results:
+        out += [
+            f"    {ret} res = {call};",
+            "    WASMEXT_LEAVE_REENTRANT();",
+            "    wasmext_instance_end_(self, line, level);",
+            "    return res;",
+        ]
+    else:
+        out += [f"    {call};", "    WASMEXT_LEAVE_REENTRANT();", "    wasmext_instance_end_(self, line, level);"]
+    out += ["}", ""]
+    return out
+
+
+def _c_lit(text: str) -> str:
+    return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def _layout(model: ModuleModel) -> tuple[dict[int, tuple[int, int]], dict[int, tuple[int, int]]]:
+    """Where each import is: by the index of the import in the descriptor, (the number of its module in the order wasm2c passes them in, its place among the
+    function slots of the module) for a function and (..., its place among the pointers) for a memory or a global."""
+    order: dict[str, list[int]] = {}
+    for k, imp in enumerate(model.imports):
+        order.setdefault(imp.module, []).append(k)
+    fslot: dict[int, tuple[int, int]] = {}
+    rslot: dict[int, tuple[int, int]] = {}
+    for n_mod, module in enumerate(sorted(order, key=lambda m: m.encode("utf-8"))):
+        nf = nr = 0
+        for k in order[module]:
+            if model.imports[k].kind == "func":
+                fslot[k] = (n_mod, nf)
+                nf += 1
+            else:
+                rslot[k] = (n_mod, nr)
+                nr += 1
+    return fslot, rslot
 
 
 def binding_headers(model: ModuleModel) -> tuple[str, ...]:
@@ -339,15 +437,17 @@ def _core_functions(
         "    if (host->wait != NULL) b->guest.wait = host->wait;",
         "    fusedwasi_p2_bind_memory(&b->guest, 0, &memory->data, &memory->size);  /* read at each access, so a memory that grows needs nothing */",
     ]
-    # the slots: found by the index of the import in its module
-    index = {
-        id(imp): (n_mod, slot) for n_mod, (_, imports) in enumerate(_group(model)) for slot, imp in enumerate(imports)
-    }
-    for k, imp in enumerate(imp for imp in model.imports if imp.core):
-        n_mod, slot = index[id(imp)]
+    # the slots: found by the index of the import in the descriptor
+    fslot, _ = _layout(model)
+    core_k = 0
+    for k, imp in enumerate(model.imports):
+        if not imp.core:
+            continue
+        n_mod, slot = fslot[k]
         out.append(
-            f"    b->m{n_mod}.slot[{slot}].typed = (void *){last}_core{k}; b->m{n_mod}.slot[{slot}].host = 0; b->m{n_mod}.slot[{slot}].user = b;"
+            f"    b->m{n_mod}.slot[{slot}].typed = (void *){last}_core{core_k}; b->m{n_mod}.slot[{slot}].host = 0; b->m{n_mod}.slot[{slot}].user = b;"
         )
+        core_k += 1
     out += [
         "}",
         f"static void {last}_call_begin(void *block) {{",
@@ -364,11 +464,3 @@ def _core_functions(
         "",
     ]
     return out
-
-
-def _group(model: ModuleModel) -> list[tuple[str, list[ImportFact]]]:
-    """The imports by the module they come from, in the order wasm2c passes the structures in: the names of the modules, as UTF-8 bytes."""
-    order: dict[str, list[ImportFact]] = {}
-    for imp in model.imports:
-        order.setdefault(imp.module, []).append(imp)
-    return sorted(order.items(), key=lambda item: item[0].encode("utf-8"))

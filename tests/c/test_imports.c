@@ -1,5 +1,6 @@
 /* Tests of the function imports of wasmext_instance.h in plain C over a module built by wasm2c and its generated binding. MODULE is the prefix. */
 #include <stdio.h>
+#define WASMEXT_DEFINE_THREAD_STATE
 #include "wasmext_instance.h"
 
 #define CAT_(a, b) a##b

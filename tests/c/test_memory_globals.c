@@ -1,5 +1,6 @@
 /* The exported memories and globals of an instance, in plain C over a real wasm2c module. MODULE is the prefix; MEMORY64 (a macro) selects the checks of a memory64 module. */
 #include <stdio.h>
+#define WASMEXT_DEFINE_THREAD_STATE
 #include "wasmext_instance.h"
 
 #define CAT_(a, b) a##b

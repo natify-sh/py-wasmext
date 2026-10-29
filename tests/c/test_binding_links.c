@@ -1,5 +1,6 @@
 /* A binding that answers every WASI function of the table is compiled and linked: the typed functions, the headers and the signatures are right. Nothing runs. */
 #include <stdio.h>
+#define WASMEXT_DEFINE_THREAD_STATE
 #include "wasmext_instance.h"
 
 #define CAT_(a, b) a##b

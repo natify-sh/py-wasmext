@@ -109,36 +109,83 @@ MEMORY64 = """(module
   (func (export "grow") (param i32) (result i32) local.get 0 i64.extend_i32_u memory.grow i32.wrap_i64)
   (func (export "load") (param i32) (result i32) local.get 0 i64.extend_i32_u i32.load8_u)
   (func (export "store") (param i32 i32) local.get 0 i64.extend_i32_u local.get 1 i32.store8))"""
+LINK_MODULES = {
+    "lib": """(module
+  (memory (export "mem") 1 4)
+  (global $counter (export "counter") (mut i32) (i32.const 10))
+  (global (export "ver") i64 (i64.const 7))
+  (func (export "add") (param i32 i32) (result i32) local.get 0 local.get 1 i32.add)
+  (func (export "div") (param i32 i32) (result i32) local.get 0 local.get 1 i32.div_s)
+  (func (export "swap") (param i32 i64) (result i64 i32) local.get 1 local.get 0)
+  (func (export "vec") (param v128) (result v128) local.get 0 local.get 0 i32x4.add)
+  (func (export "log") (param i32))
+  (func (export "get_counter") (result i32) global.get $counter))""",
+    "app": """(module
+  (import "libx" "add" (func $add (param i32 i32) (result i32)))
+  (import "libx" "div" (func $div (param i32 i32) (result i32)))
+  (import "libx" "swap" (func $swap (param i32 i64) (result i64 i32)))
+  (import "libx" "vec" (func $vec (param v128) (result v128)))
+  (import "libx" "mem" (memory 1 4))
+  (import "libx" "counter" (global $counter (mut i32)))
+  (import "libx" "ver" (global $ver i64))
+  (import "env" "k" (global $k i32))
+  (func (export "call_add") (param i32 i32) (result i32) local.get 0 local.get 1 call $add)
+  (func (export "call_div") (param i32 i32) (result i32) local.get 0 local.get 1 call $div)
+  (func (export "call_swap") (param i32 i64) (result i64 i32) local.get 0 local.get 1 call $swap)
+  (func (export "call_vec") (param v128) (result v128) local.get 0 call $vec)
+  (func (export "peek") (param i32) (result i32) local.get 0 i32.load8_u)
+  (func (export "poke") (param i32 i32) local.get 0 local.get 1 i32.store8)
+  (func (export "inc") (result i32) global.get $counter i32.const 1 i32.add global.set $counter global.get $counter)
+  (func (export "get_ver") (result i64) global.get $ver)
+  (func (export "get_k") (result i32) global.get $k)
+  (func (export "grow") (param i32) (result i32) local.get 0 memory.grow))""",
+    "tiny": '(module (memory (export "mem") 0 4))',
+    "big": '(module (memory (export "mem") 1 8))',
+}
 START_TRAP = """(module (func $s unreachable) (start $s) (func (export "f") (result i32) i32.const 1))"""
 
 
 @pytest.fixture(scope="module")
 def build(wabt: Path, tmp_path_factory: pytest.TempPathFactory) -> Callable[..., Path]:
-    """Builds a C test against a module: wat -> wasm -> wasm2c -> the descriptor and the binding of wasmext -> the test and the runtime."""
+    """Builds a C test against modules: wat -> wasm -> wasm2c -> the descriptor and the binding of wasmext -> the test and the runtime. `wat` is one module, or a dict
+    {name: wat} for several that the test links to each other; `host` is the host of all of them."""
     out = tmp_path_factory.mktemp("instance")
     toolchain = find_toolchain()
     runtime = toolchain.runtime
     simde = [toolchain.include] if toolchain.include is not None and (toolchain.include / "simde").is_dir() else []
 
     def run(
-        wat: str, name: str, test: str, flags: Sequence[str] = (), host: str = "wasm32", defines: Sequence[str] = ()
+        wat: str | dict[str, str],
+        name: str,
+        test: str,
+        flags: Sequence[str] = (),
+        host: str = "wasm32",
+        defines: Sequence[str] = (),
     ) -> Path:
-        (out / f"{name}.wat").write_text(wat, encoding="utf-8")
-        wasm = out / f"{name}.wasm"
-        subprocess.run([wabt / "bin" / "wat2wasm", out / f"{name}.wat", "-o", wasm], check=True)
-        subprocess.run(
-            [wabt / "bin" / "wasm2c", wasm, "-o", out / f"{name}_w2c.c", f"--module-name={name}"], check=True
-        )
-        model = build_model(parse(wasm.read_bytes()), name, host=host)
-        (out / f"{name}_descriptor.c").write_text(generate_descriptor(model), encoding="utf-8")
-        (out / f"{name}_binding.c").write_text(generate_binding(model), encoding="utf-8")
+        modules = wat if isinstance(wat, dict) else {name: wat}
+        sources = [C_DIR / test]
+        for module, text in modules.items():
+            (out / f"{module}.wat").write_text(text, encoding="utf-8")
+            wasm = out / f"{module}.wasm"
+            subprocess.run([wabt / "bin" / "wat2wasm", out / f"{module}.wat", "-o", wasm], check=True)
+            subprocess.run(
+                [wabt / "bin" / "wasm2c", wasm, "-o", out / f"{module}_w2c.c", f"--module-name={module}"], check=True
+            )
+            model = build_model(parse(wasm.read_bytes()), module, host=host)
+            (out / f"{module}_descriptor.c").write_text(generate_descriptor(model), encoding="utf-8")
+            (out / f"{module}_binding.c").write_text(generate_binding(model), encoding="utf-8")
+            sources += [out / f"{module}_binding.c", out / f"{module}_descriptor.c", out / f"{module}_w2c.c"]
         exe = (
             out
             / f"{name}_{Path(test).stem}{'_' + ''.join(c for c in ''.join(flags) if c.isalnum()) if flags else ''}{EXE}"
         )
         compile_c(
-            [C_DIR / test, out / f"{name}_binding.c", out / f"{name}_descriptor.c", out / f"{name}_w2c.c",
-             runtime / "wasm-rt-impl.c", runtime / "wasm-rt-mem-impl.c", runtime / "wasm-rt-exceptions-impl.c"],
+            [
+                *sources,
+                runtime / "wasm-rt-impl.c",
+                runtime / "wasm-rt-mem-impl.c",
+                runtime / "wasm-rt-exceptions-impl.c",
+            ],
             exe,
             include_dirs=[WASMEXT_C, Path(get_include()), runtime, out, *simde],
             flags=flags,
@@ -147,7 +194,7 @@ def build(wabt: Path, tmp_path_factory: pytest.TempPathFactory) -> Callable[...,
             std=None,
             threads=True,
             math=True,
-        )  # fmt: skip
+        )
         return exe
 
     return run
@@ -190,8 +237,8 @@ def test_function_imports_under_sanitizers(build: Callable[..., Path]) -> None:
 @pytest.mark.parametrize(
     ("wat", "host", "message"),
     [
-        ('(module (import "env" "m" (memory 1)) (func (export "g")))', "wasm32", "step 3d"),
-        ('(module (import "env" "g" (global i32)) (func (export "f")))', "wasm32", "step 3d"),
+        ('(module (import "env" "t" (table 1 funcref)) (func (export "g")))', "wasm32", "step 5"),
+        ('(module (import "env" "e" (tag (param i32))) (func (export "f")))', "wasm32", "step 7"),
         (
             '(module (import "wasi:cli/exit@0.2.0" "exit" (func (param i32))) (memory (export "memory") 1) (func (export "f")))',
             "wasm32-wasip2",
@@ -214,7 +261,7 @@ def test_function_imports_under_sanitizers(build: Callable[..., Path]) -> None:
         ),
         ('(module (import "env" "r" (func (param funcref))) (func (export "f")))', "wasm32", "reference type"),
     ],
-    ids=["memory", "global", "wasi-0.2-no-realloc", "no-memory", "unknown-call", "wrong-signature", "funcref"],
+    ids=["table", "tag", "wasi-0.2-no-realloc", "no-memory", "unknown-call", "wrong-signature", "funcref"],
 )
 def test_what_the_binding_does_not_carry_yet(wabt: Path, tmp_path: Path, wat: str, host: str, message: str) -> None:
     from wasmext._gen import GenError
@@ -311,3 +358,21 @@ def test_memories_and_globals_under_sanitizers(build: Callable[..., Path]) -> No
         )
     )
     _run(build(MEMORY64, "mem64", "test_memory_globals.c", flags=["-fsanitize=thread", "-g"], defines=["MEMORY64=1"]))
+
+
+def test_links_between_instances(build: Callable[..., Path]) -> None:
+    _run(build(LINK_MODULES, "links", "test_links.c"))
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="the sanitizers are checked on Linux")
+def test_links_under_sanitizers(build: Callable[..., Path]) -> None:
+    if SANITIZED or not supports_flag("-fsanitize=address,undefined"):
+        pytest.skip("no sanitizers, or one is on for the whole run")
+    _run(
+        build(
+            LINK_MODULES,
+            "links",
+            "test_links.c",
+            flags=["-fsanitize=address,undefined", "-fno-sanitize-recover=all", "-g"],
+        )
+    )

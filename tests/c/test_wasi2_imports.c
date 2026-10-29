@@ -1,6 +1,7 @@
 /* The WASI 0.2 imports of a module (a fused core module: flat types, the canonical ABI by hand) answered by the host of the store. Plain C over a real wasm2c module. */
 #include <stdio.h>
 #include "wasmext_host.h"
+#define WASMEXT_DEFINE_THREAD_STATE
 #include "wasmext_instance.h"
 
 #define CAT_(a, b) a##b

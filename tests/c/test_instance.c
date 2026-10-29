@@ -2,6 +2,7 @@
    tests/test_instance_core.py. Exit 0 and "ok" when all pass. */
 #include <stdio.h>
 #include "wasmext_errors.h"
+#define WASMEXT_DEFINE_THREAD_STATE
 #include "wasmext_instance.h"
 
 #define CAT_(a, b) a##b

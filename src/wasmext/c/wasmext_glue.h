@@ -127,6 +127,7 @@ typedef struct {
     uint32_t runtime;   /* WASMEXT_RUNTIME of the host that made it: the layout of the structs of the wasm2c runtime */
     const void *funcref;  /* a function: the wasm_rt_funcref_t of it (its type, the function, the instance), to put in a table; valid while `owner` is; NULL for the others (added at the end: `size` tells a reader) */
     uint32_t floor;     /* the lowest WASMEXT_ABI of a reader that can use this record (wasmext_export_seal): a reader below it refuses */
+    const void *store;  /* the store of the exporter, opaque (added at the end: `size` tells a reader): instances are linked inside one store, as in Wasmtime, because the store frees its members when it is closed; NULL from a host that does not know it */
 } wasmext_export;
 /* a function is called as `result f(void *instance, parameters..., int *trapped)`: a trap is reported through `trapped` (its code: see above),
    and the result is then undefined; it catches the traps of its own module. */

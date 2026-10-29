@@ -1,7 +1,7 @@
 /* The WASI imports of a module answered by the host of the store (WASI 0.1), in plain C: a store, a host with hooks, instances of a real wasm2c module. */
+#define WASMEXT_DEFINE_THREAD_STATE
 #include <stdio.h>
 #include "wasmext_host.h"
-#define WASMEXT_DEFINE_THREAD_STATE
 #include "wasmext_instance.h"
 
 #define CAT_(a, b) a##b

@@ -1,7 +1,7 @@
 /* The start function of the module traps: `instantiate` answers its code, the instance can only be freed. Plain C. */
+#define WASMEXT_DEFINE_THREAD_STATE
 #include <stdio.h>
 #include "wasmext_errors.h"
-#define WASMEXT_DEFINE_THREAD_STATE
 #include "wasmext_instance.h"
 
 #define CAT_(a, b) a##b

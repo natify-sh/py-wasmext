@@ -1,4 +1,5 @@
 /* Tests of wasmext_store.h in plain C: no wasm, no Python. Exit 0 and "ok" when all pass. */
+#define WASMEXT_DEFINE_THREAD_STATE
 #include <stdio.h>
 #include "wasmext_store.h"
 

@@ -1,7 +1,7 @@
 /* Links between instances in plain C: the record of an export of one (`lib`) is given to an import of another (`app`), in one store and in two. Also the checks that
    refuse a record that does not fit (`tiny`, `big`: memories with other limits). Four real wasm2c modules. */
-#include <stdio.h>
 #define WASMEXT_DEFINE_THREAD_STATE
+#include <stdio.h>
 #include "wasmext_instance.h"
 
 extern const wasmext_binding lib_binding, app_binding, tiny_binding, big_binding;
@@ -102,24 +102,51 @@ static void test_two_instances_one_store(void) {
     wasmext_store_free(s);
 }
 
-/* two stores: each call enters the store of the instance that runs; closing the exporter's store refuses the calls into it, as a closed store does */
+/* two stores: instances are linked inside one store (the store frees its members at the close, and an importer in another store would read what was freed), so the record
+   of an instance of one store is refused by an instance of another, and the same pair in one store links */
 static void test_two_stores(void) {
     wasmext_store *sa = wasmext_store_new(), *sb = wasmext_store_new();
     wasmext_instance *lib = wasmext_instance_new(sa, &lib_binding, NULL), *app = wasmext_instance_new(sb, &app_binding, NULL);
+    char text[WASMEXT_STORE_ERROR_SIZE];
+    CHECK(wasmext_instance_instantiate(lib) == 0);
+    CHECK(link_to(app, "libx", "add", lib, "add", WASMEXT_DESC_FUNC, NULL) == WASMEXT_INST_LINK_FAILED);
+    wasmext_store_error(sb, text, sizeof text);
+    CHECK(strstr(text, "another store") != NULL && strstr(text, "libx.add") != NULL);
+    CHECK(link_to(app, "libx", "mem", lib, "mem", WASMEXT_DESC_MEMORY, NULL) == WASMEXT_INST_LINK_FAILED);
+    CHECK(link_to(app, "libx", "counter", lib, "counter", WASMEXT_DESC_GLOBAL, NULL) == WASMEXT_INST_LINK_FAILED);
+    {   /* a record from a host that does not know the store (store NULL) is refused too */
+        wasmext_export rec;
+        CHECK(wasmext_instance_export_record(lib, (uint32_t)export_of(lib, "add", WASMEXT_DESC_FUNC), NULL, &rec) == 0);
+        rec.store = NULL;
+        CHECK(wasmext_instance_bind_export(app, (uint32_t)import_of(app, "libx", "add"), &rec) == WASMEXT_INST_LINK_FAILED);
+    }
+    wasmext_store_free(sa);
+    wasmext_store_free(sb);
+}
+
+/* closing the store closes every instance in it, and a call into one answers the code of a closed store, through a link as well */
+static void test_close_with_links(void) {
+    wasmext_store *s = wasmext_store_new();
+    wasmext_instance *app = wasmext_instance_new(s, &app_binding, NULL), *lib = wasmext_instance_new(s, &lib_binding, NULL); /* the importer is made first */
     wasmext_val a[2], r[1];
     CHECK(wasmext_instance_instantiate(lib) == 0);
     link_all(app, lib, NULL);
     CHECK(wasmext_instance_instantiate(app) == 0);
     a[0] = I32(2); a[1] = I32(3);
     CHECK(call(app, "call_add", a, 2, r, 1) == 0 && r[0].as.i32 == 5);
-    CHECK(wasmext_store_close(sa) == WASMEXT_STORE_OK);
-    CHECK(call(app, "call_add", a, 2, r, 1) == (int)WASMEXT_TRAP_CLOSED); /* the trap of the closed store goes through */
+    {   /* the store finds an instance by the pointer that its funcrefs carry (module_instance) */
+        wasmext_owner o;
+        void *object;
+        CHECK(wasmext_store_find(s, lib->module, &o) == WASMEXT_STORE_OK && wasmext_store_member(s, o, &object) == WASMEXT_STORE_OK && object == lib);
+        CHECK(wasmext_store_find(s, app->module, &o) == WASMEXT_STORE_OK && o == app->owner);
+        CHECK(app->owner != 0 && lib->owner != 0 && app->owner != lib->owner);
+    }
+    CHECK(wasmext_instance_free(lib) == WASMEXT_STORE_BUSY); /* a member of the store: the store frees it */
+    CHECK(wasmext_store_close(s) == WASMEXT_STORE_OK);
+    CHECK(call(app, "call_add", a, 2, r, 1) == (int)WASMEXT_TRAP_CLOSED);
     CHECK(wasmext_error_describe((int)WASMEXT_TRAP_CLOSED).kind == WASMEXT_ERR_CLOSED);
-    CHECK(wasmext_store_close(sb) == WASMEXT_STORE_OK);
-    wasmext_instance_free(app);
-    wasmext_instance_free(lib);
-    wasmext_store_free(sa);
-    wasmext_store_free(sb);
+    CHECK(wasmext_instance_wasi_end(app, NULL) == WASMEXT_END_NONE); /* the structure of wasm2c is gone: nothing is read */
+    wasmext_store_free(s); /* the wrappers are freed here, under ASan with no leak and no use after free */
 }
 
 /* records that do not fit */
@@ -177,6 +204,7 @@ static void test_refusals(void) {
 int main(void) {
     test_two_instances_one_store();
     test_two_stores();
+    test_close_with_links();
     test_refusals();
     if (failures) { fprintf(stderr, "%d failed\n", failures); return 1; }
     puts("ok");

@@ -79,7 +79,7 @@ typedef struct {
     int (*wasi_end)(void *instance, uint32_t *value); /* how the last call ended the WASI program: WASMEXT_END_NONE, EXIT (the code) or SIGNAL (the number); NULL when no WASI */
 } wasmext_binding;
 
-typedef struct {
+typedef struct wasmext_instance_s_ {
     const wasmext_binding *binding;
     wasmext_store *store;
     void *module; /* the structure of wasm2c (and, after it, the slots of the imports) */
@@ -90,6 +90,7 @@ typedef struct {
     uint64_t *saved_max;    /* ... and the maximum it had before the first pin */
     WASMEXT_MUTEX_T pin_mutex;
     int instantiated;
+    wasmext_owner owner; /* its handle in the registry of the store, once it is instantiated (0 before) */
     wasmext_counter status; /* the answer of the last call: 0, or the code of the trap. Atomic: with calls from several threads it is the answer of one of them; use the result of the call */
 } wasmext_instance;
 
@@ -115,6 +116,29 @@ static inline void wasmext_thread_free(void) {
     }
 }
 
+/* What the store does with an instance. At the close it releases the structure of wasm2c (the wrapper `wasmext_instance` stays valid, closed, until the store is freed); the
+   wrapper is freed with the store (adopted), or earlier by `wasmext_instance_free` for an instance that was never registered. */
+static inline void wasmext_instance_close_(void *object) {
+    wasmext_instance *i = (wasmext_instance *)object;
+    if (i->module != NULL) {
+        if (i->instantiated) i->binding->release(i->module);
+        free(i->module);
+        i->module = NULL;
+    }
+}
+static inline void wasmext_instance_wrapper_free_(void *object) {
+    wasmext_instance *i = (wasmext_instance *)object;
+    wasmext_instance_close_(i);
+    WASMEXT_MUTEX_DESTROY(&i->pin_mutex);
+    free(i->bound);
+    free(i->owners);
+    free(i->values);
+    free(i->pins);
+    free(i->saved_max);
+    free(i);
+}
+static const wasmext_owner_ops wasmext_instance_ops_ = {NULL, NULL, NULL, wasmext_instance_close_};
+
 /* Makes an instance in `store`: NULL with `*error` (an errno) when it cannot be made. Imports, if any, are bound before `wasmext_instance_instantiate`. */
 static inline wasmext_instance *wasmext_instance_new(wasmext_store *store, const wasmext_binding *binding, int *error) {
     int ignored;
@@ -136,6 +160,11 @@ static inline wasmext_instance *wasmext_instance_new(wasmext_store *store, const
     WASMEXT_MUTEX_INIT(&i->pin_mutex);
     i->binding = binding;
     i->store = store;
+    if (wasmext_store_adopt(store, i, wasmext_instance_wrapper_free_) != WASMEXT_STORE_OK) {
+        wasmext_instance_wrapper_free_(i);
+        *error = ENOMEM;
+        return NULL;
+    }
     *error = 0;
     return i;
 }
@@ -225,6 +254,7 @@ static inline int wasmext_instance_export_record(wasmext_instance *i, uint32_t i
     out->abi = WASMEXT_ABI;
     out->owner = owner;
     out->runtime = WASMEXT_RUNTIME;
+    out->store = i->store;
     switch (d->exports[index].kind) {
         case WASMEXT_DESC_FUNC:
             if (b->shim == NULL) return WASMEXT_INST_UNSUPPORTED;
@@ -268,6 +298,9 @@ static inline int wasmext_instance_bind_export(wasmext_instance *i, uint32_t imp
     if (import >= d->n_imports || d->imports[import].core) return WASMEXT_INST_BAD_IMPORT;
     m = &d->imports[import];
     if (!wasmext_export_ok(e)) return wasmext_instance_link_fail_(i, m, "is linked to an export from an incompatible version of wasmext", "");
+    /* Instances are linked inside one store: the store frees its members when it is closed, and an importer in another store would read what the close freed. */
+    if (e->size < offsetof(wasmext_export, store) + sizeof e->store || e->store != (const void *)i->store)
+        return wasmext_instance_link_fail_(i, m, "is linked to an export of another store: instances are linked inside one store", "");
     switch (m->kind) {
         case WASMEXT_DESC_FUNC: {
             char want[160];
@@ -408,7 +441,18 @@ static inline int wasmext_instance_instantiate(wasmext_instance *i) {
     if (lock != NULL) wasmext_rlock_release_to(lock, level); /* a trap left the unlocks of fusedwasi behind */
     wasmext_store_leave(i->store, line);
     wasmext_atomic_store(&i->status, rc);
-    if (rc == 0) i->instantiated = 1;
+    if (rc == 0) {
+        /* the store holds the instance from now until the close, and finds it by the pointer that its funcrefs carry */
+        int reg = wasmext_store_register(i->store, i->module, i, &wasmext_instance_ops_, &i->owner);
+        if (reg != WASMEXT_STORE_OK) {
+            i->binding->release(i->module);
+            memset(i->module, 0, i->binding->instance_size);
+            rc = reg == WASMEXT_STORE_CLOSED ? (int)WASMEXT_TRAP_CLOSED : (int)WASMEXT_TRAP_NO_MEMORY;
+            wasmext_atomic_store(&i->status, rc);
+            return rc;
+        }
+        i->instantiated = 1;
+    }
     return rc;
 }
 
@@ -458,7 +502,7 @@ static inline int wasmext_instance_wasi_end(const wasmext_instance *i, uint32_t 
     uint32_t ignored;
     if (value == NULL) value = &ignored;
     *value = 0;
-    return i->binding->wasi_end != NULL ? i->binding->wasi_end(i->module, value) : WASMEXT_END_NONE;
+    return i->module != NULL && i->binding->wasi_end != NULL ? i->binding->wasi_end(i->module, value) : WASMEXT_END_NONE;
 }
 
 /* ---- memories ---- */
@@ -589,17 +633,14 @@ static inline int wasmext_instance_global_set(wasmext_instance *i, uint32_t inde
 /* The answer of the last call of the instance: 0, or the code of the trap. */
 static inline int wasmext_instance_status(const wasmext_instance *i) { return (int)wasmext_atomic_load((wasmext_counter *)&i->status); }
 
-static inline void wasmext_instance_free(wasmext_instance *i) {
-    if (i == NULL) return;
-    if (i->instantiated) i->binding->release(i->module);
-    WASMEXT_MUTEX_DESTROY(&i->pin_mutex);
-    free(i->module);
-    free(i->bound);
-    free(i->owners);
-    free(i->values);
-    free(i->pins);
-    free(i->saved_max);
-    free(i);
+/* Frees the wrapper of an instance that the store does not hold: one that was never instantiated, or whose instantiation failed. An instantiated instance is a member of the
+   store until the close (as in Wasmtime) and the store frees it when it is freed: WASMEXT_STORE_BUSY, nothing done. */
+static inline int wasmext_instance_free(wasmext_instance *i) {
+    if (i == NULL) return WASMEXT_STORE_OK;
+    if (i->owner != 0) return WASMEXT_STORE_BUSY;
+    wasmext_store_unadopt(i->store, i);
+    wasmext_instance_wrapper_free_(i);
+    return WASMEXT_STORE_OK;
 }
 
 #endif

@@ -104,3 +104,27 @@ def test_the_recursive_lock_under_threadsanitizer(tmp_path: Path) -> None:
     exe = tmp_path / "test_rlock_tsan"
     compile_c([C_DIR / "test_rlock.c"], exe, include_dirs=[WASMEXT_C], flags=["-fsanitize=thread", "-g"], threads=True)
     _run(exe)
+
+
+def test_the_registry_of_owners(tmp_path: Path) -> None:
+    exe = tmp_path / f"test_registry{EXE}"
+    compile_c([C_DIR / "test_registry.c"], exe, include_dirs=[WASMEXT_C], threads=True)
+    _run(exe)  # (a search that loops is caught by the timeout of _run)
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="the sanitizers are checked on Linux")
+def test_the_registry_under_sanitizers(tmp_path: Path) -> None:
+    if (
+        SANITIZED
+        or find_cc() is None
+        or not supports_flag("-fsanitize=thread")
+        or not supports_flag("-fsanitize=address,undefined")
+    ):
+        pytest.skip("no sanitizers, or one is on for the whole run")
+    for name, flags in (
+        ("tsan", ["-fsanitize=thread", "-g"]),
+        ("asan", ["-fsanitize=address,undefined", "-fno-sanitize-recover=all", "-g"]),
+    ):
+        exe = tmp_path / f"test_registry_{name}"
+        compile_c([C_DIR / "test_registry.c"], exe, include_dirs=[WASMEXT_C], flags=flags, threads=True)
+        _run(exe)

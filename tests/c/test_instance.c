@@ -1,8 +1,8 @@
 /* Tests of wasmext_instance.h in plain C over a module built by wasm2c and its generated binding: no Python. The module is MODULE (a prefix), built from
    tests/test_instance_core.py. Exit 0 and "ok" when all pass. */
+#define WASMEXT_DEFINE_THREAD_STATE
 #include <stdio.h>
 #include "wasmext_errors.h"
-#define WASMEXT_DEFINE_THREAD_STATE
 #include "wasmext_instance.h"
 
 #define CAT_(a, b) a##b

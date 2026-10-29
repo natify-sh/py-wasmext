@@ -91,7 +91,8 @@
           "const char *signature",
           "uint32_t runtime",
           "const void *funcref",
-          "uint32_t floor"
+          "uint32_t floor",
+          "const void *store"
         ]
       },
       "stub": [
@@ -229,7 +230,8 @@
           "const char *signature",
           "uint32_t runtime",
           "const void *funcref",
-          "uint32_t floor"
+          "uint32_t floor",
+          "const void *store"
         ],
         "<name>_value": [
           "int type",
@@ -351,7 +353,8 @@
         "const char *signature",
         "uint32_t runtime",
         "const void *funcref",
-        "uint32_t floor"
+        "uint32_t floor",
+        "const void *store"
       ],
       "wasmext_traps": [
         "uint32_t size",

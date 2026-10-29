@@ -1,4 +1,5 @@
 /* Tests of wasmext_host.h in plain C over the headers of fusedwasi and the runtime of wasm2c: no module, no Python. Exit 0 and "ok" when all pass. */
+#define WASMEXT_DEFINE_THREAD_STATE
 #include <stdio.h>
 #include "wasmext_host.h"
 #include "wasmext_store.h"

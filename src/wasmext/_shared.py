@@ -492,6 +492,7 @@ def generate_shared(
     A("    uint32_t runtime;")
     A("    const void *funcref;")
     A("    uint32_t floor;")
+    A("    const void *store;")
     A(f"}} {last}_export;")
     A("")
     A(

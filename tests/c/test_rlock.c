@@ -1,4 +1,5 @@
 /* Tests of wasmext_rlock.h in plain C. Exit 0 and "ok" when all pass. */
+#define WASMEXT_DEFINE_THREAD_STATE
 #include <stdio.h>
 #include "wasmext_rlock.h"
 

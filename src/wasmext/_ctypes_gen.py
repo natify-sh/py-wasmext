@@ -229,7 +229,7 @@ class _Export(_c.Structure):
     _fields_ = [
         ("size", _c.c_uint32), ("abi", _c.c_uint32), ("kind", _c.c_uint32), ("type", _c.c_uint32), ("flags", _c.c_uint32),
         ("owner", _c.c_void_p), ("address", _c.c_void_p), ("instance", _c.c_void_p),
-        ("signature", _c.c_char_p), ("runtime", _c.c_uint32), ("funcref", _c.c_void_p), ("floor", _c.c_uint32),
+        ("signature", _c.c_char_p), ("runtime", _c.c_uint32), ("funcref", _c.c_void_p), ("floor", _c.c_uint32), ("store", _c.c_void_p),
     ]
 
 

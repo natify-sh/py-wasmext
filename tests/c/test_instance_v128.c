@@ -1,6 +1,6 @@
 /* A v128 crosses the core as 16 bytes of the order of WebAssembly memory. Plain C. */
-#include <stdio.h>
 #define WASMEXT_DEFINE_THREAD_STATE
+#include <stdio.h>
 #include "wasmext_instance.h"
 
 #define CAT_(a, b) a##b

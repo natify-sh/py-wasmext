@@ -39,3 +39,29 @@ The old shape is not patched; the generated store of `_shared.py` and the wrappe
 
 1. **Free-threaded:** the split counter is built now with C11 atomics (a requirement of layer 1, from the owner), the plain form where there is one thread. The cost of the sum and of choosing a line is not measured; `docs/experiments/context_bench/` is the place to measure it before the choice is final.
 2. Is the state of fusedwasi (`fusedwasi_p2_state`, and p1 over it) allocated inside the store as now, or by the host that makes the store? I propose inside, as now.
+
+## Part 2b: the host of WASI in the static core (a design, for review; read 2026-10-29)
+
+**What there is.** The host of WASI is written three times over the same state of fusedwasi (`fusedwasi_p2_state`, with its callbacks for streams, clocks, random bytes, sleep and the network policies):
+
+- the shared library: `_shared.py` generates C (`_p2_helpers`, `_p2_new`, `api_p2_release`): the configuration struct `<last>_config`, the copy of arguments, environment and `dirs`, the hooks over the callbacks of the configuration, the release. All of it carries the module prefix, and none of it needs the module;
+- the extension: `wasi_python.h` (548 lines) and `wasi2_python.h` (356 lines) do the same with Python callables; the glue `<name>_glue.h` has a store struct of its own (`wasi`, `wasi_py`, `p2_message`, `wait`, `closed`...);
+- the executable: through the shared library's store.
+
+`<last>_config` is the same in every module (the network fields exist only in a 0.2 build, which is the only difference). What is truly per module is small: the **guest of an instance** (`wasi_guest_init` binds the memory of that instance by its mangled name), and the callbacks that need the instance (`trap`, `exit`, `signal`, `realloc`). That is step 3, not this one.
+
+**What 2b builds** (static C, `src/wasmext/c/wasmext_host.h`, in the manner of `wasmext_glue.h`; needs the headers of fusedwasi and `wasm-rt.h`, not a module):
+
+1. **`wasmext_config`**: today's `<last>_config`, one struct for all modules; the network fields are always there (a 0.1 build ignores them).
+2. **`wasmext_host`**: an object made by `wasmext_host_new(config, &error)`: the fusedwasi state, the copies of arguments, environment and preopens, the three standard streams, the hooks (stdin, stdout and stderr, clock, random, sleep, sockets, http), the message of a trap of the host (`p2_message`), the `wait`. The checks of the configuration (a bad `dirs` item, a missing `=`) are done here, once. `wasmext_host_free` releases it.
+3. **Owned by the store through the arena**: `wasmext_store_own(store, host, wasmext_host_free)`. The store module stays free of fusedwasi and wasm-rt; the host is an object the store owns, as any other. (This is the "inside the store" of the decision, with the composition kept clean.)
+4. **A hook that fails traps the host** the way the generated code does (`wasm_rt_trap(WASMEXT_TRAP_HOST)` after keeping the message in the host); the container-of from the state to the host is `offsetof` in one place.
+5. The errno mapping of a hook for 0.1 (`fusedwasi_p1_errno`) is used where the p1 header is included, and `EIO` otherwise, as now.
+
+**Not in 2b:** the guest of an instance and its callbacks (step 3); the Python hooks (`wasi_python.h`, `wasi2_python.h`): they become a front end that gives the static host plain C hooks whose `user` is the Python callable, so the logic of streams and policies is written once. That change is made in the extension's own step, not patched here.
+
+**Tests (C first)**, `tests/c/test_host.c`, over the real headers of fusedwasi and the runtime of wasm2c (no module, no Python): the configuration is copied (arguments, environment cut at the first `=`, `dirs` as `host::guest`, read-only flags); a bad item gives its errno; the hooks are called (a write to a stream reaches `stdout_write`, a read reaches `stdin_read`, a clock and random reach theirs, a hook that fails sets the message); the host is freed once, under ASan with no leak; the same host is freed by the arena at `close`.
+
+**Open (for the owner):**
+1. The host as a separate object owned through the arena (above), or as fields of the store? I propose the object.
+2. A 0.1-only build and a 0.2 build share one `wasmext_host`: the 0.2 network policies stay in it and are simply unused by 0.1. Any objection?

@@ -510,7 +510,7 @@ def _shim(name: str, last: str, prefix: str, export: str, ft: FuncType) -> list[
         if t == "funcref":
             out.append(f"    rc = wasmext_link_funcref_(self, &a{k}); if (rc) {{ *trapped = rc; {give} }}")
         elif t == "externref":
-            out.append(f"    rc = wasmext_extern_check_(self->store, a{k}); if (rc) {{ *trapped = rc; {give} }}")
+            out.append(f"    rc = wasmext_link_extern_(self, a{k}); if (rc) {{ *trapped = rc; {give} }}")
     out += [
         "    rc = wasmext_instance_begin_(self, &line, &level);",
         f"    if (rc) {{ *trapped = (int)WASMEXT_TRAP_LINKED + rc; {give} }}",

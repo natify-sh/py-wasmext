@@ -40,7 +40,7 @@ Status: 6a, 6b and 6c built 2026-10-30. The step is complete. The owner accepted
 * Non-goals:
   * The collector. Until step 9, a long-lived store that is given very many values holds them all. The way out is to close the store (an explicit `with store:`), which the front ends already require.
   * Counting references from the host. WebAssembly copies an `externref` where the host does not see (locals, a table, a global), so only a scan of what the store holds can say that nobody holds a value, and that is the collector.
-  * An `externref` in the typed fast shape, and linking a function with an `externref` in its signature across instances (step 8, as for `funcref`).
+  * An `externref` in the typed fast shape for a HOST function (FFIs cannot pass it); linking a function with an `externref` in its signature across instances is built in 8a-2 (S0008).
   * `FEATURES.md` and the old glue: untouched. The old glue still refuses these features and goes with its step.
 
 ## Interface
@@ -121,7 +121,7 @@ The cell of an imported immutable global that the host gives is `uint64_t values
 ### Binding (`_binding.py`)
 The binding carries `externref` in the signatures of exports, imports, `call_ref` and the host functions of a table.
 * C types: `_CTYPE["externref"] = "wasm_rt_externref_t"`, `_MULTI_CODE["externref"] = "e"`, `_RT_TYPE["externref"] = "WASM_RT_EXTERNREF"`. The tables of the old glue lack the `externref`; the binding adds it.
-* Letter in a signature of a record: `"r"` for both kinds of reference (`_SIG_LETTER`).
+* Letter in a signature of a record: `"E"` for an externref, `"F"` for a funcref (`_SIG_LETTER`; was `"r"` for both before 8a-2).
 * A function with a reference in its signature has a shim (8a-2, S0008; `_has_ref` and `_linkable` are gone); only a typed host function has none.
 * The adapters, the forwarders and the trampolines (`_adapter`, `_forwarder`, `_trampoline`, `_slot_call`) pass an `externref` by the pointer, and check an answer with `wasmext_extern_result_`.
 * Imports of tables of `externref` use `wasm_rt_externref_table_t`; imports of globals of both kinds are carried through `ref_slot`.
@@ -143,7 +143,7 @@ The binding carries `externref` in the signatures of exports, imports, `call_ref
 * A value comes out (a result, a read from a table or a global): WebAssembly can give back only what it was given, so it is a member already and is not checked again.
   The host reads its `user` with `wasmext_extern_user(ref)`; NULL gives NULL.
 * A function with an `externref` in its signature has no typed shape: `wasmext_instance_bind_typed` refuses it (`WASMEXT_INST_UNSUPPORTED`).
-  It has no record for linking between instances either, as the functions with a `funcref` (step 8). A host function in a table (S0005, 5c) and `call_ref` (5b) carry it.
+  It has a record for linking between instances since 8a-2 (S0008), as the functions with a `funcref`. A host function in a table (S0005, 5c) and `call_ref` (5b) carry it.
 
 ### Kinds of members
 The checks of 6a first accepted any pointer that was a member of the store, and the members are of several kinds (instances, tables, host functions, references).
@@ -200,7 +200,7 @@ Mutations that must fail the tests (done on 2026-10-30, each caught):
 * The kind as the address of the ops table.
   Why not: each translation unit has its own copy of a `static const` ops, so the addresses differ. The kind is a field.
 * A typed fast shape and a link record for functions with an `externref`.
-  Why not: a reference is checked as it comes in, and the typed shape has no checks. Linking across instances is for step 8.
+  Why not: a reference is checked as it comes in, and the typed shape has no checks. The typed shape of a linked function (the shim) checks them itself since 8a-2 (S0008).
 * Globals of references in a later step.
   Why not: they were refused since step 3, and step 5 did not touch them; the owner accepted them in this step.
 

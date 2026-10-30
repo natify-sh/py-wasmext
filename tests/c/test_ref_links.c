@@ -42,7 +42,7 @@ static wasmext_extern *give(wasmext_store *s, item_t *it) {
 }
 
 static void link_all(wasmext_instance *app, wasmext_instance *lib) {
-    static const char *const names[] = {"fident", "eident", "mixed", "getf", "boom", "isnull"};
+    static const char *const names[] = {"fident", "eident", "mixed", "getf", "boom", "isnull", "mfr"};
     for (size_t k = 0; k < sizeof names / sizeof names[0]; k++) CHECK(link_to(app, "libr", names[k], lib, names[k]) == 0);
 }
 
@@ -86,6 +86,9 @@ static void test_calls_through_links(void) {
     CHECK(call(app, "mx", a, 4, r, 4) == 0);
     CHECK(r[0].type == 0x6F && r[0].as.ref == e1 && r[1].type == 0x7E && r[1].as.i64 == 77 && r[2].type == 0x70 && r[3].type == 0x7F && r[3].as.i32 == 5);
     CHECK(back2.ref.func == nine.ref.func && back2.owner == app->owner);
+    /* a funcref inside a multi-value result */
+    r[0] = REF(&back); r[1] = I32(0);
+    CHECK(call(app, "mf", NULL, 0, r, 2) == 0 && back.ref.module_instance == seven.ref.module_instance && back.owner == lib->owner && r[1].as.i32 == 1);
     /* the funcref that comes out of the callee belongs to the callee's instance and can be used: call_ref, and a table element called by call_indirect */
     r[0] = REF(&back);
     CHECK(call(app, "gf", NULL, 0, r, 1) == 0 && back.ref.func != NULL && back.ref.module_instance == seven.ref.module_instance && back.owner == lib->owner && back.owner != app->owner);
@@ -94,7 +97,7 @@ static void test_calls_through_links(void) {
     CHECK(wasmext_instance_table_set(app, (uint32_t)export_of(app, "tab", WASMEXT_DESC_TABLE), 2, &back) == 0);
     a[0] = I32(2);
     CHECK(call(app, "callslot", a, 1, r, 1) == 0 && r[0].as.i32 == 7);
-    wasmext_store_free(s);
+    CHECK(wasmext_store_free(s) == WASMEXT_STORE_OK);
     CHECK(it1.released == 1);
 }
 
@@ -119,7 +122,7 @@ static void test_a_trap_in_the_callee(void) {
     CHECK(record_of(lib, "boom", &rec) == 0);
     ((eshim_t)rec.address)(rec.instance, e1, &trapped);
     CHECK(trapped == WASMEXT_TRAP_LINKED + (int)WASM_RT_TRAP_UNREACHABLE);
-    wasmext_store_free(s);
+    CHECK(wasmext_store_free(s) == WASMEXT_STORE_OK);
 }
 
 /* a reference that comes into the shim is checked there: a pointer that is not a reference of the store is WASMEXT_TAB_WRONG_STORE, a funcref that no member stands behind WASMEXT_TAB_STALE */
@@ -134,6 +137,10 @@ static void test_the_shim_checks_what_comes_in(void) {
     typedef wasm_rt_funcref_t (*fshim_t)(void *, wasm_rt_funcref_t, int *);
     int trapped, not_a_reference = 5;
     wasm_rt_funcref_t forged, got;
+    char text[WASMEXT_STORE_ERROR_SIZE];
+    typedef struct { void *e; uint64_t j; wasm_rt_funcref_t f; uint32_t i; } mres_t; /* the layout of the multi-value result of `mixed` (wasm2c's struct wasm_multi_ejri) */
+    typedef mres_t (*mshim_t)(void *, uint32_t, wasm_rt_funcref_t, void *, uint64_t, int *);
+    mres_t res;
     CHECK(wasmext_instance_instantiate(lib) == 0);
     link_all(app, lib);
     CHECK(wasmext_instance_instantiate(app) == 0);
@@ -160,8 +167,29 @@ static void test_the_shim_checks_what_comes_in(void) {
     trapped = 0;
     ((fshim_t)rec.address)(rec.instance, forged, &trapped);
     CHECK(trapped == WASMEXT_TAB_STALE);
-    wasmext_store_free(s);
-    wasmext_store_free(other);
+    wasmext_store_error(s, text, sizeof text);
+    CHECK(strstr(text, "stale") != NULL);
+    /* a function with several parameters: the checks reach the reference in any position (funcref second, externref third) */
+    CHECK(record_of(lib, "mixed", &rec) == 0);
+    trapped = 0;
+    res = ((mshim_t)rec.address)(rec.instance, 5, nine.ref, e1, 77, &trapped);
+    CHECK(trapped == 0 && res.e == e1 && res.j == 77 && res.f.module_instance == nine.ref.module_instance && res.i == 5);
+    trapped = 0;
+    ((mshim_t)rec.address)(rec.instance, 5, nine.ref, &not_a_reference, 77, &trapped);
+    CHECK(trapped == WASMEXT_TAB_WRONG_STORE);
+    wasmext_store_error(s, text, sizeof text);
+    CHECK(strstr(text, "not of this store") != NULL);
+    trapped = 0;
+    ((mshim_t)rec.address)(rec.instance, 5, nine.ref, foreign, 77, &trapped);
+    CHECK(trapped == WASMEXT_TAB_WRONG_STORE);
+    trapped = 0;
+    ((mshim_t)rec.address)(rec.instance, 5, forged, e1, 77, &trapped);
+    CHECK(trapped == WASMEXT_TAB_STALE);
+    trapped = 0;
+    ((mshim_t)rec.address)(rec.instance, 5, forged, &not_a_reference, 77, &trapped);
+    CHECK(trapped == WASMEXT_TAB_STALE); /* the first reference that fails decides */
+    CHECK(wasmext_store_free(s) == WASMEXT_STORE_OK);
+    CHECK(wasmext_store_free(other) == WASMEXT_STORE_OK);
 }
 
 /* what is still refused: a signature that differs in the letter, and a typed host function with a reference */
@@ -183,7 +211,7 @@ static void test_refusals(void) {
     /* a typed function of the host (FFIs cannot pass a struct by value) is refused for an import with a reference: the uniform shape is the way */
     CHECK(wasmext_instance_bind_typed(bad2, (uint32_t)import_of(bad2, "libb", "eident"), (void *)link_all, NULL) == WASMEXT_INST_UNSUPPORTED);
     CHECK(wasmext_instance_bind_typed(bad2, (uint32_t)import_of(bad2, "libb2", "fident"), (void *)link_all, NULL) == WASMEXT_INST_UNSUPPORTED);
-    wasmext_store_free(s);
+    CHECK(wasmext_store_free(s) == WASMEXT_STORE_OK);
 }
 
 int main(void) {

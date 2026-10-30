@@ -80,7 +80,8 @@ REFLIBA = """(module
   (func (export "mixed") (param i32 funcref externref i64) (result externref i64 funcref i32) local.get 2 local.get 3 local.get 1 local.get 0)
   (func (export "getf") (result funcref) ref.func $seven)
   (func (export "boom") (param externref) (result externref) unreachable)
-  (func (export "isnull") (param funcref) (result i32) local.get 0 ref.is_null))"""
+  (func (export "isnull") (param funcref) (result i32) local.get 0 ref.is_null)
+  (func (export "mfr") (result funcref i32) ref.func $seven i32.const 1))"""
 REFAPPB = """(module
   (import "libr" "fident" (func $fi (param funcref) (result funcref)))
   (import "libr" "eident" (func $ei (param externref) (result externref)))
@@ -88,13 +89,15 @@ REFAPPB = """(module
   (import "libr" "getf" (func $gf (result funcref)))
   (import "libr" "boom" (func $bm (param externref) (result externref)))
   (import "libr" "isnull" (func $isn (param funcref) (result i32)))
+  (import "libr" "mfr" (func $mfr (result funcref i32)))
   (func $nine (export "nine") (result i32) i32.const 9)
   (func (export "fi") (param funcref) (result funcref) local.get 0 call $fi)
   (func (export "ei") (param externref) (result externref) local.get 0 call $ei)
   (func (export "mx") (param i32 funcref externref i64) (result externref i64 funcref i32) local.get 0 local.get 1 local.get 2 local.get 3 call $mx)
   (func (export "gf") (result funcref) call $gf)
   (func (export "isn") (param funcref) (result i32) local.get 0 call $isn)
-  (func (export "fnine") (result funcref) ref.func $nine call $fi))"""
+  (func (export "fnine") (result funcref) ref.func $nine call $fi)
+  (func (export "mf") (result funcref i32) call $mfr))"""
 
 
 def _library(

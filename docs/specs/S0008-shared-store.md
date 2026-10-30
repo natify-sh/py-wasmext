@@ -56,6 +56,7 @@ Facts that bound the design (checked in the code and in the runtime sources of w
 * No artifact is bound for life. An instance runs on the runtime of the store it was made in; the `wasm_rt_*` of every copy (the `exceptions` wrapper, `WASM_RT_TRAP_HANDLER`) forward to the active runtime of the thread. A call that passes through instances of two stores (a host function in between) has one active runtime at a time, each store's own entry stack.
 * Through a table (raw call B to A): no store enter; a trap anywhere goes to the active runtime's trap and then to the innermost entry; a throw goes to the
   innermost `try` of any copy.
+* Typed HOST functions with references are refused by `bind_typed`; a sealed record built by a C host is trusted C (`bind_export` compares letters and refuses an unknown one, not the code behind the address).
 * Through a link: B's forwarder calls A's shim (nested enter); LINKED+code is re-raised in B. Open: re-throw an uncaught exception instead of trapping.
 * Every copy that has an instance in the store is made ready on the thread at the first entry (stack limit and `wasm_rt_init_thread`). With depth counting
   (Windows, Emscripten) the entry saves and restores the counters of those copies.

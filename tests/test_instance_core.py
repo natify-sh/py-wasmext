@@ -234,7 +234,8 @@ REF_LINK_MODULES = {
   (func (export "mixed") (param i32 funcref externref i64) (result externref i64 funcref i32) local.get 2 local.get 3 local.get 1 local.get 0)
   (func (export "getf") (result funcref) ref.func $seven)
   (func (export "boom") (param externref) (result externref) unreachable)
-  (func (export "isnull") (param funcref) (result i32) local.get 0 ref.is_null))""",
+  (func (export "isnull") (param funcref) (result i32) local.get 0 ref.is_null)
+  (func (export "mfr") (result funcref i32) ref.func $seven i32.const 1))""",
     "rapp": """(module
   (type $t (func (result i32)))
   (import "libr" "fident" (func $fi (param funcref) (result funcref)))
@@ -243,6 +244,7 @@ REF_LINK_MODULES = {
   (import "libr" "getf" (func $gf (result funcref)))
   (import "libr" "boom" (func $bm (param externref) (result externref)))
   (import "libr" "isnull" (func $isn (param funcref) (result i32)))
+  (import "libr" "mfr" (func $mfr (result funcref i32)))
   (table $tab (export "tab") 4 8 funcref)
   (func $nine (export "nine") (result i32) i32.const 9)
   (func (export "fi") (param funcref) (result funcref) local.get 0 call $fi)
@@ -252,6 +254,7 @@ REF_LINK_MODULES = {
   (func (export "bm") (param externref) (result externref) local.get 0 call $bm)
   (func (export "isn") (param funcref) (result i32) local.get 0 call $isn)
   (func (export "fnine") (result funcref) ref.func $nine call $fi)
+  (func (export "mf") (result funcref i32) call $mfr)
   (func (export "callslot") (param i32) (result i32) local.get 0 call_indirect (type $t)))""",
     "rbad": """(module
   (import "libb" "eident" (func (param funcref) (result funcref)))

@@ -287,8 +287,8 @@ static void test_references_through_links(void) {
     wasmext_val a[4], r[4];
     wasmext_extern *e1;
     int item = 1, error = 0;
-    static const char *const names[] = {"fident", "eident", "mixed", "getf", "boom", "isnull"};
-    char why[200];
+    static const char *const names[] = {"fident", "eident", "mixed", "getf", "boom", "isnull", "mfr"};
+    char why[200], text[WASMEXT_STORE_ERROR_SIZE];
     CHECK(B->store_attach(s, why, sizeof why) == WASMEXT_STORE_OK);
     lib = A->instance_new(s, "rlib", &error);
     app = B->instance_new(s, "rapp", &error);
@@ -315,6 +315,17 @@ static void test_references_through_links(void) {
     CHECK(B->call(app, "fnine", NULL, 0, r, 1) == (int)WASMEXT_TRAP_HOST);
     /* a funcref of A that A answers: refused where it comes out into the code of B */
     CHECK(B->call(app, "gf", NULL, 0, r, 1) == (int)WASMEXT_TRAP_HOST);
+    B->store_error(s, text, sizeof text);
+    CHECK(strstr(text, "another artifact") != NULL);
+    /* ... also one inside a multi-value result (a funcref that A makes with ref.func, and a number) */
+    r[0] = REF(&back); r[1] = I32(0);
+    CHECK(B->call(app, "mf", NULL, 0, r, 2) == (int)WASMEXT_TRAP_HOST);
+    /* a funcref of B in the funcref position of a function with several parameters */
+    a[0] = I32(5); a[1] = REF(&nine); a[2] = XREF(e1); a[3] = I64(77);
+    r[0] = XREF(NULL); r[1] = I64(0); r[2] = REF(&back2); r[3] = I32(0);
+    CHECK(B->call(app, "mx", a, 4, r, 4) == (int)WASMEXT_TRAP_HOST);
+    B->store_error(s, text, sizeof text);
+    CHECK(strstr(text, "another artifact") != NULL);
     /* ... but A's own call of it is its own business */
     r[0] = REF(&back);
     CHECK(A->call(lib, "getf", NULL, 0, r, 1) == 0 && back.ref.module_instance == seven.ref.module_instance);

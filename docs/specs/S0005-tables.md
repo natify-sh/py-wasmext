@@ -58,7 +58,7 @@ Since step 4 instances are linked inside one store, and a store is made by one a
 * Non-goals:
   * Tables shared across separately built artifacts, and the trap state they need (step 8).
   * Calling by the host an element whose type no module of the artifact declares.
-  * `funcref` in the typed fast shape, and linking a function with a `funcref` in its signature across instances (step 8, with the trap state).
+  * `funcref` in the typed fast shape, for a HOST function; linking a function with a `funcref` in its signature across instances is built in 8a-2 (S0008).
   * `externref` (S0006), tags (S0007).
   * Synchronising a write to a table by WebAssembly code with the host's (the threads proposal, step 11).
   * Taking the lock of the host (`wasmext_rlock`) inside a host function put in a table: it is the business of the function itself, as for an import.
@@ -190,7 +190,7 @@ Helpers that the generated code and the checks use: `wasmext_funcref_member_`, `
   It answers one in the same way, or NULL. A function of another store, a forged one, a result of another type, or a failure of the host is a trap `WASMEXT_TRAP_HOST` (or the failure's own code).
 * What a funcref cannot do: the typed fast shape has no funcref (it would pass a struct by value). So `wasmext_instance_bind_typed` refuses such an import (`WASMEXT_INST_UNSUPPORTED`).
   A function with a funcref in its signature has a record and is linked (8a-2, S0008): the letters of the signature are `F` and `E`, the shim and the typed slot pass `wasm_rt_funcref_t` by value and `void *`. The shim checks a reference as it comes in (a funcref of a member of the store and, until 8b, of the artifact of the callee; an externref a member of the store), and the importer checks a funcref that comes out; typed HOST functions with a reference stay refused (`bind_typed` answers `UNSUPPORTED`).
-  Linking those across instances is for step 8, with the trap state.
+  (Built in 8a-2.)
 
 ### Host functions as elements
 * `wasmext_instance_host_funcref` makes a `wasmext_host_func` and registers it as a member of the store under its own pointer. That pointer is the `module_instance` of the funcref.

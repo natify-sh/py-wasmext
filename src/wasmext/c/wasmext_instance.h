@@ -417,7 +417,7 @@ static inline int wasmext_instance_bind_export(wasmext_instance *i, uint32_t imp
             wasmext_import_slot *slot;
             wasmext_instance_signature_(&m->type, want, sizeof want);
             if (e->kind != WASMEXT_FUNC || e->address == NULL) return wasmext_instance_link_fail_(i, m, "is a function: the export given is not", "");
-            if (e->signature == NULL || strcmp(e->signature, want) != 0) {
+            if (e->signature == NULL || strcmp(e->signature, want) != 0 || strspn(want, "ijfdoFE>") != strlen(want)) {
                 char detail[200];
                 snprintf(detail, sizeof detail, " %s: the export given is another one (%s)", want, e->signature != NULL ? e->signature : "none");
                 return wasmext_instance_link_fail_(i, m, "is a function", detail);
@@ -945,13 +945,20 @@ static inline const void *wasmext_funcref_artifact_(wasmext_store *store, const 
 
 /* A funcref that comes into the code of the instance `i` through a link (S0008, 8a-2), where the shape is the typed one and no `wasmext_val` is made: the argument of a shim and the
    answer of a linked function. It must be a function of a member of the store, and (TEMPORARY, removed by 8b) of the artifact of `i`: 0, or WASMEXT_TAB_STALE or
-   WASMEXT_TAB_FOREIGN_ARTIFACT. An externref is checked with `wasmext_extern_check_`. A link is inside one store, so no more is needed. */
+   WASMEXT_TAB_FOREIGN_ARTIFACT. A refusal leaves its reason in the error text of the store. An externref is checked with `wasmext_link_extern_`. A link is inside one store, so no more is needed. */
+static inline int wasmext_link_refused_(wasmext_instance *i, int rc) {
+    if (rc == WASMEXT_TAB_STALE) wasmext_store_set_error(i->store, "a funcref passed through a link is stale: no member of the store stands behind it");
+    else if (rc == WASMEXT_TAB_FOREIGN_ARTIFACT) wasmext_store_set_error(i->store, "a funcref passed through a link belongs to another artifact (its functions cannot be called from here yet)");
+    else if (rc == WASMEXT_TAB_WRONG_STORE) wasmext_store_set_error(i->store, "a reference passed through a link is not of this store");
+    return rc;
+}
 static inline int wasmext_link_funcref_(wasmext_instance *i, const wasm_rt_funcref_t *r) {
     wasmext_funcref f;
     int rc = wasmext_funcref_from_(i, r, &f);
-    if (rc != 0) return rc;
-    return wasmext_foreign_artifact_(i->artifact, wasmext_funcref_artifact_(i->store, &f)); /* removed by 8b (S0008) */
+    if (rc == 0) rc = wasmext_foreign_artifact_(i->artifact, wasmext_funcref_artifact_(i->store, &f)); /* removed by 8b (S0008) */
+    return wasmext_link_refused_(i, rc);
 }
+static inline int wasmext_link_extern_(wasmext_instance *i, const void *e) { return wasmext_link_refused_(i, wasmext_extern_check_(i->store, e)); }
 
 /* Makes a function of the host (`fn`, one shape for every function: see wasmext_host_fn) of the type `params` -> `results` (bytes of the binary format) and gives it as an element of a table
    to put in this store (`out`). The type must be one that the module of `i` declares (its type section), else WASMEXT_INST_UNDECLARED_TYPE: the glue is made ahead of time, and a

@@ -257,6 +257,7 @@ Read by the core: `wasmext_descriptor` (`version`, `size`, `flags`, `imports`, `
 
 ### Free
 * `wasmext_instance_free` frees an instance that the store does not hold (never instantiated, or whose instantiation failed). For an instantiated instance it answers `WASMEXT_STORE_BUSY` and does nothing (S0004).
+* A funcref of the importer's own instance sent through a link during its start function is refused as `WASMEXT_TAB_STALE`: the instance is registered after `instantiate` returns, so no member stands behind the funcref yet (read from the code; the uniform host path behaves the same).
 
 ## Test plan
 The C tests need a real module. pytest builds one for each: `wat2wasm`, then `wasm2c`, then the binding of the emitter, then the C test with the static core, using the toolchain of the project (fixture `build` in `tests/test_instance_core.py`; the build is cached for the run). A C test is a plain program with no Python. As in step 1, a second reader checks the emitter: the descriptor inside the binding equals the model's dump.

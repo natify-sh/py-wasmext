@@ -135,6 +135,7 @@ A step builds the new thing in the static core and leaves the old generated copy
 | the table of codes of errors | `_trap_message` in `_shared.py`, `raise_trap_code` in `_gen.py`, the wrapper | `wasmext_errors.h` | layers 2 and 3 | - |
 | the instance, its imports and exports | `<last>_instance`, `<last>_call<i>`, `set_import<k>` in `_gen.py`/`_shared.py` | `wasmext_instance.h` + `_binding.py` | layers 2 and 3 | - |
 | which import is answered by the host, and by which function of fusedwasi | `_P2_FUNCS`, `_p2_cname`, `_WASI_SIGNATURES`, `_WASI_UNSTABLE_OWN` and the loops in `_gen.py` | `ImportFact` in `_model.py` | layer 3 (extension) | `tests/test_model_wasi_mapping.py` (3b2) |
+| the table of the host and the operations on it | `wasmext_table_new/free/grow/export`, `wasmext_function_export` in `wasmext_glue.h`; `<last>_link_table<j>`, `_scrub_tables`, `_glue_funcref` in `_gen.py` | `wasmext_table.h`, `wasmext_instance.h` (`wasmext_tab_*`, `wasmext_instance_funcref`) | layer 2, the extension step (the old functions are used by the new ones until then) | `tests/c/test_tables.c` |
 | the descriptive facts of a module (`_Import*`, `ApiModel`, `BuildFlags`) | `_gen.py`, `_shared.py`, `_exe.py` | `_model.py` | layers 2 and 3 | - |
 
 ## Risks and what is not known

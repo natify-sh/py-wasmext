@@ -142,6 +142,33 @@ LINK_MODULES = {
     "tiny": '(module (memory (export "mem") 0 4))',
     "big": '(module (memory (export "mem") 1 8))',
 }
+TABLE_MODULES = {
+    "owner": """(module
+  (type $t (func (result i32)))
+  (table $tab (export "tab") 4 8 funcref)
+  (func $seven (export "seven") (result i32) i32.const 7)
+  (func (export "bad") (result i32) unreachable)
+  (func (export "one") (param i32) (result i32) local.get 0)
+  (func (export "call") (param i32) (result i32) local.get 0 call_indirect (type $t))
+  (func (export "size") (result i32) table.size $tab)
+  (func (export "grow") (param i32) (result i32) ref.null func local.get 0 table.grow $tab)
+  (elem (i32.const 0) $seven))""",
+    "user": """(module
+  (type $t (func (result i32)))
+  (import "own_u" "tab" (table $tab 2 funcref))
+  (func $nine (export "nine") (result i32) i32.const 9)
+  (elem (i32.const 1) $nine)
+  (func (export "call") (param i32) (result i32) local.get 0 call_indirect $tab (type $t))
+  (func (export "size") (result i32) table.size $tab))""",
+    "trapper": """(module
+  (import "own_t" "tab" (table $tab 2 funcref))
+  (func $ten (result i32) i32.const 10)
+  (elem (i32.const 3) $ten)
+  (func $boom unreachable)
+  (start $boom))""",
+    "strict": '(module (import "own_s" "tab" (table 8 funcref)) (func (export "f")))',
+    "capped": '(module (import "own_c" "tab" (table 1 2 funcref)) (func (export "f")))',
+}
 START_TRAP = """(module (func $s unreachable) (start $s) (func (export "f") (result i32) i32.const 1))"""
 
 
@@ -237,7 +264,7 @@ def test_function_imports_under_sanitizers(build: Callable[..., Path]) -> None:
 @pytest.mark.parametrize(
     ("wat", "host", "message"),
     [
-        ('(module (import "env" "t" (table 1 funcref)) (func (export "g")))', "wasm32", "step 5"),
+        ('(module (import "env" "t" (table 1 externref)) (func (export "g")))', "wasm32", "externref is step 6"),
         ('(module (import "env" "e" (tag (param i32))) (func (export "f")))', "wasm32", "step 7"),
         (
             '(module (import "wasi:cli/exit@0.2.0" "exit" (func (param i32))) (memory (export "memory") 1) (func (export "f")))',
@@ -261,7 +288,7 @@ def test_function_imports_under_sanitizers(build: Callable[..., Path]) -> None:
         ),
         ('(module (import "env" "r" (func (param funcref))) (func (export "f")))', "wasm32", "reference type"),
     ],
-    ids=["table", "tag", "wasi-0.2-no-realloc", "no-memory", "unknown-call", "wrong-signature", "funcref"],
+    ids=["externref-table", "tag", "wasi-0.2-no-realloc", "no-memory", "unknown-call", "wrong-signature", "funcref"],
 )
 def test_what_the_binding_does_not_carry_yet(wabt: Path, tmp_path: Path, wat: str, host: str, message: str) -> None:
     from wasmext._gen import GenError
@@ -376,3 +403,22 @@ def test_links_under_sanitizers(build: Callable[..., Path]) -> None:
             flags=["-fsanitize=address,undefined", "-fno-sanitize-recover=all", "-g"],
         )
     )
+
+
+def test_tables_of_funcref(build: Callable[..., Path]) -> None:
+    _run(build(TABLE_MODULES, "tables", "test_tables.c"))
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="the sanitizers are checked on Linux")
+def test_tables_under_sanitizers(build: Callable[..., Path]) -> None:
+    if SANITIZED or not supports_flag("-fsanitize=address,undefined") or not supports_flag("-fsanitize=thread"):
+        pytest.skip("no sanitizers, or one is on for the whole run")
+    _run(
+        build(
+            TABLE_MODULES,
+            "tables",
+            "test_tables.c",
+            flags=["-fsanitize=address,undefined", "-fno-sanitize-recover=all", "-g"],
+        )
+    )
+    _run(build(TABLE_MODULES, "tables", "test_tables.c", flags=["-fsanitize=thread", "-g"]))

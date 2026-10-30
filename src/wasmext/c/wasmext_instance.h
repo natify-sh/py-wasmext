@@ -28,6 +28,14 @@ typedef struct {
     } as;
 } wasmext_val;
 
+/* A function as an element of a table holds it: a copy of the four words of `wasm_rt_funcref_t` (its type, the function, the instance) and where it comes from. `store` and `owner` (the
+   handle of the instance in the registry of that store) are how a table checks that it is given a function of its own store. Valid as a value for as long as the store is open. */
+typedef struct {
+    wasm_rt_funcref_t ref;
+    const void *store;
+    wasmext_owner owner;
+} wasmext_funcref;
+
 /* the answers of the API that are not a trap */
 enum {
     WASMEXT_INST_OK = 0,
@@ -63,6 +71,7 @@ typedef struct {
     void *shim;                       /* a function: `result f(void *wasmext_instance, parameters..., int *trapped)` for the record that another instance imports; a trap of this
                                          instance is answered as WASMEXT_TRAP_LINKED + its code. NULL for the others, and for a function with a reference in its signature */
     const char *signature;            /* a function: its signature as the record says it (the parameters, '>', the results: i j f d o) */
+    void (*funcref)(void *instance, wasm_rt_funcref_t *out); /* a function: fills the element of a table that stands for it; NULL for the others, and for a function with a reference in its signature */
 } wasmext_export_binding;
 
 /* What the generated code gives the core for a module. Constant data and the functions that name the symbols of wasm2c. */
@@ -86,6 +95,7 @@ typedef struct wasmext_instance_s_ {
     unsigned char *bound; /* for each import of the descriptor: 1 once it has a host function */
     void **owners;          /* for each import of the descriptor: the `owner` of the record it was linked to (what keeps the exporter alive: the host's business) */
     uint64_t (*values)[2];  /* for each import of the descriptor: room for the value of an immutable global that the host gives (16 bytes) */
+    wasm_rt_funcref_t *refs; /* for each export of the descriptor (a function): the element of a table that stands for it, filled when the instance is made */
     wasmext_counter *pins;  /* for each export of the descriptor (a memory): how many pins it has */
     uint64_t *saved_max;    /* ... and the maximum it had before the first pin */
     WASMEXT_MUTEX_T pin_mutex;
@@ -133,6 +143,7 @@ static inline void wasmext_instance_wrapper_free_(void *object) {
     free(i->bound);
     free(i->owners);
     free(i->values);
+    free(i->refs);
     free(i->pins);
     free(i->saved_max);
     free(i);
@@ -156,7 +167,12 @@ static inline wasmext_instance *wasmext_instance_new(wasmext_store *store, const
     i->values = (uint64_t (*)[2])calloc(binding->descriptor->n_imports ? binding->descriptor->n_imports : 1, sizeof(uint64_t[2]));
     i->pins = (wasmext_counter *)calloc(binding->descriptor->n_exports ? binding->descriptor->n_exports : 1, sizeof(wasmext_counter));
     i->saved_max = (uint64_t *)calloc(binding->descriptor->n_exports ? binding->descriptor->n_exports : 1, sizeof(uint64_t));
-    if (i->owners == NULL || i->values == NULL || i->pins == NULL || i->saved_max == NULL) { free(i->owners); free(i->values); free(i->pins); free(i->saved_max); free(i->bound); free(i->module); free(i); *error = ENOMEM; return NULL; }
+    i->refs = (wasm_rt_funcref_t *)calloc(binding->descriptor->n_exports ? binding->descriptor->n_exports : 1, sizeof(wasm_rt_funcref_t));
+    if (i->owners == NULL || i->values == NULL || i->pins == NULL || i->saved_max == NULL || i->refs == NULL) {
+        free(i->owners); free(i->values); free(i->pins); free(i->saved_max); free(i->refs); free(i->bound); free(i->module); free(i);
+        *error = ENOMEM;
+        return NULL;
+    }
     WASMEXT_MUTEX_INIT(&i->pin_mutex);
     i->binding = binding;
     i->store = store;
@@ -263,6 +279,10 @@ static inline int wasmext_instance_export_record(wasmext_instance *i, uint32_t i
             out->address = b->shim;
             out->instance = i;
             out->signature = b->signature;
+            if (i->refs[index].func != NULL) {
+                out->funcref = &i->refs[index];
+                out->flags |= 16u; /* may be put in a table (of this store) */
+            }
             break;
         case WASMEXT_DESC_MEMORY: {
             wasm_rt_memory_t *m = (wasm_rt_memory_t *)b->address(i->module);
@@ -281,8 +301,16 @@ static inline int wasmext_instance_export_record(wasmext_instance *i, uint32_t i
             out->address = b->address(i->module);
             break;
         }
+        case WASMEXT_DESC_TABLE: {
+            const wasmext_table_desc *t = &d->tables[d->exports[index].index];
+            if (t->elem != 0x70 || t->limits.is64 || t->limits.shared || b->address == NULL) return WASMEXT_INST_UNSUPPORTED; /* externref: step 6 */
+            out->kind = WASMEXT_TABLE;
+            out->type = (uint32_t)sizeof(wasm_rt_funcref_table_t);
+            out->address = b->address(i->module);
+            break;
+        }
         default:
-            return WASMEXT_INST_UNSUPPORTED; /* a table: step 5; a tag: step 7 */
+            return WASMEXT_INST_UNSUPPORTED; /* a tag: step 7 */
     }
     wasmext_export_seal(out);
     return 0;
@@ -350,8 +378,28 @@ static inline int wasmext_instance_bind_export(wasmext_instance *i, uint32_t imp
             *i->binding->ref_slot(i->module, import) = e->address;
             break;
         }
+        case WASMEXT_DESC_TABLE: {
+            const wasmext_table_desc *t = &d->tables[m->index];
+            const wasm_rt_funcref_table_t *tab = (const wasm_rt_funcref_table_t *)e->address;
+            if (t->elem != 0x70 || t->limits.is64 || t->limits.shared) return WASMEXT_INST_UNSUPPORTED; /* externref: step 6 */
+            if (e->kind != WASMEXT_TABLE || tab == NULL) return wasmext_instance_link_fail_(i, m, "is a table: the export given is not", "");
+            if (e->type != sizeof(wasm_rt_funcref_table_t)) return wasmext_instance_link_fail_(i, m, ": the table is from an incompatible runtime of wasm2c", "");
+            if (tab->size < t->limits.min) {
+                char detail[120];
+                snprintf(detail, sizeof detail, ": the table has %lu elements, the module needs at least %llu", (unsigned long)tab->size, (unsigned long long)t->limits.min);
+                return wasmext_instance_link_fail_(i, m, "", detail);
+            }
+            if (t->limits.has_max && tab->max_size > t->limits.max) {
+                char detail[120];
+                snprintf(detail, sizeof detail, ": the table may grow to %lu elements, the module allows %llu", (unsigned long)tab->max_size, (unsigned long long)t->limits.max);
+                return wasmext_instance_link_fail_(i, m, "", detail);
+            }
+            if (i->binding->ref_slot == NULL) return WASMEXT_INST_BAD_IMPORT;
+            *i->binding->ref_slot(i->module, import) = (void *)tab;
+            break;
+        }
         default:
-            return WASMEXT_INST_UNSUPPORTED; /* a table: step 5; a tag: step 7 */
+            return WASMEXT_INST_UNSUPPORTED; /* a tag: step 7 */
     }
     i->bound[import] = 1;
     i->owners[import] = e->owner;
@@ -408,6 +456,23 @@ static inline void wasmext_instance_end_(wasmext_instance *i, int line, long lev
     wasmext_store_leave(i->store, line);
 }
 
+/* An instance whose instantiation failed has run its `elem` segments, and the start function, perhaps: functions of its own may stand in the tables it imports, and the structure
+   they point to is released and cleared. Takes them out (the slots become null) so that the owner of the table, and the others that share it, do not call a function that is
+   gone. The host does not call into the store with the tables while an instance is made (as `table.set` of WebAssembly, a write to a table is not synchronised). */
+static inline void wasmext_instance_scrub_tables_(wasmext_instance *i) {
+    const wasmext_descriptor *d = i->binding->descriptor;
+    const char *lo = (const char *)i->module, *hi = lo + i->binding->instance_size;
+    for (uint32_t k = 0; k < d->n_imports; k++) {
+        wasm_rt_funcref_table_t *tab;
+        if (d->imports[k].kind != WASMEXT_DESC_TABLE || !i->bound[k] || i->binding->ref_slot == NULL) continue;
+        tab = (wasm_rt_funcref_table_t *)*i->binding->ref_slot(i->module, k);
+        for (uint32_t e = 0; tab != NULL && e < tab->size; e++) {
+            const char *mi = (const char *)tab->data[e].module_instance;
+            if (tab->data[e].func != NULL && mi >= lo && mi < hi) memset(&tab->data[e], 0, sizeof tab->data[e]);
+        }
+    }
+}
+
 /* Runs the start function: 0, or the code of a trap (then the instance is not usable and can only be freed). An import that nobody answers is
    WASMEXT_TRAP_LINK_ERROR, before anything runs, with the name in the text of the store (`wasmext_store_error`): bind it and try again. */
 static inline int wasmext_instance_instantiate(wasmext_instance *i) {
@@ -441,19 +506,36 @@ static inline int wasmext_instance_instantiate(wasmext_instance *i) {
     if (lock != NULL) wasmext_rlock_release_to(lock, level); /* a trap left the unlocks of fusedwasi behind */
     wasmext_store_leave(i->store, line);
     wasmext_atomic_store(&i->status, rc);
+    if (rc != 0) wasmext_instance_scrub_tables_(i);
     if (rc == 0) {
         /* the store holds the instance from now until the close, and finds it by the pointer that its funcrefs carry */
         int reg = wasmext_store_register(i->store, i->module, i, &wasmext_instance_ops_, &i->owner);
         if (reg != WASMEXT_STORE_OK) {
             i->binding->release(i->module);
+            wasmext_instance_scrub_tables_(i);
             memset(i->module, 0, i->binding->instance_size);
             rc = reg == WASMEXT_STORE_CLOSED ? (int)WASMEXT_TRAP_CLOSED : (int)WASMEXT_TRAP_NO_MEMORY;
             wasmext_atomic_store(&i->status, rc);
             return rc;
         }
+        for (uint32_t k = 0; k < i->binding->descriptor->n_exports; k++)
+            if (i->binding->exports[k].funcref != NULL) i->binding->exports[k].funcref(i->module, &i->refs[k]);
         i->instantiated = 1;
     }
     return rc;
+}
+
+/* The exported function `index` as an element of a table: `out` is the value that `wasmext_tab_set` takes. WASMEXT_INST_UNSUPPORTED for a function with a reference in its signature. */
+static inline int wasmext_instance_funcref(wasmext_instance *i, uint32_t index, wasmext_funcref *out) {
+    const wasmext_descriptor *d = i->binding->descriptor;
+    if (index >= d->n_exports || d->exports[index].kind != WASMEXT_DESC_FUNC) return WASMEXT_INST_BAD_EXPORT;
+    if (!i->instantiated) return WASMEXT_INST_NOT_INSTANTIATED;
+    if (wasmext_store_closed(i->store)) return (int)WASMEXT_TRAP_CLOSED;
+    if (i->refs[index].func == NULL) return WASMEXT_INST_UNSUPPORTED;
+    out->ref = i->refs[index];
+    out->store = i->store;
+    out->owner = i->owner;
+    return 0;
 }
 
 /* the index of the export `name` (UTF-8, `n` bytes) of the kind, or -1 */

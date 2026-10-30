@@ -4,11 +4,20 @@ It holds no rule. The adapters turn an array of `wasmext_val` into a typed call 
 field of the export); `instantiate`/`release` catch a trap of the start function; for each import there is the function that wasm2c declares, which looks at the
 slot of the import and calls the host (the typed function when it was given, else the uniform one with the values packed). See docs/step3_instances.md."""
 
+# pyright: reportPrivateUsage=false
 from __future__ import annotations
 
-from ._gen import _CTYPE, _MULTI_CODE, GenError, _p2_headers, mangle, module_prefix  # pyright: ignore[reportPrivateUsage]
+from ._gen import (
+    _CTYPE,
+    _MULTI_CODE,
+    _RT_TYPE,
+    GenError,
+    _p2_headers,
+    mangle,
+    module_prefix,
+)
 from ._model import VALTYPE_BYTES, ImportFact, ModuleModel
-from ._wasm import FuncType, GlobalType, Limits, ValType
+from ._wasm import FuncType, GlobalType, Limits, TableType, ValType
 
 __all__ = ["binding_headers", "generate_binding"]
 
@@ -126,10 +135,15 @@ def _forwarder(c_module: str, c_name: str, slot: int, ft: FuncType) -> list[str]
 def generate_binding(model: ModuleModel) -> str:
     """The C source of `<last>_binding.c`: `extern const wasmext_binding <last>_binding`. The descriptor is `<last>_descriptor` (see _descriptor.py)."""
     for imp in model.imports:
-        if imp.kind in ("table", "tag"):
-            step = "step 5" if imp.kind == "table" else "step 7"
+        if imp.kind == "tag":
             raise GenError(
-                f"{model.name}: the import {imp.module}.{imp.name} is a {imp.kind}; that is {step} of docs/step3_instances.md"
+                f"{model.name}: the import {imp.module}.{imp.name} is a tag; that is step 7 of docs/step3_instances.md"
+            )
+        if isinstance(imp.type, TableType) and (
+            imp.type.elem != "funcref" or imp.type.limits.is64 or imp.type.limits.shared
+        ):
+            raise GenError(
+                f"{model.name}: the import {imp.module}.{imp.name} is a table of {imp.type.elem} (or 64-bit, or shared); only funcref tables are carried (externref is step 6 of docs/layers.md)"
             )
         if isinstance(imp.type, FuncType) and not _supported(imp.type):
             raise GenError(
@@ -209,6 +223,8 @@ def generate_binding(model: ModuleModel) -> str:
         else:
             if isinstance(imp.type, GlobalType):
                 ctype = _CTYPE[imp.type.type]
+            elif isinstance(imp.type, TableType):
+                ctype = "wasm_rt_funcref_table_t"
             else:
                 assert isinstance(imp.type, Limits)
                 ctype = "wasm_rt_memory_t"
@@ -233,6 +249,13 @@ def generate_binding(model: ModuleModel) -> str:
             if _supported(ft):
                 shims[n] = f"{last}_shim{n}"
                 out += _shim(shims[n], last, prefix, e.name, ft)
+    refs: dict[int, str] = {}
+    for n, e in enumerate(model.exports):
+        if e.kind == "func":
+            assert isinstance(e.type, FuncType)
+            if _supported(e.type):
+                refs[n] = f"{last}_ref{n}"
+                out += _ref_filler(refs[n], last, prefix, e.name, e.type)
     enter = "WASMEXT_ENTER_REENTRANT" if reentrant else "WASMEXT_ENTER_PLAIN"
     leave = "WASMEXT_LEAVE_REENTRANT" if reentrant else "WASMEXT_LEAVE_PLAIN"
     wasm_args = "".join(f", &b->m{n}" for n in range(len(modules)))
@@ -282,16 +305,16 @@ def generate_binding(model: ModuleModel) -> str:
             if _supported(ft):
                 sig = "".join(_MULTI_CODE[t] for t in ft.params) + ">" + "".join(_MULTI_CODE[t] for t in ft.results)
                 rows.append(
-                    f"{{{adapters[(ft.params, ft.results)]}, (void *)(void (*)(void))w2c_{prefix}_{mangle(e.name)}, 0, (void *){shims[n]}, {_c_lit(sig)}}}"
+                    f"{{{adapters[(ft.params, ft.results)]}, (void *)(void (*)(void))w2c_{prefix}_{mangle(e.name)}, 0, (void *){shims[n]}, {_c_lit(sig)}, {refs[n]}}}"
                 )
                 continue
-        elif e.kind in ("memory", "global"):
-            # wasm2c's accessor: `wasm_rt_memory_t *f(w2c_<p> *)` for a memory, `T *f(w2c_<p> *)` for a global (the pointer to its value)
-            rows.append(f"{{0, 0, (void *(*)(void *))w2c_{prefix}_{mangle(e.name)}, 0, 0}}")
+        elif e.kind in ("memory", "global", "table"):
+            # wasm2c's accessor: `wasm_rt_memory_t *f(w2c_<p> *)` for a memory, `T *f(w2c_<p> *)` for a global (the pointer to its value), `wasm_rt_funcref_table_t *f(w2c_<p> *)` for a table
+            rows.append(f"{{0, 0, (void *(*)(void *))w2c_{prefix}_{mangle(e.name)}, 0, 0, 0}}")
             continue
-        rows.append("{0, 0, 0, 0, 0}")
+        rows.append("{0, 0, 0, 0, 0, 0}")
     out.append(f"static const wasmext_export_binding {last}_export_bindings[] = {{")
-    out += [f"    {r}," for r in rows] or ["    {0, 0, 0, 0, 0},"]
+    out += [f"    {r}," for r in rows] or ["    {0, 0, 0, 0, 0, 0},"]
     out += [
         "};",
         "",
@@ -338,6 +361,21 @@ def _shim(name: str, last: str, prefix: str, export: str, ft: FuncType) -> list[
         out += [f"    {call};", "    WASMEXT_LEAVE_REENTRANT();", "    wasmext_instance_end_(self, line, level);"]
     out += ["}", ""]
     return out
+
+
+def _ref_filler(name: str, last: str, prefix: str, export: str, ft: FuncType) -> list[str]:
+    """Fills the element of a table that stands for the export: its type (the one of this module, whose hash the elements of any module with the type share), the function itself (called as
+    `result f(void *instance, parameters...)`) and the instance. No tail-call variant: a call that is a tail call goes through the plain one."""
+    types = "".join(f", {_RT_TYPE[t]}" for t in (*ft.params, *ft.results))
+    return [
+        f"static void {name}(void *block, wasm_rt_funcref_t *r) {{",
+        "    memset(r, 0, sizeof *r);",
+        f"    r->module_instance = &((struct {last}_block *)block)->inst;",
+        f"    r->func_type = wasm2c_{prefix}_get_func_type({len(ft.params)}, {len(ft.results)}{types});",
+        f"    r->func = (wasm_rt_function_ptr_t)(void (*)(void))w2c_{prefix}_{mangle(export)};",
+        "}",
+        "",
+    ]
 
 
 def _c_lit(text: str) -> str:

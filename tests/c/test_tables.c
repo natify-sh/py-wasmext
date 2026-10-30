@@ -179,7 +179,7 @@ static void test_refusals_and_failed_start(void) {
     wasmext_store *s = wasmext_store_new(), *other = wasmext_store_new();
     wasmext_instance *owner = wasmext_instance_new(s, &owner_binding, NULL), *strict = wasmext_instance_new(s, &strict_binding, NULL);
     wasmext_instance *capped = wasmext_instance_new(s, &capped_binding, NULL), *trapper = wasmext_instance_new(s, &trapper_binding, NULL);
-    wasmext_instance *far = wasmext_instance_new(other, &user_binding, NULL);
+    wasmext_instance *stranger_app = wasmext_instance_new(other, &user_binding, NULL);
     wasmext_export rec;
     wasmext_funcref f;
     char text[WASMEXT_STORE_ERROR_SIZE];
@@ -197,7 +197,7 @@ static void test_refusals_and_failed_start(void) {
     CHECK(wasmext_instance_bind_export(strict, table_import(strict), &rec) == WASMEXT_INST_LINK_FAILED);
     wasmext_store_error(s, text, sizeof text);
     CHECK(strstr(text, "is a table") != NULL);
-    CHECK(link_table(far, owner) == WASMEXT_INST_LINK_FAILED);
+    CHECK(link_table(stranger_app, owner) == WASMEXT_INST_LINK_FAILED);
     wasmext_store_error(other, text, sizeof text);
     CHECK(strstr(text, "another store") != NULL);
     /* the start function traps after the segment put `ten` in slot 3: the instance is released, and the slot is empty again */
@@ -210,7 +210,7 @@ static void test_refusals_and_failed_start(void) {
     wasmext_instance_free(trapper);
     wasmext_instance_free(strict);
     wasmext_instance_free(capped);
-    wasmext_instance_free(far);
+    wasmext_instance_free(stranger_app);
     wasmext_store_free(s);
     wasmext_store_free(other);
 }

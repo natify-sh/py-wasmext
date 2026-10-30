@@ -123,7 +123,7 @@ WASM_RT_NO_RETURN static inline void wasmext_throw_pending_(void);
 * The import cannot be a slot of the instance. So the binding defines the global that the module reads, and the core writes the tag of the exporter into it once, for the whole program (`wasmext_cell_set_once`).
   Every instance of the module, in any store, reads the same tag.
 * All the instances of one exporter have the same tag, so the usual links agree.
-  A link to another tag is refused with the reason (`is a tag that this program has linked to another tag already (wasm2c reads an imported tag from a global: one for the process)`), never mixed.
+  A link to another tag is refused with `WASMEXT_INST_TAG_HELD` (since 8a-3; it was `WASMEXT_INST_LINK_FAILED`) and the reason (`is a tag that this program has linked to another tag already (wasm2c reads an imported tag from a global: one for the process)`), never mixed.
 * Because it is a symbol, two modules of one program that import the same name from the same module collide at link time (as the imported functions did before).
 * An import that is not bound is not run, whatever the global holds.
 * Identity, not structure: a tag of another module with the same signature is a different tag and does not catch.

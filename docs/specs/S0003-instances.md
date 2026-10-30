@@ -127,7 +127,7 @@ Answers of the API that are not a trap:
 | `WASMEXT_INST_IMMUTABLE` | -8 | a global that cannot be set |
 | `WASMEXT_INST_LINK_FAILED` | -9 | an export given for an import does not fit; the text naming the import is in the store (`wasmext_store_error`) |
 
-Added later: `WASMEXT_INST_UNDECLARED_TYPE` -10 (S0005), `WASMEXT_INST_NO_EXCEPTION` -11 (S0007), `WASMEXT_TAB_BOUNDS` -30, `WASMEXT_TAB_FULL` -31, `WASMEXT_TAB_WRONG_STORE` -32, `WASMEXT_TAB_STALE` -33, `WASMEXT_TAB_WRONG_ELEM` -34 (S0005).
+Added later: `WASMEXT_INST_UNDECLARED_TYPE` -10 (S0005), `WASMEXT_INST_NO_EXCEPTION` -11 (S0007), `WASMEXT_INST_TAG_HELD` -12 (S0007, S0008), `WASMEXT_TAB_BOUNDS` -30, `WASMEXT_TAB_FULL` -31, `WASMEXT_TAB_WRONG_STORE` -32, `WASMEXT_TAB_STALE` -33, `WASMEXT_TAB_WRONG_ELEM` -34 (S0005).
 
 ### Binding (`wasmext_binding`, made by `_binding.py`)
 ```c
@@ -229,7 +229,7 @@ Read by the core: `wasmext_descriptor` (`version`, `size`, `flags`, `imports`, `
 
 ### Record of an export and links
 * `export_record` fills a `wasmext_export` for a function, a memory or a global. The record is valid as long as the instance is. A closed store answers `WASMEXT_TRAP_CLOSED`; before `instantiate`, `NOT_INSTANTIATED`; a function without a shim, `UNSUPPORTED`. For a function it sets `address` to a typed shim that enters the exporter's store and answers a trap as `WASMEXT_TRAP_LINKED` + its code.
-* `bind_export` gives an import such a record. The checks are those that the old glue wrote for each import, once, from the descriptor. All refuse with `WASMEXT_INST_LINK_FAILED` and a reason in the text of the store:
+* `bind_export` gives an import such a record. The checks are those that the old glue wrote for each import, once, from the descriptor. All refuse with `WASMEXT_INST_LINK_FAILED` and a reason in the text of the store, except a closed store of the record (`WASMEXT_TRAP_CLOSED`, answered before any record is read) and a tag import whose cell is already held by another tag (`WASMEXT_INST_TAG_HELD`, S0007, S0008):
   * the record version (`wasmext_export_ok`);
   * the record is of this store (S0004);
   * a function: the kind and the signature, compared as the letter string;

@@ -93,19 +93,22 @@ Benchmark: `uv run python tools/bench_calls.py` before and after, store of the a
 * Trampolines only (a) and same-artifact-only (c): ruled out by D3.
 Design 1 was corrected on 2026-10-30 after the maintainer's remark: copies of the runtime exist for autonomy, and instances of all modules in a store use the runtime of that store; there is no binding of an artifact to a group for life. Recommended: design 1, built as **8a** (record, attach, serials, lifetimes, references in signatures, host tags) then **8b** (the group state).
 
-## Open questions (for the maintainer)
-1. Design 1 as revised (the runtime is that of the store; a throw in A is caught by a `try` in B) or design 2?
-2. Is forwarding the seven exception functions in the `exceptions` wrapper acceptable under D6?
-3. Shared entry in every build, or a build option with a record flag? Depends on the benchmark.
-4. Compatibility: the same source fingerprint (one release), or the same x plus the layout hash?
-5. Host tags immortal (proposed) or owned by a store with the cell reset?
-6. Should a link re-throw an uncaught exception in the importer (changes S0007)?
-7. Depth-count platforms: save the joined counters at entry, or first move Windows to the stack-limit check?
-8. New Dn: one supersedes D29, one amends D34 (host tags), one notes D2's condition "one party owns the traps of a group" is now met, one records that the host is shared through the store (supersedes the "WASI state never crosses" line of architecture.md).
+## Decisions (taken on 2026-10-30 by the model of Wasmtime, at the maintainer's instruction)
+1. **Design 1.** In Wasmtime an exception thrown by code of one module is caught by a `try` of another in the same store, because the runtime is one. Design 2 cannot do it.
+2. **The `exceptions` wrapper is acceptable under D6.** It is a wrapper outside the toolchain file (the manner of the `mem` wrapper); it is the only way to give the seven functions the runtime of the store.
+3. **Host tags belong to the store** (in Wasmtime a `Tag` is made in a `Store` and lives and dies with it), not immortal. The process-global cell of an imported tag (D34) is set once as before and **cleared when the store that made the tag closes** (compare-and-swap from this tag to empty); while a store holds the tag, a second live store that imports the same name gets `WASMEXT_STORE_INCOMPATIBLE` with the reason. This is a limit of wasm2c (one global symbol per import name), noted in the spec and not hidden.
+4. **Shared entry in every build** (Wasmtime has one entry for all). Kept unless the benchmark shows more than 10 percent on case 1 or 2; then a build option with a record flag is a new decision.
+5. **Compatibility:** the same x of the ABI and the same layout hash (`attach` refuses otherwise). Not the same source fingerprint: that would forbid two releases of one x, and the ABI is one thing for alpha.
+6. **A link re-throws an uncaught exception** in the importer (Wasmtime propagates an exception through every frame of the store). This changes S0007 ("exceptions do not cross links"); S0007 is changed first, in the same step.
+7. **Depth counting** (Windows, Emscripten): the entry saves and restores the counters of the copies that have an instance in the store. Moving Windows to the stack-limit check is a separate step if it measures better.
+8. **New Dn** (written with the step): one supersedes D29; one amends D34 (host tags belong to the store, the cell is cleared at close); one records that D2's condition ("one party owns the traps of a group") is met; one records that the host is shared through the store (supersedes the line of `architecture.md`).
 Known risks, not solved: MSVC `longjmp` across two DLLs (SEH) is untested; the artifact that made a store must stay loaded while any instance of the store runs.
+
+Status stays `draft` until the maintainer sets `approved` (rule of CLAUDE.md: no code before). Step 8 is built as 8a then 8b, each with an independent `reviewer` and a before/after run of `tools/bench_calls.py`.
 
 ## Changes
 * 2026-10-30: created (draft) from the design study of a `Plan` agent.
 * 2026-10-30: design 1 revised: the runtime belongs to the store, not to the artifact (no binding for life; open question about the interpreter dict removed).
 * 2026-10-30: the model stated as that of Wasmtime (runtime, host and state shared in the store; only the distribution of the runtime differs).
 * 2026-10-30: binding to the store explicit; stores share nothing (one known leak: the process-global cell of an imported tag).
+* 2026-10-30: open questions decided by the model of Wasmtime; waiting for `approved`.

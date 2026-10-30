@@ -145,6 +145,7 @@ LINK_MODULES = {
 TABLE_MODULES = {
     "owner": """(module
   (type $t (func (result i32)))
+  (type $add (func (param i32 i32) (result i32)))
   (table $tab (export "tab") 4 8 funcref)
   (func $seven (export "seven") (result i32) i32.const 7)
   (func (export "bad") (result i32) unreachable)
@@ -157,6 +158,7 @@ TABLE_MODULES = {
   (func (export "mix") (param f32 f64) (result f64) local.get 0 f64.promote_f32 local.get 1 f64.add)
   (func (export "nothing"))
   (func (export "vec") (param v128) (result v128) local.get 0 local.get 0 i32x4.add)
+  (func (export "calladd") (param i32 i32 i32) (result i32) local.get 1 local.get 2 local.get 0 call_indirect (type $add))
   (func (export "ident") (param funcref) (result funcref) local.get 0)
   (func (export "pair") (param funcref funcref) (result funcref funcref) local.get 1 local.get 0)
   (func (export "isnull") (param funcref) (result i32) local.get 0 ref.is_null)
@@ -173,7 +175,7 @@ TABLE_MODULES = {
   (func (export "mix") (param f32 f64) (result f64) local.get 1 local.get 0 f64.promote_f32 f64.sub)
   (func (export "nothing"))
   (func (export "vec") (param v128) (result v128) local.get 0)
-  (func (export "mul3") (param i32 i32 i32) (result i32) local.get 0 local.get 1 i32.mul local.get 2 i32.mul)
+  (func (export "mul4") (param i32 i32 i32 i32) (result i32) local.get 0 local.get 1 i32.mul local.get 2 i32.mul local.get 3 i32.mul)
   (elem (i32.const 1) $nine)
   (func (export "call") (param i32) (result i32) local.get 0 call_indirect $tab (type $t))
   (func (export "size") (result i32) table.size $tab))""",

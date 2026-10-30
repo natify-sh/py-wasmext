@@ -225,7 +225,7 @@ static void test_call_ref(void) {
     wasmext_instance *owner = wasmext_instance_new(s, &owner_binding, NULL), *user = wasmext_instance_new(s, &user_binding, NULL);
     wasmext_instance *stranger = wasmext_instance_new(other, &owner_binding, NULL);
     wasmext_funcref f;
-    wasmext_val a[3], r[2];
+    wasmext_val a[4], r[2];
     CHECK(wasmext_instance_instantiate(owner) == 0 && link_table(user, owner) == 0 && wasmext_instance_instantiate(user) == 0 && wasmext_instance_instantiate(stranger) == 0);
     /* the `add` of the user adds 100: the call is to the user's function, through the declaration of the type by the owner */
     CHECK(funcref_of(user, "add", &f) == 0);
@@ -251,11 +251,11 @@ static void test_call_ref(void) {
     /* an element read from a table is called the same way: the `nine` of the user, in slot 1 */
     CHECK(wasmext_instance_table_get(owner, tab_export(owner), 1, &f) == 0);
     CHECK(wasmext_instance_call_ref(owner, &f, NULL, 0, r, 1) == 0 && r[0].as.i32 == 9);
-    /* a type that the owner does not declare (three parameters), and one it does, called with the wrong arguments */
-    CHECK(funcref_of(user, "mul3", &f) == 0);
-    a[0] = I32(2); a[1] = I32(3); a[2] = I32(4);
-    CHECK(wasmext_instance_call_ref(owner, &f, a, 3, r, 1) == WASMEXT_INST_UNDECLARED_TYPE);
-    CHECK(wasmext_instance_call_ref(user, &f, a, 3, r, 1) == 0 && r[0].as.i32 == 24); /* the user declares it */
+    /* a type that the owner does not declare (four parameters), and one it does, called with the wrong arguments */
+    CHECK(funcref_of(user, "mul4", &f) == 0);
+    a[0] = I32(2); a[1] = I32(3); a[2] = I32(4); a[3] = I32(1);
+    CHECK(wasmext_instance_call_ref(owner, &f, a, 4, r, 1) == WASMEXT_INST_UNDECLARED_TYPE);
+    CHECK(wasmext_instance_call_ref(user, &f, a, 4, r, 1) == 0 && r[0].as.i32 == 24); /* the user declares it */
     CHECK(funcref_of(user, "add", &f) == 0);
     CHECK(wasmext_instance_call_ref(owner, &f, a, 1, r, 1) == WASMEXT_INST_BAD_ARGS);
     CHECK(wasmext_instance_call_ref(owner, &f, a, 2, r, 0) == WASMEXT_INST_BAD_ARGS);
@@ -434,6 +434,85 @@ static void test_funcref_in_an_import(void) {
     wasmext_store_free(other);
 }
 
+/* a function of the host as an element of a table: wasm calls it by `call_indirect`, the host by `call_ref`; its type must be one the module declares; its failure is a trap; it can call
+   back into the store; the store lets go of it at the close, once */
+typedef struct { int calls; int released; wasmext_instance *back; } hf_t;
+static int hf_const(void *user, const wasmext_val *a, wasmext_val *r) { ((hf_t *)user)->calls++; (void)a; r[0] = I32(42); return 0; }
+static int hf_add(void *user, const wasmext_val *a, wasmext_val *r) { ((hf_t *)user)->calls++; r[0] = I32(a[0].as.i32 + a[1].as.i32 + 1000); return 0; }
+static int hf_swap(void *user, const wasmext_val *a, wasmext_val *r) { ((hf_t *)user)->calls++; r[0] = I64(a[1].as.i64); r[1] = I32(a[0].as.i32); return 0; }
+static int hf_fail(void *user, const wasmext_val *a, wasmext_val *r) { ((hf_t *)user)->calls++; (void)a; (void)r; return 77; }
+static int hf_ident(void *user, const wasmext_val *a, wasmext_val *r) { ((hf_t *)user)->calls++; r[0].type = 0x70; r[0].as.ref = a[0].as.ref; return 0; }
+static int hf_nested(void *user, const wasmext_val *a, wasmext_val *r) { /* calls the module again, from inside a call of it */
+    hf_t *h = (hf_t *)user;
+    wasmext_val x;
+    int rc = wasmext_instance_call(h->back, (uint32_t)export_of(h->back, "seven", WASMEXT_DESC_FUNC), NULL, 0, &x, 1);
+    (void)a;
+    h->calls++;
+    r[0] = I32(x.as.i32 + 1);
+    return rc;
+}
+static void hf_release(void *user) { ((hf_t *)user)->released++; }
+static const uint8_t T_NONE[] = {0}, T_I32[] = {0x7F}, T_I32I32[] = {0x7F, 0x7F}, T_I32I64[] = {0x7F, 0x7E}, T_I64I32[] = {0x7E, 0x7F}, T_REF[] = {0x70}, T_I32X4[] = {0x7F, 0x7F, 0x7F, 0x7F};
+static void test_host_functions_in_tables(void) {
+    wasmext_store *s = wasmext_store_new(), *other = wasmext_store_new();
+    wasmext_instance *owner = wasmext_instance_new(s, &owner_binding, NULL), *user = wasmext_instance_new(s, &user_binding, NULL);
+    wasmext_instance *stranger = wasmext_instance_new(other, &owner_binding, NULL);
+    wasmext_funcref f, g, nine, back;
+    hf_t c = {0, 0, NULL}, add = {0, 0, NULL}, swap = {0, 0, NULL}, fail = {0, 0, NULL}, ident = {0, 0, NULL}, nested = {0, 0, NULL};
+    wasmext_val a[3], r[2];
+    int32_t v;
+    CHECK(wasmext_instance_instantiate(owner) == 0 && link_table(user, owner) == 0 && wasmext_instance_instantiate(user) == 0 && wasmext_instance_instantiate(stranger) == 0);
+    /* () -> i32 in slot 2: wasm calls it through the table, from the instance that made the function and from another one that has the same type */
+    CHECK(wasmext_instance_host_funcref(owner, T_NONE, 0, T_I32, 1, hf_const, &c, hf_release, &f) == 0 && f.store == s && f.owner != 0 && f.ref.func != NULL);
+    CHECK(wasmext_instance_table_set(owner, tab_export(owner), 2, &f) == 0);
+    CHECK(value(owner, "call", 2) == 42 && c.calls == 1);
+    CHECK(value(user, "call", 2) == 42 && c.calls == 2);
+    CHECK(wasmext_instance_table_get(owner, tab_export(owner), 2, &g) == 0 && g.ref.func == f.ref.func && g.owner == f.owner); /* it is a member of the store, like an instance */
+    CHECK(wasmext_instance_call_ref(owner, &g, NULL, 0, r, 1) == 0 && r[0].as.i32 == 42 && c.calls == 3); /* ... and the host calls it too */
+    /* the type is checked by call_indirect: this slot is not a function of the type the other exports ask for */
+    a[0] = I32(2); a[1] = I32(3); a[2] = I32(4);
+    CHECK(export_call(owner, "calladd", a, 3, r, 1) == (int)WASM_RT_TRAP_CALL_INDIRECT);
+    /* (i32, i32) -> i32: the arguments reach the host function, its result reaches the module */
+    CHECK(wasmext_instance_host_funcref(owner, T_I32I32, 2, T_I32, 1, hf_add, &add, hf_release, &f) == 0 && wasmext_instance_table_set(owner, tab_export(owner), 3, &f) == 0);
+    a[0] = I32(3); a[1] = I32(5); a[2] = I32(6);
+    CHECK(export_call(owner, "calladd", a, 3, r, 1) == 0 && r[0].as.i32 == 1011 && add.calls == 1);
+    /* several results, in order, through call_ref */
+    CHECK(wasmext_instance_host_funcref(owner, T_I32I64, 2, T_I64I32, 2, hf_swap, &swap, hf_release, &f) == 0);
+    a[0] = I32(7); a[1] = I64(9);
+    CHECK(wasmext_instance_call_ref(owner, &f, a, 2, r, 2) == 0 && r[0].type == 0x7E && r[0].as.i64 == 9 && r[1].as.i32 == 7);
+    /* a funcref in the signature of a host function in a table */
+    CHECK(funcref_of(user, "nine", &nine) == 0);
+    CHECK(wasmext_instance_host_funcref(owner, T_REF, 1, T_REF, 1, hf_ident, &ident, hf_release, &f) == 0);
+    a[0] = REF(&nine); r[0] = REF(&back);
+    CHECK(wasmext_instance_call_ref(owner, &f, a, 1, r, 1) == 0 && back.ref.func == nine.ref.func && back.owner == user->owner && ident.calls == 1);
+    /* a failure of the host function is a trap of the call that reached it, and the instances stay usable */
+    CHECK(wasmext_instance_host_funcref(owner, T_NONE, 0, T_I32, 1, hf_fail, &fail, hf_release, &f) == 0 && wasmext_instance_table_set(owner, tab_export(owner), 2, &f) == 0);
+    CHECK(call(owner, "call", 2, &v) == (int)WASMEXT_TRAP_HOST && fail.calls == 1);
+    CHECK(wasmext_error_describe(wasmext_instance_status(owner)).kind == WASMEXT_ERR_HOST);
+    CHECK(value(owner, "call", 0) == 7 && value(user, "call", 1) == 9);
+    /* it can call the module again from inside the call */
+    nested.back = owner;
+    CHECK(wasmext_instance_host_funcref(owner, T_NONE, 0, T_I32, 1, hf_nested, &nested, hf_release, &f) == 0 && wasmext_instance_table_set(owner, tab_export(owner), 2, &f) == 0);
+    CHECK(value(owner, "call", 2) == 8 && nested.calls == 1);
+    CHECK(value(owner, "call", 0) == 7); /* the buffer of the outer call was put back */
+    /* a type that the module does not declare has no trampoline: refused, nothing is made */
+    CHECK(wasmext_instance_host_funcref(owner, T_I32X4, 4, T_I32, 1, hf_add, &add, hf_release, &f) == WASMEXT_INST_UNDECLARED_TYPE);
+    CHECK(wasmext_instance_host_funcref(user, T_I32X4, 4, T_I32, 1, hf_add, &add, NULL, &f) == 0); /* the user declares it */
+    CHECK(wasmext_instance_host_funcref(owner, T_NONE, 0, T_I32, 1, NULL, &c, NULL, &f) == WASMEXT_INST_BAD_ARGS);
+    /* the store of the function is the store of the instance that made it: another store's table refuses it */
+    CHECK(wasmext_instance_host_funcref(owner, T_NONE, 0, T_I32, 1, hf_const, &c, NULL, &f) == 0);
+    CHECK(wasmext_instance_table_set(stranger, tab_export(stranger), 0, &f) == WASMEXT_TAB_WRONG_STORE);
+    /* the close: each release is called once, and not before */
+    CHECK(c.released == 0 && add.released == 0 && swap.released == 0 && fail.released == 0 && ident.released == 0 && nested.released == 0);
+    CHECK(wasmext_store_close(s) == WASMEXT_STORE_OK);
+    CHECK(c.released == 1 && add.released == 1 && swap.released == 1 && fail.released == 1 && ident.released == 1 && nested.released == 1);
+    CHECK(wasmext_instance_call_ref(owner, &f, NULL, 0, r, 1) == (int)WASMEXT_TRAP_CLOSED);
+    CHECK(wasmext_instance_host_funcref(owner, T_NONE, 0, T_I32, 1, hf_const, &c, NULL, &f) == (int)WASMEXT_TRAP_CLOSED);
+    wasmext_store_free(s);
+    CHECK(c.released == 1 && nested.released == 1); /* not again at the free */
+    wasmext_store_free(other);
+}
+
 /* the record of an exported function says it can be put in a table */
 static void test_function_records(void) {
     wasmext_store *s = wasmext_store_new();
@@ -496,6 +575,7 @@ int main(void) {
     test_call_ref();
     test_funcref_values();
     test_funcref_in_an_import();
+    test_host_functions_in_tables();
     test_threads();
     if (failures) { fprintf(stderr, "%d failed\n", failures); return 1; }
     puts("ok");

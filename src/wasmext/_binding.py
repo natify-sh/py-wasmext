@@ -114,19 +114,35 @@ def _adapter(name: str, ft: FuncType, reentrant: bool) -> list[str]:
 
 def _forwarder(c_module: str, c_name: str, slot: int, ft: FuncType) -> list[str]:
     """The function that wasm2c declares for an import: the slot decides between the typed host function and the uniform one."""
+    params = "".join(f", {_CTYPE[t]} a{k}" for k, t in enumerate(ft.params))
+    head = [
+        f"{_ret(ft)} {c_name}(struct {c_module} *h{params}) {{",
+        f"    wasmext_import_slot *s = &h->slot[{slot}];",
+    ]
+    return _slot_call(head, ft, typed=not _has_funcref(ft))  # a funcref is a struct: only the uniform shape carries it
+
+
+def _trampoline(name: str, ft: FuncType) -> list[str]:
+    """The function of an element of a table that stands for a function of the host: `module_instance` is its slot (a `wasmext_import_slot` that starts the record of the function), and
+    the call is made as the call of an import is, by the uniform shape."""
+    params = "".join(f", {_CTYPE[t]} a{k}" for k, t in enumerate(ft.params))
+    head = [
+        f"static {_ret(ft)} {name}(void *h_{params}) {{",
+        "    wasmext_import_slot *s = (wasmext_import_slot *)h_;",
+    ]
+    return _slot_call(head, ft, typed=False)
+
+
+def _slot_call(head: list[str], ft: FuncType, *, typed: bool) -> list[str]:
+    """The body that calls the host function of the slot `s`: the typed one when there is one (if `typed`), else the uniform one with the values packed."""
     several = len(ft.results) > 1
     ret = _ret(ft)
-    params = "".join(f", {_CTYPE[t]} a{k}" for k, t in enumerate(ft.params))
     ptypes = "".join(f", {_CTYPE[t]}" for t in ft.params)
     names = "".join(f", a{k}" for k in range(len(ft.params)))
     n_a, n_r = max(len(ft.params), 1), max(len(ft.results), 1)
-    out = [
-        f"{ret} {c_name}(struct {c_module} *h{params}) {{",
-        f"    wasmext_import_slot *s = &h->slot[{slot}];",
-    ]
+    out = list(head)
     if ft.results:
         out.append(f"    {ret} res;")
-    typed = not _has_funcref(ft)  # a funcref is a struct: only the uniform shape carries it
     if typed:
         out += [
             "    if (s->typed) {",
@@ -295,6 +311,7 @@ def generate_binding(model: ModuleModel) -> str:
         seen_types.append((ft.params, ft.results))
         types = "".join(f", {_RT_TYPE[t]}" for t in (*ft.params, *ft.results))
         out += _adapter(f"{last}_radapt{k}", ft, True)
+        out += _trampoline(f"{last}_tramp{k}", ft)
         out += [
             f"static const uint8_t {last}_rtp{k}[] = {{{', '.join(str(VALTYPE_BYTES[t]) for t in ft.params) or '0'}}};",
             f"static const uint8_t {last}_rtr{k}[] = {{{', '.join(str(VALTYPE_BYTES[t]) for t in ft.results) or '0'}}};",
@@ -302,7 +319,7 @@ def generate_binding(model: ModuleModel) -> str:
             "",
         ]
         ref_rows.append(
-            f"{{{last}_rt{k}, {last}_radapt{k}, {{{len(ft.params)}, {len(ft.results)}, {last}_rtp{k}, {last}_rtr{k}}}}}"
+            f"{{{last}_rt{k}, {last}_radapt{k}, {{{len(ft.params)}, {len(ft.results)}, {last}_rtp{k}, {last}_rtr{k}}}, (void *)(void (*)(void)){last}_tramp{k}}}"
         )
     if ref_rows:
         out.append(f"static const wasmext_ref_type {last}_ref_types[] = {{")

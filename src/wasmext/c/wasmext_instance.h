@@ -67,6 +67,7 @@ typedef struct {
     const char *(*type)(void);
     int (*adapter)(void *instance, void *function, const wasmext_val *args, wasmext_val *results);
     wasmext_functype sig;
+    void *trampoline; /* `result f(void *module_instance, parameters...)`: the function of an element of this type that stands for a function of the host (wasmext_instance_host_funcref) */
 } wasmext_ref_type;
 
 /* What the generated function of an import looks at: the uniform host function, or a typed one (`result f(void *user, parameters..., int *trapped)`, no packing
@@ -699,6 +700,73 @@ static inline int wasmext_instance_call_ref(wasmext_instance *i, const wasmext_f
     wasmext_store_leave(i->store, line);
     wasmext_atomic_store(&i->status, rc);
     return rc;
+}
+
+/* A function of the host as an element of a table. The record starts with a slot of an import, so the trampoline that the binding makes for the type calls it as it calls an import: by
+   the uniform shape, with a failure of the host a trap. `wasm_rt_funcref_t.module_instance` is the record, which is a member of the store under that pointer: the funcref passes the
+   same checks as the one of an instance's function. */
+typedef struct {
+    wasmext_import_slot slot; /* first: the pointer to the record is the pointer to the slot */
+    wasmext_store *store;
+    void (*release)(void *user);
+    int released;
+} wasmext_host_func;
+
+static inline void wasmext_host_func_close_(void *object) {
+    wasmext_host_func *h = (wasmext_host_func *)object;
+    if (!h->released) {
+        h->released = 1;
+        if (h->release != NULL) h->release(h->slot.user);
+    }
+}
+static inline void wasmext_host_func_free_(void *object) {
+    wasmext_host_func_close_(object);
+    free(object);
+}
+static const wasmext_owner_ops wasmext_host_func_ops_ = {NULL, NULL, NULL, wasmext_host_func_close_};
+
+/* Makes a function of the host (`fn`, one shape for every function: see wasmext_host_fn) of the type `params` -> `results` (bytes of the binary format) and gives it as an element of a table
+   to put in this store (`out`). The type must be one that the module of `i` declares (its type section), else WASMEXT_INST_UNDECLARED_TYPE: the glue is made ahead of time, and a
+   type that the module does not have has no trampoline. The store keeps the function until it is closed; then `release(user)` is called once (it may be NULL). The call may be made
+   from any thread; `fn` is called as an import is, from inside a call of the module. */
+static inline int wasmext_instance_host_funcref(wasmext_instance *i, const uint8_t *params, uint32_t n_params, const uint8_t *results, uint32_t n_results, wasmext_host_fn fn,
+                                                void *user, void (*release)(void *user), wasmext_funcref *out) {
+    const wasmext_ref_type *rt = NULL;
+    wasmext_host_func *h;
+    int rc;
+    if (fn == NULL) return WASMEXT_INST_BAD_ARGS;
+    if (!i->instantiated) return WASMEXT_INST_NOT_INSTANTIATED;
+    if (wasmext_store_closed(i->store)) return (int)WASMEXT_TRAP_CLOSED;
+    for (uint32_t k = 0; k < i->binding->n_ref_types && rt == NULL; k++) {
+        const wasmext_ref_type *c = &i->binding->ref_types[k];
+        if (c->trampoline != NULL && c->sig.n_params == n_params && c->sig.n_results == n_results && (n_params == 0 || memcmp(c->sig.params, params, n_params) == 0) &&
+            (n_results == 0 || memcmp(c->sig.results, results, n_results) == 0))
+            rt = c;
+    }
+    if (rt == NULL) return WASMEXT_INST_UNDECLARED_TYPE;
+    h = (wasmext_host_func *)calloc(1, sizeof *h);
+    if (h == NULL) return WASMEXT_INST_NOMEM;
+    h->slot.host = fn;
+    h->slot.user = user;
+    h->slot.self = i;
+    h->store = i->store;
+    h->release = release;
+    if (wasmext_store_adopt(i->store, h, wasmext_host_func_free_) != WASMEXT_STORE_OK) {
+        free(h);
+        return WASMEXT_INST_NOMEM;
+    }
+    rc = wasmext_store_register(i->store, h, h, &wasmext_host_func_ops_, &out->owner);
+    if (rc != WASMEXT_STORE_OK) {
+        wasmext_store_unadopt(i->store, h);
+        free(h);
+        return rc == WASMEXT_STORE_CLOSED ? (int)WASMEXT_TRAP_CLOSED : WASMEXT_INST_NOMEM;
+    }
+    memset(&out->ref, 0, sizeof out->ref);
+    out->ref.func_type = rt->type();
+    out->ref.func = (wasm_rt_function_ptr_t)rt->trampoline;
+    out->ref.module_instance = h;
+    out->store = i->store;
+    return 0;
 }
 
 /* How the last call ended the WASI program of the module: WASMEXT_END_NONE, WASMEXT_END_EXIT (`*value` is the code of proc_exit) or WASMEXT_END_SIGNAL (the number of

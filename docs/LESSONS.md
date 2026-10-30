@@ -132,3 +132,11 @@ Traps found on the way, with the rule. Newest last.
 * Cause: the shim enters the exporter with its own entry, so an uncaught exception ends there as a trap.
 * Rule: an exception unwinds into the caller only where the code runs on the caller's native stack, for example a function reached through a shared table. Test exceptions through tables, not through links.
 * Where found: step 7, `docs/specs/S0007-tags-exceptions.md`, commit 11fca32.
+
+### Two copies of the runtime in one store: a trap goes to the handler of the copy entered last
+* What happened: two shared libraries, each with its own copy of the wasm2c runtime, shared one store (S0008, 8a-1), and code of one copy hit a guard page.
+* Symptom: SIGABRT, `w2c_liba_load` -> `os_signal_handler` of the other library -> `wasm_rt_trap` -> `abort` (no entry on its stack); a thread that called into both copies also leaked one alternate stack.
+* Cause: every copy has its own `g_wasm_rt_jmp_buf`, unwind target, handler of signals and `sigaltstack`; a signal runs the handler installed last, and `wasm_rt_free_thread` frees only the stack that is in place.
+* Rule: a test that builds two copies must build them with the product's flags (`signal_build_flags`) and must not trap across them until the store has one trap state (8b); the copies of a store are made ready on a thread, and let go of, together.
+* Where found: independent review of step 8a-1, `docs/specs/S0008-shared-store.md` ("Known limit of 8a-1"), `tests/test_artifacts.py`.
+

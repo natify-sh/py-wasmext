@@ -107,6 +107,7 @@ WASMEXT_LAYOUT(funcref_types,
 #define WASMEXT_SINCE_RECORD 0x000001A1u   /* a function, a memory, a global */
 #define WASMEXT_SINCE_TABLE 0x000001A1u    /* a table */
 #define WASMEXT_SINCE_FUNCREF 0x000001A1u  /* the field funcref: a function that may be put in a table */
+#define WASMEXT_SINCE_STORE 0x000001A3u    /* the head of the store (wasmext_store_head) and `wasmext_store_attach` */
 
 /* What another instance reads of an export of this one (a function, a memory or a global): a record that a host passes from the exporter to the
    importer. It is a public interface, versioned by WASMEXT_ABI: a reader checks `abi` (the same x), `floor` (its own version is not below it), and `size`
@@ -128,6 +129,7 @@ typedef struct {
     const void *funcref;  /* a function: the wasm_rt_funcref_t of it (its type, the function, the instance), to put in a table; valid while `owner` is; NULL for the others (added at the end: `size` tells a reader) */
     uint32_t floor;     /* the lowest WASMEXT_ABI of a reader that can use this record (wasmext_export_seal): a reader below it refuses */
     const void *store;  /* the store of the exporter, opaque (added at the end: `size` tells a reader): instances are linked inside one store, as in Wasmtime, because the store frees its members when it is closed; NULL from a host that does not know it */
+    const void *artifact; /* the artifact (the library, the extension) whose code and copy of the runtime run the exporter, opaque (added at the end): the same artifact for everything one made; NULL when not known */
 } wasmext_export;
 /* a function is called as `result f(void *instance, parameters..., int *trapped)`: a trap is reported through `trapped` (its code: see above),
    and the result is then undefined; it catches the traps of its own module. */

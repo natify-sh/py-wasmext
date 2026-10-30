@@ -18,17 +18,6 @@
 /* the two kinds of table have the same head (the element data, the maximum, the size) */
 typedef char wasmext_table_heads_[sizeof(wasm_rt_externref_table_t) == sizeof(wasm_rt_funcref_table_t) ? 1 : -1];
 
-/* A table that no module owns, made by the host. The record of it (wasmext_tab_record) is what an import of a module is given. */
-typedef struct wasmext_tab_s_ {
-    int elem; /* 0x70 (funcref) or 0x6F (externref): which of the two below is the table */
-    wasm_rt_funcref_table_t table;
-    wasm_rt_externref_table_t etable;
-    wasmext_store *store;
-    wasmext_owner owner;
-    WASMEXT_MUTEX_T mutex;
-    int live; /* 0 once the store is closed: the wrapper stays until the store is freed */
-} wasmext_tab;
-
 static inline void wasmext_tab_close_(void *object) {
     wasmext_tab *t = (wasmext_tab *)object;
     if (t->live) {
@@ -71,6 +60,7 @@ static inline wasmext_tab *wasmext_tab_new(wasmext_store *store, int elem, uint3
     }
     WASMEXT_MUTEX_INIT(&t->mutex);
     t->store = store;
+    t->artifact = WASMEXT_ARTIFACT;
     t->live = 1;
     if (wasmext_store_adopt(store, t, wasmext_tab_wrapper_free_) != WASMEXT_STORE_OK) {
         wasmext_tab_wrapper_free_(t);
@@ -111,9 +101,11 @@ static inline int wasmext_tab_get_(wasmext_store *s, WASMEXT_MUTEX_T *mutex, was
 }
 
 /* a null funcref (`ref.func` is NULL) empties the slot */
-static inline int wasmext_tab_set_(wasmext_store *s, WASMEXT_MUTEX_T *mutex, wasm_rt_funcref_table_t *t, uint32_t index, const wasmext_funcref *f) {
+static inline int wasmext_tab_set_(wasmext_store *s, const void *artifact, WASMEXT_MUTEX_T *mutex, wasm_rt_funcref_table_t *t, uint32_t index, const wasmext_funcref *f) {
     int line, rc;
     rc = wasmext_funcref_check_(s, f);
+    if (rc != 0) return rc;
+    rc = wasmext_foreign_artifact_(artifact, wasmext_funcref_artifact_(s, f)); /* removed by 8b (S0008); `artifact` is that of the table's instance, or of the host that made it */
     if (rc != 0) return rc;
     line = wasmext_store_enter(s);
     if (line < 0) return (int)WASMEXT_TRAP_CLOSED;
@@ -211,7 +203,7 @@ static inline int wasmext_tab_xgrow_(wasmext_store *s, WASMEXT_MUTEX_T *mutex, w
 /* The element `index` of a funcref table (empty when `out->ref.func` is NULL). */
 static inline int wasmext_tab_get(wasmext_tab *t, uint32_t index, wasmext_funcref *out) { return t->elem != 0x70 ? WASMEXT_TAB_WRONG_ELEM : wasmext_tab_get_(t->store, &t->mutex, &t->table, index, out); }
 /* Puts a function in the slot `index`; NULL, or a null funcref, empties it. */
-static inline int wasmext_tab_set(wasmext_tab *t, uint32_t index, const wasmext_funcref *f) { return t->elem != 0x70 ? WASMEXT_TAB_WRONG_ELEM : wasmext_tab_set_(t->store, &t->mutex, &t->table, index, f); }
+static inline int wasmext_tab_set(wasmext_tab *t, uint32_t index, const wasmext_funcref *f) { return t->elem != 0x70 ? WASMEXT_TAB_WRONG_ELEM : wasmext_tab_set_(t->store, t->artifact, &t->mutex, &t->table, index, f); }
 /* The same for a table of externref: the reference (NULL when empty), and a reference of the store (NULL empties the slot). */
 static inline int wasmext_tab_get_extern(wasmext_tab *t, uint32_t index, void **out) { return t->elem != 0x6F ? WASMEXT_TAB_WRONG_ELEM : wasmext_tab_xget_(t->store, &t->mutex, &t->etable, index, out); }
 static inline int wasmext_tab_set_extern(wasmext_tab *t, uint32_t index, void *ref) { return t->elem != 0x6F ? WASMEXT_TAB_WRONG_ELEM : wasmext_tab_xset_(t->store, &t->mutex, &t->etable, index, ref); }
@@ -230,6 +222,7 @@ static inline int wasmext_tab_record(wasmext_tab *t, void *owner, wasmext_export
     wasmext_table_export(out, t->elem == 0x70 ? &t->table : (wasm_rt_funcref_table_t *)&t->etable, owner);
     if (t->elem == 0x6F) out->flags |= 32u; /* the elements are externref */
     out->store = t->store;
+    out->artifact = t->artifact;
     return 0;
 }
 
@@ -258,7 +251,7 @@ static inline int wasmext_instance_table_set(wasmext_instance *i, uint32_t index
     void *t;
     int elem, rc = wasmext_instance_table_of_(i, index, &t, &elem);
     if (rc != 0) return rc;
-    return elem != 0x70 ? WASMEXT_TAB_WRONG_ELEM : wasmext_tab_set_(i->store, &i->pin_mutex, (wasm_rt_funcref_table_t *)t, element, f);
+    return elem != 0x70 ? WASMEXT_TAB_WRONG_ELEM : wasmext_tab_set_(i->store, i->artifact, &i->pin_mutex, (wasm_rt_funcref_table_t *)t, element, f);
 }
 static inline int wasmext_instance_table_get_extern(wasmext_instance *i, uint32_t index, uint32_t element, void **out) {
     void *t;

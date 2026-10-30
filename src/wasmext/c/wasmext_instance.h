@@ -55,7 +55,8 @@ enum {
     WASMEXT_TAB_FULL = -31,         /* the table cannot grow that much (its maximum, or memory) */
     WASMEXT_TAB_WRONG_STORE = -32,  /* the function is of another store, or is not a function of one */
     WASMEXT_TAB_STALE = -33,        /* the element is a function that no member of the store stands behind */
-    WASMEXT_TAB_WRONG_ELEM = -34    /* an operation on the elements of a funcref table, on a table of externref, or the other way */
+    WASMEXT_TAB_WRONG_ELEM = -34,   /* an operation on the elements of a funcref table, on a table of externref, or the other way */
+    WASMEXT_TAB_FOREIGN_ARTIFACT = -35 /* TEMPORARY, removed by 8b (S0008): the function is of an instance of another artifact than the code that would call it */
 };
 
 /* The host function of an import, one shape for every import: `args` and `results` are arrays of the counts and the types of its signature (the descriptor
@@ -72,6 +73,14 @@ static inline int wasmext_funcref_member_(wasmext_store *store, const void *modu
 /* checks of the references that come in (defined below, where the rest of the references are) */
 static inline int wasmext_funcref_check_(wasmext_store *store, const wasmext_funcref *f);
 static inline int wasmext_extern_check_(wasmext_store *store, const void *e);
+
+/* TEMPORARY guard, removed by 8b (S0008), when the store gets a trap state that all its artifacts share: until then a function of an instance of one artifact cannot be called by
+   the code of another (a trap in it would not come back to the entry of the caller's copy of the runtime). `mine` is the artifact of the code that would call the function, `theirs`
+   the artifact of the function (NULL when it is not known: a table that no module owns, made by a host that does not say). Every place that lets a funcref in uses this one function. */
+static inline int wasmext_foreign_artifact_(const void *mine, const void *theirs) { return theirs != NULL && mine != NULL && mine != theirs ? WASMEXT_TAB_FOREIGN_ARTIFACT : 0; }
+static inline const void *wasmext_export_artifact_(const wasmext_export *e) { return e->size >= offsetof(wasmext_export, artifact) + sizeof e->artifact ? e->artifact : NULL; }
+/* the artifact of the instance or host function that `f` stands for (NULL if no member of `store` does) */
+static inline const void *wasmext_funcref_artifact_(wasmext_store *store, const wasmext_funcref *f);
 
 /* A function type that the module declares (its type section) and can call an element of: wasm2c's type (the pointer it compares first, then the 256-bit hash, as `call_indirect`
    does, so a function of another module with the same type matches), the adapter, and the signature. */
@@ -128,6 +137,7 @@ typedef struct {
     uint32_t n_ref_types;
     const wasmext_tag_binding *tags;        /* the tags the module can see: the ones it exports and the ones it imports */
     uint32_t n_tags;
+    uint32_t host_layout;                   /* WASMEXT_HOST_LAYOUT_ID where the binding is built (0 for a module that uses no host): the host of the store must have been set with it */
 } wasmext_binding;
 
 typedef struct wasmext_instance_s_ {
@@ -144,6 +154,7 @@ typedef struct wasmext_instance_s_ {
     int instantiated;
     wasmext_owner owner; /* its handle in the registry of the store, once it is instantiated (0 before) */
     wasmext_counter status; /* the answer of the last call: 0, or the code of the trap. Atomic: with calls from several threads it is the answer of one of them; use the result of the call */
+    const void *artifact;   /* the artifact (WASMEXT_ARTIFACT) that made it: its code and its copy of the runtime of wasm2c are what runs the instance */
 } wasmext_instance;
 
 /* The runtime of wasm2c is set up once for each thread that calls into a module. The flag is one for the artifact, not one for each file that includes this header (a
@@ -192,12 +203,18 @@ static inline void wasmext_instance_wrapper_free_(void *object) {
 }
 static const wasmext_owner_ops wasmext_instance_ops_ = {NULL, NULL, NULL, wasmext_instance_close_, WASMEXT_KIND_INSTANCE};
 
+/* the layout of the core and of the runtime of wasm2c of this copy, as the head of a store says them (defined at the end of the file, where the structs are all known) */
+static inline uint32_t wasmext_core_layout_(void);
+static inline uint32_t wasmext_core_runtime_(void);
+
 /* Makes an instance in `store`: NULL with `*error` (an errno) when it cannot be made. Imports, if any, are bound before `wasmext_instance_instantiate`. */
 static inline wasmext_instance *wasmext_instance_new(wasmext_store *store, const wasmext_binding *binding, int *error) {
     int ignored;
     wasmext_instance *i;
     if (error == NULL) error = &ignored;
     if (store == NULL || binding == NULL) { *error = EINVAL; return NULL; }
+    /* a store that this artifact neither made nor attached to (S0008): its instances would run on a copy of the runtime that the store does not know */
+    if (!wasmext_store_has_artifact(store, wasmext_core_layout_(), wasmext_core_runtime_())) { *error = EXDEV; return NULL; }
     if (wasmext_store_closed(store)) { *error = EBADF; return NULL; }
     i = (wasmext_instance *)calloc(1, sizeof *i);
     if (i == NULL) { *error = ENOMEM; return NULL; }
@@ -218,6 +235,7 @@ static inline wasmext_instance *wasmext_instance_new(wasmext_store *store, const
     WASMEXT_MUTEX_INIT(&i->pin_mutex);
     i->binding = binding;
     i->store = store;
+    i->artifact = WASMEXT_ARTIFACT;
     if (wasmext_store_adopt(store, i, wasmext_instance_wrapper_free_) != WASMEXT_STORE_OK) {
         wasmext_instance_wrapper_free_(i);
         *error = ENOMEM;
@@ -322,6 +340,7 @@ static inline int wasmext_instance_export_record(wasmext_instance *i, uint32_t i
     out->owner = owner;
     out->runtime = WASMEXT_RUNTIME;
     out->store = i->store;
+    out->artifact = i->artifact;
     switch (d->exports[index].kind) {
         case WASMEXT_DESC_FUNC:
             if (b->shim == NULL) return WASMEXT_INST_UNSUPPORTED;
@@ -433,6 +452,11 @@ static inline int wasmext_instance_bind_export(wasmext_instance *i, uint32_t imp
             if (e->kind != WASMEXT_GLOBAL || e->address == NULL) return wasmext_instance_link_fail_(i, m, "is a global: the export given is not", "");
             if (e->type != g->type || (e->flags & 1u) != (uint32_t)g->is_mutable)
                 return wasmext_instance_link_fail_(i, m, "is a global of another type or mutability than the export given", "");
+            /* removed by 8b (S0008) */
+            if (g->type == 0x70 && wasmext_foreign_artifact_(i->artifact, wasmext_export_artifact_(e)) != 0) {
+                wasmext_instance_link_fail_(i, m, ": the global is of an instance of another artifact (its functions cannot be called from here yet)", "");
+                return WASMEXT_TAB_FOREIGN_ARTIFACT;
+            }
             if (i->binding->ref_slot == NULL) return WASMEXT_INST_BAD_IMPORT;
             *i->binding->ref_slot(i->module, import) = e->address;
             break;
@@ -444,6 +468,11 @@ static inline int wasmext_instance_bind_export(wasmext_instance *i, uint32_t imp
             if (e->kind != WASMEXT_TABLE || e->address == NULL) return wasmext_instance_link_fail_(i, m, "is a table: the export given is not", "");
             if (e->type != sizeof(wasm_rt_funcref_table_t)) return wasmext_instance_link_fail_(i, m, ": the table is from an incompatible runtime of wasm2c", "");
             if (((e->flags >> 5) & 1u) != (t->elem == 0x6F ? 1u : 0u)) return wasmext_instance_link_fail_(i, m, ": the elements of the table are not of the type the module needs (funcref or externref)", "");
+            /* removed by 8b (S0008) */
+            if (t->elem == 0x70 && wasmext_foreign_artifact_(i->artifact, wasmext_export_artifact_(e)) != 0) {
+                wasmext_instance_link_fail_(i, m, ": the table is of an instance of another artifact (its functions cannot be called from here yet)", "");
+                return WASMEXT_TAB_FOREIGN_ARTIFACT;
+            }
             if (t->elem == 0x70) {
                 size = ((const wasm_rt_funcref_table_t *)e->address)->size;
                 max_size = ((const wasm_rt_funcref_table_t *)e->address)->max_size;
@@ -512,6 +541,8 @@ static inline int wasmext_instance_bind_global_value(wasmext_instance *i, uint32
         case 0x70: { /* `as.ref` is a wasmext_funcref of the store, or NULL for a null funcref */
             const wasmext_funcref *f = (const wasmext_funcref *)v->as.ref;
             int rc = wasmext_funcref_check_(i->store, f);
+            if (rc != 0) return rc;
+            rc = wasmext_foreign_artifact_(i->artifact, wasmext_funcref_artifact_(i->store, f)); /* removed by 8b (S0008) */
             if (rc != 0) return rc;
             if (f == NULL) memset(cell, 0, sizeof(wasm_rt_funcref_t));
             else memcpy(cell, &f->ref, sizeof(wasm_rt_funcref_t));
@@ -599,6 +630,11 @@ static inline int wasmext_instance_instantiate(wasmext_instance *i) {
         host = wasmext_store_host(i->store);
         if (host == NULL) {
             wasmext_store_set_error(i->store, "the store has no host for the WASI imports of the module");
+            return (int)WASMEXT_TRAP_LINK_ERROR;
+        }
+        /* the first call that touches the host: the host was made by an artifact whose struct may differ from the one this binding reads (S0008) */
+        if (wasmext_store_host_layout(i->store) != i->binding->host_layout) {
+            wasmext_store_set_error(i->store, "the host of the store was made with another layout of the host of WASI than this module reads (another artifact, or one built without wasmext_host.h)");
             return (int)WASMEXT_TRAP_LINK_ERROR;
         }
     }
@@ -732,6 +768,8 @@ static inline int wasmext_funcref_result_(void *self, const wasmext_val *r, wasm
     if (r->type != 0x70) return WASMEXT_INST_BAD_ARGS;
     rc = wasmext_funcref_check_(i->store, f);
     if (rc != 0) return rc;
+    rc = wasmext_foreign_artifact_(i->artifact, wasmext_funcref_artifact_(i->store, f)); /* removed by 8b (S0008) */
+    if (rc != 0) return rc;
     if (f == NULL) memset(out, 0, sizeof *out);
     else *out = f->ref;
     return 0;
@@ -739,10 +777,13 @@ static inline int wasmext_funcref_result_(void *self, const wasmext_val *r, wasm
 
 /* Before a call: a funcref argument is of this store (or null), and a funcref result has a `wasmext_funcref` to be filled (the caller points `as.ref` at one). After it, the funcref
    results get their store and the handle of their instance. `ptypes` and `rtypes` are the types of the signature. */
-static inline int wasmext_call_check_refs_(wasmext_store *s, const wasmext_functype *t, const wasmext_val *args, const wasmext_val *results) {
+static inline int wasmext_call_check_refs_(wasmext_store *s, const void *artifact, const wasmext_functype *t, const wasmext_val *args, const wasmext_val *results) {
     for (uint32_t k = 0; k < t->n_params; k++) {
         int rc = 0;
-        if (t->params[k] == 0x70) rc = wasmext_funcref_check_(s, (const wasmext_funcref *)args[k].as.ref);
+        if (t->params[k] == 0x70) {
+            rc = wasmext_funcref_check_(s, (const wasmext_funcref *)args[k].as.ref);
+            if (rc == 0) rc = wasmext_foreign_artifact_(artifact, wasmext_funcref_artifact_(s, (const wasmext_funcref *)args[k].as.ref)); /* removed by 8b (S0008) */
+        }
         else if (t->params[k] == 0x6F) rc = wasmext_extern_check_(s, args[k].as.ref);
         if (rc != 0) return rc;
     }
@@ -801,7 +842,7 @@ static inline int wasmext_instance_call(wasmext_instance *i, uint32_t index, con
         if (args[k].type != e->type.params[k]) return WASMEXT_INST_BAD_ARGS;
     if (b->adapter == NULL) return WASMEXT_INST_UNSUPPORTED;
     if (!i->instantiated) return WASMEXT_INST_NOT_INSTANTIATED;
-    rc = wasmext_call_check_refs_(i->store, &e->type, args, results);
+    rc = wasmext_call_check_refs_(i->store, i->artifact, &e->type, args, results);
     if (rc != 0) return rc;
     line = wasmext_store_enter(i->store);
     if (line < 0) return (int)WASMEXT_TRAP_CLOSED;
@@ -829,6 +870,8 @@ static inline int wasmext_instance_call_ref(wasmext_instance *i, const wasmext_f
     if (f == NULL || f->ref.func == NULL) return (int)WASM_RT_TRAP_NULL_REF;
     rc = wasmext_funcref_check_(i->store, f);
     if (rc != 0) return rc;
+    rc = wasmext_foreign_artifact_(i->artifact, wasmext_funcref_artifact_(i->store, f)); /* removed by 8b (S0008) */
+    if (rc != 0) return rc;
     if (f->ref.func_type == NULL) return WASMEXT_INST_UNDECLARED_TYPE;
     for (uint32_t k = 0; k < i->binding->n_ref_types && rt == NULL; k++) {
         const char *t = i->binding->ref_types[k].type();
@@ -838,7 +881,7 @@ static inline int wasmext_instance_call_ref(wasmext_instance *i, const wasmext_f
     if (rt->sig.n_params != n_args || rt->sig.n_results != n_results) return WASMEXT_INST_BAD_ARGS;
     for (uint32_t k = 0; k < n_args; k++)
         if (args[k].type != rt->sig.params[k]) return WASMEXT_INST_BAD_ARGS;
-    rc = wasmext_call_check_refs_(i->store, &rt->sig, args, results);
+    rc = wasmext_call_check_refs_(i->store, i->artifact, &rt->sig, args, results);
     if (rc != 0) return rc;
     line = wasmext_store_enter(i->store);
     if (line < 0) return (int)WASMEXT_TRAP_CLOSED;
@@ -876,6 +919,22 @@ static inline void wasmext_host_func_free_(void *object) {
     free(object);
 }
 static const wasmext_owner_ops wasmext_host_func_ops_ = {NULL, NULL, NULL, wasmext_host_func_close_, WASMEXT_KIND_HOST_FUNC};
+
+/* ... for the guard above (removed by 8b, S0008): a host function is of the artifact of the instance that made it, whose trampoline it is */
+static inline const void *wasmext_funcref_artifact_(wasmext_store *store, const wasmext_funcref *f) {
+    wasmext_owner owner;
+    void *object;
+    if (f == NULL || f->ref.func == NULL) return NULL;
+    if (wasmext_store_find_kind(store, f->ref.module_instance, WASMEXT_KIND_INSTANCE, &owner) == WASMEXT_STORE_OK) {
+        if (wasmext_store_member(store, owner, &object) != WASMEXT_STORE_OK) return NULL;
+        return ((const wasmext_instance *)object)->artifact;
+    }
+    if (wasmext_store_find_kind(store, f->ref.module_instance, WASMEXT_KIND_HOST_FUNC, &owner) == WASMEXT_STORE_OK) {
+        if (wasmext_store_member(store, owner, &object) != WASMEXT_STORE_OK) return NULL;
+        return ((const wasmext_instance *)((const wasmext_host_func *)object)->slot.self)->artifact;
+    }
+    return NULL;
+}
 
 /* Makes a function of the host (`fn`, one shape for every function: see wasmext_host_fn) of the type `params` -> `results` (bytes of the binary format) and gives it as an element of a table
    to put in this store (`out`). The type must be one that the module of `i` declares (its type section), else WASMEXT_INST_UNDECLARED_TYPE: the glue is made ahead of time, and a
@@ -1146,6 +1205,8 @@ static inline int wasmext_instance_global_set(wasmext_instance *i, uint32_t inde
             const wasmext_funcref *f = (const wasmext_funcref *)value->as.ref;
             rc = wasmext_funcref_check_(i->store, f);
             if (rc != 0) return rc;
+            rc = wasmext_foreign_artifact_(i->artifact, wasmext_funcref_artifact_(i->store, f)); /* removed by 8b (S0008) */
+            if (rc != 0) return rc;
             if (f == NULL) memset(p, 0, sizeof(wasm_rt_funcref_t));
             else memcpy(p, &f->ref, sizeof(wasm_rt_funcref_t));
             break;
@@ -1172,5 +1233,39 @@ static inline int wasmext_instance_free(wasmext_instance *i) {
     wasmext_instance_wrapper_free_(i);
     return WASMEXT_STORE_OK;
 }
+
+/* A table that no module owns, made by the host. The record of it (wasmext_tab_record) is what an import of a module is given. */
+typedef struct wasmext_tab_s_ {
+    int elem; /* 0x70 (funcref) or 0x6F (externref): which of the two below is the table */
+    wasm_rt_funcref_table_t table;
+    wasm_rt_externref_table_t etable;
+    wasmext_store *store;
+    const void *artifact; /* that made it */
+    wasmext_owner owner;
+    WASMEXT_MUTEX_T mutex;
+    int live; /* 0 once the store is closed: the wrapper stays until the store is freed */
+} wasmext_tab;
+
+/* The layout of the core as the head of a store says it (S0008): the store, its registry and members, and every struct that a store holds for the code of another copy to read
+   inline: the lock, the instance, the slot of an import, the host function, the extern, the table of the host. Each field, by offset and size (WASMEXT_LF_). WASMEXT_NO_THREADS and the
+   compiler are in it. `attach` refuses a store whose number differs. */
+#define WASMEXT_CORE_LAYOUT ((uint32_t)(WASMEXT_STORE_LAYOUT_ ^ \
+    WASMEXT_LS_(23u, wasmext_rlock) ^ WASMEXT_LF_(0, wasmext_rlock, mutex) ^ WASMEXT_LF_(1, wasmext_rlock, owner) ^ WASMEXT_LF_(2, wasmext_rlock, depth) ^ \
+    WASMEXT_LS_(29u, wasmext_instance) ^ WASMEXT_LF_(0, wasmext_instance, binding) ^ WASMEXT_LF_(1, wasmext_instance, store) ^ WASMEXT_LF_(2, wasmext_instance, module) ^ \
+    WASMEXT_LF_(3, wasmext_instance, bound) ^ WASMEXT_LF_(4, wasmext_instance, owners) ^ WASMEXT_LF_(5, wasmext_instance, values) ^ WASMEXT_LF_(6, wasmext_instance, refs) ^ \
+    WASMEXT_LF_(7, wasmext_instance, pins) ^ WASMEXT_LF_(8, wasmext_instance, saved_max) ^ WASMEXT_LF_(9, wasmext_instance, pin_mutex) ^ WASMEXT_LF_(10, wasmext_instance, instantiated) ^ \
+    WASMEXT_LF_(11, wasmext_instance, owner) ^ WASMEXT_LF_(12, wasmext_instance, status) ^ WASMEXT_LF_(13, wasmext_instance, artifact) ^ \
+    WASMEXT_LS_(31u, wasmext_import_slot) ^ WASMEXT_LF_(0, wasmext_import_slot, host) ^ WASMEXT_LF_(1, wasmext_import_slot, typed) ^ WASMEXT_LF_(2, wasmext_import_slot, user) ^ \
+    WASMEXT_LF_(3, wasmext_import_slot, self) ^ \
+    WASMEXT_LS_(37u, wasmext_host_func) ^ WASMEXT_LF_(0, wasmext_host_func, slot) ^ WASMEXT_LF_(1, wasmext_host_func, store) ^ WASMEXT_LF_(2, wasmext_host_func, release) ^ \
+    WASMEXT_LF_(3, wasmext_host_func, released) ^ \
+    WASMEXT_LS_(41u, wasmext_extern) ^ WASMEXT_LF_(0, wasmext_extern, user) ^ WASMEXT_LF_(1, wasmext_extern, release) ^ WASMEXT_LF_(2, wasmext_extern, store) ^ \
+    WASMEXT_LF_(3, wasmext_extern, released) ^ \
+    WASMEXT_LS_(43u, wasmext_tab) ^ WASMEXT_LF_(0, wasmext_tab, elem) ^ WASMEXT_LF_(1, wasmext_tab, table) ^ WASMEXT_LF_(2, wasmext_tab, etable) ^ WASMEXT_LF_(3, wasmext_tab, store) ^ \
+    WASMEXT_LF_(4, wasmext_tab, artifact) ^ WASMEXT_LF_(5, wasmext_tab, owner) ^ WASMEXT_LF_(6, wasmext_tab, mutex) ^ WASMEXT_LF_(7, wasmext_tab, live)))
+static inline uint32_t wasmext_core_layout_(void) { return WASMEXT_CORE_LAYOUT; }
+static inline uint32_t wasmext_core_runtime_(void) { return (uint32_t)WASMEXT_RUNTIME; }
+#undef WASMEXT_CORE_IDENT
+#define WASMEXT_CORE_IDENT WASMEXT_ABI, WASMEXT_SINCE_STORE, WASMEXT_CORE_LAYOUT, WASMEXT_RUNTIME
 
 #endif

@@ -92,7 +92,8 @@
           "uint32_t runtime",
           "const void *funcref",
           "uint32_t floor",
-          "const void *store"
+          "const void *store",
+          "const void *artifact"
         ]
       },
       "stub": [
@@ -231,7 +232,8 @@
           "uint32_t runtime",
           "const void *funcref",
           "uint32_t floor",
-          "const void *store"
+          "const void *store",
+          "const void *artifact"
         ],
         "<name>_value": [
           "int type",
@@ -310,6 +312,7 @@
       "WASMEXT_MEMORY": "2",
       "WASMEXT_SINCE_FUNCREF": "0x000001A1u",
       "WASMEXT_SINCE_RECORD": "0x000001A1u",
+      "WASMEXT_SINCE_STORE": "0x000001A3u",
       "WASMEXT_SINCE_TABLE": "0x000001A1u",
       "WASMEXT_TABLE": "1",
       "WASMEXT_TABLE_NO_MAXIMUM": "0xFFFFFFFFu",
@@ -355,7 +358,8 @@
         "uint32_t runtime",
         "const void *funcref",
         "uint32_t floor",
-        "const void *store"
+        "const void *store",
+        "const void *artifact"
       ],
       "wasmext_traps": [
         "uint32_t size",

@@ -41,7 +41,7 @@ Facts that bound the design (checked in the code and in the runtime sources of w
 * A fixed header at the start of `wasmext_store`: `{size, abi, floor, layout, runtime, flags, rt}`. `int wasmext_store_attach(wasmext_store *s, char *why, size_t cap)`;
   new code `WASMEXT_STORE_INCOMPATIBLE`. `attach` refuses (reason in the caller's buffer) when x differs or below `floor`, `size` differs, `layout`
   (hash of sizes and offsets of store, registry, slot, owner ops, arena node, rlock, instance, host func, extern, `WASMEXT_NO_THREADS`, `_MSC_VER`)
-  differs, `runtime` differs, the creator was built without the trap handler, or the store is closed.
+  differs, `runtime` differs (code `WASMEXT_STORE_INCOMPATIBLE`), the creator was built without the trap handler (8b), or the store is closed (code `WASMEXT_STORE_CLOSED`, built so in 8a-1).
 * `wasmext_store_new` takes the serial from the runtime of the store (`rt->next_serial()`); the per-artifact `wasmext_store_serial_` goes away.
   `wasmext_instance_new` refuses a store this artifact did not make or attach (`EXDEV`).
 * `_natify` `_RUNTIME_WRAPPERS`: `impl` always defines `WASM_RT_TRAP_HANDLER`; `exceptions` renames the seven functions of the exceptions file to
@@ -59,7 +59,7 @@ Facts that bound the design (checked in the code and in the runtime sources of w
 * Through a link: B's forwarder calls A's shim (nested enter); LINKED+code is re-raised in B. Open: re-throw an uncaught exception instead of trapping.
 * Every copy that has an instance in the store is made ready on the thread at the first entry (stack limit and `wasm_rt_init_thread`). With depth counting
   (Windows, Emscripten) the entry saves and restores the counters of those copies.
-* Every attached artifact stays loaded until `wasmext_store_free` returns; `attach` adds an unload hook through `wasmext_store_adopt` (freed last).
+* Every attached artifact stays loaded until `wasmext_store_free` returns. In 8a-1 this is the host's duty: `attach(s, why, cap)` only records the artifact in the store and has no unload hook (a hook would need a parameter; decide with the front end, layer 2).
 * Imported tag cell stays one per (artifact, module) per process (D34).
 * The binding of an instance to a runtime is explicit and by store: whoever calls `wasmext_store_new` makes the store and its runtime, and any other artifact
   joins it only by `wasmext_store_attach`. Several stores can live in one process, each with its own instances, runtime, host and state, and nothing is
@@ -72,6 +72,10 @@ Facts that bound the design (checked in the code and in the runtime sources of w
   A module that is alone needs nothing outside itself. The host of the store is reached through the store by an instance of any artifact; its layout is
   part of what `attach` checks (`layout` of `wasmext_host`, P1 bit, fusedwasi version). `docs/architecture.md` says "the state of WASI never crosses
   (opaque)"; that line is older and is superseded by this section, and needs a new Dn.
+
+### Known limit of 8a-1 (fixed by 8b)
+* A trap (a signal included) in code of one copy while two copies are in one store aborts, or jumps into the stale buffer of the other copy. Seen in review: a guard-page access in `w2c_liba_load` ran the handler of signals of `libartifact_b`, which called its own `wasm_rt_trap`, found no entry and aborted (SIGABRT). Each copy has its own `g_wasm_rt_jmp_buf`, unwind target and handler, and the handler that runs is that of the copy that installed its chain last. 8a-1 therefore tests no trap across artifacts; the traps of one copy alone are as before.
+* Requirement for 8b: a thread that calls into two copies leaks one alternate stack. Each copy of the runtime allocates and installs its own `sigaltstack` in `wasm_rt_init_thread`; the second replaces the first, and `wasm_rt_free_thread` of a copy frees its stack only if it is the one in place (the other is reported as "alternate stack was modified unexpectedly" and kept, so LeakSanitizer reports it). The readiness of the copies of a store on a thread (`thread_ready` and `thread_free` of all of them, in the reverse order) must be made one operation in 8b.
 
 ## Test plan
 `tests/c/test_artifacts.c` with a fixture `build_artifact` that uses the product's repairs and wrappers (D35); each artifact is a shared library with
@@ -113,3 +117,5 @@ Status `approved` by the maintainer on 2026-10-30 ("затверджую, поч
 * 2026-10-30: binding to the store explicit; stores share nothing (one known leak: the process-global cell of an imported tag).
 * 2026-10-30: open questions decided by the model of Wasmtime; waiting for `approved`.
 * 2026-10-30: approved by the maintainer; 8a-1 started.
+* 2026-10-30: 8a-1 built. Differs from the text above: `wasmext_store_new()` and `wasmext_store_attach()` are macros over `wasmext_store_new_`/`wasmext_store_attach_` that pass `WASMEXT_CORE_IDENT` (abi, floor, layout, runtime), because the layout of the instance structs is known only in `wasmext_instance.h` and `wasmext_store.h` stays free of wasm2c (a program with the store alone gets a store-only layout and runtime 0); a closed store is `WASMEXT_STORE_CLOSED`; no unload hook; `wasmext_export` gets a field `artifact` at the end (the identity of the artifact: the address of `wasmext_artifact_`, defined with `WASMEXT_DEFINE_THREAD_STATE`), and `wasmext_instance`/`wasmext_tab` carry it; `instance_new` of a store this artifact neither made nor attached is `EXDEV`; the refusal of a funcref of another artifact is a TEMPORARY guard (`WASMEXT_TAB_FOREIGN_ARTIFACT`, one function `wasmext_foreign_artifact_`, every use marked "removed by 8b"). Found: a thread that calls into two copies leaks the alternate stack of the first (each copy installs its own, the runtime frees only the one in place); 8b makes the copies of a store ready together.
+* 2026-10-30: 8a-1 after review: the layout hash covers every field (offset and size) of every struct another copy reads inline, `wasmext_tab` included (its struct moved to `wasmext_instance.h`); the layout of `wasmext_host` has its own word in the head (`host_layout`, set by `wasmext_store_set_host`, checked by `wasmext_instance_instantiate` against `wasmext_binding.host_layout`, the first call that touches the host); `has_artifact`/`instance_new` compare size, layout and runtime of the full core before locking; `wasmext_artifact_` is hidden; the temporary guard has a test and a mutation at every site; the artifacts are built with the product's `WASMEXT_CHAIN` flags.

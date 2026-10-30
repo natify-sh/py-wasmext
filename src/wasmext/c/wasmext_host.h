@@ -66,6 +66,18 @@ typedef struct wasmext_host {
     wasmext_rlock lock;  /* taken around each call into fusedwasi from an instance: the state has no lock of its own, by design (see wasmext_rlock.h) */
 } wasmext_host;
 
+/* The layout of the host as another copy of the core reads it (S0008): every field of the struct, by offset and size. The artifact that sets the host in a store says it
+   (`wasmext_store_set_host`), and the first call that touches the host (`wasmext_instance_instantiate` of a module that uses it) compares it with the layout its binding was built with. */
+#define WASMEXT_HOST_LAYOUT ((uint32_t)(WASMEXT_LS_(47u, wasmext_host) ^ WASMEXT_LF_(0, wasmext_host, wasi) ^ WASMEXT_LF_(1, wasmext_host, stdin_read) ^ \
+    WASMEXT_LF_(2, wasmext_host, stdout_write) ^ WASMEXT_LF_(3, wasmext_host, clock) ^ WASMEXT_LF_(4, wasmext_host, random) ^ WASMEXT_LF_(5, wasmext_host, sleep) ^ \
+    WASMEXT_LF_(6, wasmext_host, sockets) ^ WASMEXT_LF_(7, wasmext_host, http) ^ WASMEXT_LF_(8, wasmext_host, sockets_all) ^ WASMEXT_LF_(9, wasmext_host, no_tcp) ^ \
+    WASMEXT_LF_(10, wasmext_host, no_udp) ^ WASMEXT_LF_(11, wasmext_host, http_all) ^ WASMEXT_LF_(12, wasmext_host, user) ^ WASMEXT_LF_(13, wasmext_host, args_v) ^ \
+    WASMEXT_LF_(14, wasmext_host, env_n) ^ WASMEXT_LF_(15, wasmext_host, env_v) ^ WASMEXT_LF_(16, wasmext_host, nargs_v) ^ WASMEXT_LF_(17, wasmext_host, nenv_v) ^ \
+    WASMEXT_LF_(18, wasmext_host, preopens) ^ WASMEXT_LF_(19, wasmext_host, npreopens) ^ WASMEXT_LF_(20, wasmext_host, streams) ^ WASMEXT_LF_(21, wasmext_host, message) ^ \
+    WASMEXT_LF_(22, wasmext_host, wait) ^ WASMEXT_LF_(23, wasmext_host, lock) ^ WASMEXT_LAYOUT_BITS_))
+#undef WASMEXT_HOST_LAYOUT_ID
+#define WASMEXT_HOST_LAYOUT_ID WASMEXT_HOST_LAYOUT
+
 static inline wasmext_host *wasmext_host_of_(fusedwasi_p2_state *s) { return (wasmext_host *)s->user; }
 
 static inline void wasmext_host_trap_(fusedwasi_p2_state *s, const char *message) {

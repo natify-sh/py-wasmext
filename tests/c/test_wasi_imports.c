@@ -60,6 +60,21 @@ static void test_a_store_with_no_host(void) {
     wasmext_store_free(s);
 }
 
+/* the host was set with the layout of its struct (S0008): a binding built with another one refuses to start, naming the host, and a host set from a file that does not know the struct is not accepted */
+static void test_a_host_of_another_layout(void) {
+    wasmext_store *s = make_store();
+    wasmext_instance *i = wasmext_instance_new(s, BINDING, NULL);
+    char text[WASMEXT_STORE_ERROR_SIZE];
+    CHECK(s->head.host_layout == WASMEXT_HOST_LAYOUT && s->head.host_layout != 0);
+    s->head.host_layout ^= 1u;
+    CHECK(wasmext_instance_instantiate(i) == (int)WASMEXT_TRAP_LINK_ERROR);
+    wasmext_store_error(s, text, sizeof text);
+    CHECK(strstr(text, "layout of the host") != NULL);
+    s->head.host_layout ^= 1u;
+    CHECK(wasmext_instance_instantiate(i) == 0);
+    wasmext_store_free(s);
+}
+
 static void test_the_calls(void) {
     wasmext_store *s = make_store();
     wasmext_instance *i = wasmext_instance_new(s, BINDING, NULL);
@@ -170,6 +185,7 @@ static void test_threads(void) {
 
 int main(void) {
     test_a_store_with_no_host();
+    test_a_host_of_another_layout();
     test_the_calls();
     test_two_instances_share_the_host();
     test_threads();

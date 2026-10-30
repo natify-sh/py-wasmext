@@ -485,6 +485,9 @@ def generate_binding(model: ModuleModel) -> str:
         + (f", {last}_call_begin, {last}_wasi_end" if core else ", 0, 0")
         + (f", {last}_ref_types, {len(ref_rows)}" if ref_rows else ", 0, 0")
         + (f", {last}_tags, {len(tag_rows)}" if tag_rows else ", 0, 0")
+        + (
+            ", WASMEXT_HOST_LAYOUT_ID" if core else ", 0"
+        )  # the layout of the host this binding reads (wasmext_host.h); checked against the one the host of the store was set with
         + "};",
         "",
     ]

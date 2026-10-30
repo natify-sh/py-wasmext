@@ -8,9 +8,15 @@ slot of the import and calls the host (the typed function when it was given, els
 from __future__ import annotations
 
 from ._gen import (
-    _CTYPE,
-    _MULTI_CODE,
-    _RT_TYPE,
+    _CTYPE as _GEN_CTYPE,
+)
+from ._gen import (
+    _MULTI_CODE as _GEN_MULTI_CODE,
+)
+from ._gen import (
+    _RT_TYPE as _GEN_RT_TYPE,
+)
+from ._gen import (
     GenError,
     _p2_headers,
     mangle,
@@ -23,20 +29,20 @@ __all__ = ["binding_headers", "generate_binding"]
 
 _FIELD: dict[ValType, str] = {"i32": "i32", "i64": "i64", "f32": "f32", "f64": "f64"}
 _REFS = ("funcref", "externref")
+# the old glue refuses an externref (and so lacks it in these tables); the binding carries it: the pointer of a record of the store (docs/step6_externref.md)
+_CTYPE: dict[ValType, str] = {**_GEN_CTYPE, "externref": "wasm_rt_externref_t"}
+_MULTI_CODE: dict[ValType, str] = {**_GEN_MULTI_CODE, "externref": "e"}
+_RT_TYPE: dict[ValType, str] = {**_GEN_RT_TYPE, "externref": "WASM_RT_EXTERNREF"}
 
 
-def _supported(ft: FuncType) -> bool:
-    """A signature the binding carries: a funcref is (a `wasmext_funcref` by pointer), an externref is not yet (step 6)."""
-    return "externref" not in (*ft.params, *ft.results)
-
-
-def _has_funcref(ft: FuncType) -> bool:
-    return "funcref" in (*ft.params, *ft.results)
+def _has_ref(ft: FuncType) -> bool:
+    """A reference in the signature: it is checked as it comes in, so the typed shape (no checks) does not carry it, and only the uniform one does."""
+    return any(t in _REFS for t in (*ft.params, *ft.results))
 
 
 def _linkable(ft: FuncType) -> bool:
-    """A function that another instance can import by the typed shape (`result f(void *instance, parameters..., int *trapped)`): a funcref is a struct, which that shape does not carry."""
-    return _supported(ft) and not _has_funcref(ft)
+    """A function that another instance can import by the typed shape (`result f(void *instance, parameters..., int *trapped)`): one with no reference in its signature."""
+    return not _has_ref(ft)
 
 
 def _ret(ft: FuncType) -> str:
@@ -51,6 +57,8 @@ def _pack(t: ValType, dst: str, src: str) -> str:
     if t == "funcref":
         # the caller points `as.ref` at a `wasmext_funcref` to be filled (the core checks it before the call and sets its store and owner after)
         return f"{dst}.type = {byte:#x}; ((wasmext_funcref *){dst}.as.ref)->ref = {src};"
+    if t == "externref":
+        return f"{dst}.type = {byte:#x}; {dst}.as.ref = {src};"
     if t == "v128":
         return f"{dst}.type = {byte:#x}; memcpy({dst}.as.v128, &{src}, 16);"
     cast = {"i32": "(int32_t)", "i64": "(int64_t)", "f32": "", "f64": ""}[t]
@@ -74,7 +82,9 @@ def _adapter(name: str, ft: FuncType, reentrant: bool) -> list[str]:
     pre: list[str] = []
     args = ""
     for k, t in enumerate(ft.params):
-        if t == "funcref":
+        if t == "externref":
+            args += f", a[{k}].as.ref"
+        elif t == "funcref":
             pre.append(
                 f"wasm_rt_funcref_t t{k}; if (a[{k}].as.ref) t{k} = ((const wasmext_funcref *)a[{k}].as.ref)->ref; else memset(&t{k}, 0, sizeof t{k});"
             )
@@ -119,7 +129,9 @@ def _forwarder(c_module: str, c_name: str, slot: int, ft: FuncType) -> list[str]
         f"{_ret(ft)} {c_name}(struct {c_module} *h{params}) {{",
         f"    wasmext_import_slot *s = &h->slot[{slot}];",
     ]
-    return _slot_call(head, ft, typed=not _has_funcref(ft))  # a funcref is a struct: only the uniform shape carries it
+    return _slot_call(
+        head, ft, typed=not _has_ref(ft)
+    )  # a reference is checked as it comes in: only the uniform shape carries it
 
 
 def _trampoline(name: str, ft: FuncType) -> list[str]:
@@ -164,6 +176,8 @@ def _slot_call(head: list[str], ft: FuncType, *, typed: bool) -> list[str]:
             out.append(
                 f"        if (wasmext_funcref_from_(s->self, &a{k}, &f{k})) wasm_rt_trap(WASMEXT_TRAP_HOST); a[{k}].type = 0x70; a[{k}].as.ref = &f{k};"
             )
+        elif t == "externref":
+            out.append(f"        {_pack(t, f'a[{k}]', f'a{k}')}")
         else:
             out.append(f"        {_pack(t, f'a[{k}]', f'a{k}')}")
     out += [
@@ -175,6 +189,10 @@ def _slot_call(head: list[str], ft: FuncType, *, typed: bool) -> list[str]:
         if t == "funcref":
             out.append(
                 f"        if (wasmext_funcref_result_(s->self, &r[{j}], &{dst})) wasm_rt_trap(WASMEXT_TRAP_HOST);"
+            )
+        elif t == "externref":
+            out.append(
+                f"        if (wasmext_extern_result_(s->self, &r[{j}], &{dst})) wasm_rt_trap(WASMEXT_TRAP_HOST);"
             )
         else:
             out.append(f"        {_unpack(t, f'r[{j}]', dst)}")
@@ -195,10 +213,6 @@ def generate_binding(model: ModuleModel) -> str:
         ):
             raise GenError(
                 f"{model.name}: the import {imp.module}.{imp.name} is a table of {imp.type.elem} (or 64-bit, or shared); only funcref tables are carried (externref is step 6 of docs/layers.md)"
-            )
-        if isinstance(imp.type, FuncType) and not _supported(imp.type):
-            raise GenError(
-                f"{model.name}: the import {imp.module}.{imp.name} has an externref in its signature; that is step 6 of docs/layers.md"
             )
         if isinstance(imp.type, GlobalType) and imp.type.type in _REFS:
             raise GenError(
@@ -289,7 +303,7 @@ def generate_binding(model: ModuleModel) -> str:
             ft = e.type
             assert isinstance(ft, FuncType)
             key = (ft.params, ft.results)
-            if _supported(ft) and key not in adapters:
+            if key not in adapters:
                 adapters[key] = f"{last}_adapt{len(adapters)}"
                 out += _adapter(adapters[key], ft, reentrant)
     shims: dict[int, str] = {}
@@ -305,7 +319,7 @@ def generate_binding(model: ModuleModel) -> str:
     ref_rows: list[str] = []
     seen_types: list[tuple[tuple[ValType, ...], tuple[ValType, ...]]] = []
     for ft in model.module.types:
-        if not _supported(ft) or (ft.params, ft.results) in seen_types:
+        if (ft.params, ft.results) in seen_types:
             continue
         k = len(seen_types)
         seen_types.append((ft.params, ft.results))
@@ -329,9 +343,8 @@ def generate_binding(model: ModuleModel) -> str:
     for n, e in enumerate(model.exports):
         if e.kind == "func":
             assert isinstance(e.type, FuncType)
-            if _supported(e.type):
-                refs[n] = f"{last}_ref{n}"
-                out += _ref_filler(refs[n], last, prefix, e.name, e.type)
+            refs[n] = f"{last}_ref{n}"
+            out += _ref_filler(refs[n], last, prefix, e.name, e.type)
     enter = "WASMEXT_ENTER_REENTRANT" if reentrant else "WASMEXT_ENTER_PLAIN"
     leave = "WASMEXT_LEAVE_REENTRANT" if reentrant else "WASMEXT_LEAVE_PLAIN"
     wasm_args = "".join(f", &b->m{n}" for n in range(len(modules)))
@@ -378,13 +391,12 @@ def generate_binding(model: ModuleModel) -> str:
         if e.kind == "func":
             ft = e.type
             assert isinstance(ft, FuncType)
-            if _supported(ft):
-                sig = "".join(_MULTI_CODE[t] for t in ft.params) + ">" + "".join(_MULTI_CODE[t] for t in ft.results)
-                shim = f"(void *){shims[n]}" if n in shims else "0"
-                rows.append(
-                    f"{{{adapters[(ft.params, ft.results)]}, (void *)(void (*)(void))w2c_{prefix}_{mangle(e.name)}, 0, {shim}, {_c_lit(sig)}, {refs[n]}}}"
-                )
-                continue
+            sig = "".join(_MULTI_CODE[t] for t in ft.params) + ">" + "".join(_MULTI_CODE[t] for t in ft.results)
+            shim = f"(void *){shims[n]}" if n in shims else "0"
+            rows.append(
+                f"{{{adapters[(ft.params, ft.results)]}, (void *)(void (*)(void))w2c_{prefix}_{mangle(e.name)}, 0, {shim}, {_c_lit(sig)}, {refs[n]}}}"
+            )
+            continue
         elif e.kind in ("memory", "global", "table"):
             # wasm2c's accessor: `wasm_rt_memory_t *f(w2c_<p> *)` for a memory, `T *f(w2c_<p> *)` for a global (the pointer to its value), `wasm_rt_funcref_table_t *f(w2c_<p> *)` for a table
             rows.append(f"{{0, 0, (void *(*)(void *))w2c_{prefix}_{mangle(e.name)}, 0, 0, 0}}")

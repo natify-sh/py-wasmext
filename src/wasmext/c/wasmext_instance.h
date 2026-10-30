@@ -248,7 +248,10 @@ static inline int wasmext_instance_bind_typed(wasmext_instance *i, uint32_t impo
     if (fn == NULL) return WASMEXT_INST_BAD_IMPORT;
     ft = &i->binding->descriptor->imports[import].type;
     for (uint32_t k = 0; k < ft->n_params + ft->n_results; k++)
-        if ((k < ft->n_params ? ft->params[k] : ft->results[k - ft->n_params]) == 0x70) return WASMEXT_INST_UNSUPPORTED; /* a funcref is a struct: the typed shape has none, the uniform one does */
+        {
+            uint8_t t = k < ft->n_params ? ft->params[k] : ft->results[k - ft->n_params];
+            if (t == 0x70 || t == 0x6F) return WASMEXT_INST_UNSUPPORTED; /* a reference is checked as it comes in: the typed shape has none, the uniform one does */
+        }
     slot = i->binding->import_slot(i->module, import);
     slot->host = NULL;
     slot->typed = fn;
@@ -561,6 +564,78 @@ static inline int wasmext_funcref_check_(wasmext_store *store, const wasmext_fun
     return 0;
 }
 
+/* ---- externref (docs/step6_externref.md) ---- */
+
+/* A value of the host that WebAssembly holds as an `externref`: the pointer to this record is the reference. WebAssembly never reads it; the store keeps the record until it is closed, then
+   calls `release(user)` once. */
+typedef struct {
+    void *user;
+    void (*release)(void *user);
+    wasmext_store *store;
+    int released;
+} wasmext_extern;
+
+static inline void wasmext_extern_close_(void *object) {
+    wasmext_extern *e = (wasmext_extern *)object;
+    if (!e->released) {
+        e->released = 1;
+        if (e->release != NULL) e->release(e->user);
+    }
+}
+static inline void wasmext_extern_free_(void *object) {
+    wasmext_extern_close_(object);
+    free(object);
+}
+static const wasmext_owner_ops wasmext_extern_ops_ = {NULL, NULL, NULL, wasmext_extern_close_};
+
+/* Gives the store a value to hold (`user`, which the host owns; `release(user)` is called once when the store is closed, and may be NULL). `*out` is the reference. */
+static inline int wasmext_extern_new(wasmext_store *store, void *user, void (*release)(void *user), wasmext_extern **out) {
+    wasmext_extern *e;
+    wasmext_owner owner;
+    int rc;
+    if (store == NULL || out == NULL) return WASMEXT_INST_BAD_ARGS;
+    if (wasmext_store_closed(store)) return (int)WASMEXT_TRAP_CLOSED;
+    e = (wasmext_extern *)calloc(1, sizeof *e);
+    if (e == NULL) return WASMEXT_INST_NOMEM;
+    e->user = user;
+    e->release = release;
+    e->store = store;
+    if (wasmext_store_adopt(store, e, wasmext_extern_free_) != WASMEXT_STORE_OK) {
+        free(e);
+        return WASMEXT_INST_NOMEM;
+    }
+    rc = wasmext_store_register(store, e, e, &wasmext_extern_ops_, &owner);
+    if (rc != WASMEXT_STORE_OK) {
+        wasmext_store_unadopt(store, e);
+        free(e);
+        return rc == WASMEXT_STORE_CLOSED ? (int)WASMEXT_TRAP_CLOSED : WASMEXT_INST_NOMEM;
+    }
+    *out = e;
+    return 0;
+}
+
+/* The value of a reference (NULL for a null reference). Only for a reference that came out of the store, or that a check below accepted. */
+static inline void *wasmext_extern_user(const wasmext_extern *e) { return e != NULL ? e->user : NULL; }
+
+/* Whether `e` is a reference of `store` (made by wasmext_extern_new): it must be a member of the store; the pointer is not read before. NULL is a null reference, always acceptable. 0, or
+   WASMEXT_TAB_WRONG_STORE. */
+static inline int wasmext_extern_check_(wasmext_store *store, const void *e) {
+    wasmext_owner owner;
+    if (e == NULL) return 0;
+    return wasmext_store_find(store, e, &owner) == WASMEXT_STORE_OK ? 0 : WASMEXT_TAB_WRONG_STORE;
+}
+
+/* The reference that a host function answers (`r`, of type 0x6F, whose `as.ref` is a reference of the store, or NULL) into `out`. */
+static inline int wasmext_extern_result_(void *self, const wasmext_val *r, wasm_rt_externref_t *out) {
+    wasmext_instance *i = (wasmext_instance *)self;
+    int rc;
+    if (r->type != 0x6F) return WASMEXT_INST_BAD_ARGS;
+    rc = wasmext_extern_check_(i->store, r->as.ref);
+    if (rc != 0) return rc;
+    *out = r->as.ref;
+    return 0;
+}
+
 /* The funcref that wasm passes to a host function: `out` is made from the element `r`, of the store of the instance `self` (the slot's). WASMEXT_TAB_STALE when `r` is a function
    that no member of the store stands behind. A null funcref is a funcref with no function. */
 static inline int wasmext_funcref_from_(void *self, const wasm_rt_funcref_t *r, wasmext_funcref *out) {
@@ -589,11 +664,12 @@ static inline int wasmext_funcref_result_(void *self, const wasmext_val *r, wasm
 /* Before a call: a funcref argument is of this store (or null), and a funcref result has a `wasmext_funcref` to be filled (the caller points `as.ref` at one). After it, the funcref
    results get their store and the handle of their instance. `ptypes` and `rtypes` are the types of the signature. */
 static inline int wasmext_call_check_refs_(wasmext_store *s, const wasmext_functype *t, const wasmext_val *args, const wasmext_val *results) {
-    for (uint32_t k = 0; k < t->n_params; k++)
-        if (t->params[k] == 0x70) {
-            int rc = wasmext_funcref_check_(s, (const wasmext_funcref *)args[k].as.ref);
-            if (rc != 0) return rc;
-        }
+    for (uint32_t k = 0; k < t->n_params; k++) {
+        int rc = 0;
+        if (t->params[k] == 0x70) rc = wasmext_funcref_check_(s, (const wasmext_funcref *)args[k].as.ref);
+        else if (t->params[k] == 0x6F) rc = wasmext_extern_check_(s, args[k].as.ref);
+        if (rc != 0) return rc;
+    }
     for (uint32_t k = 0; k < t->n_results; k++)
         if (t->results[k] == 0x70 && results[k].as.ref == NULL) return WASMEXT_INST_BAD_ARGS;
     return 0;

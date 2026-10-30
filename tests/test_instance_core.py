@@ -192,6 +192,15 @@ TABLE_MODULES = {
     "strict": '(module (import "own_s" "tab" (table 8 funcref)) (func (export "f")))',
     "capped": '(module (import "own_c" "tab" (table 1 2 funcref)) (func (export "f")))',
 }
+EXTERN_MODULES = {
+    "xr": """(module
+  (import "xenv" "visit" (func $visit (param externref) (result externref)))
+  (func (export "id") (param externref) (result externref) local.get 0)
+  (func (export "pair") (param externref externref) (result externref externref) local.get 1 local.get 0)
+  (func (export "isnull") (param externref) (result i32) local.get 0 ref.is_null)
+  (func (export "via") (param externref) (result externref) local.get 0 call $visit)
+  (func (export "mixed") (param i32 externref f64) (result f64 externref) local.get 2 local.get 1))""",
+}
 START_TRAP = """(module (func $s unreachable) (start $s) (func (export "f") (result i32) i32.const 1))"""
 
 
@@ -310,12 +319,20 @@ def test_function_imports_under_sanitizers(build: Callable[..., Path]) -> None:
             "fd_close is",
         ),
         (
-            '(module (import "env" "r" (func (param externref))) (func (export "f")))',
+            '(module (import "env" "g" (global externref)) (func (export "f")))',
             "wasm32",
-            "externref in its signature",
+            "global of externref",
         ),
     ],
-    ids=["externref-table", "tag", "wasi-0.2-no-realloc", "no-memory", "unknown-call", "wrong-signature", "externref"],
+    ids=[
+        "externref-table",
+        "tag",
+        "wasi-0.2-no-realloc",
+        "no-memory",
+        "unknown-call",
+        "wrong-signature",
+        "externref-global",
+    ],
 )
 def test_what_the_binding_does_not_carry_yet(wabt: Path, tmp_path: Path, wat: str, host: str, message: str) -> None:
     from wasmext._gen import GenError
@@ -449,3 +466,22 @@ def test_tables_under_sanitizers(build: Callable[..., Path]) -> None:
         )
     )
     _run(build(TABLE_MODULES, "tables", "test_tables.c", flags=["-fsanitize=thread", "-g"]))
+
+
+def test_externref_values(build: Callable[..., Path]) -> None:
+    _run(build(EXTERN_MODULES, "xr", "test_externref.c"))
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="the sanitizers are checked on Linux")
+def test_externref_under_sanitizers(build: Callable[..., Path]) -> None:
+    if SANITIZED or not supports_flag("-fsanitize=address,undefined") or not supports_flag("-fsanitize=thread"):
+        pytest.skip("no sanitizers, or one is on for the whole run")
+    _run(
+        build(
+            EXTERN_MODULES,
+            "xr",
+            "test_externref.c",
+            flags=["-fsanitize=address,undefined", "-fno-sanitize-recover=all", "-g"],
+        )
+    )
+    _run(build(EXTERN_MODULES, "xr", "test_externref.c", flags=["-fsanitize=thread", "-g"]))

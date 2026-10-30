@@ -97,6 +97,31 @@ static void test_values(void) {
     }
     a[0] = XREF((char *)e1 + 1);
     CHECK(call(x, "id", a, 1, r, 1) == WASMEXT_TAB_WRONG_STORE);
+    /* a member of the store that is not a reference is not accepted as one: the pointer of an instance, of a table, of a function of the host (all of them are known to the store) */
+    {
+        wasmext_tab *tab = wasmext_tab_new(s, 0x6F, 1, WASMEXT_TABLE_NO_MAXIMUM, NULL);
+        wasmext_funcref hf, fake;
+        static const uint8_t T_X[] = {0x6F};
+        CHECK(tab != NULL && wasmext_instance_host_funcref(x, T_X, 1, T_X, 1, visit, &v, NULL, &hf) == 0);
+        a[0] = XREF(x->module);
+        CHECK(call(x, "id", a, 1, r, 1) == WASMEXT_TAB_WRONG_STORE);
+        a[0] = XREF(x);
+        CHECK(call(x, "id", a, 1, r, 1) == WASMEXT_TAB_WRONG_STORE);
+        a[0] = XREF(&tab->etable);
+        CHECK(call(x, "id", a, 1, r, 1) == WASMEXT_TAB_WRONG_STORE);
+        a[0] = XREF((void *)hf.ref.module_instance);
+        CHECK(call(x, "id", a, 1, r, 1) == WASMEXT_TAB_WRONG_STORE);
+        CHECK(wasmext_tab_set_extern(tab, 0, x->module) == WASMEXT_TAB_WRONG_STORE);
+        /* ... nor a reference as the instance of a funcref, even with the handle that the store gives it */
+        CHECK(wasmext_instance_funcref(x, (uint32_t)export_of(x, "id", WASMEXT_DESC_FUNC), &fake) == 0);
+        fake.ref.module_instance = e1;
+        CHECK(wasmext_store_find(s, e1, &fake.owner) == WASMEXT_STORE_OK);
+        CHECK(wasmext_instance_call_ref(x, &fake, NULL, 0, r, 1) == WASMEXT_TAB_WRONG_STORE);
+        fake.ref.module_instance = tab;
+        CHECK(wasmext_store_find(s, &tab->etable, &fake.owner) == WASMEXT_STORE_OK);
+        fake.ref.module_instance = &tab->etable;
+        CHECK(wasmext_instance_call_ref(x, &fake, NULL, 0, r, 1) == WASMEXT_TAB_WRONG_STORE);
+    }
     /* the host function is given the reference and answers one */
     a[0] = XREF(e1);
     CHECK(call(x, "via", a, 1, r, 1) == 0 && v.calls == 1 && v.seen == e1 && r[0].as.ref == e1);

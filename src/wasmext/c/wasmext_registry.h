@@ -24,7 +24,11 @@ typedef struct {
     void (*release)(void *object);
     void (*unlink)(void *object);
     void (*close)(void *object);
+    int kind; /* what the member is (WASMEXT_KIND_*, 0 when it is of no kind that is checked): a pointer that a host hands back as a reference is accepted only if it is a member of the kind it claims to be */
 } wasmext_owner_ops;
+
+/* the kinds of member whose pointers cross the API as references: a pointer of one kind is never accepted for another */
+enum { WASMEXT_KIND_NONE = 0, WASMEXT_KIND_INSTANCE = 1, WASMEXT_KIND_TABLE = 2, WASMEXT_KIND_EXTERN = 3, WASMEXT_KIND_HOST_FUNC = 4 };
 
 typedef struct {
     void *key;
@@ -159,6 +163,14 @@ static inline int wasmext_registry_add(wasmext_registry *r, void *key, void *obj
 static inline int wasmext_registry_find(const wasmext_registry *r, const void *key, wasmext_owner *out) {
     int64_t index = wasmext_registry_lookup_(r, key);
     if (index < 0) return WASMEXT_REGISTRY_UNKNOWN;
+    *out = wasmext_registry_handle_(r, (uint32_t)index);
+    return WASMEXT_REGISTRY_OK;
+}
+
+/* The handle of the member under `key` if it is of this kind (the pointer is not read), else WASMEXT_REGISTRY_UNKNOWN. */
+static inline int wasmext_registry_find_kind(const wasmext_registry *r, const void *key, int kind, wasmext_owner *out) {
+    int64_t index = wasmext_registry_lookup_(r, key);
+    if (index < 0 || r->slots[index].ops == NULL || r->slots[index].ops->kind != kind) return WASMEXT_REGISTRY_UNKNOWN;
     *out = wasmext_registry_handle_(r, (uint32_t)index);
     return WASMEXT_REGISTRY_OK;
 }

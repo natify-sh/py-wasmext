@@ -62,6 +62,12 @@ enum {
    is the export of another instance answers WASMEXT_TRAP_LINKED + the code of a trap of that instance, and the trap goes through with that code. */
 typedef int (*wasmext_host_fn)(void *user, const wasmext_val *args, wasmext_val *results);
 
+/* the handle of the member that a funcref points to: an instance or a host function of the store (never another kind of member: an extern, a table) */
+static inline int wasmext_funcref_member_(wasmext_store *store, const void *module_instance, wasmext_owner *owner) {
+    if (wasmext_store_find_kind(store, module_instance, WASMEXT_KIND_INSTANCE, owner) == WASMEXT_STORE_OK) return WASMEXT_STORE_OK;
+    return wasmext_store_find_kind(store, module_instance, WASMEXT_KIND_HOST_FUNC, owner);
+}
+
 /* checks of the references that come in (defined below, where the rest of the references are) */
 static inline int wasmext_funcref_check_(wasmext_store *store, const wasmext_funcref *f);
 static inline int wasmext_extern_check_(wasmext_store *store, const void *e);
@@ -171,7 +177,7 @@ static inline void wasmext_instance_wrapper_free_(void *object) {
     free(i->saved_max);
     free(i);
 }
-static const wasmext_owner_ops wasmext_instance_ops_ = {NULL, NULL, NULL, wasmext_instance_close_};
+static const wasmext_owner_ops wasmext_instance_ops_ = {NULL, NULL, NULL, wasmext_instance_close_, WASMEXT_KIND_INSTANCE};
 
 /* Makes an instance in `store`: NULL with `*error` (an errno) when it cannot be made. Imports, if any, are bound before `wasmext_instance_instantiate`. */
 static inline wasmext_instance *wasmext_instance_new(wasmext_store *store, const wasmext_binding *binding, int *error) {
@@ -593,7 +599,7 @@ static inline int wasmext_funcref_check_(wasmext_store *store, const wasmext_fun
     wasmext_owner owner;
     if (f == NULL || f->ref.func == NULL) return 0;
     if (f->store != (const void *)store) return WASMEXT_TAB_WRONG_STORE;
-    if (wasmext_store_find(store, f->ref.module_instance, &owner) != WASMEXT_STORE_OK || owner != f->owner) return WASMEXT_TAB_WRONG_STORE;
+    if (wasmext_funcref_member_(store, f->ref.module_instance, &owner) != WASMEXT_STORE_OK || owner != f->owner) return WASMEXT_TAB_WRONG_STORE;
     return 0;
 }
 
@@ -619,7 +625,7 @@ static inline void wasmext_extern_free_(void *object) {
     wasmext_extern_close_(object);
     free(object);
 }
-static const wasmext_owner_ops wasmext_extern_ops_ = {NULL, NULL, NULL, wasmext_extern_close_};
+static const wasmext_owner_ops wasmext_extern_ops_ = {NULL, NULL, NULL, wasmext_extern_close_, WASMEXT_KIND_EXTERN};
 
 /* Gives the store a value to hold (`user`, which the host owns; `release(user)` is called once when the store is closed, and may be NULL). `*out` is the reference. */
 static inline int wasmext_extern_new(wasmext_store *store, void *user, void (*release)(void *user), wasmext_extern **out) {
@@ -655,7 +661,7 @@ static inline void *wasmext_extern_user(const wasmext_extern *e) { return e != N
 static inline int wasmext_extern_check_(wasmext_store *store, const void *e) {
     wasmext_owner owner;
     if (e == NULL) return 0;
-    return wasmext_store_find(store, e, &owner) == WASMEXT_STORE_OK ? 0 : WASMEXT_TAB_WRONG_STORE;
+    return wasmext_store_find_kind(store, e, WASMEXT_KIND_EXTERN, &owner) == WASMEXT_STORE_OK ? 0 : WASMEXT_TAB_WRONG_STORE;
 }
 
 /* The reference that a host function answers (`r`, of type 0x6F, whose `as.ref` is a reference of the store, or NULL) into `out`. */
@@ -677,7 +683,7 @@ static inline int wasmext_funcref_from_(void *self, const wasm_rt_funcref_t *r, 
     out->store = i->store;
     out->owner = 0;
     if (r->func == NULL) return 0;
-    return wasmext_store_find(i->store, r->module_instance, &out->owner) == WASMEXT_STORE_OK ? 0 : WASMEXT_TAB_STALE;
+    return wasmext_funcref_member_(i->store, r->module_instance, &out->owner) == WASMEXT_STORE_OK ? 0 : WASMEXT_TAB_STALE;
 }
 
 /* The funcref that a host function answers (`r`, whose type must be 0x70 and whose `as.ref` is a `wasmext_funcref` of its own, or NULL for a null funcref) into `out`: 0, or an error
@@ -713,7 +719,7 @@ static inline int wasmext_call_fill_refs_(wasmext_store *s, const wasmext_functy
             wasmext_funcref *f = (wasmext_funcref *)results[k].as.ref;
             f->store = s;
             f->owner = 0;
-            if (f->ref.func != NULL && wasmext_store_find(s, f->ref.module_instance, &f->owner) != WASMEXT_STORE_OK) return WASMEXT_TAB_STALE;
+            if (f->ref.func != NULL && wasmext_funcref_member_(s, f->ref.module_instance, &f->owner) != WASMEXT_STORE_OK) return WASMEXT_TAB_STALE;
         }
     return 0;
 }
@@ -832,7 +838,7 @@ static inline void wasmext_host_func_free_(void *object) {
     wasmext_host_func_close_(object);
     free(object);
 }
-static const wasmext_owner_ops wasmext_host_func_ops_ = {NULL, NULL, NULL, wasmext_host_func_close_};
+static const wasmext_owner_ops wasmext_host_func_ops_ = {NULL, NULL, NULL, wasmext_host_func_close_, WASMEXT_KIND_HOST_FUNC};
 
 /* Makes a function of the host (`fn`, one shape for every function: see wasmext_host_fn) of the type `params` -> `results` (bytes of the binary format) and gives it as an element of a table
    to put in this store (`out`). The type must be one that the module of `i` declares (its type section), else WASMEXT_INST_UNDECLARED_TYPE: the glue is made ahead of time, and a
@@ -988,7 +994,7 @@ static inline int wasmext_instance_global_get(wasmext_instance *i, uint32_t inde
         f->ref = *(const wasm_rt_funcref_t *)p;
         f->store = i->store;
         f->owner = 0;
-        if (f->ref.func != NULL && wasmext_store_find(i->store, f->ref.module_instance, &f->owner) != WASMEXT_STORE_OK) return WASMEXT_TAB_STALE;
+        if (f->ref.func != NULL && wasmext_funcref_member_(i->store, f->ref.module_instance, &f->owner) != WASMEXT_STORE_OK) return WASMEXT_TAB_STALE;
         memset(out, 0, sizeof *out);
         out->type = 0x70;
         out->as.ref = f;

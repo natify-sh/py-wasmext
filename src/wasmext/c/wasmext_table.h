@@ -47,7 +47,7 @@ static inline void wasmext_tab_wrapper_free_(void *object) {
     WASMEXT_MUTEX_DESTROY(&t->mutex);
     free(t);
 }
-static const wasmext_owner_ops wasmext_tab_ops_ = {NULL, NULL, NULL, wasmext_tab_close_};
+static const wasmext_owner_ops wasmext_tab_ops_ = {NULL, NULL, NULL, wasmext_tab_close_, WASMEXT_KIND_TABLE};
 
 /* Makes a table of `initial` elements (null) in `store`; `elem` is 0x70 (funcref) or 0x6F (externref); `maximum` is WASMEXT_TABLE_NO_MAXIMUM for none. NULL with `*error` (an errno: EINVAL,
    EBADF for a closed store, ENOMEM) when it cannot be made. */
@@ -101,7 +101,7 @@ static inline int wasmext_tab_get_(wasmext_store *s, WASMEXT_MUTEX_T *mutex, was
         out->store = s;
         out->owner = 0;
         if (out->ref.func != NULL) {
-            if (wasmext_store_find(s, out->ref.module_instance, &owner) != WASMEXT_STORE_OK) rc = WASMEXT_TAB_STALE;
+            if (wasmext_funcref_member_(s, out->ref.module_instance, &owner) != WASMEXT_STORE_OK) rc = WASMEXT_TAB_STALE;
             else out->owner = owner;
         }
     }

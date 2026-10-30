@@ -26,7 +26,7 @@ static void m_retain(void *o) { ((member_t *)o)->retained++; }
 static void m_release(void *o) { ((member_t *)o)->released++; order[order_n++] = 3000 + ((member_t *)o)->id; }
 static void m_unlink(void *o) { ((member_t *)o)->unlinked++; order[order_n++] = 1000 + ((member_t *)o)->id; }
 static void m_close(void *o) { ((member_t *)o)->closed++; order[order_n++] = 2000 + ((member_t *)o)->id; }
-static const wasmext_owner_ops ops = {m_retain, m_release, m_unlink, m_close};
+static const wasmext_owner_ops ops = {m_retain, m_release, m_unlink, m_close, WASMEXT_KIND_NONE};
 
 static void test_basics(void) {
     wasmext_store *s = wasmext_store_new();
@@ -193,7 +193,26 @@ static void test_threads(void) {
     wasmext_store_free(s);
 }
 
+/* a member is found by the kind it claims: a member of another kind, or of none, is not */
+static void test_kinds(void) {
+    wasmext_store *st = wasmext_store_new();
+    static const wasmext_owner_ops of_a = {NULL, NULL, NULL, NULL, WASMEXT_KIND_EXTERN}, of_b = {NULL, NULL, NULL, NULL, WASMEXT_KIND_TABLE};
+    int ka = 0, kb = 0, kn = 0, none = 0;
+    wasmext_owner oa, ob, on, found;
+    CHECK(wasmext_store_register(st, &ka, &ka, &of_a, &oa) == WASMEXT_STORE_OK && wasmext_store_register(st, &kb, &kb, &of_b, &ob) == WASMEXT_STORE_OK);
+    CHECK(wasmext_store_register(st, &kn, &kn, NULL, &on) == WASMEXT_STORE_OK);
+    CHECK(wasmext_store_find_kind(st, &ka, WASMEXT_KIND_EXTERN, &found) == WASMEXT_STORE_OK && found == oa);
+    CHECK(wasmext_store_find_kind(st, &kb, WASMEXT_KIND_TABLE, &found) == WASMEXT_STORE_OK && found == ob);
+    CHECK(wasmext_store_find_kind(st, &ka, WASMEXT_KIND_TABLE, &found) == WASMEXT_STORE_UNKNOWN);
+    CHECK(wasmext_store_find_kind(st, &kb, WASMEXT_KIND_EXTERN, &found) == WASMEXT_STORE_UNKNOWN);
+    CHECK(wasmext_store_find_kind(st, &kn, WASMEXT_KIND_EXTERN, &found) == WASMEXT_STORE_UNKNOWN); /* a member of no kind */
+    CHECK(wasmext_store_find_kind(st, &kn, WASMEXT_KIND_NONE, &found) == WASMEXT_STORE_UNKNOWN); /* ... not even as that: no ops, no kind to claim */
+    CHECK(wasmext_store_find_kind(st, &none, WASMEXT_KIND_EXTERN, &found) == WASMEXT_STORE_UNKNOWN); /* a pointer that is no member */
+    wasmext_store_free(st);
+}
+
 int main(void) {
+    test_kinds();
     test_basics();
     test_other_stores();
     test_many();

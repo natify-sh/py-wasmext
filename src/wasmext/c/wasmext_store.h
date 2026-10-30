@@ -250,6 +250,15 @@ static inline int wasmext_store_find(wasmext_store *s, const void *key, wasmext_
     return rc;
 }
 
+/* The same, if the member is of this kind (WASMEXT_KIND_*): a pointer of an instance is not accepted where a reference is expected, nor the other way. */
+static inline int wasmext_store_find_kind(wasmext_store *s, const void *key, int kind, wasmext_owner *out) {
+    int rc;
+    WASMEXT_LOCK(&s->mutex);
+    rc = wasmext_store_registry_code_(wasmext_registry_find_kind(&s->registry, key, kind, out));
+    WASMEXT_UNLOCK(&s->mutex);
+    return rc;
+}
+
 /* The object of a handle: WASMEXT_STORE_OK, WASMEXT_STORE_WRONG (a handle of another store) or WASMEXT_STORE_STALE (of a member that is gone). */
 static inline int wasmext_store_member(wasmext_store *s, wasmext_owner owner, void **object) {
     int rc;

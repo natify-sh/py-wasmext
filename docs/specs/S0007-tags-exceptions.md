@@ -40,7 +40,7 @@ The owner accepted the plan of 2026-10-30: a tag of a module is shared with anot
   * 7d: the C tests of steps 3 to 7 build what the product builds; the binding knows every tag of the module, also the ones the module keeps to itself.
 * Non-goals (the limits of this step):
   * One tag per import name per process. An importer reads a symbol, so the program holds one tag for each import name.
-  * No tag made by the host (not a tag of a module). It waits for step 8.
+  * No tag made by the host (not a tag of a module) in this step. Done in step 8a-3 (D39): it belongs to the store.
   * `exnref` (the exception as a value), `throw_ref`, `catch_ref`: not carried. `exnref` is step 12 of the order, "not before a real module that uses it exists".
   * Exceptions across separately built artifacts: step 8.
   * A reference among the values of a tag: the payload is not read or made (`decode` and `encode` are NULL).
@@ -207,3 +207,4 @@ These were not recorded as run; see Open questions.
   The fixture of `tests/test_instance_core.py` builds through the repairs and the wrappers of the product. New: `tests/c/test_nomemory.c`.
   The binding has every tag of the module, in the order of its index space (the imported ones, then the ones it defines, exported or not, read from `wasmext_tags_<prefix>`).
   The table is added to the C of wasm2c by `_export_tags`. So an exception of a tag the module keeps to itself is read with its values, and the host can throw it by the identity it learned from the exception.
+* 2026-10-30, 8a-3 (S0008, D39): a tag made by the host (`wasmext_tag_new`) belongs to the store and is imported through the same `bind_export` of kind `WASMEXT_TAG`; the cell of D34 is cleared (compare-and-swap) when that store closes, and a second tag for a name that a live store holds is `WASMEXT_STORE_INCOMPATIBLE` with the reason. The tag of an exporting instance needs no clearing: its identity is static data of the module's artifact. "One tag per import name per process" stands while a store holds it.

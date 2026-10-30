@@ -460,6 +460,20 @@ static inline int wasmext_cell_set_once(void *volatile *slot, void *value) {
     return old == NULL || old == value;
 }
 
+/* Sets `*slot` back to NULL if it holds `value` (compare-and-swap, so a cell that another owner has taken since is left alone): 1 if it was cleared, else 0. */
+static inline int wasmext_cell_clear(void *volatile *slot, void *value) {
+#if defined(_WIN32)
+    return _InterlockedCompareExchangePointer((void *volatile *)slot, NULL, value) == value;
+#elif defined(__GNUC__) || defined(__clang__)
+    void *old = value;
+    return __atomic_compare_exchange_n(slot, &old, NULL, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+#else
+    if (*slot != value) return 0;
+    *slot = NULL;
+    return 1;
+#endif
+}
+
 /* The object of a handle: WASMEXT_STORE_OK, WASMEXT_STORE_WRONG (a handle of another store) or WASMEXT_STORE_STALE (of a member that is gone). */
 static inline int wasmext_store_member(wasmext_store *s, wasmext_owner owner, void **object) {
     int rc;

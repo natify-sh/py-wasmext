@@ -98,6 +98,12 @@ REFAPPB = """(module
   (func (export "isn") (param funcref) (result i32) local.get 0 call $isn)
   (func (export "fnine") (result funcref) ref.func $nine call $fi)
   (func (export "mf") (result funcref i32) call $mfr))"""
+# 8a-3: a tag of the host, made in a store by one artifact and imported by a module of each (the import module names differ: an imported tag is a global of the program)
+TAGA = """(module
+  (import "hgna" "t" (tag $t (param i32)))
+  (func (export "self_catch") (result i32)
+    (block $h (result i32) (try_table (catch $t $h) i32.const 31 throw $t) i32.const -1)))"""
+TAGB = TAGA.replace("hgna", "hgnb")
 
 
 def _library(
@@ -155,12 +161,21 @@ def _library(
 def _run(wabt: Path, tmp_path: Path, flags: Sequence[str] = (), defines: Sequence[str] = ()) -> None:
     if sys.platform == "win32" or find_cc() is None:
         pytest.skip("shared libraries with hidden visibility and pthreads: Linux and macOS with a cc")
-    a = _library(wabt, tmp_path, "a", {"liba": LIBA, "usea": USEA, "rlib": REFLIBA}, flags, defines)
+    a = _library(wabt, tmp_path, "a", {"liba": LIBA, "usea": USEA, "rlib": REFLIBA, "tha": TAGA}, flags, defines)
     b = _library(
         wabt,
         tmp_path,
         "b",
-        {"appb": APPB, "tabb": TABB, "glb": GLB, "ownb": OWNB, "hostb": HOSTB, "ifb": IFB, "rapp": REFAPPB},
+        {
+            "appb": APPB,
+            "tabb": TABB,
+            "glb": GLB,
+            "ownb": OWNB,
+            "hostb": HOSTB,
+            "ifb": IFB,
+            "rapp": REFAPPB,
+            "thb": TAGB,
+        },
         flags,
         defines,
     )
@@ -245,9 +260,10 @@ _SWAPS = {
     "instance-binding-store": ("wasmext_instance.h", "const wasmext_binding *binding;", 0, "wasmext_store *store;", 0),
     "import-slot-host-typed": ("wasmext_instance.h", "wasmext_host_fn host;", 0, "void *typed;", 0),
     "extern-user-release": ("wasmext_instance.h", "void *user;", 1, "void (*release)(void *user);", 0),
-    "host-func-slot-store": ("wasmext_instance.h", "wasmext_import_slot slot;", 0, "wasmext_store *store;", 2),
+    "host-func-slot-store": ("wasmext_instance.h", "wasmext_import_slot slot;", 0, "wasmext_store *store;", 3),
     "tab-elem-live": ("wasmext_instance.h", "int elem;", 0, "int live;", 0),
     "funcref-store-owner": ("wasmext_instance.h", "const void *store;", 0, "wasmext_owner owner;", 0),
+    "host-tag-store-cells": ("wasmext_instance.h", "wasmext_store *store;", 1, "void **cells;", 0),
 }
 
 

@@ -331,6 +331,105 @@ static inline void wasmext_instance_signature_(const wasmext_functype *t, char *
     out[n] = 0;
 }
 
+/* ---- a tag made by the host (docs/specs/S0008-shared-store.md, 8a-3) ---- */
+
+/* A tag of the host belongs to the store that made it, as a Tag belongs to a Store in Wasmtime: a member of kind WASMEXT_KIND_TAG, keyed by its identity (the address of `id`), freed
+   when the store is closed. An importer's tag is a global of the program (D34), so `cells` are the globals of the imports that were given this tag: the close puts each back to NULL
+   (only if it still holds this tag) so that nothing points into the store afterwards, and while they hold it no other tag can take them. */
+#define WASMEXT_TAG_SIGNATURE_MAX 64
+typedef struct {
+    char id; /* first: the identity of the tag is its address */
+    wasmext_store *store;
+    void **cells;
+    uint32_t n_cells, cap_cells;
+    char signature[WASMEXT_TAG_SIGNATURE_MAX]; /* as a record says it: the letters of the values, then '>' */
+} wasmext_host_tag;
+
+static inline void wasmext_host_tag_close_(void *object) {
+    wasmext_host_tag *t = (wasmext_host_tag *)object;
+    for (uint32_t k = 0; k < t->n_cells; k++) wasmext_cell_clear((void *volatile *)t->cells[k], &t->id);
+}
+static inline void wasmext_host_tag_free_(void *object) {
+    wasmext_host_tag *t = (wasmext_host_tag *)object;
+    free(t->cells);
+    free(t);
+}
+static const wasmext_owner_ops wasmext_host_tag_ops_ = {NULL, NULL, NULL, wasmext_host_tag_close_, WASMEXT_KIND_TAG};
+
+/* Makes a tag of the types `types` (bytes of the binary format) in `store`; `*out` is the record of an exported tag that `wasmext_instance_bind_export` gives to an import of the same
+   signature, of an instance of this store. WASMEXT_INST_BAD_ARGS (no store, more than 62 values, a type that is not a value type, or a store that this artifact neither made nor attached to),
+   WASMEXT_TRAP_CLOSED, WASMEXT_INST_NOMEM. */
+static inline int wasmext_tag_new(wasmext_store *store, const uint8_t *types, uint32_t n, wasmext_export *out) {
+    wasmext_host_tag *t;
+    wasmext_functype ft;
+    wasmext_owner owner;
+    int rc;
+    if (store == NULL || out == NULL || (types == NULL && n > 0) || n > WASMEXT_TAG_SIGNATURE_MAX - 2) return WASMEXT_INST_BAD_ARGS;
+    if (!wasmext_store_has_artifact(store, wasmext_core_layout_(), wasmext_core_runtime_())) return WASMEXT_INST_BAD_ARGS;
+    if (wasmext_store_closed(store)) return (int)WASMEXT_TRAP_CLOSED;
+    t = (wasmext_host_tag *)calloc(1, sizeof *t);
+    if (t == NULL) return WASMEXT_INST_NOMEM;
+    ft.n_params = n;
+    ft.n_results = 0;
+    ft.params = types;
+    ft.results = NULL;
+    wasmext_instance_signature_(&ft, t->signature, sizeof t->signature);
+    if (strchr(t->signature, '?') != NULL) { free(t); return WASMEXT_INST_BAD_ARGS; }
+    t->store = store;
+    rc = wasmext_store_register_unchecked_(store, &t->id, t, &wasmext_host_tag_ops_, &owner);
+    if (rc == WASMEXT_STORE_OK) {
+        rc = wasmext_store_own_unchecked_(store, t, wasmext_host_tag_free_);
+        if (rc != WASMEXT_STORE_OK) wasmext_store_unregister(store, owner);
+    }
+    if (rc != WASMEXT_STORE_OK) {
+        free(t);
+        return rc == WASMEXT_STORE_CLOSED ? (int)WASMEXT_TRAP_CLOSED : WASMEXT_INST_NOMEM;
+    }
+    memset(out, 0, sizeof *out);
+    out->size = sizeof *out;
+    out->abi = WASMEXT_ABI;
+    out->kind = WASMEXT_TAG;
+    out->address = &t->id;
+    out->signature = t->signature;
+    out->runtime = WASMEXT_RUNTIME;
+    out->store = store;
+    out->artifact = WASMEXT_ARTIFACT;
+    wasmext_export_seal(out);
+    return 0;
+}
+
+/* If `key` (the address in a record of a tag) is a host tag of `store`: remembers `cell` (the global of an import that is about to be given it) among the tag's, once.
+   `*host` says whether it is (a tag of a module lives as long as the program: nothing to clear). WASMEXT_STORE_OK, WASMEXT_STORE_CLOSED or WASMEXT_STORE_NOMEM. The cell is remembered before it is set,
+   and even if the set is then refused: the clear at the close is a compare-and-swap, so a cell that holds another tag is left alone. */
+static inline int wasmext_host_tag_hold_(wasmext_store *store, const void *key, void **cell, int *host) {
+    wasmext_owner owner;
+    void *object = NULL;
+    wasmext_host_tag *t;
+    int rc = WASMEXT_STORE_OK;
+    *host = 0;
+    WASMEXT_LOCK(&store->mutex);
+    if (wasmext_atomic_load(&store->closing)) rc = WASMEXT_STORE_CLOSED;
+    else if (wasmext_registry_find_kind(&store->registry, key, WASMEXT_KIND_TAG, &owner) == WASMEXT_REGISTRY_OK &&
+             wasmext_registry_object(&store->registry, owner, &object) == WASMEXT_REGISTRY_OK) {
+        uint32_t k;
+        t = (wasmext_host_tag *)object;
+        *host = 1;
+        for (k = 0; k < t->n_cells; k++)
+            if (t->cells[k] == (void *)cell) break;
+        if (k == t->n_cells) {
+            if (t->n_cells == t->cap_cells) {
+                uint32_t cap = t->cap_cells ? t->cap_cells * 2 : 4u;
+                void **list = (void **)realloc((void *)t->cells, cap * sizeof(void *));
+                if (list == NULL) rc = WASMEXT_STORE_NOMEM;
+                else { t->cells = list; t->cap_cells = cap; }
+            }
+            if (rc == WASMEXT_STORE_OK) t->cells[t->n_cells++] = (void *)cell;
+        }
+    }
+    WASMEXT_UNLOCK(&store->mutex);
+    return rc;
+}
+
 /* The record of an exported function, memory or global, for another instance to import (`wasmext_export` of wasmext_glue.h: public, versioned). `owner` is whatever keeps this
    instance alive for as long as the record is used: the host's business, which the core only passes on. The record is valid as long as this instance is. */
 static inline int wasmext_instance_export_record(wasmext_instance *i, uint32_t index, void *owner, wasmext_export *out) {
@@ -502,6 +601,7 @@ static inline int wasmext_instance_bind_export(wasmext_instance *i, uint32_t imp
         case WASMEXT_DESC_TAG: {
             char want[160];
             void **cell;
+            int held, host;
             wasmext_instance_signature_(&m->type, want, sizeof want);
             if (e->kind != WASMEXT_TAG || e->address == NULL) return wasmext_instance_link_fail_(i, m, "is a tag: the export given is not", "");
             if (e->signature == NULL || strcmp(e->signature, want) != 0) {
@@ -513,8 +613,17 @@ static inline int wasmext_instance_bind_export(wasmext_instance *i, uint32_t imp
             /* wasm2c has no slot for a tag: the import is a global of the program that the module reads, so it holds one tag for the whole process (every instance of the module, in any store).
                The tag of an exporter is the same for all its instances, so the usual links agree; a link to another tag is refused, not mixed. */
             cell = i->binding->ref_slot(i->module, import);
-            if (!wasmext_cell_set_once((void *volatile *)cell, e->address))
+            /* A tag of the host belongs to the store: its close clears the cells it was given (S0008, 8a-3), so the cell is among its own before it is set. */
+            held = wasmext_host_tag_hold_(i->store, e->address, cell, &host);
+            if (held == WASMEXT_STORE_CLOSED) return wasmext_instance_link_fail_(i, m, "is a tag of a store that is closed", "");
+            if (held == WASMEXT_STORE_NOMEM) return WASMEXT_INST_NOMEM;
+            if (!wasmext_cell_set_once((void *volatile *)cell, e->address)) {
+                if (host) {
+                    wasmext_instance_link_fail_(i, m, "is a tag of this store, but another tag holds the import already (wasm2c reads an imported tag from a global: one tag for each import name in the whole program, until the store that holds it is closed)", "");
+                    return WASMEXT_STORE_INCOMPATIBLE;
+                }
                 return wasmext_instance_link_fail_(i, m, "is a tag that this program has linked to another tag already (wasm2c reads an imported tag from a global: one for the process)", "");
+            }
             break;
         }
         default:
@@ -1271,7 +1380,7 @@ typedef struct wasmext_tab_s_ {
 } wasmext_tab;
 
 /* The layout of the core as the head of a store says it (S0008): the store, its registry and members, and every struct that a store holds for the code of another copy to read
-   inline: the lock, the instance, the slot of an import, the host function, the extern, the table of the host. Each field, by offset and size (WASMEXT_LF_). WASMEXT_NO_THREADS and the
+   inline: the lock, the instance, the slot of an import, the host function, the extern, the table of the host, the tag of the host. Each field, by offset and size (WASMEXT_LF_). WASMEXT_NO_THREADS and the
    compiler are in it. `attach` refuses a store whose number differs. */
 #define WASMEXT_SALT_wasmext_rlock 3432918353u
 #define WASMEXT_SALT_wasmext_instance 461845907u
@@ -1280,6 +1389,7 @@ typedef struct wasmext_tab_s_ {
 #define WASMEXT_SALT_wasmext_extern 2716889263u
 #define WASMEXT_SALT_wasmext_tab 1597334677u
 #define WASMEXT_SALT_wasmext_funcref 3793510007u
+#define WASMEXT_SALT_wasmext_host_tag 2166136261u
 #define WASMEXT_CORE_LAYOUT ((uint32_t)(WASMEXT_STORE_LAYOUT_ ^ \
     WASMEXT_LS_(53u, wasmext_funcref) ^ WASMEXT_LF_(0, wasmext_funcref, ref) ^ WASMEXT_LF_(1, wasmext_funcref, store) ^ WASMEXT_LF_(2, wasmext_funcref, owner) ^ \
     WASMEXT_LS_(23u, wasmext_rlock) ^ WASMEXT_LF_(0, wasmext_rlock, mutex) ^ WASMEXT_LF_(1, wasmext_rlock, owner) ^ WASMEXT_LF_(2, wasmext_rlock, depth) ^ \
@@ -1294,7 +1404,9 @@ typedef struct wasmext_tab_s_ {
     WASMEXT_LS_(41u, wasmext_extern) ^ WASMEXT_LF_(0, wasmext_extern, user) ^ WASMEXT_LF_(1, wasmext_extern, release) ^ WASMEXT_LF_(2, wasmext_extern, store) ^ \
     WASMEXT_LF_(3, wasmext_extern, released) ^ \
     WASMEXT_LS_(43u, wasmext_tab) ^ WASMEXT_LF_(0, wasmext_tab, elem) ^ WASMEXT_LF_(1, wasmext_tab, table) ^ WASMEXT_LF_(2, wasmext_tab, etable) ^ WASMEXT_LF_(3, wasmext_tab, store) ^ \
-    WASMEXT_LF_(4, wasmext_tab, artifact) ^ WASMEXT_LF_(5, wasmext_tab, owner) ^ WASMEXT_LF_(6, wasmext_tab, mutex) ^ WASMEXT_LF_(7, wasmext_tab, live)))
+    WASMEXT_LF_(4, wasmext_tab, artifact) ^ WASMEXT_LF_(5, wasmext_tab, owner) ^ WASMEXT_LF_(6, wasmext_tab, mutex) ^ WASMEXT_LF_(7, wasmext_tab, live) ^ \
+    WASMEXT_LS_(59u, wasmext_host_tag) ^ WASMEXT_LF_(0, wasmext_host_tag, id) ^ WASMEXT_LF_(1, wasmext_host_tag, store) ^ WASMEXT_LF_(2, wasmext_host_tag, cells) ^ \
+    WASMEXT_LF_(3, wasmext_host_tag, n_cells) ^ WASMEXT_LF_(4, wasmext_host_tag, cap_cells) ^ WASMEXT_LF_(5, wasmext_host_tag, signature)))
 static inline uint32_t wasmext_core_layout_(void) { return WASMEXT_CORE_LAYOUT; }
 static inline uint32_t wasmext_core_runtime_(void) { return (uint32_t)WASMEXT_RUNTIME; }
 #undef WASMEXT_CORE_CHECK

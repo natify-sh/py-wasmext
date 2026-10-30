@@ -28,7 +28,7 @@ typedef struct {
 } wasmext_owner_ops;
 
 /* the kinds of member whose pointers cross the API as references: a pointer of one kind is never accepted for another */
-enum { WASMEXT_KIND_NONE = 0, WASMEXT_KIND_INSTANCE = 1, WASMEXT_KIND_TABLE = 2, WASMEXT_KIND_EXTERN = 3, WASMEXT_KIND_HOST_FUNC = 4 };
+enum { WASMEXT_KIND_NONE = 0, WASMEXT_KIND_INSTANCE = 1, WASMEXT_KIND_TABLE = 2, WASMEXT_KIND_EXTERN = 3, WASMEXT_KIND_HOST_FUNC = 4, WASMEXT_KIND_TAG = 5 };
 
 typedef struct {
     void *key;

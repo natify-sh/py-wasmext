@@ -337,6 +337,85 @@ static void test_references_through_links(void) {
     CHECK(A->store_free(s) == WASMEXT_STORE_OK);
 }
 
+/* a tag of the host (8a-3): made in the store by one artifact, imported by an instance of each; the close clears both cells, from either copy, and each release runs once. The artifact that has
+   not attached makes no tag in the store. */
+static void test_host_tags(void) {
+    static const uint8_t types[] = {0x7F};
+    int error = 0;
+    char why[200], text[WASMEXT_STORE_ERROR_SIZE];
+    for (int variant = 0; variant < 4; variant++) {
+        const artifact_api *maker = variant & 1 ? B : A, *closer = variant & 2 ? B : A, *other = variant & 1 ? A : B;
+        wasmext_store *s = maker->store_new();
+        wasmext_instance *ia, *ib;
+        wasmext_export rec, none;
+        void *volatile *cell_a, *volatile *cell_b;
+        long a0 = A->releases(), b0 = B->releases();
+        CHECK(other->tag_new(s, types, 1, &none) == WASMEXT_INST_BAD_ARGS); /* not attached: refused, nothing made */
+        CHECK(other->store_attach(s, why, sizeof why) == WASMEXT_STORE_OK);
+        CHECK(maker->tag_new(s, types, 1, &rec) == 0 && rec.kind == WASMEXT_TAG && strcmp(rec.signature, "i>") == 0 && rec.artifact == maker->id);
+        ia = A->instance_new(s, "tha", &error);
+        ib = B->instance_new(s, "thb", &error);
+        CHECK(ia && ib);
+        cell_a = A->tag_cell(ia);
+        cell_b = B->tag_cell(ib);
+        CHECK(*cell_a == NULL && *cell_b == NULL);
+        CHECK(A->bind(ia, "hgna", "t", &rec) == 0 && B->bind(ib, "hgnb", "t", &rec) == 0); /* the record of one copy is read by the other */
+        CHECK(A->instantiate(ia) == 0 && B->instantiate(ib) == 0);
+        CHECK(*cell_a == rec.address && *cell_b == rec.address);
+        CHECK(call_i32(A, ia, "self_catch", 0, 0, 0) == 31 && call_i32(B, ib, "self_catch", 0, 0, 0) == 31);
+        CHECK(other->tag_new(s, types, 1, &none) == 0); /* attached now: a tag of each copy */
+        CHECK(A->store_own(s) == 0 && B->store_own(s) == 0);
+        CHECK(closer->store_close(s) == WASMEXT_STORE_OK);
+        CHECK(*cell_a == NULL && *cell_b == NULL); /* both cells let go, by the copy that closed */
+        CHECK(A->releases() - a0 == 1 && B->releases() - b0 == 1);
+        CHECK(maker->tag_new(s, types, 1, &none) == (int)WASMEXT_TRAP_CLOSED);
+        CHECK(B->store_free(s) == WASMEXT_STORE_OK); /* freed by B: the tags are not freed twice (AddressSanitizer) */
+        CHECK(A->releases() - a0 == 1 && B->releases() - b0 == 1 && *cell_a == NULL && *cell_b == NULL);
+    }
+    /* a second store for the name is refused while the first holds it, with the reason; the cell is the first's after the second is gone, and empty after the first */
+    {
+        wasmext_store *s1 = A->store_new(), *s2 = A->store_new();
+        wasmext_instance *i1 = A->instance_new(s1, "tha", &error), *i2 = A->instance_new(s2, "tha", &error);
+        wasmext_export t1, t2;
+        void *volatile *cell = A->tag_cell(i1);
+        CHECK(A->tag_new(s1, types, 1, &t1) == 0 && A->tag_new(s2, types, 1, &t2) == 0);
+        CHECK(A->bind(i1, "hgna", "t", &t1) == 0);
+        CHECK(A->bind(i2, "hgna", "t", &t2) == WASMEXT_STORE_INCOMPATIBLE);
+        A->store_error(s2, text, sizeof text);
+        CHECK(strstr(text, "hgna.t") != NULL && strstr(text, "another tag holds the import already") != NULL);
+        CHECK(B->store_attach(s2, why, sizeof why) == WASMEXT_STORE_OK && B->store_free(s2) == WASMEXT_STORE_OK); /* the refused store goes (freed by the other copy) */
+        CHECK(*cell == t1.address);
+        CHECK(A->store_free(s1) == WASMEXT_STORE_OK && *cell == NULL);
+    }
+}
+
+static void *tag_work(void *arg) {
+    struct worker *w = (struct worker *)arg;
+    static const uint8_t types[] = {0x7F};
+    int error = 0;
+    for (int k = 0; k < 200; k++) {
+        wasmext_store *s = w->api->store_new();
+        wasmext_instance *i = w->api->instance_new(s, w->name, &error);
+        wasmext_export rec;
+        void *volatile *cell;
+        if (s == NULL || i == NULL || w->api->tag_new(s, types, 1, &rec) != 0) { w->bad++; continue; }
+        cell = w->api->tag_cell(i);
+        if (w->api->bind(i, w->api == A ? "hgna" : "hgnb", "t", &rec) != 0 || w->api->instantiate(i) != 0 || call_i32(w->api, i, "self_catch", 0, 0, 0) != 31) w->bad++;
+        if (w->api->store_free(s) != WASMEXT_STORE_OK || *cell != NULL) w->bad++;
+    }
+    w->api->thread_free();
+    return NULL;
+}
+
+/* two threads, one in each copy, each making and freeing stores with a tag (the cells are the copies' own) */
+static void test_host_tags_threads(void) {
+    pthread_t t[2];
+    struct worker w[2] = {{A, NULL, "tha", 0}, {B, NULL, "thb", 0}};
+    for (int k = 0; k < 2; k++) pthread_create(&t[k], NULL, tag_work, &w[k]);
+    for (int k = 0; k < 2; k++) pthread_join(t[k], NULL);
+    CHECK(w[0].bad == 0 && w[1].bad == 0);
+}
+
 int main(void) {
     A = artifact_a();
     B = artifact_b();
@@ -346,6 +425,8 @@ int main(void) {
     test_one_store();
     test_the_other_way();
     test_references_through_links();
+    test_host_tags();
+    test_host_tags_threads();
     if (failures) { fprintf(stderr, "%d failed\n", failures); return 1; }
     puts("ok");
     return 0;

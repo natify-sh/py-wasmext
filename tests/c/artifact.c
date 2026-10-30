@@ -109,9 +109,17 @@ static int store_misc_(wasmext_store *s, int which) {
     return wasmext_store_set_host(s, &object_, no_free_, NULL);
 }
 
+static int tag_new_(wasmext_store *s, const uint8_t *types, uint32_t n, wasmext_export *out) { return wasmext_tag_new(s, types, n, out); }
+static void *volatile *tag_cell_(wasmext_instance *i) {
+    const wasmext_descriptor *d = i->binding->descriptor;
+    for (uint32_t k = 0; k < d->n_imports; k++)
+        if (d->imports[k].kind == WASMEXT_DESC_TAG) return (void *volatile *)i->binding->ref_slot(i->module, k);
+    return NULL;
+}
+
 static const artifact_api api_ = {
     (const void *)&wasmext_artifact_, trap_address_, store_new_, store_attach_, store_close_, store_free_, store_own_, releases_, store_error_, instance_new_, instantiate_, call_,
-    export_record_, bind_, funcref_, table_set_, global_set_funcref_, tab_new_, tab_set_, tab_get_, wasmext_thread_free, call_ref_, bind_host_, bind_global_funcref_, host_funcref_, extern_new_, store_misc_, artifact_so_new, artifact_so_attach, extern_make_};
+    export_record_, bind_, funcref_, table_set_, global_set_funcref_, tab_new_, tab_set_, tab_get_, wasmext_thread_free, call_ref_, bind_host_, bind_global_funcref_, host_funcref_, extern_new_, store_misc_, artifact_so_new, artifact_so_attach, extern_make_, tag_new_, tag_cell_};
 
 #define ARTIFACT_CAT_(a, b) a##b
 #define ARTIFACT_CAT(a, b) ARTIFACT_CAT_(a, b)

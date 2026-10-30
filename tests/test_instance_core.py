@@ -346,6 +346,46 @@ TAG_MODULES = {
     "td": """(module (tag $t (param i32 i64)) (export "t" (tag $t)) (func (export "f")))""",
     "te": """(module (import "tgz" "t" (tag (param i32))) (func (export "f")))""",
 }
+# 8a-3 (S0008): tags made by the host. Every import module name is its own (an imported tag is a global of the program, one for each name)
+_HSELF = """(module
+  (import "{g}" "t" (tag $t (param i32 i64)))
+  (func (export "self_catch") (result i32)
+    (block $h (result i32 i64)
+      (try_table (catch $t $h) i32.const 11 i64.const 1 throw $t)
+      i32.const -1 i64.const -1)
+    drop))"""
+HOST_TAG_MODULES = {
+    "ha": """(module
+  (type $f (func))
+  (import "hga" "t" (tag $t (param i32 i64)))
+  (table $tab (export "tab") 2 funcref)
+  (func $thrower (type $f) i32.const 7 i64.const 9 throw $t)
+  (elem (i32.const 0) $thrower)
+  (func (export "call_slot") (param i32) local.get 0 call_indirect (type $f))
+  (func (export "throw_it") i32.const 5 i64.const 6 throw $t))""",
+    "hb": """(module
+  (type $f (func))
+  (import "hgb" "t" (tag $t (param i32 i64)))
+  (import "hgbt" "tab" (table $tab 2 funcref))
+  (func (export "catch_slot") (param i32) (result i32 i64)
+    (block $h (result i32 i64)
+      (try_table (catch $t $h)
+        local.get 0 call_indirect (type $f))
+      i32.const -1 i64.const -1)))""",
+    "hh": """(module
+  (import "henv" "h" (func $h))
+  (import "hgh" "t" (tag $t (param i32 i64)))
+  (func (export "run") (result i32 i64)
+    (block $b (result i32 i64)
+      (try_table (catch $t $b) call $h)
+      i32.const -1 i64.const -1)))""",
+    "hs": """(module (import "hgs" "t" (tag (param i32))) (func (export "f")))""",
+    "hx": _HSELF.replace("{g}", "hgx"),
+    "hy": _HSELF.replace("{g}", "hgy"),
+    "hz": _HSELF.replace("{g}", "hgz"),
+    "ta": TAG_MODULES["ta"],
+    "tb": TAG_MODULES["tb"],
+}
 NO_MEMORY = """(module (memory i64 4294967296) (func (export "f")))"""
 START_TRAP = """(module (func $s unreachable) (start $s) (func (export "f") (result i32) i32.const 1))"""
 
@@ -682,6 +722,25 @@ def test_tags_under_sanitizers(build: Callable[..., Path]) -> None:
             flags=["-fsanitize=address,undefined", "-fno-sanitize-recover=all", "-g"],
         )
     )
+
+
+def test_host_tags_belong_to_the_store(build: Callable[..., Path]) -> None:
+    _run(build(HOST_TAG_MODULES, "hosttags", "test_host_tags.c"))
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="the sanitizers are checked on Linux")
+def test_host_tags_under_sanitizers(build: Callable[..., Path]) -> None:
+    if SANITIZED or not supports_flag("-fsanitize=address,undefined") or not supports_flag("-fsanitize=thread"):
+        pytest.skip("no sanitizers, or one is on for the whole run")
+    _run(
+        build(
+            HOST_TAG_MODULES,
+            "hosttags",
+            "test_host_tags.c",
+            flags=["-fsanitize=address,undefined", "-fno-sanitize-recover=all", "-g"],
+        )
+    )
+    _run(build(HOST_TAG_MODULES, "hosttags", "test_host_tags.c", flags=["-fsanitize=thread", "-g"]))
 
 
 def test_a_memory_that_cannot_be_had(build: Callable[..., Path]) -> None:

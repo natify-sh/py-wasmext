@@ -75,7 +75,13 @@ OWNB = """(module
 
 
 def _library(
-    wabt: Path, out: Path, name: str, modules: dict[str, str], flags: Sequence[str], defines: Sequence[str] = ()
+    wabt: Path,
+    out: Path,
+    name: str,
+    modules: dict[str, str],
+    flags: Sequence[str],
+    defines: Sequence[str] = (),
+    hidden: bool = True,
 ) -> Path:
     """The artifact `name`: tests/c/artifact.c, the modules (built as the fixture `build` of test_instance_core.py builds them) and the runtime, as a shared library."""
     cc = find_cc()
@@ -111,7 +117,7 @@ def _library(
     library = out / f"libartifact_{name}{'.dylib' if sys.platform == 'darwin' else '.so'}"
     subprocess.run(
         [
-            cc, "-shared", "-fPIC", "-fvisibility=hidden", "-w", "-pthread", *flags, f"-DARTIFACT_NAME={name}", *(f"-D{k}={v}" for k, v in chain_macros), *(f"-D{x}" for x in defines), *chain_link,
+            cc, "-shared", "-fPIC", *(["-fvisibility=hidden"] if hidden else []), "-w", "-pthread", *flags, f"-DARTIFACT_NAME={name}", *(f"-D{k}={v}" for k, v in chain_macros), *(f"-D{x}" for x in defines), *chain_link,
             *(f"-I{p}" for p in (d, C_DIR, WASMEXT_C, Path(get_include()), toolchain.runtime, *simde)),
             *map(str, sources), "-lm", "-o", str(library),
         ],
@@ -167,19 +173,21 @@ def test_two_artifacts_under_threadsanitizer(wabt: Path, tmp_path: Path) -> None
     _run(wabt, tmp_path, ["-fsanitize=thread", "-g"])
 
 
-def _layout(tmp_path: Path, swap: tuple[str, str, int, str, int] | None) -> tuple[int, int]:
-    """The hashes of the layout of the core and of the host, from a copy of the headers in which two fields (`a` in the `ia`-th line that starts with it, `b` likewise) swapped places."""
+def _layout(
+    tmp_path: Path, swaps: Sequence[tuple[str, str, int, str, int]] = (), defines: Sequence[str] = ()
+) -> tuple[int, int]:
+    """The hashes of the layout of the core and of the host, from a copy of the headers in which fields swapped places (`a` in the `ia`-th line of the header that starts with it, `b`
+    likewise) and with the given defines."""
     import shutil
 
     cc = find_cc()
     if cc is None:
         pytest.skip("no C compiler of the cc kind")
-    d = tmp_path / ("swapped" if swap else "plain")
+    d = tmp_path / f"copy{len(list(tmp_path.iterdir()))}"
     d.mkdir()
     for h in WASMEXT_C.glob("*.h"):
         shutil.copy(h, d / h.name)
-    if swap:
-        name, a, ia, b, ib = swap
+    for name, a, ia, b, ib in swaps:
         lines = (d / name).read_text(encoding="utf-8").split("\n")
         at = [k for k, line in enumerate(lines) if line.strip().startswith(a)][ia]
         bt = [k for k, line in enumerate(lines) if line.strip().startswith(b)][ib]
@@ -187,7 +195,7 @@ def _layout(tmp_path: Path, swap: tuple[str, str, int, str, int] | None) -> tupl
         (d / name).write_text("\n".join(lines), encoding="utf-8")
     exe = d / "layout_hash"
     subprocess.run(
-        [cc, "-O2", "-w", f"-I{d}", f"-I{Path(get_include())}", f"-I{find_toolchain().runtime}", str(C_DIR / "layout_hash.c"), "-lm", "-pthread", "-o", str(exe)],
+        [cc, "-O2", "-w", *(f"-D{x}" for x in defines), f"-I{d}", f"-I{Path(get_include())}", f"-I{find_toolchain().runtime}", str(C_DIR / "layout_hash.c"), "-lm", "-pthread", "-o", str(exe)],
         check=True,
     )  # fmt: skip
     core, host = subprocess.run([str(exe)], capture_output=True, text=True, check=True).stdout.split()
@@ -213,6 +221,7 @@ _SWAPS = {
     "extern-user-release": ("wasmext_instance.h", "void *user;", 1, "void (*release)(void *user);", 0),
     "host-func-slot-store": ("wasmext_instance.h", "wasmext_import_slot slot;", 0, "wasmext_store *store;", 2),
     "tab-elem-live": ("wasmext_instance.h", "int elem;", 0, "int live;", 0),
+    "funcref-store-owner": ("wasmext_instance.h", "const void *store;", 0, "wasmext_owner owner;", 0),
 }
 
 
@@ -221,23 +230,60 @@ def test_the_layout_hash_follows_every_field_that_another_copy_reads(
     tmp_path: Path, swap: tuple[str, str, int, str, int]
 ) -> None:
     """Two fields swapped (a reorder that no `sizeof` sees) change the hash of the layout that `attach` and `instance_new` compare: a copy built with the other order is refused."""
-    base = _layout(tmp_path, None)
-    assert _layout(tmp_path, swap)[0] != base[0], (
+    base = _layout(tmp_path)
+    assert _layout(tmp_path, [swap])[0] != base[0], (
         f"swapping {swap[1]!r} and {swap[3]!r} in {swap[0]} left WASMEXT_CORE_LAYOUT as it was"
     )
 
 
-def test_the_layout_hash_follows_the_host(tmp_path: Path) -> None:
-    """The host of the store is read by the binding of another artifact; its layout has a word of its own in the head of the store."""
-    base = _layout(tmp_path, None)
-    swapped = _layout(
-        tmp_path,
-        (
-            "wasmext_host.h",
-            "int (*clock)(void *user, uint32_t id, uint64_t *ns);",
-            1,
-            "int (*random)(void *user, uint8_t *buf, size_t n);",
-            1,
-        ),
+# swaps in two structs at once that cancelled each other when the terms of the structs were not salted (found by review)
+_PAIRS = {
+    "slot-and-arena": ("slot-key-object", "arena-object-release"),
+    "extern-and-owner-ops": ("extern-user-release", "owner-ops-retain-release"),
+}
+
+
+@pytest.mark.parametrize("pair", list(_PAIRS.values()), ids=list(_PAIRS))
+def test_two_swaps_in_two_structs_do_not_cancel(tmp_path: Path, pair: tuple[str, str]) -> None:
+    base = _layout(tmp_path)
+    assert _layout(tmp_path, [_SWAPS[pair[0]], _SWAPS[pair[1]]])[0] != base[0], (
+        f"swapping both {pair} left WASMEXT_CORE_LAYOUT as it was"
     )
-    assert swapped[1] != base[1], "swapping two fields of wasmext_host left WASMEXT_HOST_LAYOUT as it was"
+
+
+def test_the_layout_hash_follows_the_host(tmp_path: Path) -> None:
+    """The host of the store is read by the binding of another artifact; its layout has a word of its own in the head of the store: its fields, the size and the preopen of fusedwasi, and the
+    switches of the build that change what fusedwasi reads (the descriptors of 0.1). The version of fusedwasi is not there: its headers say none."""
+    base = _layout(tmp_path)
+    clock = (
+        "wasmext_host.h",
+        "int (*clock)(void *user, uint32_t id, uint64_t *ns);",
+        1,
+        "int (*random)(void *user, uint8_t *buf, size_t n);",
+        1,
+    )
+    assert _layout(tmp_path, [clock])[1] != base[1], (
+        "swapping two fields of wasmext_host left WASMEXT_HOST_LAYOUT as it was"
+    )
+    assert _layout(tmp_path, defines=["WASMEXT_HOST_P1"])[1] != base[1], (
+        "-DWASMEXT_HOST_P1 left WASMEXT_HOST_LAYOUT as it was"
+    )
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="the dynamic symbols are read with nm on Linux")
+def test_the_identity_of_an_artifact_is_not_exported(wabt: Path, tmp_path: Path) -> None:
+    """Built with the default visibility for everything else, a library still keeps `wasmext_artifact_` to itself: if it were exported, the dynamic linker could make one library's
+    variable stand for another's and two artifacts would have one identity."""
+    import shutil
+
+    nm = shutil.which("nm")
+    if nm is None or find_cc() is None:
+        pytest.skip("no nm, or no C compiler")
+    library = _library(wabt, tmp_path, "a", {"liba": LIBA}, [], hidden=False)
+    symbols = subprocess.run(
+        [nm, "-D", "--defined-only", str(library)], capture_output=True, text=True, check=True
+    ).stdout
+    assert (
+        "artifact_a" in symbols and "wasm_rt_trap" in symbols
+    )  # the build did export, so the check below means something
+    assert "wasmext_artifact_" not in symbols

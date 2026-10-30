@@ -46,6 +46,7 @@ static inline wasmext_tab *wasmext_tab_new(wasmext_store *store, int elem, uint3
     void *key;
     if (error == NULL) error = &ignored;
     if (store == NULL || (elem != 0x70 && elem != 0x6F) || (maximum != WASMEXT_TABLE_NO_MAXIMUM && initial > maximum)) { *error = EINVAL; return NULL; }
+    if (!wasmext_store_has_artifact(store, wasmext_core_layout_(), wasmext_core_runtime_())) { *error = EXDEV; return NULL; } /* as `wasmext_instance_new` (S0008) */
     if (wasmext_store_closed(store)) { *error = EBADF; return NULL; }
     t = (wasmext_tab *)calloc(1, sizeof *t);
     if (t == NULL) { *error = ENOMEM; return NULL; }
@@ -62,12 +63,12 @@ static inline wasmext_tab *wasmext_tab_new(wasmext_store *store, int elem, uint3
     t->store = store;
     t->artifact = WASMEXT_ARTIFACT;
     t->live = 1;
-    if (wasmext_store_adopt(store, t, wasmext_tab_wrapper_free_) != WASMEXT_STORE_OK) {
+    if (wasmext_store_adopt_unchecked_(store, t, wasmext_tab_wrapper_free_) != WASMEXT_STORE_OK) {
         wasmext_tab_wrapper_free_(t);
         *error = ENOMEM;
         return NULL;
     }
-    if (wasmext_store_register(store, key, t, &wasmext_tab_ops_, &t->owner) != WASMEXT_STORE_OK) {
+    if (wasmext_store_register_unchecked_(store, key, t, &wasmext_tab_ops_, &t->owner) != WASMEXT_STORE_OK) {
         wasmext_store_unadopt(store, t);
         wasmext_tab_wrapper_free_(t);
         *error = wasmext_store_closed(store) ? EBADF : ENOMEM;

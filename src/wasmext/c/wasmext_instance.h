@@ -236,7 +236,7 @@ static inline wasmext_instance *wasmext_instance_new(wasmext_store *store, const
     i->binding = binding;
     i->store = store;
     i->artifact = WASMEXT_ARTIFACT;
-    if (wasmext_store_adopt(store, i, wasmext_instance_wrapper_free_) != WASMEXT_STORE_OK) {
+    if (wasmext_store_adopt_unchecked_(store, i, wasmext_instance_wrapper_free_) != WASMEXT_STORE_OK) {
         wasmext_instance_wrapper_free_(i);
         *error = ENOMEM;
         return NULL;
@@ -650,7 +650,7 @@ static inline int wasmext_instance_instantiate(wasmext_instance *i) {
     if (rc != 0) wasmext_instance_scrub_tables_(i);
     if (rc == 0) {
         /* the store holds the instance from now until the close, and finds it by the pointer that its funcrefs carry */
-        int reg = wasmext_store_register(i->store, i->module, i, &wasmext_instance_ops_, &i->owner);
+        int reg = wasmext_store_register_unchecked_(i->store, i->module, i, &wasmext_instance_ops_, &i->owner);
         if (reg != WASMEXT_STORE_OK) {
             i->binding->release(i->module);
             wasmext_instance_scrub_tables_(i);
@@ -706,17 +706,19 @@ static inline int wasmext_extern_new(wasmext_store *store, void *user, void (*re
     wasmext_owner owner;
     int rc;
     if (store == NULL || out == NULL) return WASMEXT_INST_BAD_ARGS;
+    /* a store that this artifact neither made nor attached to, or of another layout (S0008): the nearest code is BAD_ARGS */
+    if (!wasmext_store_has_artifact(store, wasmext_core_layout_(), wasmext_core_runtime_())) return WASMEXT_INST_BAD_ARGS;
     if (wasmext_store_closed(store)) return (int)WASMEXT_TRAP_CLOSED;
     e = (wasmext_extern *)calloc(1, sizeof *e);
     if (e == NULL) return WASMEXT_INST_NOMEM;
     e->user = user;
     e->release = release;
     e->store = store;
-    if (wasmext_store_adopt(store, e, wasmext_extern_free_) != WASMEXT_STORE_OK) {
+    if (wasmext_store_adopt_unchecked_(store, e, wasmext_extern_free_) != WASMEXT_STORE_OK) {
         free(e);
         return WASMEXT_INST_NOMEM;
     }
-    rc = wasmext_store_register(store, e, e, &wasmext_extern_ops_, &owner);
+    rc = wasmext_store_register_unchecked_(store, e, e, &wasmext_extern_ops_, &owner);
     if (rc != WASMEXT_STORE_OK) {
         wasmext_store_unadopt(store, e);
         free(e);
@@ -962,11 +964,11 @@ static inline int wasmext_instance_host_funcref(wasmext_instance *i, const uint8
     h->slot.self = i;
     h->store = i->store;
     h->release = release;
-    if (wasmext_store_adopt(i->store, h, wasmext_host_func_free_) != WASMEXT_STORE_OK) {
+    if (wasmext_store_adopt_unchecked_(i->store, h, wasmext_host_func_free_) != WASMEXT_STORE_OK) {
         free(h);
         return WASMEXT_INST_NOMEM;
     }
-    rc = wasmext_store_register(i->store, h, h, &wasmext_host_func_ops_, &out->owner);
+    rc = wasmext_store_register_unchecked_(i->store, h, h, &wasmext_host_func_ops_, &out->owner);
     if (rc != WASMEXT_STORE_OK) {
         wasmext_store_unadopt(i->store, h);
         free(h);
@@ -1249,7 +1251,15 @@ typedef struct wasmext_tab_s_ {
 /* The layout of the core as the head of a store says it (S0008): the store, its registry and members, and every struct that a store holds for the code of another copy to read
    inline: the lock, the instance, the slot of an import, the host function, the extern, the table of the host. Each field, by offset and size (WASMEXT_LF_). WASMEXT_NO_THREADS and the
    compiler are in it. `attach` refuses a store whose number differs. */
+#define WASMEXT_SALT_wasmext_rlock 3432918353u
+#define WASMEXT_SALT_wasmext_instance 461845907u
+#define WASMEXT_SALT_wasmext_import_slot 2654435769u
+#define WASMEXT_SALT_wasmext_host_func 1540483477u
+#define WASMEXT_SALT_wasmext_extern 2716889263u
+#define WASMEXT_SALT_wasmext_tab 1597334677u
+#define WASMEXT_SALT_wasmext_funcref 3793510007u
 #define WASMEXT_CORE_LAYOUT ((uint32_t)(WASMEXT_STORE_LAYOUT_ ^ \
+    WASMEXT_LS_(53u, wasmext_funcref) ^ WASMEXT_LF_(0, wasmext_funcref, ref) ^ WASMEXT_LF_(1, wasmext_funcref, store) ^ WASMEXT_LF_(2, wasmext_funcref, owner) ^ \
     WASMEXT_LS_(23u, wasmext_rlock) ^ WASMEXT_LF_(0, wasmext_rlock, mutex) ^ WASMEXT_LF_(1, wasmext_rlock, owner) ^ WASMEXT_LF_(2, wasmext_rlock, depth) ^ \
     WASMEXT_LS_(29u, wasmext_instance) ^ WASMEXT_LF_(0, wasmext_instance, binding) ^ WASMEXT_LF_(1, wasmext_instance, store) ^ WASMEXT_LF_(2, wasmext_instance, module) ^ \
     WASMEXT_LF_(3, wasmext_instance, bound) ^ WASMEXT_LF_(4, wasmext_instance, owners) ^ WASMEXT_LF_(5, wasmext_instance, values) ^ WASMEXT_LF_(6, wasmext_instance, refs) ^ \
@@ -1265,6 +1275,8 @@ typedef struct wasmext_tab_s_ {
     WASMEXT_LF_(4, wasmext_tab, artifact) ^ WASMEXT_LF_(5, wasmext_tab, owner) ^ WASMEXT_LF_(6, wasmext_tab, mutex) ^ WASMEXT_LF_(7, wasmext_tab, live)))
 static inline uint32_t wasmext_core_layout_(void) { return WASMEXT_CORE_LAYOUT; }
 static inline uint32_t wasmext_core_runtime_(void) { return (uint32_t)WASMEXT_RUNTIME; }
+#undef WASMEXT_CORE_CHECK
+#define WASMEXT_CORE_CHECK WASMEXT_CORE_LAYOUT, WASMEXT_RUNTIME
 #undef WASMEXT_CORE_IDENT
 #define WASMEXT_CORE_IDENT WASMEXT_ABI, WASMEXT_SINCE_STORE, WASMEXT_CORE_LAYOUT, WASMEXT_RUNTIME
 

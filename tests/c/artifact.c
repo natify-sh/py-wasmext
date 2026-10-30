@@ -92,9 +92,22 @@ static int host_funcref_(wasmext_instance *i, wasmext_host_fn fn, wasmext_funcre
     return wasmext_instance_host_funcref(i, NULL, 0, result, 1, fn, NULL, NULL, out);
 }
 
+static int extern_new_(wasmext_store *s) {
+    wasmext_extern *e = NULL;
+    return wasmext_extern_new(s, NULL, NULL, &e);
+}
+static void no_free_(void *object) { (void)object; }
+static int store_misc_(wasmext_store *s, int which) {
+    static char object_;
+    wasmext_owner owner;
+    if (which == 0) return wasmext_store_adopt(s, &object_, no_free_);
+    if (which == 1) return wasmext_store_register(s, &object_, &object_, NULL, &owner);
+    return wasmext_store_set_host(s, &object_, no_free_, NULL);
+}
+
 static const artifact_api api_ = {
     (const void *)&wasmext_artifact_, trap_address_, store_new_, store_attach_, store_close_, store_free_, store_own_, releases_, store_error_, instance_new_, instantiate_, call_,
-    export_record_, bind_, funcref_, table_set_, global_set_funcref_, tab_new_, tab_set_, tab_get_, wasmext_thread_free, call_ref_, bind_host_, bind_global_funcref_, host_funcref_, artifact_so_new, artifact_so_attach};
+    export_record_, bind_, funcref_, table_set_, global_set_funcref_, tab_new_, tab_set_, tab_get_, wasmext_thread_free, call_ref_, bind_host_, bind_global_funcref_, host_funcref_, extern_new_, store_misc_, artifact_so_new, artifact_so_attach};
 
 #define ARTIFACT_CAT_(a, b) a##b
 #define ARTIFACT_CAT(a, b) ARTIFACT_CAT_(a, b)

@@ -33,6 +33,8 @@ typedef struct {
     int (*bind_host)(wasmext_instance *i, const char *module, const char *name, wasmext_host_fn fn, void *user);
     int (*bind_global_funcref)(wasmext_instance *i, const char *module, const char *name, const wasmext_funcref *f);
     int (*host_funcref)(wasmext_instance *i, wasmext_host_fn fn, wasmext_funcref *out); /* a host function of the type () -> i32 as an element of a table */
+    int (*extern_new)(wasmext_store *s);  /* an extern with no value */
+    int (*store_misc)(wasmext_store *s, int which); /* 0: adopt, 1: register, 2: set_host, each with an object of this copy */
     wasmext_store *(*so_new)(void);      /* a store made, and attached to, by a file of this copy that includes wasmext_store.h alone */
     int (*so_attach)(wasmext_store *s, char *why, size_t cap);
 } artifact_api;

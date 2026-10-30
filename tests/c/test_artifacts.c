@@ -70,6 +70,16 @@ static void test_attach(void) {
     CHECK(B->store_attach(s, why, 8) == WASMEXT_STORE_INCOMPATIBLE && why[7] == 0 && why[8] == 'x');
     CHECK(B->store_attach(s, NULL, 0) == WASMEXT_STORE_INCOMPATIBLE);
     s->head = good;
+    /* B has not attached: what it would add to the store is refused, nothing is added (the store of A is still whole) */
+    {
+        long b0 = B->releases();
+        CHECK(B->tab_new(s, &error) == NULL && error == EXDEV);
+        CHECK(B->store_own(s) == WASMEXT_STORE_INCOMPATIBLE);
+        CHECK(B->extern_new(s) == WASMEXT_INST_BAD_ARGS);
+        CHECK(B->store_misc(s, 0) == WASMEXT_STORE_INCOMPATIBLE && B->store_misc(s, 1) == WASMEXT_STORE_INCOMPATIBLE && B->store_misc(s, 2) == WASMEXT_STORE_INCOMPATIBLE);
+        CHECK(A->tab_new(s, &error) != NULL && A->extern_new(s) == 0); /* the artifact that made it can */
+        CHECK(B->releases() == b0);
+    }
     /* nothing was attached by the refusals */
     CHECK(B->instance_new(s, "appb", &error) == NULL && error == EXDEV);
     /* a store that is closed */

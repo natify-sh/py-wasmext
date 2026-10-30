@@ -73,6 +73,21 @@ static void test_a_host_of_another_layout(void) {
     s->head.host_layout ^= 1u;
     CHECK(wasmext_instance_instantiate(i) == 0);
     wasmext_store_free(s);
+    {   /* a host set from a file that does not know the struct (layout 0) is not accepted by a binding that reads it */
+        wasmext_store *z = wasmext_store_new();
+        wasmext_config c;
+        wasmext_host *h;
+        wasmext_instance *k;
+        int err;
+        memset(&c, 0, sizeof c);
+        h = wasmext_host_new(&c, "prog", &err);
+        CHECK(h != NULL && wasmext_store_set_host_(z, h, wasmext_host_free, &h->lock, 0u, WASMEXT_CORE_CHECK) == WASMEXT_STORE_OK);
+        k = wasmext_instance_new(z, BINDING, NULL);
+        CHECK(wasmext_instance_instantiate(k) == (int)WASMEXT_TRAP_LINK_ERROR);
+        wasmext_store_error(z, text, sizeof text);
+        CHECK(strstr(text, "layout of the host") != NULL);
+        wasmext_store_free(z);
+    }
 }
 
 static void test_the_calls(void) {

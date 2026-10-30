@@ -140,7 +140,17 @@ typedef struct {
 
 /* One field of a struct in a hash of the layout (S0008): its offset and its size, each weighted by the number `n` of the field in its struct, so that two fields that are swapped
    (even of one size), or one that is moved or resized, change the hash. The structs that another copy of the core reads inline are all hashed this way, field by field. */
-#define WASMEXT_LF_(n, T, m) ((uint32_t)((uint32_t)offsetof(T, m) * (2u * (n) + 1u) * 2654435761u + (uint32_t)sizeof(((T *)0)->m) * (2u * (n) + 1u) * 40503u + (n)))
+#define WASMEXT_LF_(n, T, m) \
+    ((uint32_t)(((uint32_t)offsetof(T, m) * (2u * (n) + 1u) * 2654435761u + (uint32_t)sizeof(((T *)0)->m) * (2u * (n) + 1u) * 40503u + (n)) * WASMEXT_SALT_##T))
+/* ... salted by the struct (WASMEXT_SALT_<type>, an odd constant of its own), so that a term of one struct cannot cancel the same (field, offset, size) of another when the hashes are
+   combined by XOR: two swaps at once, one in each of two structs, still change the hash. A struct that gets a field in the list needs a salt here (or next to its hash). */
+#define WASMEXT_SALT_wasmext_store_head 2246822519u
+#define WASMEXT_SALT_wasmext_store_line_ 3266489917u
+#define WASMEXT_SALT_wasmext_store 668265263u
+#define WASMEXT_SALT_wasmext_registry 374761393u
+#define WASMEXT_SALT_wasmext_slot 3624381081u
+#define WASMEXT_SALT_wasmext_owner_ops 2870177451u
+#define WASMEXT_SALT_wasmext_arena_node 1274126177u
 #define WASMEXT_LS_(k, T) ((uint32_t)sizeof(T) * (k))
 
 /* What the head of a store says, for the artifact that makes or attaches: the ABI, the floor, the layout of the core and the layout of the runtime of wasm2c. This file does not know
@@ -296,7 +306,7 @@ static inline void wasmext_store_leave(wasmext_store *s, int line) {
 
 /* The store owns `object` until it is closed, and then `release(object)` is called (not held under the lock), in the reverse order of owning. On a refusal
    the object is not owned: the caller still frees it. */
-static inline int wasmext_store_own(wasmext_store *s, void *object, void (*release)(void *object)) {
+static inline int wasmext_store_own_unchecked_(wasmext_store *s, void *object, void (*release)(void *object)) {
     wasmext_arena_node *node = (wasmext_arena_node *)malloc(sizeof(wasmext_arena_node));
     if (node == NULL) return WASMEXT_STORE_NOMEM;
     WASMEXT_LOCK(&s->mutex);
@@ -313,17 +323,28 @@ static inline int wasmext_store_own(wasmext_store *s, void *object, void (*relea
     return WASMEXT_STORE_OK;
 }
 
+/* ... for a store that this artifact neither made nor attached to (or whose head is not that of this copy), WASMEXT_STORE_INCOMPATIBLE and nothing is done. `wasmext_store_own(s, object,
+   release)` is a macro that adds the layout of the core and the runtime this file is compiled with (WASMEXT_CORE_CHECK; wasmext_instance.h redefines it once it knows the structs). The code
+   of the core that works on a store it has checked already calls the `_unchecked_` function. */
+#define WASMEXT_CORE_CHECK WASMEXT_STORE_LAYOUT_, 0u
+static inline int wasmext_store_own_(wasmext_store *s, void *object, void (*release)(void *object), uint32_t layout, uint32_t runtime) {
+    if (!wasmext_store_has_artifact(s, layout, runtime)) return WASMEXT_STORE_INCOMPATIBLE;
+    return wasmext_store_own_unchecked_(s, object, release);
+}
+#define wasmext_store_own(S, O, R) wasmext_store_own_((S), (O), (R), WASMEXT_CORE_CHECK)
+
 /* The store has one host. It is given once: WASMEXT_STORE_BUSY if there is one already (nothing is changed), the refusals of `wasmext_store_own` otherwise (then the
    host is not owned and the caller frees it). `release` is called at the close, as for any owned object; `lock` is the lock of the host (may be NULL). */
-static inline int wasmext_store_set_host_(wasmext_store *s, void *host, void (*release)(void *object), void *lock, uint32_t host_layout) {
+static inline int wasmext_store_set_host_(wasmext_store *s, void *host, void (*release)(void *object), void *lock, uint32_t host_layout, uint32_t layout, uint32_t runtime) {
     int rc;
+    if (!wasmext_store_has_artifact(s, layout, runtime)) return WASMEXT_STORE_INCOMPATIBLE;
     WASMEXT_LOCK(&s->mutex);
     if (s->host != NULL) {
         WASMEXT_UNLOCK(&s->mutex);
         return WASMEXT_STORE_BUSY;
     }
     WASMEXT_UNLOCK(&s->mutex);
-    rc = wasmext_store_own(s, host, release);
+    rc = wasmext_store_own_unchecked_(s, host, release);
     if (rc != WASMEXT_STORE_OK) return rc;
     WASMEXT_LOCK(&s->mutex);
     s->host = host;
@@ -334,7 +355,7 @@ static inline int wasmext_store_set_host_(wasmext_store *s, void *host, void (*r
 }
 /* ... `wasmext_store_set_host(s, host, release, lock)` is a macro that adds the layout of the host (wasmext_host.h redefines WASMEXT_HOST_LAYOUT_ID once it knows the struct; 0 before). */
 #define WASMEXT_HOST_LAYOUT_ID 0u
-#define wasmext_store_set_host(S, H, R, L) wasmext_store_set_host_((S), (H), (R), (L), WASMEXT_HOST_LAYOUT_ID)
+#define wasmext_store_set_host(S, H, R, L) wasmext_store_set_host_((S), (H), (R), (L), WASMEXT_HOST_LAYOUT_ID, WASMEXT_CORE_CHECK)
 static inline void *wasmext_store_host(wasmext_store *s) {
     void *host;
     WASMEXT_LOCK(&s->mutex);
@@ -388,7 +409,7 @@ static inline int wasmext_store_registry_code_(int rc) {
 
 /* Makes `object` a member under `key` (for an instance, the `module_instance` pointer of its funcrefs). The store holds it until the close; `ops` (may be NULL) says what it does
    with it (see wasmext_registry.h). WASMEXT_STORE_CLOSED when the store is closed or closing, DUPLICATE if the key is a member already. */
-static inline int wasmext_store_register(wasmext_store *s, void *key, void *object, const wasmext_owner_ops *ops, wasmext_owner *out) {
+static inline int wasmext_store_register_unchecked_(wasmext_store *s, void *key, void *object, const wasmext_owner_ops *ops, wasmext_owner *out) {
     int rc;
     WASMEXT_LOCK(&s->mutex);
     if (wasmext_atomic_load(&s->closing)) {
@@ -399,6 +420,12 @@ static inline int wasmext_store_register(wasmext_store *s, void *key, void *obje
     WASMEXT_UNLOCK(&s->mutex);
     return rc;
 }
+
+static inline int wasmext_store_register_(wasmext_store *s, void *key, void *object, const wasmext_owner_ops *ops, wasmext_owner *out, uint32_t layout, uint32_t runtime) {
+    if (!wasmext_store_has_artifact(s, layout, runtime)) return WASMEXT_STORE_INCOMPATIBLE;
+    return wasmext_store_register_unchecked_(s, key, object, ops, out);
+}
+#define wasmext_store_register(S, K, O, P, OUT) wasmext_store_register_((S), (K), (O), (P), (OUT), WASMEXT_CORE_CHECK)
 
 /* The handle of the member under `key`, or WASMEXT_STORE_UNKNOWN: this store has no such member (the pointer is of another store, or of none: the registry of one store cannot
    tell which; the front end reports it as a wrong store). */
@@ -464,7 +491,7 @@ static inline void wasmext_store_each(wasmext_store *s, void (*visit)(void *obje
 }
 
 /* The store frees `object` (with `free_fn`) when it is freed, not when it is closed: what stays valid, closed, after the close (the wrapper of an instance). */
-static inline int wasmext_store_adopt(wasmext_store *s, void *object, void (*free_fn)(void *object)) {
+static inline int wasmext_store_adopt_unchecked_(wasmext_store *s, void *object, void (*free_fn)(void *object)) {
     wasmext_arena_node *node = (wasmext_arena_node *)malloc(sizeof(wasmext_arena_node));
     if (node == NULL) return WASMEXT_STORE_NOMEM;
     node->object = object;
@@ -475,6 +502,12 @@ static inline int wasmext_store_adopt(wasmext_store *s, void *object, void (*fre
     WASMEXT_UNLOCK(&s->mutex);
     return WASMEXT_STORE_OK;
 }
+/* ... checked as `wasmext_store_own` is (WASMEXT_STORE_INCOMPATIBLE for a store that is not this artifact's) */
+static inline int wasmext_store_adopt_(wasmext_store *s, void *object, void (*free_fn)(void *object), uint32_t layout, uint32_t runtime) {
+    if (!wasmext_store_has_artifact(s, layout, runtime)) return WASMEXT_STORE_INCOMPATIBLE;
+    return wasmext_store_adopt_unchecked_(s, object, free_fn);
+}
+#define wasmext_store_adopt(S, O, F) wasmext_store_adopt_((S), (O), (F), WASMEXT_CORE_CHECK)
 /* ... and takes it back (the caller frees it): WASMEXT_STORE_UNKNOWN if it was not adopted. */
 static inline int wasmext_store_unadopt(wasmext_store *s, void *object) {
     wasmext_arena_node **link, *node = NULL;

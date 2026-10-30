@@ -61,6 +61,12 @@ Facts that bound the design (checked in the code and in the runtime sources of w
   (Windows, Emscripten) the entry saves and restores the counters of those copies.
 * Every attached artifact stays loaded until `wasmext_store_free` returns; `attach` adds an unload hook through `wasmext_store_adopt` (freed last).
 * Imported tag cell stays one per (artifact, module) per process (D34).
+* The model is that of Wasmtime: a store is the one place where the runtime, the host (WASI state: descriptors, arguments, environment, preopens) and the
+  state of its members live, and the instances of one or several modules (of any artifact) in it share all three. What differs from Wasmtime is only how the
+  runtime is distributed: not one library, but a copy inside every artifact, of which the copy of the artifact that made the store is the one in use.
+  A module that is alone needs nothing outside itself. The host of the store is reached through the store by an instance of any artifact; its layout is
+  part of what `attach` checks (`layout` of `wasmext_host`, P1 bit, fusedwasi version). `docs/architecture.md` says "the state of WASI never crosses
+  (opaque)"; that line is older and is superseded by this section, and needs a new Dn.
 
 ## Test plan
 `tests/c/test_artifacts.c` with a fixture `build_artifact` that uses the product's repairs and wrappers (D35); each artifact is a shared library with
@@ -90,9 +96,10 @@ Design 1 was corrected on 2026-10-30 after the maintainer's remark: copies of th
 5. Host tags immortal (proposed) or owned by a store with the cell reset?
 6. Should a link re-throw an uncaught exception in the importer (changes S0007)?
 7. Depth-count platforms: save the joined counters at entry, or first move Windows to the stack-limit check?
-8. New Dn: one supersedes D29, one amends D34 (host tags), one notes D2's condition "one party owns the traps of a group" is now met.
+8. New Dn: one supersedes D29, one amends D34 (host tags), one notes D2's condition "one party owns the traps of a group" is now met, one records that the host is shared through the store (supersedes the "WASI state never crosses" line of architecture.md).
 Known risks, not solved: MSVC `longjmp` across two DLLs (SEH) is untested; the artifact that made a store must stay loaded while any instance of the store runs.
 
 ## Changes
 * 2026-10-30: created (draft) from the design study of a `Plan` agent.
 * 2026-10-30: design 1 revised: the runtime belongs to the store, not to the artifact (no binding for life; open question about the interpreter dict removed).
+* 2026-10-30: the model stated as that of Wasmtime (runtime, host and state shared in the store; only the distribution of the runtime differs).

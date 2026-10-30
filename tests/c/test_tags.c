@@ -109,7 +109,7 @@ static void test_tags(void) {
     CHECK(strstr(text, "the export given is not") != NULL);
     /* wasm2c reads an imported tag from a global: the program holds one tag for it. The same tag again is accepted; another one is not */
     CHECK(link_export(b2, WASMEXT_DESC_TABLE, a, "tab") == 0 && link_export(b2, WASMEXT_DESC_TAG, a, "t") == 0);
-    CHECK(link_export(b3, WASMEXT_DESC_TAG, d, "t") == WASMEXT_INST_LINK_FAILED);
+    CHECK(link_export(b3, WASMEXT_DESC_TAG, d, "t") == WASMEXT_INST_TAG_HELD);
     wasmext_store_error(s, text, sizeof text);
     CHECK(strstr(text, "linked to another tag already") != NULL);
     /* a tag that is not linked is not run, even though the program holds a tag for the import from the other instances */

@@ -380,7 +380,7 @@ static void test_host_tags(void) {
         void *volatile *cell = A->tag_cell(i1);
         CHECK(A->tag_new(s1, types, 1, &t1) == 0 && A->tag_new(s2, types, 1, &t2) == 0);
         CHECK(A->bind(i1, "hgna", "t", &t1) == 0);
-        CHECK(A->bind(i2, "hgna", "t", &t2) == WASMEXT_STORE_INCOMPATIBLE);
+        CHECK(A->bind(i2, "hgna", "t", &t2) == WASMEXT_INST_TAG_HELD);
         A->store_error(s2, text, sizeof text);
         CHECK(strstr(text, "hgna.t") != NULL && strstr(text, "another tag holds the import already") != NULL);
         CHECK(B->store_attach(s2, why, sizeof why) == WASMEXT_STORE_OK && B->store_free(s2) == WASMEXT_STORE_OK); /* the refused store goes (freed by the other copy) */

@@ -50,6 +50,7 @@ enum {
     WASMEXT_INST_LINK_FAILED = -9,   /* an export given for an import does not fit: the text, naming the import, is in the store (`wasmext_store_error`) */
     WASMEXT_INST_UNDECLARED_TYPE = -10, /* `call_ref`: the function is of a type that the module does not declare, so it has no way to call it (it can still be called by WebAssembly) */
     WASMEXT_INST_NO_EXCEPTION = -11,    /* `wasmext_instance_exception`: no exception is active in this thread */
+    WASMEXT_INST_TAG_HELD = -12,        /* `wasmext_instance_bind_export`: the import of a tag holds another tag already (one global for each import name in the program: wasm2c); the reason is in the store's text */
     /* the answers of the operations on a table and on a funcref (wasmext_table.h) */
     WASMEXT_TAB_BOUNDS = -30,       /* an index outside the table */
     WASMEXT_TAB_FULL = -31,         /* the table cannot grow that much (its maximum, or memory) */
@@ -376,15 +377,15 @@ static inline int wasmext_tag_new(wasmext_store *store, const uint8_t *types, ui
     wasmext_instance_signature_(&ft, t->signature, sizeof t->signature);
     if (strchr(t->signature, '?') != NULL) { free(t); return WASMEXT_INST_BAD_ARGS; }
     t->store = store;
-    rc = wasmext_store_register_unchecked_(store, &t->id, t, &wasmext_host_tag_ops_, &owner);
-    if (rc == WASMEXT_STORE_OK) {
-        rc = wasmext_store_own_unchecked_(store, t, wasmext_host_tag_free_);
-        if (rc != WASMEXT_STORE_OK) wasmext_store_unregister(store, owner);
-    }
+    /* Owned first, registered last (as `wasmext_extern_new` does): a close that runs between the two takes the arena and the members under one lock, so it frees `t` and never runs the close
+       of a member that was freed under it. Once owned, `t` is the arena's: it is not read or freed here again (a close may free it at any moment), only its addresses are used. */
+    rc = wasmext_store_own_unchecked_(store, t, wasmext_host_tag_free_);
     if (rc != WASMEXT_STORE_OK) {
         free(t);
         return rc == WASMEXT_STORE_CLOSED ? (int)WASMEXT_TRAP_CLOSED : WASMEXT_INST_NOMEM;
     }
+    rc = wasmext_store_register_unchecked_(store, &t->id, t, &wasmext_host_tag_ops_, &owner);
+    if (rc != WASMEXT_STORE_OK) return rc == WASMEXT_STORE_CLOSED ? (int)WASMEXT_TRAP_CLOSED : WASMEXT_INST_NOMEM; /* the arena frees it */
     memset(out, 0, sizeof *out);
     out->size = sizeof *out;
     out->abi = WASMEXT_ABI;
@@ -395,36 +396,48 @@ static inline int wasmext_tag_new(wasmext_store *store, const uint8_t *types, ui
     out->store = store;
     out->artifact = WASMEXT_ARTIFACT;
     wasmext_export_seal(out);
-    return 0;
+    return 0; /* a record is good while the store is open: `bind_export` refuses one of a closed store */
 }
 
-/* If `key` (the address in a record of a tag) is a host tag of `store`: remembers `cell` (the global of an import that is about to be given it) among the tag's, once.
-   `*host` says whether it is (a tag of a module lives as long as the program: nothing to clear). WASMEXT_STORE_OK, WASMEXT_STORE_CLOSED or WASMEXT_STORE_NOMEM. The cell is remembered before it is set,
-   and even if the set is then refused: the clear at the close is a compare-and-swap, so a cell that holds another tag is left alone. */
-static inline int wasmext_host_tag_hold_(wasmext_store *store, const void *key, void **cell, int *host) {
+/* Gives the global of a tag import (`cell`) the tag `key` (the address in a record of a tag), once for the program, under the lock of the store: the close raises `closing` under the same
+   lock, so either the close sees the cell in the tag's list (and clears it) or this sees `closing` and sets nothing; a cell can never be left holding a tag that the close has freed.
+   If `key` is a host tag of `store` its list gets the cell first (once), and even when the set is then refused: the clear at the close is a compare-and-swap, so a cell that holds another tag
+   is left alone. `*host` says whether it is a host tag (a tag of a module lives as long as the program: nothing to clear); `*set` whether the cell holds `key` now. WASMEXT_STORE_OK,
+   WASMEXT_STORE_CLOSED, WASMEXT_STORE_NOMEM, or WASMEXT_STORE_UNKNOWN when `signature` is not `want` (then `got` has a copy of it). The signature of the record is read under the lock too,
+   after the check of `closing`: it points into the member of a host tag, which the close frees. */
+static inline int wasmext_tag_link_(wasmext_store *store, const void *key, const char *signature, const char *want, char *got, size_t got_cap, void **cell, int *host, int *set) {
     wasmext_owner owner;
     void *object = NULL;
     wasmext_host_tag *t;
     int rc = WASMEXT_STORE_OK;
     *host = 0;
+    *set = 0;
+    got[0] = 0;
     WASMEXT_LOCK(&store->mutex);
     if (wasmext_atomic_load(&store->closing)) rc = WASMEXT_STORE_CLOSED;
-    else if (wasmext_registry_find_kind(&store->registry, key, WASMEXT_KIND_TAG, &owner) == WASMEXT_REGISTRY_OK &&
-             wasmext_registry_object(&store->registry, owner, &object) == WASMEXT_REGISTRY_OK) {
-        uint32_t k;
-        t = (wasmext_host_tag *)object;
-        *host = 1;
-        for (k = 0; k < t->n_cells; k++)
-            if (t->cells[k] == (void *)cell) break;
-        if (k == t->n_cells) {
-            if (t->n_cells == t->cap_cells) {
-                uint32_t cap = t->cap_cells ? t->cap_cells * 2 : 4u;
-                void **list = (void **)realloc((void *)t->cells, cap * sizeof(void *));
-                if (list == NULL) rc = WASMEXT_STORE_NOMEM;
-                else { t->cells = list; t->cap_cells = cap; }
+    else if (signature == NULL || strcmp(signature, want) != 0) {
+        /* the signature of a host tag is in the member, which the close frees: it is read here, under the lock, and a copy is what the caller reports */
+        snprintf(got, got_cap, "%s", signature != NULL ? signature : "none");
+        rc = WASMEXT_STORE_UNKNOWN; /* does not fit */
+    } else {
+        if (wasmext_registry_find_kind(&store->registry, key, WASMEXT_KIND_TAG, &owner) == WASMEXT_REGISTRY_OK &&
+            wasmext_registry_object(&store->registry, owner, &object) == WASMEXT_REGISTRY_OK) {
+            uint32_t k;
+            t = (wasmext_host_tag *)object;
+            *host = 1;
+            for (k = 0; k < t->n_cells; k++)
+                if (t->cells[k] == (void *)cell) break;
+            if (k == t->n_cells) {
+                if (t->n_cells == t->cap_cells) {
+                    uint32_t cap = t->cap_cells ? t->cap_cells * 2 : 4u;
+                    void **list = (void **)realloc((void *)t->cells, cap * sizeof(void *));
+                    if (list == NULL) rc = WASMEXT_STORE_NOMEM;
+                    else { t->cells = list; t->cap_cells = cap; }
+                }
+                if (rc == WASMEXT_STORE_OK) t->cells[t->n_cells++] = (void *)cell;
             }
-            if (rc == WASMEXT_STORE_OK) t->cells[t->n_cells++] = (void *)cell;
         }
+        if (rc == WASMEXT_STORE_OK) *set = wasmext_cell_set_once((void *volatile *)cell, (void *)key);
     }
     WASMEXT_UNLOCK(&store->mutex);
     return rc;
@@ -505,6 +518,8 @@ static inline int wasmext_instance_bind_export(wasmext_instance *i, uint32_t imp
     const wasmext_import_desc *m;
     if (i->instantiated) return WASMEXT_INST_TOO_LATE;
     if (import >= d->n_imports || d->imports[import].core) return WASMEXT_INST_BAD_IMPORT;
+    /* A record of an export of a closed store points into what the close freed (the store of the importer is the store of the exporter, checked below): nothing of it is read. */
+    if (wasmext_store_closed(i->store)) return (int)WASMEXT_TRAP_CLOSED;
     m = &d->imports[import];
     if (!wasmext_export_ok(e)) return wasmext_instance_link_fail_(i, m, "is linked to an export from an incompatible version of wasmext", "");
     /* Instances are linked inside one store: the store frees its members when it is closed, and an importer in another store would read what the close freed. */
@@ -599,30 +614,29 @@ static inline int wasmext_instance_bind_export(wasmext_instance *i, uint32_t imp
             break;
         }
         case WASMEXT_DESC_TAG: {
-            char want[160];
+            char want[160], got[160];
             void **cell;
-            int held, host;
+            int held, host, set;
             wasmext_instance_signature_(&m->type, want, sizeof want);
             if (e->kind != WASMEXT_TAG || e->address == NULL) return wasmext_instance_link_fail_(i, m, "is a tag: the export given is not", "");
-            if (e->signature == NULL || strcmp(e->signature, want) != 0) {
-                char detail[200];
-                snprintf(detail, sizeof detail, " %s: the export given is another one (%s)", want, e->signature != NULL ? e->signature : "none");
-                return wasmext_instance_link_fail_(i, m, "is a tag", detail);
-            }
             if (i->binding->ref_slot == NULL) return WASMEXT_INST_BAD_IMPORT;
             /* wasm2c has no slot for a tag: the import is a global of the program that the module reads, so it holds one tag for the whole process (every instance of the module, in any store).
                The tag of an exporter is the same for all its instances, so the usual links agree; a link to another tag is refused, not mixed. */
             cell = i->binding->ref_slot(i->module, import);
             /* A tag of the host belongs to the store: its close clears the cells it was given (S0008, 8a-3), so the cell is among its own before it is set. */
-            held = wasmext_host_tag_hold_(i->store, e->address, cell, &host);
-            if (held == WASMEXT_STORE_CLOSED) return wasmext_instance_link_fail_(i, m, "is a tag of a store that is closed", "");
+            held = wasmext_tag_link_(i->store, e->address, e->signature, want, got, sizeof got, cell, &host, &set);
+            if (held == WASMEXT_STORE_CLOSED) return (int)WASMEXT_TRAP_CLOSED;
+            if (held == WASMEXT_STORE_UNKNOWN) {
+                char detail[240];
+                snprintf(detail, sizeof detail, " %s: the export given is another one (%s)", want, got);
+                return wasmext_instance_link_fail_(i, m, "is a tag", detail);
+            }
             if (held == WASMEXT_STORE_NOMEM) return WASMEXT_INST_NOMEM;
-            if (!wasmext_cell_set_once((void *volatile *)cell, e->address)) {
-                if (host) {
-                    wasmext_instance_link_fail_(i, m, "is a tag of this store, but another tag holds the import already (wasm2c reads an imported tag from a global: one tag for each import name in the whole program, until the store that holds it is closed)", "");
-                    return WASMEXT_STORE_INCOMPATIBLE;
-                }
-                return wasmext_instance_link_fail_(i, m, "is a tag that this program has linked to another tag already (wasm2c reads an imported tag from a global: one for the process)", "");
+            if (!set) {
+                /* the cell is the program's, so the answer is one code whoever holds it; the text says which tag the import was refused */
+                wasmext_instance_link_fail_(i, m, host ? "is a tag of this store, but another tag holds the import already (wasm2c reads an imported tag from a global: one tag for each import name in the whole program, until the store that holds it is closed)"
+                                                       : "is a tag that this program has linked to another tag already (wasm2c reads an imported tag from a global: one for the process)", "");
+                return WASMEXT_INST_TAG_HELD;
             }
             break;
         }

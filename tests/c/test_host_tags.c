@@ -89,6 +89,14 @@ static void test_one_store(void) {
     CHECK(bind_tag(a, &rec) == 0 && wasmext_instance_instantiate(a) == 0);
     CHECK(bind_tag(b, &rec) == 0 && link_export(b, WASMEXT_DESC_TABLE, a, "tab") == 0 && wasmext_instance_instantiate(b) == 0);
     CHECK(*cell_of(a) == rec.address && *cell_of(b) == rec.address);
+    /* the tag remembers each cell once: the same import bound again, or by another instance of the module, adds none */
+    {
+        wasmext_host_tag *ht = (wasmext_host_tag *)rec.address;
+        wasmext_instance *a2 = wasmext_instance_new(s, &ha_binding, NULL), *b2 = wasmext_instance_new(s, &hb_binding, NULL);
+        CHECK(ht->n_cells == 2); /* hga.t and hgb.t */
+        CHECK(bind_tag(a2, &rec) == 0 && bind_tag(a2, &rec) == 0 && bind_tag(b2, &rec) == 0);
+        CHECK(ht->n_cells == 2);
+    }
     x = I32(0);
     CHECK(call(b, "catch_slot", &x, 1, r, 2) == 0 && r[0].type == 0x7F && r[0].as.i32 == 7 && r[1].type == 0x7E && r[1].as.i64 == 9);
     /* nobody catches it: the host reads the exception, its tag is the identity of the record */
@@ -100,6 +108,7 @@ static void test_one_store(void) {
     hs.tag = rec.address;
     CHECK(bind_tag(h, &rec) == 0);
     CHECK(wasmext_instance_bind_func(h, (uint32_t)import_of_kind(h, WASMEXT_DESC_FUNC), host_h, &hs) == 0 && wasmext_instance_instantiate(h) == 0);
+    CHECK(((wasmext_host_tag *)rec.address)->n_cells == 3);
     CHECK(call(h, "run", NULL, 0, r, 2) == 0 && r[0].as.i32 == 21 && r[1].as.i64 == 22);
     /* another signature: refused with both signatures */
     CHECK(bind_tag(bad, &rec) == WASMEXT_INST_LINK_FAILED);
@@ -114,6 +123,13 @@ static void test_one_store(void) {
     CHECK(wasmext_store_close(s) == WASMEXT_STORE_OK);
     CHECK(*cell_of(a) == NULL && *cell_of(b) == NULL && *cell_of(h) == NULL);
     CHECK(wasmext_tag_new(s, TYPES_IJ, 2, &none) == (int)WASMEXT_TRAP_CLOSED);
+    /* the record of a closed store is not read (its signature was freed by the close), by bind_export or by the link of a cell: nothing is set */
+    CHECK(bind_tag(bad, &rec) == (int)WASMEXT_TRAP_CLOSED && *cell_of(bad) == NULL);
+    {
+        int host = 0, set = 0;
+        char got[64];
+        CHECK(wasmext_tag_link_(s, rec.address, "ij>", "ij>", got, sizeof got, (void **)cell_of(a), &host, &set) == WASMEXT_STORE_CLOSED && host == 0 && set == 0 && *cell_of(a) == NULL);
+    }
     CHECK(wasmext_store_free(s) == WASMEXT_STORE_OK);
     CHECK(wasmext_store_free(other) == WASMEXT_STORE_OK);
 }
@@ -131,10 +147,10 @@ static void test_cell(void) {
     CHECK(bind_tag(x1, &t1) == 0 && wasmext_instance_instantiate(x1) == 0 && *cell == t1.address && self_catch(x1) == 11);
     CHECK(bind_tag(x1b, &t1) == 0); /* the same tag again, from another instance */
     /* a second tag of the same store, and a tag of another live store, for the same import name: refused, with the reason */
-    CHECK(bind_tag(x1b, &t1b) == WASMEXT_STORE_INCOMPATIBLE);
+    CHECK(bind_tag(x1b, &t1b) == WASMEXT_INST_TAG_HELD);
     wasmext_store_error(s1, text, sizeof text);
     CHECK(strstr(text, "hgx.t") != NULL && strstr(text, "another tag holds the import already") != NULL && strstr(text, "one tag for each import name") != NULL);
-    CHECK(bind_tag(x2, &t2) == WASMEXT_STORE_INCOMPATIBLE);
+    CHECK(bind_tag(x2, &t2) == WASMEXT_INST_TAG_HELD);
     wasmext_store_error(s2, text, sizeof text);
     CHECK(strstr(text, "hgx.t") != NULL && strstr(text, "another tag holds the import already") != NULL && strstr(text, "until the store that holds it is closed") != NULL);
     CHECK(*cell == t1.address && self_catch(x1) == 11); /* the refusal changed nothing */
@@ -163,7 +179,7 @@ static void test_clear_is_compare_and_swap(void) {
         wasmext_export t3;
         CHECK(wasmext_tag_new(third, TYPES_IJ, 2, &t3) == 0);
         CHECK(bind_tag(y2, &t2) == 0 && wasmext_instance_instantiate(y2) == 0 && *cell == t2.address);
-        CHECK(bind_tag(y3, &t3) == WASMEXT_STORE_INCOMPATIBLE);
+        CHECK(bind_tag(y3, &t3) == WASMEXT_INST_TAG_HELD);
         CHECK(wasmext_store_free(third) == WASMEXT_STORE_OK);
         CHECK(*cell == t2.address && self_catch(y2) == 11);
     }
@@ -192,8 +208,96 @@ static void test_a_tag_of_a_module(void) {
     }
 }
 
+/* a record of an export of a store that is closed is not used: the tag of a module, a table of a module, a table of the host (the close freed what it points into) */
+static void test_a_record_of_a_closed_store(void) {
+    wasmext_store *s = wasmext_store_new();
+    wasmext_instance *a = wasmext_instance_new(s, &ta_binding, NULL), *b = wasmext_instance_new(s, &tb_binding, NULL);
+    wasmext_export tab, tag, htab;
+    int err = 0;
+    wasmext_tab *ht = wasmext_tab_new(s, 0x70, 4, 8, &err); /* a table of the host: the close frees it, and the record points into it */
+    CHECK(ht != NULL && wasmext_tab_record(ht, NULL, &htab) == 0);
+    CHECK(wasmext_instance_instantiate(a) == 0);
+    CHECK(wasmext_instance_export_record(a, (uint32_t)export_of(a, "tab", WASMEXT_DESC_TABLE), NULL, &tab) == 0);
+    CHECK(wasmext_instance_export_record(a, (uint32_t)export_of(a, "t", WASMEXT_DESC_TAG), NULL, &tag) == 0);
+    CHECK(wasmext_store_close(s) == WASMEXT_STORE_OK);
+    CHECK(wasmext_instance_bind_export(b, (uint32_t)import_of_kind(b, WASMEXT_DESC_TABLE), &tab) == (int)WASMEXT_TRAP_CLOSED);
+    CHECK(wasmext_instance_bind_export(b, (uint32_t)import_of_kind(b, WASMEXT_DESC_TABLE), &htab) == (int)WASMEXT_TRAP_CLOSED);
+    CHECK(bind_tag(b, &tag) == (int)WASMEXT_TRAP_CLOSED);
+    CHECK(wasmext_store_free(s) == WASMEXT_STORE_OK);
+}
+
+/* a barrier for the two threads of a round: both spin until the round is started */
+static wasmext_counter go_;
+typedef struct { wasmext_store *s; wasmext_instance *i; wasmext_export *rec; int rc; } round_t;
+static THREAD_RESULT make_tags(void *arg) {
+    round_t *r = (round_t *)arg;
+    wasmext_export rec;
+    while (!wasmext_atomic_load(&go_)) ;
+    r->rc = wasmext_tag_new(r->s, TYPES_IJ, 2, &rec); /* 0, or WASMEXT_TRAP_CLOSED if the close came first */
+    return 0;
+}
+static THREAD_RESULT close_it(void *arg) {
+    round_t *r = (round_t *)arg;
+    while (!wasmext_atomic_load(&go_)) ;
+    wasmext_store_close(r->s);
+    return 0;
+}
+/* two threads that start together on the flag: `first` and the close of r->s */
+static void race_with_close(THREAD_RESULT (*first)(void *), round_t *r) {
+    thread_t a, b;
+    wasmext_atomic_store(&go_, 0);
+    thread_start(&a, first, r);
+    thread_start(&b, close_it, r);
+    wasmext_atomic_store(&go_, 1);
+    thread_join(a);
+    thread_join(b);
+}
+static THREAD_RESULT bind_it(void *arg) {
+    round_t *r = (round_t *)arg;
+    while (!wasmext_atomic_load(&go_)) ;
+    r->rc = bind_tag(r->i, r->rec);
+    return 0;
+}
+
+/* tag_new against the close: the tag is owned before it is registered, so a close in between takes both or neither. Under AddressSanitizer a tag that the close freed and tag_new then
+   freed again, or a close that ran the member of a tag already freed, is a heap-use-after-free. */
+static void test_new_against_close(void) {
+    for (int k = 0; k < 30000; k++) {
+        wasmext_store *s = wasmext_store_new();
+        round_t r;
+        memset(&r, 0, sizeof r);
+        r.s = s;
+        race_with_close(make_tags, &r);
+        CHECK(r.rc == 0 || r.rc == (int)WASMEXT_TRAP_CLOSED);
+        CHECK(wasmext_store_free(s) == WASMEXT_STORE_OK);
+    }
+}
+
+/* bind_export against the close: the cell is set under the lock of the store, after the check of `closing`. A bind that came too late must not write the tag the close has freed into the
+   cell, which the whole program reads. With the set outside the lock this fails in 6 of 6 runs at 100000 rounds (3 of 4 at 30000), so the rounds are many. The outcome of each round is 0 (bound, then cleared by the close) or closed; the cell is empty after it, always. */
+static void test_bind_against_close(void) {
+    int bound = 0, closed = 0;
+    for (int k = 0; k < 100000; k++) {
+        wasmext_store *s = wasmext_store_new();
+        wasmext_instance *x = wasmext_instance_new(s, &hz_binding, NULL);
+        wasmext_export rec;
+        round_t r;
+        void *volatile *cell = cell_of(x);
+        memset(&r, 0, sizeof r);
+        r.s = s; r.i = x; r.rec = &rec;
+        if (wasmext_tag_new(s, TYPES_IJ, 2, &rec) != 0) { CHECK(0); wasmext_store_free(s); continue; }
+        race_with_close(bind_it, &r);
+        if (r.rc == 0) bound++;
+        else if (r.rc == (int)WASMEXT_TRAP_CLOSED) closed++;
+        CHECK(r.rc == 0 || r.rc == (int)WASMEXT_TRAP_CLOSED);
+        if (*cell != NULL) { CHECK(*cell == NULL); *cell = NULL; } /* a freed tag in the cell: said once, and put right so the rounds go on */
+        CHECK(wasmext_store_free(s) == WASMEXT_STORE_OK);
+    }
+    CHECK(bound + closed == 100000);
+}
+
 /* threads, each with stores of its own: one thread per cell (nothing refused), and two threads for one cell (a store holds it, or is refused, and then holds it later) */
-typedef struct { const wasmext_binding *binding; int rounds; int bad; int refused; } worker_t;
+typedef struct { const wasmext_binding *binding; int rounds; int bad; int refused; int linked; } worker_t;
 static THREAD_RESULT worker(void *arg) {
     worker_t *w = (worker_t *)arg;
     for (int k = 0; k < w->rounds; k++) {
@@ -203,22 +307,41 @@ static THREAD_RESULT worker(void *arg) {
         int rc;
         if (s == NULL || i == NULL || wasmext_tag_new(s, TYPES_IJ, 2, &rec) != 0) { w->bad++; continue; }
         rc = bind_tag(i, &rec);
-        if (rc == WASMEXT_STORE_INCOMPATIBLE) w->refused++;
-        else if (rc != 0 || wasmext_instance_instantiate(i) != 0 || self_catch(i) != 11) w->bad++;
+        if (rc == WASMEXT_INST_TAG_HELD) w->refused++;
+        else if (rc == 0) w->linked++;
+        if (rc != 0 && rc != WASMEXT_INST_TAG_HELD) w->bad++;
+        else if (rc == 0 && (wasmext_instance_instantiate(i) != 0 || self_catch(i) != 11)) w->bad++;
         if (wasmext_store_free(s) != WASMEXT_STORE_OK) w->bad++;
     }
     wasmext_thread_free();
     return 0;
 }
+static void run_workers(worker_t *w, const wasmext_binding *const *b, int n) {
+    thread_t t[4];
+    for (int k = 0; k < n; k++) { memset(&w[k], 0, sizeof w[k]); w[k].binding = b[k]; w[k].rounds = 300; }
+    for (int k = 0; k < n; k++) thread_start(&t[k], worker, &w[k]);
+    for (int k = 0; k < n; k++) thread_join(t[k]);
+}
 static void test_threads(void) {
     worker_t w[4];
-    thread_t t[4];
     const wasmext_binding *b[4] = {&hx_binding, &hz_binding, &hy_binding, &hy_binding};
-    for (int k = 0; k < 4; k++) { memset(&w[k], 0, sizeof w[k]); w[k].binding = b[k]; w[k].rounds = 300; }
-    for (int k = 0; k < 4; k++) thread_start(&t[k], worker, &w[k]);
-    for (int k = 0; k < 4; k++) thread_join(t[k]);
-    CHECK(w[0].bad == 0 && w[0].refused == 0 && w[1].bad == 0 && w[1].refused == 0); /* one thread for the cell: never refused */
-    CHECK(w[2].bad == 0 && w[3].bad == 0 && w[2].refused + w[3].refused < 600);       /* two for one: some refused, some linked, none wrong */
+    /* one thread for a cell: never refused */
+    run_workers(w, b, 4);
+    CHECK(w[0].bad == 0 && w[0].refused == 0 && w[0].linked == 300 && w[1].bad == 0 && w[1].refused == 0 && w[1].linked == 300);
+    /* two for one cell: some linked (the first bind of all finds the cell empty), none wrong; the count that were refused is a matter of timing */
+    CHECK(w[2].bad == 0 && w[3].bad == 0 && w[2].linked + w[3].linked >= 1 && w[2].linked + w[3].linked + w[2].refused + w[3].refused == 600);
+    {   /* two for one cell while a store of the main thread holds it: every one of them is refused, and when that store is freed they may link */
+        wasmext_store *held = wasmext_store_new();
+        wasmext_instance *y = wasmext_instance_new(held, &hy_binding, NULL);
+        wasmext_export rec;
+        const wasmext_binding *two[2] = {&hy_binding, &hy_binding};
+        CHECK(wasmext_tag_new(held, TYPES_IJ, 2, &rec) == 0 && bind_tag(y, &rec) == 0);
+        run_workers(w, two, 2);
+        CHECK(w[0].bad == 0 && w[1].bad == 0 && w[0].refused == 300 && w[1].refused == 300 && w[0].linked == 0 && w[1].linked == 0);
+        CHECK(wasmext_store_free(held) == WASMEXT_STORE_OK);
+        run_workers(w, two, 2);
+        CHECK(w[0].bad == 0 && w[1].bad == 0 && w[0].linked + w[1].linked >= 1 && w[0].linked + w[1].linked + w[0].refused + w[1].refused == 600);
+    }
     {
         wasmext_store *s = wasmext_store_new();
         wasmext_instance *x = wasmext_instance_new(s, &hx_binding, NULL), *y = wasmext_instance_new(s, &hy_binding, NULL), *z = wasmext_instance_new(s, &hz_binding, NULL);
@@ -232,6 +355,9 @@ int main(void) {
     test_cell();
     test_clear_is_compare_and_swap();
     test_a_tag_of_a_module();
+    test_a_record_of_a_closed_store();
+    test_new_against_close();
+    test_bind_against_close();
     test_threads();
     if (failures) { fprintf(stderr, "%d failed\n", failures); return 1; }
     puts("ok");

@@ -21,4 +21,4 @@ One file per contract: `S<nnnn>-<slug>.md`, written from `docs/templates/spec.md
 | S0005 | [Tables](S0005-tables.md) | implemented | maintainer |
 | S0006 | [Externref](S0006-externref.md) | implemented | maintainer |
 | S0007 | [Tags and exceptions](S0007-tags-exceptions.md) | implemented | maintainer |
-| S0008 | [Shared store across artifacts](S0008-shared-store.md) | draft | maintainer |
+| S0008 | [Shared store across artifacts](S0008-shared-store.md) | approved | maintainer |

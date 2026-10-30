@@ -2,7 +2,7 @@
 title: Shared store across artifacts
 kind: spec
 id: S0008
-status: draft
+status: approved
 superseded_by:
 related: [D1, D2, D3, D29, D34]
 owner: maintainer
@@ -104,7 +104,7 @@ Design 1 was corrected on 2026-10-30 after the maintainer's remark: copies of th
 8. **New Dn** (written with the step): one supersedes D29; one amends D34 (host tags belong to the store, the cell is cleared at close); one records that D2's condition ("one party owns the traps of a group") is met; one records that the host is shared through the store (supersedes the line of `architecture.md`).
 Known risks, not solved: MSVC `longjmp` across two DLLs (SEH) is untested; the artifact that made a store must stay loaded while any instance of the store runs.
 
-Status stays `draft` until the maintainer sets `approved` (rule of CLAUDE.md: no code before). Step 8 is built as 8a then 8b, each with an independent `reviewer` and a before/after run of `tools/bench_calls.py`.
+Status `approved` by the maintainer on 2026-10-30 ("затверджую, починай 8a"). Step 8 is built as 8a-1 (header, layout hash, `attach`, `instance_new` refusal, test with two artifacts built apart, links through shims, a funcref of a foreign artifact refused), 8a-2 (references in link signatures: letters `F` and `E`), 8a-3 (host tags owned by the store), then 8b (runtime of the store: entry, exceptions, serials), each with an independent `reviewer` and a before/after run of `tools/bench_calls.py`.
 
 ## Changes
 * 2026-10-30: created (draft) from the design study of a `Plan` agent.
@@ -112,3 +112,4 @@ Status stays `draft` until the maintainer sets `approved` (rule of CLAUDE.md: no
 * 2026-10-30: the model stated as that of Wasmtime (runtime, host and state shared in the store; only the distribution of the runtime differs).
 * 2026-10-30: binding to the store explicit; stores share nothing (one known leak: the process-global cell of an imported tag).
 * 2026-10-30: open questions decided by the model of Wasmtime; waiting for `approved`.
+* 2026-10-30: approved by the maintainer; 8a-1 started.

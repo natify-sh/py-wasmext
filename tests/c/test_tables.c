@@ -5,7 +5,7 @@
 #include <stdio.h>
 #include "wasmext_table.h"
 
-extern const wasmext_binding owner_binding, user_binding, trapper_binding, strict_binding, capped_binding;
+extern const wasmext_binding owner_binding, user_binding, trapper_binding, strict_binding, capped_binding, hostf_binding;
 
 #ifdef _WIN32
 #include <process.h>
@@ -288,6 +288,152 @@ static void test_call_ref(void) {
     wasmext_store_free(other);
 }
 
+/* a funcref as a parameter and as a result of an exported function, in the middle of a call (`get`, `put`) and in the signature of an import: the host function is given the funcref and
+   answers one. An argument is of the store (or null); a result is written where the caller points `as.ref`. */
+static wasmext_val REF(wasmext_funcref *f) { wasmext_val x; memset(&x, 0, sizeof x); x.type = 0x70; x.as.ref = f; return x; }
+static int export_call(wasmext_instance *i, const char *name, const wasmext_val *a, uint32_t na, wasmext_val *r, uint32_t nr) {
+    return wasmext_instance_call(i, (uint32_t)export_of(i, name, WASMEXT_DESC_FUNC), a, na, r, nr);
+}
+static void test_funcref_values(void) {
+    wasmext_store *s = wasmext_store_new(), *other = wasmext_store_new();
+    wasmext_instance *owner = wasmext_instance_new(s, &owner_binding, NULL), *user = wasmext_instance_new(s, &user_binding, NULL);
+    wasmext_instance *stranger = wasmext_instance_new(other, &owner_binding, NULL);
+    wasmext_funcref nine, seven, back, back2, none, foreign;
+    wasmext_val a[2], r[2];
+    CHECK(wasmext_instance_instantiate(owner) == 0 && link_table(user, owner) == 0 && wasmext_instance_instantiate(user) == 0 && wasmext_instance_instantiate(stranger) == 0);
+    CHECK(funcref_of(user, "nine", &nine) == 0 && funcref_of(owner, "seven", &seven) == 0 && funcref_of(stranger, "seven", &foreign) == 0);
+    /* the identity: the function of another instance goes in and comes out as the same function, with its owner and its store */
+    a[0] = REF(&nine); r[0] = REF(&back);
+    CHECK(export_call(owner, "ident", a, 1, r, 1) == 0 && r[0].type == 0x70);
+    CHECK(back.ref.func == nine.ref.func && back.ref.module_instance == nine.ref.module_instance && back.owner == user->owner && back.store == s);
+    CHECK(wasmext_instance_call_ref(owner, &back, NULL, 0, r, 1) == 0 && r[0].as.i32 == 9); /* ... and it can be called */
+    /* null: a null pointer, and a pointer to a funcref with no function */
+    memset(&none, 0, sizeof none);
+    a[0] = REF(NULL); r[0] = REF(&back);
+    CHECK(export_call(owner, "ident", a, 1, r, 1) == 0 && back.ref.func == NULL && back.owner == 0 && back.store == s);
+    a[0] = REF(&none); r[0] = REF(&back);
+    CHECK(export_call(owner, "ident", a, 1, r, 1) == 0 && back.ref.func == NULL);
+    a[0] = REF(NULL);
+    CHECK(export_call(owner, "isnull", a, 1, r, 1) == 0 && r[0].as.i32 == 1);
+    a[0] = REF(&nine);
+    CHECK(export_call(owner, "isnull", a, 1, r, 1) == 0 && r[0].as.i32 == 0);
+    /* the place for a result is the caller's: none is a refusal, and nothing is called */
+    a[0] = REF(&nine); r[0] = REF(NULL);
+    CHECK(export_call(owner, "ident", a, 1, r, 1) == WASMEXT_INST_BAD_ARGS);
+    /* several results, in order */
+    a[0] = REF(&nine); a[1] = REF(&seven); r[0] = REF(&back); r[1] = REF(&back2);
+    CHECK(export_call(owner, "pair", a, 2, r, 2) == 0 && back.ref.func == seven.ref.func && back.owner == owner->owner && back2.ref.func == nine.ref.func && back2.owner == user->owner);
+    /* a function of another store, a forged one: refused before the call */
+    a[0] = REF(&foreign); r[0] = REF(&back);
+    CHECK(export_call(owner, "ident", a, 1, r, 1) == WASMEXT_TAB_WRONG_STORE);
+    foreign = nine; foreign.owner += 1;
+    a[0] = REF(&foreign);
+    CHECK(export_call(owner, "ident", a, 1, r, 1) == WASMEXT_TAB_WRONG_STORE);
+    /* `put` and `get` use the table inside the module: the function put in slot 2 is called by `call_indirect`, and `get` gives back what a table holds */
+    {
+        wasmext_val i2 = I32(2);
+        a[0] = i2; a[1] = REF(&nine);
+        CHECK(export_call(owner, "put", a, 2, NULL, 0) == 0 && value(owner, "call", 2) == 9);
+        r[0] = REF(&back);
+        CHECK(export_call(owner, "get", &i2, 1, r, 1) == 0 && back.ref.func == nine.ref.func && back.owner == user->owner);
+        i2 = I32(3);
+        CHECK(export_call(owner, "get", &i2, 1, r, 1) == 0 && back.ref.func == NULL); /* an empty slot is a null funcref */
+        i2 = I32(9);
+        CHECK(export_call(owner, "get", &i2, 1, r, 1) == (int)WASM_RT_TRAP_OOB); /* a trap of the module, the instance stays */
+    }
+    /* call_ref of a function with a funcref in its signature, through the instance that declares the type */
+    {
+        wasmext_funcref ident;
+        CHECK(funcref_of(owner, "ident", &ident) == 0);
+        a[0] = REF(&nine); r[0] = REF(&back);
+        CHECK(wasmext_instance_call_ref(owner, &ident, a, 1, r, 1) == 0 && back.ref.func == nine.ref.func && back.owner == user->owner);
+        r[0] = REF(NULL);
+        CHECK(wasmext_instance_call_ref(owner, &ident, a, 1, r, 1) == WASMEXT_INST_BAD_ARGS);
+    }
+    /* a function with a funcref in its signature is not linked to an import by the typed shape: its record has no function to call */
+    {
+        wasmext_export rec;
+        CHECK(wasmext_instance_export_record(owner, (uint32_t)export_of(owner, "ident", WASMEXT_DESC_FUNC), NULL, &rec) == WASMEXT_INST_UNSUPPORTED);
+    }
+    wasmext_store_free(s);
+    wasmext_store_free(other);
+}
+
+/* what a host function is given and answers when its signature has a funcref (the import `env.visit`) */
+typedef struct { int mode; wasmext_funcref seen; wasmext_funcref give; int calls; } visit_t;
+static int visit(void *user, const wasmext_val *args, wasmext_val *results) {
+    visit_t *v = (visit_t *)user;
+    v->calls++;
+    if (args[0].type == 0x70 && args[0].as.ref != NULL) v->seen = *(const wasmext_funcref *)args[0].as.ref;
+    switch (v->mode) {
+        case 0: results[0].type = 0x70; results[0].as.ref = args[0].as.ref; return 0; /* the same funcref back */
+        case 1: results[0].type = 0x70; results[0].as.ref = NULL; return 0;          /* null */
+        case 2: results[0].type = 0x70; results[0].as.ref = &v->give; return 0;      /* what the test chose */
+        case 3: results[0].type = 0x7F; return 0;                                    /* a value of another type */
+        default: return 77;                                                          /* a failure of the host */
+    }
+}
+static void test_funcref_in_an_import(void) {
+    wasmext_store *s = wasmext_store_new();
+    wasmext_instance *owner = wasmext_instance_new(s, &owner_binding, NULL), *user = wasmext_instance_new(s, &user_binding, NULL), *h = wasmext_instance_new(s, &hostf_binding, NULL);
+    wasmext_funcref nine, back, other_store;
+    wasmext_val a[1], r[1];
+    visit_t v;
+    int import = import_of(h, "env", "visit");
+    wasmext_store *other = wasmext_store_new();
+    wasmext_instance *stranger = wasmext_instance_new(other, &owner_binding, NULL);
+    memset(&v, 0, sizeof v);
+    CHECK(wasmext_instance_instantiate(owner) == 0 && link_table(user, owner) == 0 && wasmext_instance_instantiate(user) == 0 && wasmext_instance_instantiate(stranger) == 0);
+    CHECK(funcref_of(user, "nine", &nine) == 0 && funcref_of(stranger, "seven", &other_store) == 0);
+    /* the typed shape has no funcref: refused, and the uniform one is taken */
+    CHECK(wasmext_instance_bind_typed(h, (uint32_t)import, (void *)visit, &v) == WASMEXT_INST_UNSUPPORTED);
+    CHECK(wasmext_instance_bind_func(h, (uint32_t)import, visit, &v) == 0 && wasmext_instance_instantiate(h) == 0);
+    /* the host function is given the funcref of the function, with its owner and the store, and answers the same */
+    a[0] = REF(&nine); r[0] = REF(&back);
+    CHECK(export_call(h, "via", a, 1, r, 1) == 0 && v.calls == 1);
+    CHECK(v.seen.ref.func == nine.ref.func && v.seen.owner == user->owner && v.seen.store == s);
+    CHECK(back.ref.func == nine.ref.func && back.owner == user->owner);
+    /* a null funcref is given as a funcref with no function, and answered as null */
+    a[0] = REF(NULL);
+    CHECK(export_call(h, "via", a, 1, r, 1) == 0 && v.seen.ref.func == NULL && back.ref.func == NULL);
+    v.mode = 1;
+    a[0] = REF(&nine);
+    CHECK(export_call(h, "via", a, 1, r, 1) == 0 && back.ref.func == NULL);
+    /* the host answers a function of the store: it goes through */
+    v.mode = 2;
+    v.give = nine;
+    CHECK(export_call(h, "via", a, 1, r, 1) == 0 && back.ref.func == nine.ref.func);
+    /* ... a function of another store, a forged one, a value of another type, a failure: the call traps, with the failure of the host, and the instance is usable after it */
+    v.give = other_store;
+    CHECK(export_call(h, "via", a, 1, r, 1) == (int)WASMEXT_TRAP_HOST);
+    v.give = nine; v.give.owner += 1;
+    CHECK(export_call(h, "via", a, 1, r, 1) == (int)WASMEXT_TRAP_HOST);
+    v.mode = 3;
+    CHECK(export_call(h, "via", a, 1, r, 1) == (int)WASMEXT_TRAP_HOST);
+    v.mode = 4;
+    CHECK(export_call(h, "via", a, 1, r, 1) != 0);
+    v.mode = 0;
+    CHECK(export_call(h, "via", a, 1, r, 1) == 0 && back.ref.func == nine.ref.func);
+    /* a function with a funcref in the signature is not linked to this import either */
+    {
+        wasmext_instance *h2 = wasmext_instance_new(s, &hostf_binding, NULL);
+        wasmext_export rec;
+        CHECK(wasmext_instance_export_record(owner, (uint32_t)export_of(owner, "ident", WASMEXT_DESC_FUNC), NULL, &rec) == WASMEXT_INST_UNSUPPORTED);
+        CHECK(wasmext_instance_export_record(owner, (uint32_t)export_of(owner, "seven", WASMEXT_DESC_FUNC), NULL, &rec) == 0);
+        CHECK(wasmext_instance_bind_export(h2, (uint32_t)import_of(h2, "env", "visit"), &rec) == WASMEXT_INST_LINK_FAILED);
+        {   /* a record from a host that claims the signature of the import: refused because it has a funcref, not because the signatures differ */
+            char text[WASMEXT_STORE_ERROR_SIZE];
+            rec.signature = "r>r";
+            CHECK(wasmext_instance_bind_export(h2, (uint32_t)import_of(h2, "env", "visit"), &rec) == WASMEXT_INST_LINK_FAILED);
+            wasmext_store_error(s, text, sizeof text);
+            CHECK(strstr(text, "funcref") != NULL);
+        }
+        wasmext_instance_free(h2);
+    }
+    wasmext_store_free(s);
+    wasmext_store_free(other);
+}
+
 /* the record of an exported function says it can be put in a table */
 static void test_function_records(void) {
     wasmext_store *s = wasmext_store_new();
@@ -348,6 +494,8 @@ int main(void) {
     test_refusals_and_failed_start();
     test_function_records();
     test_call_ref();
+    test_funcref_values();
+    test_funcref_in_an_import();
     test_threads();
     if (failures) { fprintf(stderr, "%d failed\n", failures); return 1; }
     puts("ok");

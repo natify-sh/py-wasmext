@@ -157,6 +157,11 @@ TABLE_MODULES = {
   (func (export "mix") (param f32 f64) (result f64) local.get 0 f64.promote_f32 local.get 1 f64.add)
   (func (export "nothing"))
   (func (export "vec") (param v128) (result v128) local.get 0 local.get 0 i32x4.add)
+  (func (export "ident") (param funcref) (result funcref) local.get 0)
+  (func (export "pair") (param funcref funcref) (result funcref funcref) local.get 1 local.get 0)
+  (func (export "isnull") (param funcref) (result i32) local.get 0 ref.is_null)
+  (func (export "get") (param i32) (result funcref) local.get 0 table.get $tab)
+  (func (export "put") (param i32 funcref) local.get 0 local.get 1 table.set $tab)
   (elem (i32.const 0) $seven))""",
     "user": """(module
   (type $t (func (result i32)))
@@ -178,6 +183,10 @@ TABLE_MODULES = {
   (elem (i32.const 3) $ten)
   (func $boom unreachable)
   (start $boom))""",
+    "hostf": """(module
+  (import "env" "visit" (func $visit (param funcref) (result funcref)))
+  (func (export "via") (param funcref) (result funcref) local.get 0 call $visit)
+  (func (export "tell") (param funcref)  local.get 0 drop))""",
     "strict": '(module (import "own_s" "tab" (table 8 funcref)) (func (export "f")))',
     "capped": '(module (import "own_c" "tab" (table 1 2 funcref)) (func (export "f")))',
 }
@@ -298,9 +307,13 @@ def test_function_imports_under_sanitizers(build: Callable[..., Path]) -> None:
             "wasm32-wasip1",
             "fd_close is",
         ),
-        ('(module (import "env" "r" (func (param funcref))) (func (export "f")))', "wasm32", "reference type"),
+        (
+            '(module (import "env" "r" (func (param externref))) (func (export "f")))',
+            "wasm32",
+            "externref in its signature",
+        ),
     ],
-    ids=["externref-table", "tag", "wasi-0.2-no-realloc", "no-memory", "unknown-call", "wrong-signature", "funcref"],
+    ids=["externref-table", "tag", "wasi-0.2-no-realloc", "no-memory", "unknown-call", "wrong-signature", "externref"],
 )
 def test_what_the_binding_does_not_carry_yet(wabt: Path, tmp_path: Path, wat: str, host: str, message: str) -> None:
     from wasmext._gen import GenError

@@ -75,6 +75,7 @@ typedef struct {
     wasmext_host_fn host;
     void *typed;
     void *user;
+    void *self; /* the instance (wasmext_instance *) that the slot is of: what the generated function of an import needs to make a funcref of the store, set when a function is bound */
 } wasmext_import_slot;
 
 /* one export of the binding, by the index of the descriptor: for a function, the adapter of its signature and the typed function of wasm2c */
@@ -231,6 +232,7 @@ static inline int wasmext_instance_bind_func(wasmext_instance *i, uint32_t impor
     slot->host = fn;
     slot->typed = NULL;
     slot->user = user;
+    slot->self = i;
     i->bound[import] = 1;
     return 0;
 }
@@ -240,12 +242,17 @@ static inline int wasmext_instance_bind_func(wasmext_instance *i, uint32_t impor
 static inline int wasmext_instance_bind_typed(wasmext_instance *i, uint32_t import, void *fn, void *user) {
     int rc = wasmext_instance_bind_check_(i, import);
     wasmext_import_slot *slot;
+    const wasmext_functype *ft;
     if (rc != 0) return rc;
     if (fn == NULL) return WASMEXT_INST_BAD_IMPORT;
+    ft = &i->binding->descriptor->imports[import].type;
+    for (uint32_t k = 0; k < ft->n_params + ft->n_results; k++)
+        if ((k < ft->n_params ? ft->params[k] : ft->results[k - ft->n_params]) == 0x70) return WASMEXT_INST_UNSUPPORTED; /* a funcref is a struct: the typed shape has none, the uniform one does */
     slot = i->binding->import_slot(i->module, import);
     slot->host = NULL;
     slot->typed = fn;
     slot->user = user;
+    slot->self = i;
     i->bound[import] = 1;
     return 0;
 }
@@ -351,6 +358,7 @@ static inline int wasmext_instance_bind_export(wasmext_instance *i, uint32_t imp
             wasmext_import_slot *slot;
             wasmext_instance_signature_(&m->type, want, sizeof want);
             if (e->kind != WASMEXT_FUNC || e->address == NULL) return wasmext_instance_link_fail_(i, m, "is a function: the export given is not", "");
+            if (strchr(want, 'r') != NULL) return wasmext_instance_link_fail_(i, m, "has a funcref in its signature: a function with one cannot be linked to an export (a funcref is a struct, the typed shape has none)", "");
             if (e->signature == NULL || strcmp(e->signature, want) != 0) {
                 char detail[200];
                 snprintf(detail, sizeof detail, " %s: the export given is another one (%s)", want, e->signature != NULL ? e->signature : "none");
@@ -361,6 +369,7 @@ static inline int wasmext_instance_bind_export(wasmext_instance *i, uint32_t imp
             slot->host = NULL;
             slot->typed = e->address;
             slot->user = e->instance;
+            slot->self = i;
             break;
         }
         case WASMEXT_DESC_MEMORY: {
@@ -551,6 +560,54 @@ static inline int wasmext_funcref_check_(wasmext_store *store, const wasmext_fun
     return 0;
 }
 
+/* The funcref that wasm passes to a host function: `out` is made from the element `r`, of the store of the instance `self` (the slot's). WASMEXT_TAB_STALE when `r` is a function
+   that no member of the store stands behind. A null funcref is a funcref with no function. */
+static inline int wasmext_funcref_from_(void *self, const wasm_rt_funcref_t *r, wasmext_funcref *out) {
+    wasmext_instance *i = (wasmext_instance *)self;
+    out->ref = *r;
+    out->store = i->store;
+    out->owner = 0;
+    if (r->func == NULL) return 0;
+    return wasmext_store_find(i->store, r->module_instance, &out->owner) == WASMEXT_STORE_OK ? 0 : WASMEXT_TAB_STALE;
+}
+
+/* The funcref that a host function answers (`r`, whose type must be 0x70 and whose `as.ref` is a `wasmext_funcref` of its own, or NULL for a null funcref) into `out`: 0, or an error
+   (the call then traps with the failure of the host). */
+static inline int wasmext_funcref_result_(void *self, const wasmext_val *r, wasm_rt_funcref_t *out) {
+    wasmext_instance *i = (wasmext_instance *)self;
+    const wasmext_funcref *f = (const wasmext_funcref *)r->as.ref;
+    int rc;
+    if (r->type != 0x70) return WASMEXT_INST_BAD_ARGS;
+    rc = wasmext_funcref_check_(i->store, f);
+    if (rc != 0) return rc;
+    if (f == NULL) memset(out, 0, sizeof *out);
+    else *out = f->ref;
+    return 0;
+}
+
+/* Before a call: a funcref argument is of this store (or null), and a funcref result has a `wasmext_funcref` to be filled (the caller points `as.ref` at one). After it, the funcref
+   results get their store and the handle of their instance. `ptypes` and `rtypes` are the types of the signature. */
+static inline int wasmext_call_check_refs_(wasmext_store *s, const wasmext_functype *t, const wasmext_val *args, const wasmext_val *results) {
+    for (uint32_t k = 0; k < t->n_params; k++)
+        if (t->params[k] == 0x70) {
+            int rc = wasmext_funcref_check_(s, (const wasmext_funcref *)args[k].as.ref);
+            if (rc != 0) return rc;
+        }
+    for (uint32_t k = 0; k < t->n_results; k++)
+        if (t->results[k] == 0x70 && results[k].as.ref == NULL) return WASMEXT_INST_BAD_ARGS;
+    return 0;
+}
+static inline int wasmext_call_fill_refs_(wasmext_store *s, const wasmext_functype *t, wasmext_val *results) {
+    for (uint32_t k = 0; k < t->n_results; k++)
+        if (t->results[k] == 0x70) {
+            wasmext_funcref *f = (wasmext_funcref *)results[k].as.ref;
+            f->store = s;
+            f->owner = 0;
+            if (f->ref.func != NULL && wasmext_store_find(s, f->ref.module_instance, &f->owner) != WASMEXT_STORE_OK) return WASMEXT_TAB_STALE;
+        }
+    return 0;
+}
+
 /* The exported function `index` as an element of a table: `out` is the value that `wasmext_tab_set` takes. WASMEXT_INST_UNSUPPORTED for a function with a reference in its signature. */
 static inline int wasmext_instance_funcref(wasmext_instance *i, uint32_t index, wasmext_funcref *out) {
     const wasmext_descriptor *d = i->binding->descriptor;
@@ -591,6 +648,8 @@ static inline int wasmext_instance_call(wasmext_instance *i, uint32_t index, con
         if (args[k].type != e->type.params[k]) return WASMEXT_INST_BAD_ARGS;
     if (b->adapter == NULL) return WASMEXT_INST_UNSUPPORTED;
     if (!i->instantiated) return WASMEXT_INST_NOT_INSTANTIATED;
+    rc = wasmext_call_check_refs_(i->store, &e->type, args, results);
+    if (rc != 0) return rc;
     line = wasmext_store_enter(i->store);
     if (line < 0) return (int)WASMEXT_TRAP_CLOSED;
     wasmext_thread_ready();
@@ -599,6 +658,7 @@ static inline int wasmext_instance_call(wasmext_instance *i, uint32_t index, con
     if (i->binding->call_begin != NULL) i->binding->call_begin(i->module);
     rc = b->adapter(i->module, b->function, args, results);
     if (lock != NULL) wasmext_rlock_release_to(lock, level); /* a trap left the unlocks of fusedwasi behind */
+    if (rc == 0) rc = wasmext_call_fill_refs_(i->store, &e->type, results);
     wasmext_store_leave(i->store, line);
     wasmext_atomic_store(&i->status, rc);
     return rc;
@@ -625,6 +685,8 @@ static inline int wasmext_instance_call_ref(wasmext_instance *i, const wasmext_f
     if (rt->sig.n_params != n_args || rt->sig.n_results != n_results) return WASMEXT_INST_BAD_ARGS;
     for (uint32_t k = 0; k < n_args; k++)
         if (args[k].type != rt->sig.params[k]) return WASMEXT_INST_BAD_ARGS;
+    rc = wasmext_call_check_refs_(i->store, &rt->sig, args, results);
+    if (rc != 0) return rc;
     line = wasmext_store_enter(i->store);
     if (line < 0) return (int)WASMEXT_TRAP_CLOSED;
     wasmext_thread_ready();
@@ -633,6 +695,7 @@ static inline int wasmext_instance_call_ref(wasmext_instance *i, const wasmext_f
     if (i->binding->call_begin != NULL) i->binding->call_begin(i->module);
     rc = rt->adapter(f->ref.module_instance, (void *)(void (*)(void))f->ref.func, args, results);
     if (lock != NULL) wasmext_rlock_release_to(lock, level); /* a trap left the unlocks of fusedwasi behind */
+    if (rc == 0) rc = wasmext_call_fill_refs_(i->store, &rt->sig, results);
     wasmext_store_leave(i->store, line);
     wasmext_atomic_store(&i->status, rc);
     return rc;

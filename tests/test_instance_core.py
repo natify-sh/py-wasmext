@@ -1,4 +1,4 @@
-"""Step 3a of layer 1 (docs/step3_instances.md): the instance and the binding of a module, tested as plain C (tests/c/) over a real wasm2c module.
+"""Step 3a of layer 1 (docs/specs/S0003-instances.md): the instance and the binding of a module, tested as plain C (tests/c/) over a real wasm2c module.
 The C of the descriptor and of the binding is made by wasmext from the model; nothing of Python is in the program that runs."""
 
 # pyright: reportPrivateUsage=false

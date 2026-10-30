@@ -1,4 +1,4 @@
-/* externref in plain C (docs/step6_externref.md): the values the host gives the store, as arguments, results and answers of host functions; what is refused (a value of another store, a
+/* externref in plain C (docs/specs/S0006-externref.md): the values the host gives the store, as arguments, results and answers of host functions; what is refused (a value of another store, a
    pointer that this API did not make); the release at the close, once; call_ref and a host function of a table with an externref in the signature; many threads giving values. */
 #define WASMEXT_DEFINE_THREAD_STATE
 #include <stdio.h>

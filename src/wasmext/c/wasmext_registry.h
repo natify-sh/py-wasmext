@@ -1,6 +1,6 @@
 /* The registry of owners of a store: who the members of the store are, found by the pointer that a `funcref` of wasm2c carries (`module_instance`) and by a handle that
    does not lie. A member lives until the store is closed (as in Wasmtime, whose Store frees its instances only when it is dropped). No Python, no module; the lock is the
-   store's (wasmext_store.h wraps these functions), this file is the data. See docs/step4_owners.md.
+   store's (wasmext_store.h wraps these functions), this file is the data. See docs/specs/S0004-owners-registry.md.
 
    The handle `wasmext_owner` is 64 bits: the serial of the store (16 bits), the index of the slot (24) and its generation (24). A slot that is freed and used again has
    another generation, so a stale handle is recognised; a handle of another store has another serial. 0 is none. */

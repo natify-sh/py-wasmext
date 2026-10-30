@@ -54,7 +54,7 @@ Traps found on the way, with the rule. Newest last.
 * Symptom: duplicate symbols at link time; one tag per import name for the whole program.
 * Cause: wasm2c reads an imported tag from a global symbol, not from a slot. Every symbol `w2c_<module>_<name>` of an import (function, global, table accessor, tag) is a global of the program.
 * Rule: tests use distinct import module names. A tag link is made once for the program; a link to another tag is refused, never mixed.
-* Where found: step 7, `docs/step7_tags.md`, commit 11fca32.
+* Where found: step 7, `docs/specs/S0007-tags-exceptions.md`, commit 11fca32.
 
 ### A tag import needs a writable variable
 * What happened: modules that import tags, tables or globals need the `wasm_rt_*` types from the runtime headers, and the tag is declared `extern const`.
@@ -68,7 +68,7 @@ Traps found on the way, with the rule. Newest last.
 * Symptom: a test looked trusted and was not.
 * Cause: only "the test failed" was checked, not why.
 * Rule: read the failure message every time; use a mutation that changes the behaviour.
-* Where found: CLAUDE.md, principles ("for the right reason"); `docs/step3_instances.md` (3c: a 32-bit memory with guard pages is not touched).
+* Where found: CLAUDE.md, principles ("for the right reason"); `docs/specs/S0003-instances.md` (3c: a 32-bit memory with guard pages is not touched).
 
 ### CI cancels the runs of the previous commit
 * What happened: the Pre-commit run of aa214cd was cancelled by the push of the next commit.
@@ -96,7 +96,7 @@ Traps found on the way, with the rule. Newest last.
 * Symptom: the runtime aborted on the second `wasm_rt_init`. Under the sanitizers `wasm_rt_is_initialized` was wrong.
 * Cause: a flag per translation unit set the thread up twice (binding and test). Sanitizers install their own alternate stack in every thread, so the runtime takes the thread for set up.
 * Rule: one flag per artifact, defined by the one file that defines `WASMEXT_DEFINE_THREAD_STATE`. Do not use `wasm_rt_is_initialized`.
-* Where found: step 3d, `src/wasmext/c/wasmext_instance.h` (`wasmext_thread_ready_`), `docs/step3_instances.md`.
+* Where found: step 3d, `src/wasmext/c/wasmext_instance.h` (`wasmext_thread_ready_`), `docs/specs/S0003-instances.md`.
 
 ### WIN32_LEAN_AND_MEAN does not belong in a public header
 * What happened: `WIN32_LEAN_AND_MEAN` was defined in `wasmext_glue.h` to stop the winsock redefinition under MSVC.
@@ -110,14 +110,14 @@ Traps found on the way, with the rule. Newest last.
 * Symptom: ThreadSanitizer reported a data race.
 * Cause: calls from several threads write `status` at once.
 * Rule: shared state of an instance is atomic (`wasmext_counter status`); a caller uses the result of its own call, not `status`.
-* Where found: step 3a, `src/wasmext/c/wasmext_instance.h`, `docs/step3_instances.md`.
+* Where found: step 3a, `src/wasmext/c/wasmext_instance.h`, `docs/specs/S0003-instances.md`.
 
 ### Closing an exporter's store while an importer lives
 * What happened: instances of two stores were linked, and the store of the exporter was closed first.
 * Symptom: use after free under ASan: the importer's functions read what the closed store freed.
 * Cause: the store frees its members at close; a link across stores outlives them.
 * Rule: instances are linked only inside one store; `bind_export` refuses a record of another store, with the reason in the text.
-* Where found: step 4, `docs/step4_owners.md`, commit ae2e463 (`tests/c/test_links.c`).
+* Where found: step 4, `docs/specs/S0004-owners-registry.md`, commit ae2e463 (`tests/c/test_links.c`).
 
 ### Deleted marks fill a hash table
 * What happened: the registry table (open addressing) marks removed entries as `WASMEXT_TABLE_DELETED`.
@@ -131,4 +131,4 @@ Traps found on the way, with the rule. Newest last.
 * Symptom: the caller gets a trap, not an exception.
 * Cause: the shim enters the exporter with its own entry, so an uncaught exception ends there as a trap.
 * Rule: an exception unwinds into the caller only where the code runs on the caller's native stack, for example a function reached through a shared table. Test exceptions through tables, not through links.
-* Where found: step 7, `docs/step7_tags.md`, commit 11fca32.
+* Where found: step 7, `docs/specs/S0007-tags-exceptions.md`, commit 11fca32.

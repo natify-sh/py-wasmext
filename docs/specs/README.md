@@ -14,3 +14,10 @@ One file per contract: `S<nnnn>-<slug>.md`, written from `docs/templates/spec.md
 
 | id | title | status | owner |
 |---|---|---|---|
+| S0001 | [Model and descriptor](S0001-model-descriptor.md) | implemented | maintainer |
+| S0002 | [Store](S0002-store.md) | implemented | maintainer |
+| S0003 | [Instances](S0003-instances.md) | implemented | maintainer |
+| S0004 | [Owners registry](S0004-owners-registry.md) | implemented | maintainer |
+| S0005 | [Tables](S0005-tables.md) | implemented | maintainer |
+| S0006 | [Externref](S0006-externref.md) | implemented | maintainer |
+| S0007 | [Tags and exceptions](S0007-tags-exceptions.md) | implemented | maintainer |

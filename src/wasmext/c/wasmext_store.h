@@ -1,6 +1,6 @@
 /* The store: what a group of instances share and what ends with it. The same for every module; no module, no Python, no wasm2c runtime in this
    file (a host that is not Python uses it as it is). It is a header of `static inline` functions, like wasmext_glue.h: every artifact compiles its own
-   copy. See docs/step2_store.md.
+   copy. See docs/specs/S0002-store.md.
 
    - an arena of what the store owns (`wasmext_store_own`), freed in the reverse order when the store is closed;
    - a counter of active calls that is split by thread, and a flag `closing`: `close` refuses (WASMEXT_STORE_BUSY) while a call is in flight, so a
@@ -213,7 +213,7 @@ static inline void wasmext_store_error(wasmext_store *s, char *buffer, size_t ca
     WASMEXT_UNLOCK(&s->mutex);
 }
 
-/* ---- the members (docs/step4_owners.md) ---- */
+/* ---- the members (docs/specs/S0004-owners-registry.md) ---- */
 
 static inline int wasmext_store_registry_code_(int rc) {
     switch (rc) {

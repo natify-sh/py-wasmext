@@ -5,7 +5,7 @@
    `wasmext_host_new` makes it, `wasmext_host_free` lets it go; a store owns it through its arena (`wasmext_store_own(store, host, wasmext_host_free)`), as it owns
    any other object. Needs the headers of fusedwasi and the runtime of wasm2c (a failed hook traps the host), not a module. Define WASMEXT_HOST_P1 in a build for
    WASI 0.1: the descriptors of 0.1 are then made at once (a directory that cannot be opened is told by `wasmext_host_new`), and an errno of WASI is turned back
-   into the system's. See docs/step2_store.md. */
+   into the system's. See docs/specs/S0002-store.md. */
 #ifndef WASMEXT_HOST_H
 #define WASMEXT_HOST_H
 

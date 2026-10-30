@@ -1,5 +1,5 @@
 /* The instance: the same for every module. A static core over a generated `wasmext_binding`, the part that names the symbols that wasm2c made for the module
-   (see <name>_binding.c, made by wasmext from the model). No Python, nothing of a front end in this file. See docs/step3_instances.md.
+   (see <name>_binding.c, made by wasmext from the model). No Python, nothing of a front end in this file. See docs/specs/S0003-instances.md.
 
    An instance is made in a store (wasmext_store.h): every call enters the store, so a call into a closed store answers WASMEXT_TRAP_CLOSED and `close` of a
    store refuses while a call is in flight. A call answers 0, or the code of a trap (> 0: a WASM_RT_TRAP_* of the runtime, or a WASMEXT_TRAP_*, described by
@@ -640,7 +640,7 @@ static inline int wasmext_funcref_check_(wasmext_store *store, const wasmext_fun
     return 0;
 }
 
-/* ---- externref (docs/step6_externref.md) ---- */
+/* ---- externref (docs/specs/S0006-externref.md) ---- */
 
 /* A value of the host that WebAssembly holds as an `externref`: the pointer to this record is the reference. WebAssembly never reads it; the store keeps the record until it is closed, then
    calls `release(user)` once. */
@@ -921,7 +921,7 @@ static inline int wasmext_instance_host_funcref(wasmext_instance *i, const uint8
     return 0;
 }
 
-/* ---- exceptions (docs/step7_tags.md) ---- */
+/* ---- exceptions (docs/specs/S0007-tags-exceptions.md) ---- */
 
 /* The exception that nothing caught, as the runtime of wasm2c keeps it for the thread (it is the answer of a call WASM_RT_TRAP_UNCAUGHT_EXCEPTION): the tag (its identity, as a record of an
    exported tag says it in `address`), which tag of this module's binding it is (`tag_index`, or -1: the module neither exports nor imports it; an exception of a tag that the module keeps to

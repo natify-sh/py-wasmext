@@ -1,4 +1,4 @@
-"""Step 2 of layer 1 (docs/step2_store.md): the store and the table of errors, tested as plain C (tests/c/), with no wasm module and no Python in the program."""
+"""Step 2 of layer 1 (docs/specs/S0002-store.md): the store and the table of errors, tested as plain C (tests/c/), with no wasm module and no Python in the program."""
 
 from __future__ import annotations
 

@@ -1,5 +1,5 @@
-/* Tables of `funcref` and of `externref`: a table of the store, and the operations on it and on a table that an instance exports. No Python. See docs/step5_tables.md and
-   docs/step6_externref.md.
+/* Tables of `funcref` and of `externref`: a table of the store, and the operations on it and on a table that an instance exports. No Python. See docs/specs/S0005-tables.md and
+   docs/specs/S0006-externref.md.
 
    A table is a member of a store (wasmext_store.h), as in WebAssembly and in Wasmtime: it lives until the store is closed. An element of a `funcref` table is a `wasmext_funcref`
    (wasmext_instance.h): a function of an instance of the SAME store; a function of another store is refused (WASMEXT_TAB_WRONG_STORE), and so is a value that was not made by this API

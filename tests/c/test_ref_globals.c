@@ -1,4 +1,4 @@
-/* Globals of funcref and of externref (docs/step6_externref.md, 6c): read and written by the host and by the module, shared between instances, given a value by the host when they are
+/* Globals of funcref and of externref (docs/specs/S0006-externref.md, 6c): read and written by the host and by the module, shared between instances, given a value by the host when they are
    immutable imports, and what a failed start leaves in a shared global of funcref. */
 #define WASMEXT_DEFINE_THREAD_STATE
 #include <stdio.h>

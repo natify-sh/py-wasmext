@@ -9,6 +9,8 @@ updated: 2026-10-30
 
 Short records: what was decided, why, what was rejected. Newest last. Never renumber; to change a decision add a new one with Supersedes: Dn.
 
+The step documents `step1` to `step7` were moved to `docs/specs/` (`S0001` to `S0007`) on 2026-10-30; the section names in `Source:` lines are those of the old step texts (in git before that commit).
+
 Dates are those of the source document. "undated" means the source gives no date. An entry that says CONFLICT: found two documents that disagree; both facts are written and nothing was chosen.
 
 ### D1. Every artifact keeps its own copy of the runtime; no shared runtime library
@@ -85,23 +87,23 @@ Source: docs/layers.md, "Rule (the owner): existing code is not patched on the s
 ### D15. The shipped core is the same for every module; the generated binding holds data only
 Status: accepted · Date: 2026-10-28 · Supersedes: — · Evidence: tests/test_instance_core.py
 The static hand-written C core in `src/wasmext/c/` decides every rule. What is per module is the wasm2c output, the descriptor, and a small generated table that ties the core to the symbols wasm2c mangled; no rule is decided in it.
-CONFLICT: layers.md says the generated binding is "data only". step3_instances.md, in the same plan, says the binding is also generated code: one adapter per distinct signature, the forwarders of imports, and the trampolines for host functions in tables, and asks "Accepted?" because a `libffi` is not taken (not on every target). The step 3 binding was built that way; "no rule decided in it" holds in both.
-Source: docs/layers.md, "Layer 1: wasmext glue"; docs/step3_instances.md, "Generated (`<name>_binding.c`...)" and "Open" item 1
+CONFLICT: layers.md says the generated binding is "data only". specs/S0003-instances.md, in the same plan, says the binding is also generated code: one adapter per distinct signature, the forwarders of imports, and the trampolines for host functions in tables, and asks "Accepted?" because a `libffi` is not taken (not on every target). The step 3 binding was built that way; "no rule decided in it" holds in both.
+Source: docs/layers.md, "Layer 1: wasmext glue"; docs/specs/S0003-instances.md, "Generated (`<name>_binding.c`...)" and "Open" item 1
 
 ### D16. The core is header code compiled into each artifact
 Status: accepted · Date: 2026-10-28 · Supersedes: — · Evidence: tests/c/test_store.c
 `static inline` functions in headers, as `wasmext_glue.h` is: no switch, no separate `.c`. Each built module has its own copy, as it has of the wasm2c runtime. Layer 2 later prefixes the names with the module name.
-Source: docs/step2_store.md, "Where the code lives, and how it reaches an artifact"
+Source: docs/specs/S0002-store.md, "Where the code lives, and how it reaches an artifact"
 
 ### D17. Step 1: one model at build time, one descriptor at run time
 Status: accepted · Date: 2026-10-28 · Supersedes: — · Evidence: tests/test_descriptor.py, tests/c/dump_descriptor.c
 `build_model` analyses a module once (frozen dataclasses, no I/O) and every emitter reads only it. The library describes itself at run time (`wasmext_descriptor`, read-only data, a `version` and `size` checked by a reader). Function types are inline in each import and export (no table of types); names are WebAssembly names, never mangled C names; value types use the bytes of the binary format; parameter names are in the descriptor (the owner's answer). Two readers of the same facts must agree (C text against `ModuleModel.dump()`).
-Source: docs/step1_model_descriptor.md, the Status paragraph and "The descriptor"
+Source: docs/specs/S0001-model-descriptor.md, the Status paragraph and "The descriptor"
 
 ### D18. `close` refuses when a call is in flight; it never waits
 Status: accepted · Date: 2026-10-28 · Supersedes: — · Evidence: tests/c/test_store.c, tests/test_store_core.py
 `wasmext_store_close` raises the flag, adds the split per-thread counters, and returns BUSY if a call is in flight, so a close from inside a call cannot wait for itself. Twice is 0. After the close every entry that takes the store fails with a code (`WASMEXT_TRAP_CLOSED` for a call), never a crash. Counters are split by thread because one shared counter costs about 300 ns per call on 4 threads against 25 to 35 ns.
-Source: docs/step2_store.md, "What step 2 builds" item 3; docs/context_concept.md, "Closing"
+Source: docs/specs/S0002-store.md, "What step 2 builds" item 3; docs/context_concept.md, "Closing"
 
 ### D19. Free-threaded safety is a requirement of layer 1; ctypes uses CDLL
 Status: accepted · Date: 2026-10-28 · Supersedes: — · Evidence: tests/c/test_store.c (TSan)
@@ -112,88 +114,88 @@ Source: docs/layers.md, "Free-threaded is a requirement of layer 1" and "Layer 3
 Status: accepted · Date: 2026-10-29 · Supersedes: — · Evidence: tests/c/test_rlock.c, tests/c/test_wasi_imports.c
 One host is shared by all instances of a store, so a WASI call takes one recursive lock in the host (a hook may call back into the module). Rejected: (b) "a store with WASI is for one thread at a time". The state of fusedwasi has no lock by design (the plan says so), and the README of fusedwasi has no sentence about it.
 CONFLICT: layers.md and context_concept.md state the rule "no lock held across a call outward", and context_concept says a recursive mutex is not needed with it. The host lock of step 3b2 is held around a call into fusedwasi whose hook may call back into the module, hence recursive. The two rules are for different locks (registry and store against host); no document reconciles them.
-Source: docs/step3_instances.md, "3b2" Open item 1 and Status (3b2a); the sentence about fusedwasi's README: maintainer, sessions of 2026-10-27..30
+Source: docs/specs/S0003-instances.md, "3b2" Open item 1 and Status (3b2a); the sentence about fusedwasi's README: maintainer, sessions of 2026-10-27..30
 
 ### D21. The host is an object owned by the store through the arena
 Status: accepted · Date: 2026-10-29 · Supersedes: — · Evidence: tests/c/test_host.c
 `wasmext_host_new` makes the host of fusedwasi (config copies, streams, clocks, random, sockets, http hooks); the store owns it with `wasmext_store_own`, and a host slot (`wasmext_store_set_host`, once) holds it, so the store module stays free of fusedwasi and wasm-rt (option A). One `wasmext_host` serves 0.1 and 0.2. The Python hooks later become plain C hooks with a `user`, in the extension's own step.
-Source: docs/step2_store.md, "Part 2b" (What 2b builds, items 2 and 3); docs/step3_instances.md, "3b2" item 1
+Source: docs/specs/S0002-store.md, "Part 2b" (What 2b builds, items 2 and 3); docs/specs/S0003-instances.md, "3b2" item 1
 
 ### D22. The configuration is strict
 Status: accepted · Date: 2026-10-29 · Supersedes: — · Evidence: tests/c/test_host.c
 An environment item with no `=` or no NAME, a directory with no host path, a NULL array with a count, or a NULL item is `EINVAL`. A `dirs` item must be `host::guest` with both parts; `NAME=` (empty value) is fine. Reason: nobody outside the project passes a configuration, so there is no old behaviour to keep.
-Source: docs/step2_store.md, "Part 2b" paragraph "Built (2026-10-29)"
+Source: docs/specs/S0002-store.md, "Part 2b" paragraph "Built (2026-10-29)"
 
 ### D23. One host-function shape for every import, with a typed fast path kept
 Status: accepted · Date: 2026-10-29 · Supersedes: — · Evidence: tests/c/test_imports.c
 `int host_fn(void *user, const wasmext_val *args, wasmext_val *results)`; 0 is success. A typed shape `result f(void *user, parameters..., int *trapped)` stays, chosen per import. `wasmext_val` is a tagged value passed only by pointer or in arrays; `v128` is 16 bytes. Imports are bound by index of the descriptor.
-Source: docs/step3_instances.md, "Static (`src/wasmext/c/wasmext_instance.h`)" item 5 and Status 3b1
+Source: docs/specs/S0003-instances.md, "Static (`src/wasmext/c/wasmext_instance.h`)" item 5 and Status 3b1
 
 ### D24. The registry of owners lives in the store; the handle is a number with a generation
 Status: accepted · Date: 2026-10-29 · Supersedes: — · Evidence: tests/c/test_registry.c
 The core registers an instance itself when it is instantiated; a front end only replaces the object. A stale handle is recognised, not taken for a new member at the same address. This replaces the Python-capsule design (one registry per interpreter, shared through `wasmext.owners.v1`, weak entries, keep-alive chains `writers`/`refs`).
-CONFLICT: docs/owners_registry.md (2026-10-28) still describes weak entries and the capsule, and TABLES_PLAN.md still describes the `writers`/`refs` chains. step4_owners.md (2026-10-29) says it replaces the capsule design and keeps strong members; owners_registry.md keeps its reading of the problem only.
-Source: docs/step4_owners.md, Status paragraph and "What step 4 builds" items 1 and 4; docs/owners_registry.md, "The design"
+CONFLICT: docs/owners_registry.md (2026-10-28) still describes weak entries and the capsule, and TABLES_PLAN.md still describes the `writers`/`refs` chains. specs/S0004-owners-registry.md (2026-10-29) says it replaces the capsule design and keeps strong members; owners_registry.md keeps its reading of the problem only.
+Source: docs/specs/S0004-owners-registry.md, Status paragraph and "What step 4 builds" items 1 and 4; docs/owners_registry.md, "The design"
 
 ### D25. Registry handle: 16-bit store serial, 24-bit index, 24-bit generation
 Status: accepted · Date: 2026-10-29 · Supersedes: — · Evidence: tests/c/test_registry.c
 Not 32 and 32 (the first design). With 32/32 a handle of one store opens the member in the same slot of another store, and a lookup by a pointer cannot say which store a pointer belongs to. `find` by a pointer answers UNKNOWN for a pointer of another store; a handle of another store is WRONG.
-Source: docs/step4_owners.md, Status paragraph, points (1) and (5)
+Source: docs/specs/S0004-owners-registry.md, Status paragraph, points (1) and (5)
 
 ### D26. Instances are linked only inside one store
 Status: accepted · Date: 2026-10-29 · Supersedes: — · Evidence: tests/c/test_links.c
 The store frees its members at close, and the first run showed a link across stores was a use after free under ASan (closing the exporter's store freed what the importer's functions read). So, as in Wasmtime, an object of another store is refused: `wasmext_export.store` was added and `bind_export` refuses a record of another store, with the reason in the text.
-Source: docs/step4_owners.md, Status paragraph, point (2)
+Source: docs/specs/S0004-owners-registry.md, Status paragraph, point (2)
 
 ### D27. The store frees its instances; `wasmext_instance_free` is refused when instantiated
 Status: accepted · Date: 2026-10-29 · Supersedes: — · Evidence: tests/c/test_registry.c, tests/c/test_links.c
 At close: first an unlink pass in reverse registration order (an importer lets go of what it took from exporters), then release in reverse order. A closed instance answers `WASMEXT_TRAP_CLOSED`, not a dangling pointer. The cyclic-collector walk (`wasmext_store_each`) exists, but a front end is not required to use it; what is required is an explicit close (`with store:`), as in `wasmtime-py`.
-Source: docs/step4_owners.md, Status paragraph points (3) and (4), and "What step 4 builds" items 5 and 6
+Source: docs/specs/S0004-owners-registry.md, Status paragraph points (3) and (4), and "What step 4 builds" items 5 and 6
 
 ### D28. An object of another store is a soft refusal in C and an exception in Python
 Status: accepted · Date: 2026-10-29 · Supersedes: — · Evidence: tests/c/test_registry.c, tests/c/test_tables.c
 An error code with the reason in the text of the store (`WRONG_STORE` and similar), never a panic or an abort; the Python front end raises its exception. The registry knows its own members only.
-Source: docs/step4_owners.md, Status paragraph (end), and "What step 4 builds" item 3
+Source: docs/specs/S0004-owners-registry.md, Status paragraph (end), and "What step 4 builds" item 3
 
 ### D29. Tables first inside one artifact; the trap state across artifacts is step 8
 Status: accepted · Date: 2026-10-30 · Supersedes: — · Evidence: tests/c/test_tables.c
 Each artifact has its own `g_wasm_rt_jmp_buf`, so a trap in a function that comes from another artifact jumps to a buffer not set for the call. Inside one artifact there is no problem, and since step 4 a store is made by one artifact. A store joined by modules of another artifact needs shared trap state (the entry stack or a trampoline in the exporter); that is decided in step 8 and written there.
-Source: docs/step5_tables.md, "The one hard fact" and "Open" item 1 (accepted, Status)
+Source: docs/specs/S0005-tables.md, "The one hard fact" and "Open" item 1 (accepted, Status)
 
 ### D30. Host functions in tables and `call_ref` by the host only for declared types (the AOT rule)
 Status: accepted · Date: 2026-10-30 · Supersedes: — · Evidence: tests/c/test_tables.c
 The trampoline of a host function is made by the binding for each type the module declares in its type section; a type the module does not declare is `WASMEXT_INST_UNDECLARED_TYPE` and nothing is made. `call_ref` is matched like `call_indirect` (the type pointer, then its 256-bit hash). An element of an undeclared type can still be called by wasm. The same rule limits `wasmext_instance_throw` to tags the module exports or imports.
-Source: docs/step5_tables.md, Status (5b-1, 5c) and "Open" items 2 and 3; docs/step7_tags.md, "7c"
+Source: docs/specs/S0005-tables.md, Status (5b-1, 5c) and "Open" items 2 and 3; docs/specs/S0007-tags-exceptions.md, "7c"
 
 ### D31. A funcref in a signature or a global is passed by pointer to a `wasmext_funcref`
 Status: accepted · Date: 2026-10-30 · Supersedes: — · Evidence: tests/c/test_tables.c, tests/c/test_ref_globals.c
 A `wasmext_val` of type 0x70 has `as.ref` pointing to a `wasmext_funcref` (NULL is the null funcref); the typed fast shape has none. A funcref carries its `store` and the `owner` handle, and `set` accepts it only if the pointer of its instance is a member of the store under that very handle: a forged value is refused, not trusted. Results are written where the caller points `as.ref` (NULL is BAD_ARGS). Globals of funcref and externref were put in step 6 (the owner accepted this); their cell is 32 bytes.
-Source: docs/step5_tables.md, Status (5a, 5b-2); docs/step6_externref.md, Status and "6c"
+Source: docs/specs/S0005-tables.md, Status (5a, 5b-2); docs/specs/S0006-externref.md, Status and "6c"
 
 ### D32. `externref` is a pointer to a record the store owns until close; the lazy collector is step 9
 Status: accepted · Date: 2026-10-30 · Supersedes: — · Evidence: tests/c/test_externref.c
 `wasmext_extern_new(store, user, release, &ref)` makes a record `{user, release, store}`, a member of the store; its pointer is the `externref` WebAssembly sees. `release(user)` is called once at close (in Python: the decref). A value going in must be a member of this store, else `WASMEXT_TAB_WRONG_STORE`; NULL is always acceptable. The host cannot count references because wasm copies them where the host does not see (locals, tables, globals). Until step 9 a long-lived store holds every value it was given and the way out is to close it.
-Source: docs/step6_externref.md, "The decision: the store owns what it is given" and "What crosses, and the checks"
+Source: docs/specs/S0006-externref.md, "The decision: the store owns what it is given" and "What crosses, and the checks"
 
 ### D33. Members of the registry have a kind (`WASMEXT_KIND_*`)
 Status: accepted · Date: 2026-10-30 · Supersedes: — · Evidence: tests/c/test_registry.c (`test_kinds`), tests/c/test_externref.c
 Found in review after step 6a: checks accepted any pointer that was a member of the store, so an instance pointer would have passed as an `externref`. Now a pointer is accepted as a reference only if it is an `EXTERN`, and as the `module_instance` of a funcref only if it is an `INSTANCE` or `HOST_FUNC` (`wasmext_store_find_kind`). The kind is a field in the ops, not the address of the ops, because every translation unit has its own copy of a `static const`. A change to step 4 code, made as a hole in what 6a built on it, not a side patch.
-Source: docs/step6_externref.md, "Found in review, after 6c: the members have a kind"
+Source: docs/specs/S0006-externref.md, "Found in review, after 6c: the members have a kind"
 
 ### D34. Tags: one tag per import name in the program; tags made by the host wait for step 8
 Status: accepted · Date: 2026-10-30 · Supersedes: — · Evidence: tests/c/test_tags.c
 wasm2c reads an imported tag from a global symbol, so the binding defines that global and the core writes the exporter's tag into it once for the whole program (atomic compare-and-set); a link to another tag is refused. Two modules importing the same name from the same module collide at link time. A tag made by the host would be one per import name; it waits for step 8. Identity is the pointer (not structure).
-Source: docs/step7_tags.md, "7a" and "Not done, and why"
+Source: docs/specs/S0007-tags-exceptions.md, "7a" and "Not done, and why"
 
 ### D35. The C tests build what the product builds (step 7d)
 Status: accepted · Date: 2026-10-30 · Supersedes: — · Evidence: tests/test_instance_core.py, tests/c/test_nomemory.c
 The tests of steps 3 to 7 had built the raw wasm2c output and runtime. The fixture now runs the C through the repairs of `_natify` (`_repair_imported_elements`, `_portable`, `_repair_tail_calls`, `_export_tags`) and the runtime through `_RUNTIME_WRAPPERS` (a memory allocation traps, it does not `abort()`), using those very functions. The binding uses the table `wasmext_tags_<prefix>` so a tag the module keeps to itself is known. 7d was inserted after step 7 with the owner's agreement; raw wasm2c output is not a test subject.
-Source: docs/layers.md, "7d (inserted after 7, the owner agreed 2026-10-30)"; docs/step7_tags.md, "7d"
+Source: docs/layers.md, "7d (inserted after 7, the owner agreed 2026-10-30)"; docs/specs/S0007-tags-exceptions.md, "7d"
 
 ### D36. Custom page sizes and threads/atomics are done at the end of layer 1; `exnref` is last
 Status: accepted · Date: 2026-10-30 · Supersedes: — · Evidence: —
 Custom page sizes are item 10 (2026-10-28), threads and atomics item 11, `exnref` item 12 "at the very end" (2026-10-30), and only when a real module that uses it exists: the runtime has the type, but `_wasm.py` (`ValType`) does not know it. `exnref` and `throw_ref` are not carried by step 7.
-Source: docs/layers.md, "How it is done" items 10 to 12; docs/step7_tags.md, "Not done, and why"
+Source: docs/layers.md, "How it is done" items 10 to 12; docs/specs/S0007-tags-exceptions.md, "Not done, and why"
 
 ### D37. Other build backends and `.wat` as a source are dropped; Android and Pyodide
 Status: accepted · Date: 2026-10-28 · Supersedes: — · Evidence: —

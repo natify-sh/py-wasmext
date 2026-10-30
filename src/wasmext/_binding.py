@@ -2,7 +2,7 @@
 
 It holds no rule. The adapters turn an array of `wasmext_val` into a typed call of wasm2c (one adapter for each distinct signature, the typed function is a
 field of the export); `instantiate`/`release` catch a trap of the start function; for each import there is the function that wasm2c declares, which looks at the
-slot of the import and calls the host (the typed function when it was given, else the uniform one with the values packed). See docs/step3_instances.md."""
+slot of the import and calls the host (the typed function when it was given, else the uniform one with the values packed). See docs/specs/S0003-instances.md."""
 
 # pyright: reportPrivateUsage=false
 from __future__ import annotations
@@ -29,7 +29,7 @@ __all__ = ["binding_headers", "generate_binding"]
 
 _FIELD: dict[ValType, str] = {"i32": "i32", "i64": "i64", "f32": "f32", "f64": "f64"}
 _REFS = ("funcref", "externref")
-# the old glue refuses an externref (and so lacks it in these tables); the binding carries it: the pointer of a record of the store (docs/step6_externref.md)
+# the old glue refuses an externref (and so lacks it in these tables); the binding carries it: the pointer of a record of the store (docs/specs/S0006-externref.md)
 _CTYPE: dict[ValType, str] = {**_GEN_CTYPE, "externref": "wasm_rt_externref_t"}
 _MULTI_CODE: dict[ValType, str] = {**_GEN_MULTI_CODE, "externref": "e"}
 _RT_TYPE: dict[ValType, str] = {**_GEN_RT_TYPE, "externref": "WASM_RT_EXTERNREF"}

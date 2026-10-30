@@ -1,4 +1,4 @@
-"""Step 1 of layer 1 (docs/step1_model_descriptor.md): the model and the descriptor. The descriptor is read by a plain C program
+"""Step 1 of layer 1 (docs/specs/S0001-model-descriptor.md): the model and the descriptor. The descriptor is read by a plain C program
 (tests/c/dump_descriptor.c, no Python, no wasm2c output) and by the model in Python; the two texts must be the same."""
 
 from __future__ import annotations

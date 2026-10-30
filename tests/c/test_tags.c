@@ -1,4 +1,4 @@
-/* Tags between instances in plain C (docs/step7_tags.md, 7a): a module exports a tag and another imports it, so an exception thrown by a function of the one that is reached by the other
+/* Tags between instances in plain C (docs/specs/S0007-tags-exceptions.md, 7a): a module exports a tag and another imports it, so an exception thrown by a function of the one that is reached by the other
    (through a shared table) is caught by the other; a tag of the same signature that is another tag is not the same; the refusals. Modules: ta (the tag and a table), tb (imports both),
    tc (a tag of its own with the same signature), td (another tag), te (a tag import of another signature). */
 #define WASMEXT_DEFINE_THREAD_STATE

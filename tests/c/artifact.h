@@ -37,6 +37,7 @@ typedef struct {
     int (*store_misc)(wasmext_store *s, int which); /* 0: adopt, 1: register, 2: set_host, each with an object of this copy */
     wasmext_store *(*so_new)(void);      /* a store made, and attached to, by a file of this copy that includes wasmext_store.h alone */
     int (*so_attach)(wasmext_store *s, char *why, size_t cap);
+    wasmext_extern *(*extern_make)(wasmext_store *s, void *user); /* an externref of the store holding `user`, made by this copy (NULL on failure) */
 } artifact_api;
 
 /* in artifact_store_only.c: the file that includes only wasmext_store.h */

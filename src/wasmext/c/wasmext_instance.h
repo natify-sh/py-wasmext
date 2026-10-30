@@ -59,6 +59,11 @@ enum {
     WASMEXT_TAB_FOREIGN_ARTIFACT = -35 /* TEMPORARY, removed by 8b (S0008): the function is of an instance of another artifact than the code that would call it */
 };
 
+/* A shim and the typed slot of a linked function pass a funcref by value (four words) and an externref as a pointer; both sides are generated from the same types of wasm2c, and the
+   hash of the layout covers `wasmext_funcref`. This fails the build where the runtime of wasm2c lays them out otherwise. */
+typedef char wasmext_funcref_is_four_words_[sizeof(wasm_rt_funcref_t) == 4 * sizeof(void *) ? 1 : -1];
+typedef char wasmext_externref_is_a_pointer_[sizeof(wasm_rt_externref_t) == sizeof(void *) ? 1 : -1];
+
 /* The host function of an import, one shape for every import: `args` and `results` are arrays of the counts and the types of its signature (the descriptor
    has them). 0 is success; any other answer is a failure of the host, which keeps its own error: the call traps with WASMEXT_TRAP_HOST. A host function that
    is the export of another instance answers WASMEXT_TRAP_LINKED + the code of a trap of that instance, and the trap goes through with that code. */
@@ -116,9 +121,10 @@ typedef struct {
     void *function;
     void *(*address)(void *instance); /* a memory: its wasm_rt_memory_t *; a global: the pointer to its value (wasm2c's accessor); NULL for the others */
     void *shim;                       /* a function: `result f(void *wasmext_instance, parameters..., int *trapped)` for the record that another instance imports; a trap of this
-                                         instance is answered as WASMEXT_TRAP_LINKED + its code. NULL for the others, and for a function with a reference in its signature */
-    const char *signature;            /* a function: its signature as the record says it (the parameters, '>', the results: i j f d o) */
-    void (*funcref)(void *instance, wasm_rt_funcref_t *out); /* a function: fills the element of a table that stands for it; NULL for the others, and for a function with a reference in its signature */
+                                         instance is answered as WASMEXT_TRAP_LINKED + its code. NULL for the others. A funcref or an externref in the signature comes in by value
+                                         (`wasm_rt_funcref_t`, `void *`) and is checked by the shim */
+    const char *signature;            /* a function: its signature as the record says it (the parameters, '>', the results: i j f d o, F for a funcref, E for an externref) */
+    void (*funcref)(void *instance, wasm_rt_funcref_t *out); /* a function: fills the element of a table that stands for it; NULL for the others */
 } wasmext_export_binding;
 
 /* What the generated code gives the core for a module. Constant data and the functions that name the symbols of wasm2c. */
@@ -312,14 +318,14 @@ static inline int wasmext_instance_link_fail_(wasmext_instance *i, const wasmext
     return WASMEXT_INST_LINK_FAILED;
 }
 
-/* the signature as a record says it: the parameters, '>', the results, a letter each (i j f d o) */
+/* the signature as a record says it: the parameters, '>', the results, a letter each (i j f d o; F a funcref, E an externref: a link compares them as letters) */
 static inline void wasmext_instance_signature_(const wasmext_functype *t, char *out, size_t cap) {
     size_t n = 0;
     for (uint32_t k = 0; k < t->n_params + t->n_results + 1 && n + 1 < cap; k++) {
         if (k == t->n_params) { out[n++] = '>'; continue; }
         {
             uint8_t b = k < t->n_params ? t->params[k] : t->results[k - t->n_params - 1];
-            out[n++] = b == 0x7F ? 'i' : b == 0x7E ? 'j' : b == 0x7D ? 'f' : b == 0x7C ? 'd' : b == 0x7B ? 'o' : 'r';
+            out[n++] = b == 0x7F ? 'i' : b == 0x7E ? 'j' : b == 0x7D ? 'f' : b == 0x7C ? 'd' : b == 0x7B ? 'o' : b == 0x70 ? 'F' : b == 0x6F ? 'E' : '?';
         }
     }
     out[n] = 0;
@@ -411,7 +417,6 @@ static inline int wasmext_instance_bind_export(wasmext_instance *i, uint32_t imp
             wasmext_import_slot *slot;
             wasmext_instance_signature_(&m->type, want, sizeof want);
             if (e->kind != WASMEXT_FUNC || e->address == NULL) return wasmext_instance_link_fail_(i, m, "is a function: the export given is not", "");
-            if (strchr(want, 'r') != NULL) return wasmext_instance_link_fail_(i, m, "has a funcref in its signature: a function with one cannot be linked to an export (a funcref is a struct, the typed shape has none)", "");
             if (e->signature == NULL || strcmp(e->signature, want) != 0) {
                 char detail[200];
                 snprintf(detail, sizeof detail, " %s: the export given is another one (%s)", want, e->signature != NULL ? e->signature : "none");
@@ -804,7 +809,7 @@ static inline int wasmext_call_fill_refs_(wasmext_store *s, const wasmext_functy
     return 0;
 }
 
-/* The exported function `index` as an element of a table: `out` is the value that `wasmext_tab_set` takes. WASMEXT_INST_UNSUPPORTED for a function with a reference in its signature. */
+/* The exported function `index` as an element of a table: `out` is the value that `wasmext_tab_set` takes. */
 static inline int wasmext_instance_funcref(wasmext_instance *i, uint32_t index, wasmext_funcref *out) {
     const wasmext_descriptor *d = i->binding->descriptor;
     if (index >= d->n_exports || d->exports[index].kind != WASMEXT_DESC_FUNC) return WASMEXT_INST_BAD_EXPORT;
@@ -936,6 +941,16 @@ static inline const void *wasmext_funcref_artifact_(wasmext_store *store, const 
         return ((const wasmext_instance *)((const wasmext_host_func *)object)->slot.self)->artifact;
     }
     return NULL;
+}
+
+/* A funcref that comes into the code of the instance `i` through a link (S0008, 8a-2), where the shape is the typed one and no `wasmext_val` is made: the argument of a shim and the
+   answer of a linked function. It must be a function of a member of the store, and (TEMPORARY, removed by 8b) of the artifact of `i`: 0, or WASMEXT_TAB_STALE or
+   WASMEXT_TAB_FOREIGN_ARTIFACT. An externref is checked with `wasmext_extern_check_`. A link is inside one store, so no more is needed. */
+static inline int wasmext_link_funcref_(wasmext_instance *i, const wasm_rt_funcref_t *r) {
+    wasmext_funcref f;
+    int rc = wasmext_funcref_from_(i, r, &f);
+    if (rc != 0) return rc;
+    return wasmext_foreign_artifact_(i->artifact, wasmext_funcref_artifact_(i->store, &f)); /* removed by 8b (S0008) */
 }
 
 /* Makes a function of the host (`fn`, one shape for every function: see wasmext_host_fn) of the type `params` -> `results` (bytes of the binary format) and gives it as an element of a table

@@ -33,26 +33,16 @@ _REFS = ("funcref", "externref")
 _CTYPE: dict[ValType, str] = {**_GEN_CTYPE, "externref": "wasm_rt_externref_t"}
 _MULTI_CODE: dict[ValType, str] = {**_GEN_MULTI_CODE, "externref": "e"}
 _RT_TYPE: dict[ValType, str] = {**_GEN_RT_TYPE, "externref": "WASM_RT_EXTERNREF"}
-# the letters of a signature in a record (wasmext_instance_signature_ of the core): the two kinds of reference are alike
+# the letters of a signature in a record (wasmext_instance_signature_ of the core): F is a funcref and E an externref, so a link compares them as letters (docs/specs/S0008-shared-store.md)
 _SIG_LETTER: dict[ValType, str] = {
     "i32": "i",
     "i64": "j",
     "f32": "f",
     "f64": "d",
     "v128": "o",
-    "funcref": "r",
-    "externref": "r",
+    "funcref": "F",
+    "externref": "E",
 }
-
-
-def _has_ref(ft: FuncType) -> bool:
-    """A reference in the signature: it is checked as it comes in, so the typed shape (no checks) does not carry it, and only the uniform one does."""
-    return any(t in _REFS for t in (*ft.params, *ft.results))
-
-
-def _linkable(ft: FuncType) -> bool:
-    """A function that another instance can import by the typed shape (`result f(void *instance, parameters..., int *trapped)`): one with no reference in its signature."""
-    return not _has_ref(ft)
 
 
 def _ret(ft: FuncType) -> str:
@@ -139,9 +129,8 @@ def _forwarder(c_module: str, c_name: str, slot: int, ft: FuncType) -> list[str]
         f"{_ret(ft)} {c_name}(struct {c_module} *h{params}) {{",
         f"    wasmext_import_slot *s = &h->slot[{slot}];",
     ]
-    return _slot_call(
-        head, ft, typed=not _has_ref(ft)
-    )  # a reference is checked as it comes in: only the uniform shape carries it
+    # a typed function of a slot is a host function (without references: `bind_typed` refuses them) or the shim of a linked export, which takes a funcref by value and checks it as it comes in
+    return _slot_call(head, ft, typed=True)
 
 
 def _trampoline(name: str, ft: FuncType) -> list[str]:
@@ -172,8 +161,14 @@ def _slot_call(head: list[str], ft: FuncType, *, typed: bool) -> list[str]:
             f"        {'res = ' if ft.results else ''}(({ret} (*)(void *{ptypes}, int *))s->typed)(s->user{names}, &trapped);",
             "        if (trapped == WASMEXT_HOST_THROW) wasmext_throw_pending_();",
             "        if (trapped) wasm_rt_trap(WASMEXT_TRAP_OF(trapped));",
-            "    } else {",
         ]
+        # only the shim of a linked export has a reference in its signature (the callee's artifact and store checks are in the shim; the answer of the callee is checked for this one)
+        out += [
+            f"        if (wasmext_link_funcref_((wasmext_instance *)s->self, &{f'res.{_MULTI_CODE[t]}{j}' if several else 'res'})) wasm_rt_trap(WASMEXT_TRAP_HOST);"
+            for j, t in enumerate(ft.results)
+            if t == "funcref"
+        ]
+        out.append("    } else {")
     else:
         out.append("    {")
     out += [
@@ -327,9 +322,8 @@ def generate_binding(model: ModuleModel) -> str:
         if e.kind == "func":
             ft = e.type
             assert isinstance(ft, FuncType)
-            if _linkable(ft):
-                shims[n] = f"{last}_shim{n}"
-                out += _shim(shims[n], last, prefix, e.name, ft)
+            shims[n] = f"{last}_shim{n}"
+            out += _shim(shims[n], last, prefix, e.name, ft)
     # the types of the type section that `call_ref` can call an element of: each with the type as wasm2c knows it (the hash that `call_indirect` compares), an adapter (always the reentrant
     # one: the function is of any instance of the store, and the call may be made from inside a host function), and the signature
     ref_rows: list[str] = []
@@ -458,8 +452,8 @@ def generate_binding(model: ModuleModel) -> str:
         if e.kind == "func":
             ft = e.type
             assert isinstance(ft, FuncType)
-            sig = "".join(_MULTI_CODE[t] for t in ft.params) + ">" + "".join(_MULTI_CODE[t] for t in ft.results)
-            shim = f"(void *){shims[n]}" if n in shims else "0"
+            sig = "".join(_SIG_LETTER[t] for t in ft.params) + ">" + "".join(_SIG_LETTER[t] for t in ft.results)
+            shim = f"(void *){shims[n]}"
             rows.append(
                 f"{{{adapters[(ft.params, ft.results)]}, (void *)(void (*)(void))w2c_{prefix}_{mangle(e.name)}, 0, {shim}, {_c_lit(sig)}, {refs[n]}}}"
             )
@@ -496,7 +490,9 @@ def generate_binding(model: ModuleModel) -> str:
 
 def _shim(name: str, last: str, prefix: str, export: str, ft: FuncType) -> list[str]:
     """The typed function that another instance calls through the record of this export: it enters the store of this instance, catches a trap of its own module and answers
-    it as WASMEXT_TRAP_LINKED + its code, so the trap goes through the caller as one of its own (the buffer of the caller is put back: the entry is the reentrant one)."""
+    it as WASMEXT_TRAP_LINKED + its code, so the trap goes through the caller as one of its own (the buffer of the caller is put back: the entry is the reentrant one).
+    A funcref or an externref comes in by value (`wasm_rt_funcref_t`, `void *`) and is checked here, as a call of the host is: a reference that no member of the store stands behind, or a funcref of
+    another artifact (the temporary guard of S0008, removed by 8b), is answered in `*trapped` (not as a trap of the callee)."""
     ret = _ret(ft)
     params = "".join(f", {_CTYPE[t]} a{k}" for k, t in enumerate(ft.params))
     args = "".join(f", a{k}" for k in range(len(ft.params)))
@@ -510,6 +506,11 @@ def _shim(name: str, last: str, prefix: str, export: str, ft: FuncType) -> list[
     ]
     if ft.results:
         out += [f"    {ret} zero;", "    memset(&zero, 0, sizeof zero);"]
+    for k, t in enumerate(ft.params):
+        if t == "funcref":
+            out.append(f"    rc = wasmext_link_funcref_(self, &a{k}); if (rc) {{ *trapped = rc; {give} }}")
+        elif t == "externref":
+            out.append(f"    rc = wasmext_extern_check_(self->store, a{k}); if (rc) {{ *trapped = rc; {give} }}")
     out += [
         "    rc = wasmext_instance_begin_(self, &line, &level);",
         f"    if (rc) {{ *trapped = (int)WASMEXT_TRAP_LINKED + rc; {give} }}",

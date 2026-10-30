@@ -147,7 +147,7 @@ Helpers that the generated code and the checks use: `wasmext_funcref_member_`, `
 * `ref_types` / `n_ref_types`: one `wasmext_ref_type` for each distinct function type of the type section.
   Fields: `type()` (wasm2c's type through `wasm2c_<p>_get_func_type`), `adapter`, `sig`, `trampoline`.
   The adapters of these types are always the reentrant ones.
-* `wasmext_export_binding.funcref`: fills the element of a table that stands for an export. `shim` and `funcref` are NULL for a function with a reference in its signature.
+* `wasmext_export_binding.funcref`: fills the element of a table that stands for an export. `shim` and `funcref` are set for every function, one with a reference in its signature included (8a-2, S0008).
 * `ref_slot` gives the pointer wasm2c reads for a table import. `wasmext_import_slot.self` is the instance a slot is of.
 * The trampoline of a type is the body of the forwarder of an import (`_slot_call` in `_binding.py`), shared with it. It is made for each type, and `func_type` is the type of the instance that made the funcref.
 * The static headers of layer 1 are compiled strictly by `.github/scripts/layer1_check.c` (gcc, clang, MinGW, MSVC).
@@ -173,7 +173,7 @@ Helpers that the generated code and the checks use: `wasmext_funcref_member_`, `
   It tests whether `module_instance` lies inside the structure of the failed instance. The host does not call into the store with the tables while an instance is made.
 
 ### Functions as elements
-* `wasmext_instance_funcref` fills the funcref of exported function `index`. It answers `WASMEXT_INST_UNSUPPORTED` for a function with a reference in its signature.
+* `wasmext_instance_funcref` fills the funcref of exported function `index`. It works for a function with a reference in its signature as well.
 * `wasmext_instance_call_ref` calls the function of an element through an instance whose module declares its type.
   The type is matched as `call_indirect` does: the pointer of the type, then its 256-bit hash.
 * Errors of `call_ref`: undeclared type is `WASMEXT_INST_UNDECLARED_TYPE`; a null funcref is the trap `WASM_RT_TRAP_NULL_REF`; a funcref of another store is `WASMEXT_TAB_WRONG_STORE`; wrong counts or types are `WASMEXT_INST_BAD_ARGS`.
@@ -189,7 +189,7 @@ Helpers that the generated code and the checks use: `wasmext_funcref_member_`, `
 * For an import, the host function is given a `wasmext_funcref` valid for the call (`slot.self` is the instance it is of).
   It answers one in the same way, or NULL. A function of another store, a forged one, a result of another type, or a failure of the host is a trap `WASMEXT_TRAP_HOST` (or the failure's own code).
 * What a funcref cannot do: the typed fast shape has no funcref (it would pass a struct by value). So `wasmext_instance_bind_typed` refuses such an import (`WASMEXT_INST_UNSUPPORTED`).
-  A function with a funcref in its signature has no record to link: `wasmext_instance_export_record` answers `WASMEXT_INST_UNSUPPORTED`, and `bind_export` refuses a record that claims such a signature.
+  A function with a funcref in its signature has a record and is linked (8a-2, S0008): the letters of the signature are `F` and `E`, the shim and the typed slot pass `wasm_rt_funcref_t` by value and `void *`. The shim checks a reference as it comes in (a funcref of a member of the store and, until 8b, of the artifact of the callee; an externref a member of the store), and the importer checks a funcref that comes out; typed HOST functions with a reference stay refused (`bind_typed` answers `UNSUPPORTED`).
   Linking those across instances is for step 8, with the trap state.
 
 ### Host functions as elements
@@ -273,3 +273,4 @@ Still open elsewhere: the trap state across artifacts and a store shared across 
   The lock of the host (`wasmext_rlock`) is the business of the function itself, as for an import (not done).
 * 2026-10-30: the owner accepted the four open points (above) and the order 5a, 5b, 5c.
 * 2026-10-30: the kind of a member (`WASMEXT_KIND_*`) was added to the registry after review of step 6 (S0006); `wasmext_funcref_member_` finds an instance or a host function only by kind.
+* 2026-10-30: 8a-2 (S0008): a function with a funcref or an externref in its signature has a record, a shim and is linked; typed host functions with references stay refused.

@@ -124,7 +124,7 @@ typedef struct {
     void *owner;        /* what keeps the exporter alive (Python: the instance, a PyObject *): a reader that keeps the address keeps a reference to it */
     void *address;      /* a global: the pointer to its value; a memory: the wasm_rt_memory_t; a function: the function to call (see below); a tag: its identity, the `wasm_rt_tag_t` that `throw` and `catch` compare */
     void *instance;     /* a function: the first argument of that call */
-    const char *signature;  /* a function: the parameters, '>', the results (i j f d o r); a tag: the types of its values, then '>' */
+    const char *signature;  /* a function: the parameters, '>', the results (i j f d o; F a funcref, E an externref); a tag: the types of its values, then '>' */
     uint32_t runtime;   /* WASMEXT_RUNTIME of the host that made it: the layout of the structs of the wasm2c runtime */
     const void *funcref;  /* a function: the wasm_rt_funcref_t of it (its type, the function, the instance), to put in a table; valid while `owner` is; NULL for the others (added at the end: `size` tells a reader) */
     uint32_t floor;     /* the lowest WASMEXT_ABI of a reader that can use this record (wasmext_export_seal): a reader below it refuses */

@@ -17,6 +17,9 @@ static int failures;
 static const artifact_api *A, *B;
 
 static wasmext_val I32(int32_t v) { wasmext_val x; memset(&x, 0, sizeof x); x.type = 0x7F; x.as.i32 = v; return x; }
+static wasmext_val I64(int64_t v) { wasmext_val x; memset(&x, 0, sizeof x); x.type = 0x7E; x.as.i64 = v; return x; }
+static wasmext_val REF(wasmext_funcref *f) { wasmext_val x; memset(&x, 0, sizeof x); x.type = 0x70; x.as.ref = f; return x; }
+static wasmext_val XREF(void *p) { wasmext_val x; memset(&x, 0, sizeof x); x.type = 0x6F; x.as.ref = p; return x; }
 static int32_t call_i32(const artifact_api *api, wasmext_instance *i, const char *name, int32_t a, int32_t b, int n_args) {
     wasmext_val args[2], r;
     args[0] = I32(a);
@@ -273,6 +276,56 @@ static void test_the_other_way(void) {
     CHECK(A->releases() - a0 == 1 && B->releases() - b0 == 1);
 }
 
+/* functions with references in the signature, linked from B to A (8a-2): the externref goes through as the same pointer, with numbers and several results; a funcref of B is refused in the shim
+   of A, and a funcref of A that A answers is refused in the forwarder of B (the temporary guard of 8a, removed by 8b), as a trap of the host; null funcrefs go through. No trap of the
+   callee here: until 8b a trap in code of one copy is not tested across copies (docs/LESSONS.md). */
+static void test_references_through_links(void) {
+    wasmext_store *s = A->store_new();
+    wasmext_instance *lib, *app;
+    wasmext_export rec;
+    wasmext_funcref nine, seven, back, back2;
+    wasmext_val a[4], r[4];
+    wasmext_extern *e1;
+    int item = 1, error = 0;
+    static const char *const names[] = {"fident", "eident", "mixed", "getf", "boom", "isnull"};
+    char why[200];
+    CHECK(B->store_attach(s, why, sizeof why) == WASMEXT_STORE_OK);
+    lib = A->instance_new(s, "rlib", &error);
+    app = B->instance_new(s, "rapp", &error);
+    CHECK(lib && app && A->instantiate(lib) == 0);
+    for (size_t k = 0; k < sizeof names / sizeof names[0]; k++) CHECK(A->export_record(lib, names[k], WASMEXT_DESC_FUNC, &rec) == 0 && B->bind(app, "libr", names[k], &rec) == 0);
+    CHECK(A->export_record(lib, "fident", WASMEXT_DESC_FUNC, &rec) == 0 && strcmp(rec.signature, "F>F") == 0);
+    CHECK(B->instantiate(app) == 0);
+    e1 = A->extern_make(s, &item);
+    CHECK(e1 != NULL && B->funcref(app, "nine", &nine) == 0 && A->funcref(lib, "seven", &seven) == 0);
+    /* an externref and numbers cross the artifacts */
+    a[0] = XREF(e1);
+    CHECK(B->call(app, "ei", a, 1, r, 1) == 0 && r[0].as.ref == e1 && wasmext_extern_user(r[0].as.ref) == &item);
+    a[0] = I32(5); a[1] = REF(NULL); a[2] = XREF(e1); a[3] = I64(77);
+    r[0] = XREF(NULL); r[1] = I64(0); r[2] = REF(&back2); r[3] = I32(0);
+    CHECK(B->call(app, "mx", a, 4, r, 4) == 0 && r[0].as.ref == e1 && r[1].as.i64 == 77 && back2.ref.func == NULL && r[3].as.i32 == 5);
+    /* a null funcref goes through, in and out */
+    a[0] = REF(NULL); r[0] = REF(&back);
+    CHECK(B->call(app, "fi", a, 1, r, 1) == 0 && back.ref.func == NULL);
+    CHECK(B->call(app, "isn", a, 1, r, 1) == 0 && r[0].as.i32 == 1);
+    /* a funcref of B into a function of A (as an argument of the host's call, or one that wasm makes): refused in the shim of A. The temporary guard */
+    a[0] = REF(&nine); r[0] = REF(&back);
+    CHECK(B->call(app, "fi", a, 1, r, 1) == (int)WASMEXT_TRAP_HOST);
+    CHECK(B->call(app, "isn", a, 1, r, 1) == (int)WASMEXT_TRAP_HOST);
+    CHECK(B->call(app, "fnine", NULL, 0, r, 1) == (int)WASMEXT_TRAP_HOST);
+    /* a funcref of A that A answers: refused where it comes out into the code of B */
+    CHECK(B->call(app, "gf", NULL, 0, r, 1) == (int)WASMEXT_TRAP_HOST);
+    /* ... but A's own call of it is its own business */
+    r[0] = REF(&back);
+    CHECK(A->call(lib, "getf", NULL, 0, r, 1) == 0 && back.ref.module_instance == seven.ref.module_instance);
+    a[0] = REF(&nine);
+    CHECK(A->call(lib, "fident", a, 1, r, 1) == WASMEXT_TAB_FOREIGN_ARTIFACT);
+    /* B is still usable after the refusals */
+    a[0] = XREF(e1);
+    CHECK(B->call(app, "ei", a, 1, r, 1) == 0 && r[0].as.ref == e1);
+    CHECK(A->store_free(s) == WASMEXT_STORE_OK);
+}
+
 int main(void) {
     A = artifact_a();
     B = artifact_b();
@@ -281,6 +334,7 @@ int main(void) {
     test_store_only();
     test_one_store();
     test_the_other_way();
+    test_references_through_links();
     if (failures) { fprintf(stderr, "%d failed\n", failures); return 1; }
     puts("ok");
     return 0;

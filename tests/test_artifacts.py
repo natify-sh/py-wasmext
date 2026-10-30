@@ -72,6 +72,29 @@ OWNB = """(module
   (func (export "ident") (param funcref) (result funcref) local.get 0)
   (func (export "plus") (param i32 i32) (result i32) local.get 0 local.get 1 i32.add)
   (func (export "call") (param i32) (result i32) local.get 0 call_indirect (type $t)))"""
+# 8a-2: functions with a funcref or an externref in the signature, linked from B to A
+REFLIBA = """(module
+  (func $seven (export "seven") (result i32) i32.const 7)
+  (func (export "fident") (param funcref) (result funcref) local.get 0)
+  (func (export "eident") (param externref) (result externref) local.get 0)
+  (func (export "mixed") (param i32 funcref externref i64) (result externref i64 funcref i32) local.get 2 local.get 3 local.get 1 local.get 0)
+  (func (export "getf") (result funcref) ref.func $seven)
+  (func (export "boom") (param externref) (result externref) unreachable)
+  (func (export "isnull") (param funcref) (result i32) local.get 0 ref.is_null))"""
+REFAPPB = """(module
+  (import "libr" "fident" (func $fi (param funcref) (result funcref)))
+  (import "libr" "eident" (func $ei (param externref) (result externref)))
+  (import "libr" "mixed" (func $mx (param i32 funcref externref i64) (result externref i64 funcref i32)))
+  (import "libr" "getf" (func $gf (result funcref)))
+  (import "libr" "boom" (func $bm (param externref) (result externref)))
+  (import "libr" "isnull" (func $isn (param funcref) (result i32)))
+  (func $nine (export "nine") (result i32) i32.const 9)
+  (func (export "fi") (param funcref) (result funcref) local.get 0 call $fi)
+  (func (export "ei") (param externref) (result externref) local.get 0 call $ei)
+  (func (export "mx") (param i32 funcref externref i64) (result externref i64 funcref i32) local.get 0 local.get 1 local.get 2 local.get 3 call $mx)
+  (func (export "gf") (result funcref) call $gf)
+  (func (export "isn") (param funcref) (result i32) local.get 0 call $isn)
+  (func (export "fnine") (result funcref) ref.func $nine call $fi))"""
 
 
 def _library(
@@ -129,12 +152,12 @@ def _library(
 def _run(wabt: Path, tmp_path: Path, flags: Sequence[str] = (), defines: Sequence[str] = ()) -> None:
     if sys.platform == "win32" or find_cc() is None:
         pytest.skip("shared libraries with hidden visibility and pthreads: Linux and macOS with a cc")
-    a = _library(wabt, tmp_path, "a", {"liba": LIBA, "usea": USEA}, flags, defines)
+    a = _library(wabt, tmp_path, "a", {"liba": LIBA, "usea": USEA, "rlib": REFLIBA}, flags, defines)
     b = _library(
         wabt,
         tmp_path,
         "b",
-        {"appb": APPB, "tabb": TABB, "glb": GLB, "ownb": OWNB, "hostb": HOSTB, "ifb": IFB},
+        {"appb": APPB, "tabb": TABB, "glb": GLB, "ownb": OWNB, "hostb": HOSTB, "ifb": IFB, "rapp": REFAPPB},
         flags,
         defines,
     )

@@ -122,7 +122,7 @@ The cell of an imported immutable global that the host gives is `uint64_t values
 The binding carries `externref` in the signatures of exports, imports, `call_ref` and the host functions of a table.
 * C types: `_CTYPE["externref"] = "wasm_rt_externref_t"`, `_MULTI_CODE["externref"] = "e"`, `_RT_TYPE["externref"] = "WASM_RT_EXTERNREF"`. The tables of the old glue lack the `externref`; the binding adds it.
 * Letter in a signature of a record: `"r"` for both kinds of reference (`_SIG_LETTER`).
-* `_has_ref(ft)` and `_linkable(ft)`: a function with a reference in its signature has no typed shape and no shim.
+* A function with a reference in its signature has a shim (8a-2, S0008; `_has_ref` and `_linkable` are gone); only a typed host function has none.
 * The adapters, the forwarders and the trampolines (`_adapter`, `_forwarder`, `_trampoline`, `_slot_call`) pass an `externref` by the pointer, and check an answer with `wasmext_extern_result_`.
 * Imports of tables of `externref` use `wasm_rt_externref_table_t`; imports of globals of both kinds are carried through `ref_slot`.
 
@@ -206,7 +206,7 @@ Mutations that must fail the tests (done on 2026-10-30, each caught):
 
 ## Open questions
 * The collector (step 9): when does a value leave a long-lived store before it is closed?
-* A function with a reference in its signature cannot be linked across instances (step 8, with the trap state).
+* A function with a reference in its signature is linked across instances of one store (8a-2, S0008): the letter is `E`, and the shim checks the externref as it comes in.
 
 ## Changes
 * 2026-10-30: written as `docs/step6_externref.md`; moved to this spec with status `implemented`.
@@ -227,3 +227,4 @@ Mutations that must fail the tests (done on 2026-10-30, each caught):
   The binding carries imports of globals of both kinds. `tests/c/test_ref_globals.c` was added.
 * 2026-10-30, after 6c, found in review: the members have a kind. The registry of step 4 records the kind of a member in its ops (`wasmext_owner_ops.kind`, `WASMEXT_KIND_INSTANCE`, `TABLE`, `EXTERN`, `HOST_FUNC`), and `wasmext_store_find_kind` finds a member only as the kind it claims.
   `test_registry.c` (`test_kinds`) and the wrong-place cases of `test_externref.c` were added.
+* 2026-10-30: 8a-2 (S0008): a function with a funcref or an externref in its signature has a record, a shim and is linked; typed host functions with references stay refused.

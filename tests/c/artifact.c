@@ -96,6 +96,10 @@ static int extern_new_(wasmext_store *s) {
     wasmext_extern *e = NULL;
     return wasmext_extern_new(s, NULL, NULL, &e);
 }
+static wasmext_extern *extern_make_(wasmext_store *s, void *user) {
+    wasmext_extern *e = NULL;
+    return wasmext_extern_new(s, user, NULL, &e) == 0 ? e : NULL;
+}
 static void no_free_(void *object) { (void)object; }
 static int store_misc_(wasmext_store *s, int which) {
     static char object_;
@@ -107,7 +111,7 @@ static int store_misc_(wasmext_store *s, int which) {
 
 static const artifact_api api_ = {
     (const void *)&wasmext_artifact_, trap_address_, store_new_, store_attach_, store_close_, store_free_, store_own_, releases_, store_error_, instance_new_, instantiate_, call_,
-    export_record_, bind_, funcref_, table_set_, global_set_funcref_, tab_new_, tab_set_, tab_get_, wasmext_thread_free, call_ref_, bind_host_, bind_global_funcref_, host_funcref_, extern_new_, store_misc_, artifact_so_new, artifact_so_attach};
+    export_record_, bind_, funcref_, table_set_, global_set_funcref_, tab_new_, tab_set_, tab_get_, wasmext_thread_free, call_ref_, bind_host_, bind_global_funcref_, host_funcref_, extern_new_, store_misc_, artifact_so_new, artifact_so_attach, extern_make_};
 
 #define ARTIFACT_CAT_(a, b) a##b
 #define ARTIFACT_CAT(a, b) ARTIFACT_CAT_(a, b)

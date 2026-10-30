@@ -154,7 +154,7 @@ typedef struct {
     void *function;                   /* the typed function of wasm2c */
     void *(*address)(void *instance); /* memory: wasm_rt_memory_t *; global: pointer to its value; else NULL */
     void *shim;                       /* function: typed shim for the record that another instance imports; NULL for the others */
-    const char *signature;            /* function: parameters, '>', results (i j f d o) */
+    const char *signature;            /* function: parameters, '>', results (i j f d o; F funcref, E externref) */
     void (*funcref)(void *instance, wasm_rt_funcref_t *out);  /* (added by S0005) */
 } wasmext_export_binding;
 ```
@@ -306,3 +306,4 @@ Mutations (each was caught when the step was built): four in 3b1, three in 3b2a,
 * 2026-10-29: step 4 changed two things of this step ([S0004](S0004-owners-registry.md)): an instantiated instance is a member of the store and `wasmext_instance_free` is refused for it; instances are linked inside one store, and the test of two stores became a test of the refusal.
 * 2026-10-30: extended by S0005 (tables, funcref), S0006 (externref), S0007 (tags and exceptions). Their additions to the structs above are marked in Interface.
 * 2026-10-30: rewritten from `docs/step3_instances.md` into the spec format, status `implemented`. Interface and Semantics describe the code as it is now.
+* 2026-10-30: 8a-2 (S0008): letters `F` and `E` in `signature`; a function with a reference in its signature has a shim and is linked.

@@ -350,10 +350,10 @@ static void test_funcref_values(void) {
         r[0] = REF(NULL);
         CHECK(wasmext_instance_call_ref(owner, &ident, a, 1, r, 1) == WASMEXT_INST_BAD_ARGS);
     }
-    /* a function with a funcref in its signature is not linked to an import by the typed shape: its record has no function to call */
+    /* a function with a funcref in its signature has a record (8a-2): the letter of a funcref is F */
     {
         wasmext_export rec;
-        CHECK(wasmext_instance_export_record(owner, (uint32_t)export_of(owner, "ident", WASMEXT_DESC_FUNC), NULL, &rec) == WASMEXT_INST_UNSUPPORTED);
+        CHECK(wasmext_instance_export_record(owner, (uint32_t)export_of(owner, "ident", WASMEXT_DESC_FUNC), NULL, &rec) == 0 && strcmp(rec.signature, "F>F") == 0);
     }
     wasmext_store_free(s);
     wasmext_store_free(other);
@@ -414,20 +414,19 @@ static void test_funcref_in_an_import(void) {
     CHECK(export_call(h, "via", a, 1, r, 1) != 0);
     v.mode = 0;
     CHECK(export_call(h, "via", a, 1, r, 1) == 0 && back.ref.func == nine.ref.func);
-    /* a function with a funcref in the signature is not linked to this import either */
+    /* a function with a funcref in the signature is linked to this import (8a-2); one of another signature is not, and the text says the letters */
     {
         wasmext_instance *h2 = wasmext_instance_new(s, &hostf_binding, NULL);
         wasmext_export rec;
-        CHECK(wasmext_instance_export_record(owner, (uint32_t)export_of(owner, "ident", WASMEXT_DESC_FUNC), NULL, &rec) == WASMEXT_INST_UNSUPPORTED);
+        char text[WASMEXT_STORE_ERROR_SIZE];
         CHECK(wasmext_instance_export_record(owner, (uint32_t)export_of(owner, "seven", WASMEXT_DESC_FUNC), NULL, &rec) == 0);
         CHECK(wasmext_instance_bind_export(h2, (uint32_t)import_of(h2, "env", "visit"), &rec) == WASMEXT_INST_LINK_FAILED);
-        {   /* a record from a host that claims the signature of the import: refused because it has a funcref, not because the signatures differ */
-            char text[WASMEXT_STORE_ERROR_SIZE];
-            rec.signature = "r>r";
-            CHECK(wasmext_instance_bind_export(h2, (uint32_t)import_of(h2, "env", "visit"), &rec) == WASMEXT_INST_LINK_FAILED);
-            wasmext_store_error(s, text, sizeof text);
-            CHECK(strstr(text, "funcref") != NULL);
-        }
+        wasmext_store_error(s, text, sizeof text);
+        CHECK(strstr(text, "F>F") != NULL && strstr(text, ">i") != NULL);
+        CHECK(wasmext_instance_export_record(owner, (uint32_t)export_of(owner, "ident", WASMEXT_DESC_FUNC), NULL, &rec) == 0);
+        CHECK(wasmext_instance_bind_export(h2, (uint32_t)import_of(h2, "env", "visit"), &rec) == 0 && wasmext_instance_instantiate(h2) == 0);
+        a[0] = REF(&nine); r[0] = REF(&back);
+        CHECK(export_call(h2, "via", a, 1, r, 1) == 0 && back.ref.func == nine.ref.func && back.owner == user->owner);
         wasmext_instance_free(h2);
     }
     wasmext_store_free(s);

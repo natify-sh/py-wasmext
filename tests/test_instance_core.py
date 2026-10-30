@@ -224,6 +224,40 @@ EXTERN_MODULES = {
     "xs": '(module (import "xsown" "t" (table 8 externref)) (func (export "f")))',
     "xc": '(module (import "xcown" "t" (table 1 2 externref)) (func (export "f")))',
 }
+REF_LINK_MODULES = {
+    "rlib": """(module
+  (type $t (func (result i32)))
+  (table $tab (export "tab") 4 8 funcref)
+  (func $seven (export "seven") (result i32) i32.const 7)
+  (func (export "fident") (param funcref) (result funcref) local.get 0)
+  (func (export "eident") (param externref) (result externref) local.get 0)
+  (func (export "mixed") (param i32 funcref externref i64) (result externref i64 funcref i32) local.get 2 local.get 3 local.get 1 local.get 0)
+  (func (export "getf") (result funcref) ref.func $seven)
+  (func (export "boom") (param externref) (result externref) unreachable)
+  (func (export "isnull") (param funcref) (result i32) local.get 0 ref.is_null))""",
+    "rapp": """(module
+  (type $t (func (result i32)))
+  (import "libr" "fident" (func $fi (param funcref) (result funcref)))
+  (import "libr" "eident" (func $ei (param externref) (result externref)))
+  (import "libr" "mixed" (func $mx (param i32 funcref externref i64) (result externref i64 funcref i32)))
+  (import "libr" "getf" (func $gf (result funcref)))
+  (import "libr" "boom" (func $bm (param externref) (result externref)))
+  (import "libr" "isnull" (func $isn (param funcref) (result i32)))
+  (table $tab (export "tab") 4 8 funcref)
+  (func $nine (export "nine") (result i32) i32.const 9)
+  (func (export "fi") (param funcref) (result funcref) local.get 0 call $fi)
+  (func (export "ei") (param externref) (result externref) local.get 0 call $ei)
+  (func (export "mx") (param i32 funcref externref i64) (result externref i64 funcref i32) local.get 0 local.get 1 local.get 2 local.get 3 call $mx)
+  (func (export "gf") (result funcref) call $gf)
+  (func (export "bm") (param externref) (result externref) local.get 0 call $bm)
+  (func (export "isn") (param funcref) (result i32) local.get 0 call $isn)
+  (func (export "fnine") (result funcref) ref.func $nine call $fi)
+  (func (export "callslot") (param i32) (result i32) local.get 0 call_indirect (type $t)))""",
+    "rbad": """(module
+  (import "libb" "eident" (func (param funcref) (result funcref)))
+  (import "libb2" "fident" (func (param externref) (result externref)))
+  (func (export "f")))""",
+}
 REF_GLOBAL_MODULES = {
     "rg": """(module
   (type $t0 (func (result i32)))
@@ -591,6 +625,24 @@ def test_externref_under_sanitizers(build: Callable[..., Path]) -> None:
         )
     )
     _run(build(EXTERN_MODULES, "xr", "test_externref.c", flags=["-fsanitize=thread", "-g"]))
+
+
+def test_links_of_functions_with_references(build: Callable[..., Path]) -> None:
+    _run(build(REF_LINK_MODULES, "reflinks", "test_ref_links.c"))
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="the sanitizers are checked on Linux")
+def test_links_of_functions_with_references_under_sanitizers(build: Callable[..., Path]) -> None:
+    if SANITIZED or not supports_flag("-fsanitize=address,undefined"):
+        pytest.skip("no sanitizers, or one is on for the whole run")
+    _run(
+        build(
+            REF_LINK_MODULES,
+            "reflinks",
+            "test_ref_links.c",
+            flags=["-fsanitize=address,undefined", "-fno-sanitize-recover=all", "-g"],
+        )
+    )
 
 
 def test_globals_of_references(build: Callable[..., Path]) -> None:

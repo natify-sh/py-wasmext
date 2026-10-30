@@ -109,6 +109,8 @@ From `FEATURES.md`, `TABLES_PLAN.md` and the plans: `funcref` in an import and `
 
    10. **Custom page sizes**: at the end of layer 1 (the owner, 2026-10-28).
    11. **Threads and atomics**: after 10, same.
+   12. **`exnref`** (the exception as a value, `throw_ref`, `catch_ref`): at the very end (the owner, 2026-10-30). The runtime of wasm2c has the type (`wasm_rt_exnref_t`, with the payload inline), but the parser of the project (`_wasm.py`, `ValType`) does not know it; it needs the parser, the binding and a real module that uses it. Not before one exists.
+   **7d (inserted after 7, the owner agreed 2026-10-30):** the C tests of steps 3 to 7 built the raw output of wasm2c; the product builds it through the repairs of `_natify` (`_repair_imported_elements`, `_portable`, `_repair_tail_calls`, `_export_tags`) and the wrappers of the runtime (the allocation of a memory traps, it does not `abort()`). 7d makes the tests build what the product builds, and makes the binding use the table of tags (`wasmext_tags_<prefix>`) so that a tag the module keeps to itself is known too.
 
    **Free-threaded is a requirement of layer 1, not a last item** (the owner): the store depends on it. From step 2 the store, the registry and the counters are thread-safe by design (one locking rule, atomic counts, no lock held across a call outward), and the C tests include concurrent use. The declaration `Py_MOD_GIL_NOT_USED` is made by the extension front end once its audit is done.
 

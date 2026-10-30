@@ -367,12 +367,21 @@ def generate_binding(model: ModuleModel) -> str:
                 f"static void *{last}_tag{n}(void *inst_) {{ (void)inst_; return (void *)w2c_{prefix}_{mangle(e.name)}; }}",
                 "",
             ]
-            tag_entries.append((f"{last}_tag{n}", e.type.params))
+    # every tag of the module, in the order of its index space: the imported ones (what was linked), then the ones it defines, whether it exports them or keeps them to itself. The tags it defines
+    # are read from the table `wasmext_tags_<prefix>` that the build puts in the C of wasm2c (`_export_tags` of _natify.py), since wasm2c makes them `static`.
     for k, imp in enumerate(model.imports):
         if imp.kind == "tag":
             assert isinstance(imp.type, FuncType)
             out += [f"static void *{last}_tagi{k}(void *inst_) {{ (void)inst_; return (void *){tag_names[k]}; }}", ""]
             tag_entries.append((f"{last}_tagi{k}", imp.type.params))
+    if model.module.tags:
+        out.append(f"extern const wasm_rt_tag_t wasmext_tags_{prefix}[{len(model.module.tags)}];")
+    for j, tag_type in enumerate(model.module.tags):
+        out += [
+            f"static void *{last}_tagd{j}(void *inst_) {{ (void)inst_; return (void *)wasmext_tags_{prefix}[{j}]; }}",
+            "",
+        ]
+        tag_entries.append((f"{last}_tagd{j}", tag_type.params))
     for ident, sig in tag_entries:
         if sig not in tag_sigs:
             tag_sigs[sig] = len(tag_sigs)

@@ -1,6 +1,6 @@
 # Step 7 of layer 1: tags and exceptions
 
-Status: **built 2026-10-30** (7a, 7b, 7c in one commit). On top of steps 3 to 6. The owner accepted the plan of 2026-10-30: a tag of a module is shared with another instance of the store; the host reads an exception that nothing caught; a host function throws; the part across separately built artifacts is for step 8.
+Status: **built 2026-10-30** (7a, 7b, 7c in one commit; 7d, the repairs of the build in the tests and the table of the tags, in the next). On top of steps 3 to 6. The owner accepted the plan of 2026-10-30: a tag of a module is shared with another instance of the store; the host reads an exception that nothing caught; a host function throws; the part across separately built artifacts is for step 8.
 
 ## What there is (wasm2c)
 
@@ -22,9 +22,14 @@ Tests: `tests/c/test_tags.c`, `test_tags`: a function of `ta` thrown through a s
 
 `wasmext_instance_throw(instance, tag, values, n)` makes the payload of a tag that the module exports or imports (else `WASMEXT_INST_UNDECLARED_TYPE`: the AOT rule, a payload is made by code the binding has for the tags the module can see; the wrong number or types of values, or a reference among them, is `WASMEXT_INST_BAD_ARGS`) and keeps it for the thread; the host function then answers **`WASMEXT_HOST_THROW`** (`*trapped = WASMEXT_HOST_THROW` in the typed shape). The generated function of the import, which is also the trampoline of a host function in a table, loads the exception and calls `wasm_rt_throw()`: a `catch` in the module catches it, and where none does the call ends as in 7b. `WASMEXT_HOST_THROW` with nothing made is a failure of the host (`WASMEXT_TRAP_HOST`); make the exception just before answering (a request that is answered with something else is dropped by the next one). The record is per thread (`wasmext_pending_throw_`, defined with the other thread state under `WASMEXT_DEFINE_THREAD_STATE`).
 
+## 7d: the tests build what the product builds, and the tags the module keeps to itself
+
+Added after the owner pointed out that the patches of the build are not incidental. The C tests of steps 3 to 7 had built the **raw** output of wasm2c and the **raw** runtime. The product builds the output through `_repair_imported_elements`, `_portable`, `_repair_tail_calls` and `_export_tags`, and the runtime through the wrappers of `_RUNTIME_WRAPPERS` (the allocation of a memory traps with `WASMEXT_TRAP_NO_MEMORY` and does not `abort()`; the trap handler; the exceptions). The fixture of `tests/test_instance_core.py` now does the same (it uses those very functions, not copies), and **all the tests of steps 3 to 7 passed on it unchanged**, ASan, UBSan and TSan included. New: `tests/c/test_nomemory.c` (a memory that cannot be had: instantiate answers `NO_MEMORY`; with the raw runtime the process aborts, so the test does test the wrapper).
+
+The binding now has **every tag of the module**, in the order of its index space: the imported ones (what was linked) and the ones it defines, exported or not, whose identities it reads from `wasmext_tags_<prefix>`, the table that `_export_tags` adds to the C of wasm2c (the binding declares it `extern`, so a build without that repair does not link: the repair is part of the build, as the others are). So an exception of a tag the module keeps to itself is read with its values (`tag_index` is its place), and the host can throw it by the identity it learned from the exception.
+
 ## Not done, and why
 
 - A tag **made by the host** (not a tag of a module): an importer reads a symbol, so the host could give the program only one such tag for each import name. It waits for step 8, which has to settle what a store shared across artifacts is.
-- Exceptions of unexported tags are told by the bytes only (the tag stays inside the module; the old glue patched the C of wasm2c to see them, and the new binding patches nothing).
 - `exnref` (the exception as a value) and `throw_ref`: not carried.
 - Across artifacts: step 8.

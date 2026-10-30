@@ -92,11 +92,11 @@ static void test_tags(void) {
         memcpy(&first, ex.raw, sizeof first);
         CHECK(first == 7);
     }
-    /* a tag that the module keeps to itself: the exception has a tag and no values, and no index */
+    /* a tag that the module keeps to itself: the table of the tags of the build tells it (an index, no values to read: it has none) */
     CHECK(call(c, "throw_priv", NULL, 0, NULL, 0) == (int)WASM_RT_TRAP_UNCAUGHT_EXCEPTION);
     {
         wasmext_exception ex;
-        CHECK(wasmext_instance_exception(c, &ex) == 0 && ex.tag != NULL && ex.tag_index == -1 && ex.size == 0 && ex.n_values == 0);
+        CHECK(wasmext_instance_exception(c, &ex) == 0 && ex.tag != NULL && ex.tag_index >= 0 && ex.size == 0 && ex.n_values == 0);
     }
     /* what an import does not accept: another signature, another kind of export */
     CHECK(wasmext_instance_export_record(a, (uint32_t)export_of(a, "t", WASMEXT_DESC_TAG), NULL, &rec) == 0);
@@ -136,7 +136,7 @@ static THREAD_RESULT probe(void *arg) {
 }
 
 /* what a host function does: nothing, or throws the tag `tag` with `values`, or does it wrong */
-typedef struct { int mode; wasmext_instance *self; const void *tag; const void *foreign_tag; int calls; } host_t;
+typedef struct { int mode; wasmext_instance *self; const void *tag; const void *foreign_tag; const void *private_tag; int calls; } host_t;
 static int host_h(void *user, const wasmext_val *args, wasmext_val *results) {
     host_t *h = (host_t *)user;
     wasmext_val v[2];
@@ -148,6 +148,7 @@ static int host_h(void *user, const wasmext_val *args, wasmext_val *results) {
         case 2: v[0] = I32(1); v[1] = I32(2); { int rc = wasmext_instance_throw(h->self, h->tag, v, 2); return rc != 0 ? rc : WASMEXT_HOST_THROW; } /* the wrong types */
         case 3: v[0] = I32(1); v[1] = I64(2); { int rc = wasmext_instance_throw(h->self, h->foreign_tag, v, 2); return rc != 0 ? rc : WASMEXT_HOST_THROW; } /* a tag the module has not */
         case 4: return WASMEXT_HOST_THROW; /* nothing was made */
+        case 5: v[0] = I32(77); { int rc = wasmext_instance_throw(h->self, h->private_tag, v, 1); return rc != 0 ? rc : WASMEXT_HOST_THROW; } /* a tag the module keeps to itself */
         default: return 0;
     }
 }
@@ -204,6 +205,17 @@ static void test_throw(void) {
     CHECK(wasmext_instance_throw(h, NULL, NULL, 0) == WASMEXT_INST_BAD_ARGS);
     hs.mode = 0;
     CHECK(call(h, "run", NULL, 0, r, 2) == 0 && r[0].as.i32 == -1);
+    /* a tag that the module keeps to itself: its exception is read with its values, and the host throws it by the identity it learned from there */
+    {
+        wasmext_val p = I32(5);
+        CHECK(call(h, "throw_p", &p, 1, NULL, 0) == (int)WASM_RT_TRAP_UNCAUGHT_EXCEPTION);
+        CHECK(wasmext_instance_exception(h, &ex) == 0 && ex.tag_index >= 0 && ex.n_values == 1 && ex.values[0].as.i32 == 5);
+        hs.private_tag = ex.tag;
+        hs.mode = 5;
+        CHECK(call(h, "catch_p", NULL, 0, r, 1) == 0 && r[0].as.i32 == 77);
+        hs.mode = 0;
+        CHECK(call(h, "catch_p", NULL, 0, r, 1) == 0 && r[0].as.i32 == -1);
+    }
     /* a host function that is an element of a table: it is called by call_ref, throws, and the call ends with the trap of an uncaught exception */
     {
         wasmext_funcref f;

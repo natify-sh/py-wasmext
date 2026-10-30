@@ -1,6 +1,7 @@
 """Step 3a of layer 1 (docs/step3_instances.md): the instance and the binding of a module, tested as plain C (tests/c/) over a real wasm2c module.
 The C of the descriptor and of the binding is made by wasmext from the model; nothing of Python is in the program that runs."""
 
+# pyright: reportPrivateUsage=false
 from __future__ import annotations
 
 import os
@@ -15,7 +16,15 @@ from fusedwasi import get_include
 from wasmext import parse
 from wasmext._binding import generate_binding
 from wasmext._descriptor import generate_descriptor
+from wasmext._gen import module_prefix  # pyright: ignore[reportPrivateUsage]
 from wasmext._model import build_model
+from wasmext._natify import (  # pyright: ignore[reportPrivateUsage]
+    _RUNTIME_WRAPPERS,
+    _export_tags,
+    _portable,
+    _repair_imported_elements,
+    _repair_tail_calls,
+)
 from wasmext._toolchain import find_toolchain  # pyright: ignore[reportPrivateUsage]
 
 from .c_build import compile_c, supports_flag
@@ -286,6 +295,12 @@ TAG_MODULES = {
   (import "tenv" "h" (func $h))
   (tag $t (param i32 i64))
   (export "t" (tag $t))
+  (tag $p (param i32))
+  (func (export "throw_p") (param i32) local.get 0 throw $p)
+  (func (export "catch_p") (result i32)
+    (block $b (result i32)
+      (try_table (catch $p $b) call $h)
+      i32.const -1))
   (func (export "run") (result i32 i64)
     (block $b (result i32 i64)
       (try_table (catch $t $b) call $h)
@@ -294,6 +309,7 @@ TAG_MODULES = {
     "td": """(module (tag $t (param i32 i64)) (export "t" (tag $t)) (func (export "f")))""",
     "te": """(module (import "tgz" "t" (tag (param i32))) (func (export "f")))""",
 }
+NO_MEMORY = """(module (memory i64 4294967296) (func (export "f")))"""
 START_TRAP = """(module (func $s unreachable) (start $s) (func (export "f") (result i32) i32.const 1))"""
 
 
@@ -323,21 +339,28 @@ def build(wabt: Path, tmp_path_factory: pytest.TempPathFactory) -> Callable[...,
             subprocess.run(
                 [wabt / "bin" / "wasm2c", wasm, "-o", out / f"{module}_w2c.c", f"--module-name={module}"], check=True
             )
+            # the C is what the product builds (_prepare of _natify): the repairs of what wasm2c writes, and the table of the tags of the module
+            raw = (out / f"{module}_w2c.c").read_bytes()
+            repaired = _repair_imported_elements([raw])[0]
+            (out / f"{module}_w2c.c").write_bytes(
+                _export_tags(_repair_tail_calls(_portable(repaired)), module_prefix(module))
+            )
             model = build_model(parse(wasm.read_bytes()), module, host=host)
             (out / f"{module}_descriptor.c").write_text(generate_descriptor(model), encoding="utf-8")
             (out / f"{module}_binding.c").write_text(generate_binding(model), encoding="utf-8")
             sources += [out / f"{module}_binding.c", out / f"{module}_descriptor.c", out / f"{module}_w2c.c"]
+        # the runtime is the product's too: wrapped (the allocation of a memory traps, it does not abort; the trap handler and the exceptions as the product has them)
+        wrapped: list[Path] = []
+        for key in ("impl", "mem", "exceptions"):
+            path = out / f"rt_{key}.c"
+            path.write_text(_RUNTIME_WRAPPERS[key], encoding="utf-8")
+            wrapped.append(path)
         exe = (
             out
             / f"{name}_{Path(test).stem}{'_' + ''.join(c for c in ''.join(flags) if c.isalnum()) if flags else ''}{EXE}"
         )
         compile_c(
-            [
-                *sources,
-                runtime / "wasm-rt-impl.c",
-                runtime / "wasm-rt-mem-impl.c",
-                runtime / "wasm-rt-exceptions-impl.c",
-            ],
+            [*sources, *wrapped],
             exe,
             include_dirs=[WASMEXT_C, Path(get_include()), runtime, out, *simde],
             flags=flags,
@@ -604,3 +627,7 @@ def test_tags_under_sanitizers(build: Callable[..., Path]) -> None:
             flags=["-fsanitize=address,undefined", "-fno-sanitize-recover=all", "-g"],
         )
     )
+
+
+def test_a_memory_that_cannot_be_had(build: Callable[..., Path]) -> None:
+    _run(build({"big": NO_MEMORY}, "nomem", "test_nomemory.c"))

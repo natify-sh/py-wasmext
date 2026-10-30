@@ -15,6 +15,7 @@ on:
       - "src/wasmext/_shared.py"
       - "src/wasmext/_exe.py"
       - ".github/scripts/glue_without_python.py"
+      - ".github/scripts/layer1_check.c"
       - ".github/workflows/core-without-python.yml"
   pull_request:
     paths:
@@ -23,6 +24,7 @@ on:
       - "src/wasmext/_shared.py"
       - "src/wasmext/_exe.py"
       - ".github/scripts/glue_without_python.py"
+      - ".github/scripts/layer1_check.c"
       - ".github/workflows/core-without-python.yml"
   workflow_dispatch:
 
@@ -83,6 +85,23 @@ jobs:
         run: |
           $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
           cmd /c "call `"$vs\VC\Auxiliary\Build\vcvars64.bat`" && cl /nologo /W3 /c /Fo:core_check.obj /Isrc\wasmext\c /I`"$env:FUSEDWASI`" /I`"$env:WASM_RT`" core_check.c"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      # The static headers of layer 1 (the store, the registry, the instance, the tables...) have POSIX calls too (signals): gnu11.
+      - name: Compile the headers of layer 1 with no Python.h
+        if: runner.os != 'Windows' && matrix.cc != 'zig'
+        run: ${{ matrix.cc }} -std=gnu11 -Wall -Wextra -Wno-unused-parameter -Werror -fsyntax-only -Isrc/wasmext/c -I"$FUSEDWASI" -I"$WASM_RT" .github/scripts/layer1_check.c
+
+      - name: Compile the headers of layer 1 with no Python.h (MinGW, zig cc)
+        if: matrix.cc == 'zig'
+        run: .venv/bin/python -m ziglang cc -target x86_64-windows-gnu -std=gnu11 -Wall -Wextra -Wno-unused-parameter -Werror -c -o layer1_check.o -Isrc/wasmext/c -I"$FUSEDWASI" -I"$WASM_RT" .github/scripts/layer1_check.c
+
+      - name: Compile the headers of layer 1 with no Python.h (MSVC)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          cmd /c "call `"$vs\VC\Auxiliary\Build\vcvars64.bat`" && cl /nologo /W3 /c /Fo:layer1_check.obj /Isrc\wasmext\c /I`"$env:FUSEDWASI`" /I`"$env:WASM_RT`" .github\scripts\layer1_check.c"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       # The glue is C with POSIX calls (signals), so gnu11 and not c11; the core above is strict C11.

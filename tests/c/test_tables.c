@@ -215,6 +215,79 @@ static void test_refusals_and_failed_start(void) {
     wasmext_store_free(other);
 }
 
+/* a function that stands for an element is called from the host through an instance that declares its type: the function is another instance's, the types are numbers, several
+   results, a vector, and nothing; a type the instance does not declare, a null funcref, a trap, a wrong number of arguments and a funcref of another store are refused */
+static wasmext_val F32(float v) { wasmext_val x; memset(&x, 0, sizeof x); x.type = 0x7D; x.as.f32 = v; return x; }
+static wasmext_val F64(double v) { wasmext_val x; memset(&x, 0, sizeof x); x.type = 0x7C; x.as.f64 = v; return x; }
+static wasmext_val I64(int64_t v) { wasmext_val x; memset(&x, 0, sizeof x); x.type = 0x7E; x.as.i64 = v; return x; }
+static void test_call_ref(void) {
+    wasmext_store *s = wasmext_store_new(), *other = wasmext_store_new();
+    wasmext_instance *owner = wasmext_instance_new(s, &owner_binding, NULL), *user = wasmext_instance_new(s, &user_binding, NULL);
+    wasmext_instance *stranger = wasmext_instance_new(other, &owner_binding, NULL);
+    wasmext_funcref f;
+    wasmext_val a[3], r[2];
+    CHECK(wasmext_instance_instantiate(owner) == 0 && link_table(user, owner) == 0 && wasmext_instance_instantiate(user) == 0 && wasmext_instance_instantiate(stranger) == 0);
+    /* the `add` of the user adds 100: the call is to the user's function, through the declaration of the type by the owner */
+    CHECK(funcref_of(user, "add", &f) == 0);
+    a[0] = I32(2); a[1] = I32(3);
+    CHECK(wasmext_instance_call_ref(owner, &f, a, 2, r, 1) == 0 && r[0].type == 0x7F && r[0].as.i32 == 105);
+    CHECK(wasmext_instance_call_ref(user, &f, a, 2, r, 1) == 0 && r[0].as.i32 == 105); /* ... and through the user's own */
+    /* several results, in order; floats; nothing; a vector */
+    CHECK(funcref_of(user, "swap", &f) == 0);
+    a[0] = I32(7); a[1] = I64(9);
+    CHECK(wasmext_instance_call_ref(owner, &f, a, 2, r, 2) == 0 && r[0].type == 0x7E && r[0].as.i64 == 9 && r[1].type == 0x7F && r[1].as.i32 == 7);
+    CHECK(funcref_of(user, "mix", &f) == 0);
+    a[0] = F32(1.5f); a[1] = F64(10.0);
+    CHECK(wasmext_instance_call_ref(owner, &f, a, 2, r, 1) == 0 && r[0].type == 0x7C && r[0].as.f64 == 8.5);
+    CHECK(funcref_of(user, "nothing", &f) == 0 && wasmext_instance_call_ref(owner, &f, NULL, 0, NULL, 0) == 0);
+    {
+        wasmext_val x, y;
+        int32_t in[4] = {1, 2, 3, 4}, out[4];
+        memset(&x, 0, sizeof x); x.type = 0x7B; memcpy(x.as.v128, in, 16);
+        CHECK(funcref_of(user, "vec", &f) == 0 && wasmext_instance_call_ref(owner, &f, &x, 1, &y, 1) == 0);
+        memcpy(out, y.as.v128, 16);
+        CHECK(out[0] == 1 && out[3] == 4); /* the `vec` of the user returns its argument; the owner's would double it */
+    }
+    /* an element read from a table is called the same way: the `nine` of the user, in slot 1 */
+    CHECK(wasmext_instance_table_get(owner, tab_export(owner), 1, &f) == 0);
+    CHECK(wasmext_instance_call_ref(owner, &f, NULL, 0, r, 1) == 0 && r[0].as.i32 == 9);
+    /* a type that the owner does not declare (three parameters), and one it does, called with the wrong arguments */
+    CHECK(funcref_of(user, "mul3", &f) == 0);
+    a[0] = I32(2); a[1] = I32(3); a[2] = I32(4);
+    CHECK(wasmext_instance_call_ref(owner, &f, a, 3, r, 1) == WASMEXT_INST_UNDECLARED_TYPE);
+    CHECK(wasmext_instance_call_ref(user, &f, a, 3, r, 1) == 0 && r[0].as.i32 == 24); /* the user declares it */
+    CHECK(funcref_of(user, "add", &f) == 0);
+    CHECK(wasmext_instance_call_ref(owner, &f, a, 1, r, 1) == WASMEXT_INST_BAD_ARGS);
+    CHECK(wasmext_instance_call_ref(owner, &f, a, 2, r, 0) == WASMEXT_INST_BAD_ARGS);
+    a[1] = I64(1);
+    CHECK(wasmext_instance_call_ref(owner, &f, a, 2, r, 1) == WASMEXT_INST_BAD_ARGS); /* the second is not an i32 */
+    /* a trap in the function is the code of the call; both instances are usable after it */
+    {
+        wasmext_funcref d;
+        CHECK(funcref_of(user, "div", &d) == 0);
+        a[0] = I32(7); a[1] = I32(0);
+        CHECK(wasmext_instance_call_ref(owner, &d, a, 2, r, 1) == (int)WASM_RT_TRAP_DIV_BY_ZERO);
+        a[1] = I32(2);
+        CHECK(wasmext_instance_call_ref(owner, &d, a, 2, r, 1) == 0 && r[0].as.i32 == 3);
+        CHECK(value(owner, "call", 0) == 7 && value(user, "call", 1) == 9);
+    }
+    /* a null funcref is a trap of WebAssembly; a function of another store, or a forged one, is refused */
+    memset(&f, 0, sizeof f);
+    CHECK(wasmext_instance_call_ref(owner, &f, NULL, 0, r, 1) == (int)WASM_RT_TRAP_NULL_REF);
+    CHECK(wasmext_instance_call_ref(owner, NULL, NULL, 0, r, 1) == (int)WASM_RT_TRAP_NULL_REF);
+    CHECK(funcref_of(stranger, "seven", &f) == 0);
+    CHECK(wasmext_instance_call_ref(owner, &f, NULL, 0, r, 1) == WASMEXT_TAB_WRONG_STORE);
+    CHECK(funcref_of(owner, "seven", &f) == 0);
+    CHECK(wasmext_instance_call_ref(owner, &f, NULL, 0, r, 1) == 0 && r[0].as.i32 == 7);
+    f.owner += 1;
+    CHECK(wasmext_instance_call_ref(owner, &f, NULL, 0, r, 1) == WASMEXT_TAB_WRONG_STORE);
+    /* the close */
+    CHECK(funcref_of(owner, "seven", &f) == 0 && wasmext_store_close(s) == WASMEXT_STORE_OK);
+    CHECK(wasmext_instance_call_ref(owner, &f, NULL, 0, r, 1) == (int)WASMEXT_TRAP_CLOSED);
+    wasmext_store_free(s);
+    wasmext_store_free(other);
+}
+
 /* the record of an exported function says it can be put in a table */
 static void test_function_records(void) {
     wasmext_store *s = wasmext_store_new();
@@ -274,6 +347,7 @@ int main(void) {
     test_foreign_functions();
     test_refusals_and_failed_start();
     test_function_records();
+    test_call_ref();
     test_threads();
     if (failures) { fprintf(stderr, "%d failed\n", failures); return 1; }
     puts("ok");

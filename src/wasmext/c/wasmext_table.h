@@ -13,14 +13,6 @@
 
 #include "wasmext_instance.h"
 
-/* the answers of the operations on a table, besides 0, WASMEXT_TRAP_CLOSED and the codes of wasmext_instance.h */
-enum {
-    WASMEXT_TAB_BOUNDS = -30,       /* an index outside the table */
-    WASMEXT_TAB_FULL = -31,         /* the table cannot grow that much (its maximum, or memory) */
-    WASMEXT_TAB_WRONG_STORE = -32,  /* the function is of another store, or is not a function of one */
-    WASMEXT_TAB_STALE = -33         /* the element is a function that no member of the store stands behind */
-};
-
 /* A table that no module owns, made by the host. The record of it (wasmext_tab_record) is what an import of a module is given. */
 typedef struct wasmext_tab_s_ {
     wasm_rt_funcref_table_t table;
@@ -99,12 +91,9 @@ static inline int wasmext_tab_get_(wasmext_store *s, WASMEXT_MUTEX_T *mutex, was
 
 /* a null funcref (`ref.func` is NULL) empties the slot */
 static inline int wasmext_tab_set_(wasmext_store *s, WASMEXT_MUTEX_T *mutex, wasm_rt_funcref_table_t *t, uint32_t index, const wasmext_funcref *f) {
-    int line, rc = 0;
-    if (f != NULL && f->ref.func != NULL) {
-        wasmext_owner owner;
-        if (f->store != (const void *)s) return WASMEXT_TAB_WRONG_STORE;
-        if (wasmext_store_find(s, f->ref.module_instance, &owner) != WASMEXT_STORE_OK || owner != f->owner) return WASMEXT_TAB_WRONG_STORE;
-    }
+    int line, rc;
+    rc = wasmext_funcref_check_(s, f);
+    if (rc != 0) return rc;
     line = wasmext_store_enter(s);
     if (line < 0) return (int)WASMEXT_TRAP_CLOSED;
     WASMEXT_LOCK(mutex);

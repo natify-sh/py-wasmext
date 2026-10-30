@@ -47,13 +47,27 @@ enum {
     WASMEXT_INST_BAD_IMPORT = -6,    /* an index out of range, an import that is not a function, or one that the core answers */
     WASMEXT_INST_TOO_LATE = -7,      /* the instance is made already: imports are bound before `instantiate` */
     WASMEXT_INST_IMMUTABLE = -8,     /* a global that cannot be set */
-    WASMEXT_INST_LINK_FAILED = -9    /* an export given for an import does not fit: the text, naming the import, is in the store (`wasmext_store_error`) */
+    WASMEXT_INST_LINK_FAILED = -9,   /* an export given for an import does not fit: the text, naming the import, is in the store (`wasmext_store_error`) */
+    WASMEXT_INST_UNDECLARED_TYPE = -10, /* `call_ref`: the function is of a type that the module does not declare, so it has no way to call it (it can still be called by WebAssembly) */
+    /* the answers of the operations on a table and on a funcref (wasmext_table.h) */
+    WASMEXT_TAB_BOUNDS = -30,       /* an index outside the table */
+    WASMEXT_TAB_FULL = -31,         /* the table cannot grow that much (its maximum, or memory) */
+    WASMEXT_TAB_WRONG_STORE = -32,  /* the function is of another store, or is not a function of one */
+    WASMEXT_TAB_STALE = -33         /* the element is a function that no member of the store stands behind */
 };
 
 /* The host function of an import, one shape for every import: `args` and `results` are arrays of the counts and the types of its signature (the descriptor
    has them). 0 is success; any other answer is a failure of the host, which keeps its own error: the call traps with WASMEXT_TRAP_HOST. A host function that
    is the export of another instance answers WASMEXT_TRAP_LINKED + the code of a trap of that instance, and the trap goes through with that code. */
 typedef int (*wasmext_host_fn)(void *user, const wasmext_val *args, wasmext_val *results);
+
+/* A function type that the module declares (its type section) and can call an element of: wasm2c's type (the pointer it compares first, then the 256-bit hash, as `call_indirect`
+   does, so a function of another module with the same type matches), the adapter, and the signature. */
+typedef struct {
+    const char *(*type)(void);
+    int (*adapter)(void *instance, void *function, const wasmext_val *args, wasmext_val *results);
+    wasmext_functype sig;
+} wasmext_ref_type;
 
 /* What the generated function of an import looks at: the uniform host function, or a typed one (`result f(void *user, parameters..., int *trapped)`, no packing
    of values: the fast path), and the `user` of both. The binding makes the slots; the core fills them. */
@@ -86,6 +100,8 @@ typedef struct {
     void **(*ref_slot)(void *instance, uint32_t import);  /* the pointer that wasm2c reads for a memory or global import (of the descriptor); NULL when the module has none */
     void (*call_begin)(void *instance);     /* before each call: forgets how the last one ended (the end of a WASI program is what a call leaves); NULL when the module has no WASI */
     int (*wasi_end)(void *instance, uint32_t *value); /* how the last call ended the WASI program: WASMEXT_END_NONE, EXIT (the code) or SIGNAL (the number); NULL when no WASI */
+    const wasmext_ref_type *ref_types;      /* the function types of the type section that `call_ref` can call */
+    uint32_t n_ref_types;
 } wasmext_binding;
 
 typedef struct wasmext_instance_s_ {
@@ -525,6 +541,16 @@ static inline int wasmext_instance_instantiate(wasmext_instance *i) {
     return rc;
 }
 
+/* Whether `f` is a function of `store` and was made by this API: its store, and the handle of its instance, which must be the member of the store under the pointer `f` carries. A null
+   funcref is always acceptable (it is "no function"). 0, or WASMEXT_TAB_WRONG_STORE. */
+static inline int wasmext_funcref_check_(wasmext_store *store, const wasmext_funcref *f) {
+    wasmext_owner owner;
+    if (f == NULL || f->ref.func == NULL) return 0;
+    if (f->store != (const void *)store) return WASMEXT_TAB_WRONG_STORE;
+    if (wasmext_store_find(store, f->ref.module_instance, &owner) != WASMEXT_STORE_OK || owner != f->owner) return WASMEXT_TAB_WRONG_STORE;
+    return 0;
+}
+
 /* The exported function `index` as an element of a table: `out` is the value that `wasmext_tab_set` takes. WASMEXT_INST_UNSUPPORTED for a function with a reference in its signature. */
 static inline int wasmext_instance_funcref(wasmext_instance *i, uint32_t index, wasmext_funcref *out) {
     const wasmext_descriptor *d = i->binding->descriptor;
@@ -572,6 +598,40 @@ static inline int wasmext_instance_call(wasmext_instance *i, uint32_t index, con
     level = lock != NULL ? wasmext_rlock_depth(lock) : 0;
     if (i->binding->call_begin != NULL) i->binding->call_begin(i->module);
     rc = b->adapter(i->module, b->function, args, results);
+    if (lock != NULL) wasmext_rlock_release_to(lock, level); /* a trap left the unlocks of fusedwasi behind */
+    wasmext_store_leave(i->store, line);
+    wasmext_atomic_store(&i->status, rc);
+    return rc;
+}
+
+/* Calls a function that stands for an element of a table (a `wasmext_funcref` of this store, from `wasmext_tab_get` or `wasmext_instance_funcref`) through this instance: the function
+   must be of a type that this module declares (WASMEXT_INST_UNDECLARED_TYPE otherwise), and `args` and `results` are arrays of the counts and the types of that type, as for
+   `wasmext_instance_call`. 0, or the code of a trap (a null funcref is WASM_RT_TRAP_NULL_REF; the instances stay usable). */
+static inline int wasmext_instance_call_ref(wasmext_instance *i, const wasmext_funcref *f, const wasmext_val *args, uint32_t n_args, wasmext_val *results, uint32_t n_results) {
+    const wasmext_ref_type *rt = NULL;
+    int line, rc;
+    wasmext_rlock *lock;
+    long level;
+    if (!i->instantiated) return WASMEXT_INST_NOT_INSTANTIATED;
+    if (f == NULL || f->ref.func == NULL) return (int)WASM_RT_TRAP_NULL_REF;
+    rc = wasmext_funcref_check_(i->store, f);
+    if (rc != 0) return rc;
+    if (f->ref.func_type == NULL) return WASMEXT_INST_UNDECLARED_TYPE;
+    for (uint32_t k = 0; k < i->binding->n_ref_types && rt == NULL; k++) {
+        const char *t = i->binding->ref_types[k].type();
+        if (t != NULL && (t == f->ref.func_type || memcmp(t, f->ref.func_type, 32) == 0)) rt = &i->binding->ref_types[k];
+    }
+    if (rt == NULL) return WASMEXT_INST_UNDECLARED_TYPE;
+    if (rt->sig.n_params != n_args || rt->sig.n_results != n_results) return WASMEXT_INST_BAD_ARGS;
+    for (uint32_t k = 0; k < n_args; k++)
+        if (args[k].type != rt->sig.params[k]) return WASMEXT_INST_BAD_ARGS;
+    line = wasmext_store_enter(i->store);
+    if (line < 0) return (int)WASMEXT_TRAP_CLOSED;
+    wasmext_thread_ready();
+    lock = (wasmext_rlock *)wasmext_store_host_lock(i->store);
+    level = lock != NULL ? wasmext_rlock_depth(lock) : 0;
+    if (i->binding->call_begin != NULL) i->binding->call_begin(i->module);
+    rc = rt->adapter(f->ref.module_instance, (void *)(void (*)(void))f->ref.func, args, results);
     if (lock != NULL) wasmext_rlock_release_to(lock, level); /* a trap left the unlocks of fusedwasi behind */
     wasmext_store_leave(i->store, line);
     wasmext_atomic_store(&i->status, rc);

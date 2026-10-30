@@ -224,7 +224,7 @@ typedef struct {
 } wasmext_value;
 
 /* a trap from a signal handler (an access past the guard pages) leaves the signal blocked: sigsetjmp saves no mask, for speed */
-static void wasmext_unblock_fault_signals(void) {
+static inline void wasmext_unblock_fault_signals(void) {
 #ifndef _WIN32
     sigset_t set_;
     sigemptyset(&set_);

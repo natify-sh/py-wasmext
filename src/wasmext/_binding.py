@@ -249,6 +249,30 @@ def generate_binding(model: ModuleModel) -> str:
             if _supported(ft):
                 shims[n] = f"{last}_shim{n}"
                 out += _shim(shims[n], last, prefix, e.name, ft)
+    # the types of the type section that `call_ref` can call an element of: each with the type as wasm2c knows it (the hash that `call_indirect` compares), an adapter (always the reentrant
+    # one: the function is of any instance of the store, and the call may be made from inside a host function), and the signature
+    ref_rows: list[str] = []
+    seen_types: list[tuple[tuple[ValType, ...], tuple[ValType, ...]]] = []
+    for ft in model.module.types:
+        if not _supported(ft) or (ft.params, ft.results) in seen_types:
+            continue
+        k = len(seen_types)
+        seen_types.append((ft.params, ft.results))
+        types = "".join(f", {_RT_TYPE[t]}" for t in (*ft.params, *ft.results))
+        out += _adapter(f"{last}_radapt{k}", ft, True)
+        out += [
+            f"static const uint8_t {last}_rtp{k}[] = {{{', '.join(str(VALTYPE_BYTES[t]) for t in ft.params) or '0'}}};",
+            f"static const uint8_t {last}_rtr{k}[] = {{{', '.join(str(VALTYPE_BYTES[t]) for t in ft.results) or '0'}}};",
+            f"static const char *{last}_rt{k}(void) {{ return wasm2c_{prefix}_get_func_type({len(ft.params)}, {len(ft.results)}{types}); }}",
+            "",
+        ]
+        ref_rows.append(
+            f"{{{last}_rt{k}, {last}_radapt{k}, {{{len(ft.params)}, {len(ft.results)}, {last}_rtp{k}, {last}_rtr{k}}}}}"
+        )
+    if ref_rows:
+        out.append(f"static const wasmext_ref_type {last}_ref_types[] = {{")
+        out += [f"    {r}," for r in ref_rows]
+        out += ["};", ""]
     refs: dict[int, str] = {}
     for n, e in enumerate(model.exports):
         if e.kind == "func":
@@ -322,6 +346,7 @@ def generate_binding(model: ModuleModel) -> str:
         + (f"{last}_import_slot" if fslot else "0")
         + (f", {last}_ref_slot" if rslot else ", 0")
         + (f", {last}_call_begin, {last}_wasi_end" if core else ", 0, 0")
+        + (f", {last}_ref_types, {len(ref_rows)}" if ref_rows else ", 0, 0")
         + "};",
         "",
     ]

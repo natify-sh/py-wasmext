@@ -152,11 +152,23 @@ TABLE_MODULES = {
   (func (export "call") (param i32) (result i32) local.get 0 call_indirect (type $t))
   (func (export "size") (result i32) table.size $tab)
   (func (export "grow") (param i32) (result i32) ref.null func local.get 0 table.grow $tab)
+  (func (export "add") (param i32 i32) (result i32) local.get 0 local.get 1 i32.add)
+  (func (export "swap") (param i32 i64) (result i64 i32) local.get 1 local.get 0)
+  (func (export "mix") (param f32 f64) (result f64) local.get 0 f64.promote_f32 local.get 1 f64.add)
+  (func (export "nothing"))
+  (func (export "vec") (param v128) (result v128) local.get 0 local.get 0 i32x4.add)
   (elem (i32.const 0) $seven))""",
     "user": """(module
   (type $t (func (result i32)))
   (import "own_u" "tab" (table $tab 2 funcref))
   (func $nine (export "nine") (result i32) i32.const 9)
+  (func (export "add") (param i32 i32) (result i32) local.get 0 local.get 1 i32.add i32.const 100 i32.add)
+  (func (export "div") (param i32 i32) (result i32) local.get 0 local.get 1 i32.div_s)
+  (func (export "swap") (param i32 i64) (result i64 i32) local.get 1 local.get 0)
+  (func (export "mix") (param f32 f64) (result f64) local.get 1 local.get 0 f64.promote_f32 f64.sub)
+  (func (export "nothing"))
+  (func (export "vec") (param v128) (result v128) local.get 0)
+  (func (export "mul3") (param i32 i32 i32) (result i32) local.get 0 local.get 1 i32.mul local.get 2 i32.mul)
   (elem (i32.const 1) $nine)
   (func (export "call") (param i32) (result i32) local.get 0 call_indirect $tab (type $t))
   (func (export "size") (result i32) table.size $tab))""",

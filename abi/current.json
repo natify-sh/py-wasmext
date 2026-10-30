@@ -313,6 +313,7 @@
       "WASMEXT_SINCE_TABLE": "0x000001A1u",
       "WASMEXT_TABLE": "1",
       "WASMEXT_TABLE_NO_MAXIMUM": "0xFFFFFFFFu",
+      "WASMEXT_TAG": "4",
       "WASMEXT_TRAPS": "\"wasmext.traps.v\" WASMEXT_STRING(WASMEXT_ABI_X)",
       "WASMEXT_TRAP_CLOSED": "((wasm_rt_trap_t)0x7004)",
       "WASMEXT_TRAP_ENDED": "((wasm_rt_trap_t)0x7002)",

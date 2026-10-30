@@ -113,7 +113,7 @@ WASMEXT_LAYOUT(funcref_types,
    (wasmext_export_ok) before it reads a field. The extension for CPython wraps it in a capsule named WASMEXT_EXPORT (x is in the name, so a module
    of another x is not seen); any other host passes the pointer. */
 #define WASMEXT_EXPORT "wasmext.export.v" WASMEXT_STRING(WASMEXT_ABI_X)
-enum { WASMEXT_FUNC = 0, WASMEXT_TABLE = 1, WASMEXT_MEMORY = 2, WASMEXT_GLOBAL = 3 };
+enum { WASMEXT_FUNC = 0, WASMEXT_TABLE = 1, WASMEXT_MEMORY = 2, WASMEXT_GLOBAL = 3, WASMEXT_TAG = 4 };
 typedef struct {
     uint32_t size;      /* sizeof of this struct for the host that made it */
     uint32_t abi;       /* WASMEXT_ABI of the host that made it: what the exporter provides */
@@ -121,9 +121,9 @@ typedef struct {
     uint32_t type;      /* a global: its value type as numbered in the binary format (0x7F is i32); a memory: sizeof(wasm_rt_memory_t) */
     uint32_t flags;     /* bit 0: the global is mutable; bit 1: the memory is 64-bit; bit 2: it is checked with guard pages; bit 3: the function can be called with no Python (no GIL); bit 4: the function is of a module that shares tables (it is built with the stack of entries for traps), so it may be put in a table */
     void *owner;        /* what keeps the exporter alive (Python: the instance, a PyObject *): a reader that keeps the address keeps a reference to it */
-    void *address;      /* a global: the pointer to its value; a memory: the wasm_rt_memory_t; a function: the function to call (see below) */
+    void *address;      /* a global: the pointer to its value; a memory: the wasm_rt_memory_t; a function: the function to call (see below); a tag: its identity, the `wasm_rt_tag_t` that `throw` and `catch` compare */
     void *instance;     /* a function: the first argument of that call */
-    const char *signature;  /* a function: the parameters, '>', the results (i j f d o) */
+    const char *signature;  /* a function: the parameters, '>', the results (i j f d o r); a tag: the types of its values, then '>' */
     uint32_t runtime;   /* WASMEXT_RUNTIME of the host that made it: the layout of the structs of the wasm2c runtime */
     const void *funcref;  /* a function: the wasm_rt_funcref_t of it (its type, the function, the instance), to put in a table; valid while `owner` is; NULL for the others (added at the end: `size` tells a reader) */
     uint32_t floor;     /* the lowest WASMEXT_ABI of a reader that can use this record (wasmext_export_seal): a reader below it refuses */

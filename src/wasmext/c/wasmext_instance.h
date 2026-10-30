@@ -49,6 +49,7 @@ enum {
     WASMEXT_INST_IMMUTABLE = -8,     /* a global that cannot be set */
     WASMEXT_INST_LINK_FAILED = -9,   /* an export given for an import does not fit: the text, naming the import, is in the store (`wasmext_store_error`) */
     WASMEXT_INST_UNDECLARED_TYPE = -10, /* `call_ref`: the function is of a type that the module does not declare, so it has no way to call it (it can still be called by WebAssembly) */
+    WASMEXT_INST_NO_EXCEPTION = -11,    /* `wasmext_instance_exception`: no exception is active in this thread */
     /* the answers of the operations on a table and on a funcref (wasmext_table.h) */
     WASMEXT_TAB_BOUNDS = -30,       /* an index outside the table */
     WASMEXT_TAB_FULL = -31,         /* the table cannot grow that much (its maximum, or memory) */
@@ -80,6 +81,16 @@ typedef struct {
     wasmext_functype sig;
     void *trampoline; /* `result f(void *module_instance, parameters...)`: the function of an element of this type that stands for a function of the host (wasmext_instance_host_funcref) */
 } wasmext_ref_type;
+
+/* A tag that the module exports or imports, as the glue sees it: its identity (the `wasm_rt_tag_t` that `throw` and `catch` compare, which for an import is what was linked), the types
+   of its values, the size of the payload that wasm2c keeps for it, and how a payload is read into values and made of them (NULL: a reference among the values, which is not carried). */
+typedef struct {
+    const void *(*identity)(void *instance);
+    wasmext_functype type;
+    uint32_t size;
+    void (*decode)(const void *payload, wasmext_val *out);
+    int (*encode)(const wasmext_val *values, void *payload);
+} wasmext_tag_binding;
 
 /* What the generated function of an import looks at: the uniform host function, or a typed one (`result f(void *user, parameters..., int *trapped)`, no packing
    of values: the fast path), and the `user` of both. The binding makes the slots; the core fills them. */
@@ -115,6 +126,8 @@ typedef struct {
     int (*wasi_end)(void *instance, uint32_t *value); /* how the last call ended the WASI program: WASMEXT_END_NONE, EXIT (the code) or SIGNAL (the number); NULL when no WASI */
     const wasmext_ref_type *ref_types;      /* the function types of the type section that `call_ref` can call */
     uint32_t n_ref_types;
+    const wasmext_tag_binding *tags;        /* the tags the module can see: the ones it exports and the ones it imports */
+    uint32_t n_tags;
 } wasmext_binding;
 
 typedef struct wasmext_instance_s_ {
@@ -347,8 +360,14 @@ static inline int wasmext_instance_export_record(wasmext_instance *i, uint32_t i
             out->address = b->address(i->module);
             break;
         }
+        case WASMEXT_DESC_TAG:
+            if (b->address == NULL || b->signature == NULL) return WASMEXT_INST_UNSUPPORTED;
+            out->kind = WASMEXT_TAG;
+            out->address = b->address(i->module);
+            out->signature = b->signature;
+            break;
         default:
-            return WASMEXT_INST_UNSUPPORTED; /* a tag: step 7 */
+            return WASMEXT_INST_UNSUPPORTED;
     }
     wasmext_export_seal(out);
     return 0;
@@ -446,8 +465,26 @@ static inline int wasmext_instance_bind_export(wasmext_instance *i, uint32_t imp
             *i->binding->ref_slot(i->module, import) = e->address;
             break;
         }
+        case WASMEXT_DESC_TAG: {
+            char want[160];
+            void **cell;
+            wasmext_instance_signature_(&m->type, want, sizeof want);
+            if (e->kind != WASMEXT_TAG || e->address == NULL) return wasmext_instance_link_fail_(i, m, "is a tag: the export given is not", "");
+            if (e->signature == NULL || strcmp(e->signature, want) != 0) {
+                char detail[200];
+                snprintf(detail, sizeof detail, " %s: the export given is another one (%s)", want, e->signature != NULL ? e->signature : "none");
+                return wasmext_instance_link_fail_(i, m, "is a tag", detail);
+            }
+            if (i->binding->ref_slot == NULL) return WASMEXT_INST_BAD_IMPORT;
+            /* wasm2c has no slot for a tag: the import is a global of the program that the module reads, so it holds one tag for the whole process (every instance of the module, in any store).
+               The tag of an exporter is the same for all its instances, so the usual links agree; a link to another tag is refused, not mixed. */
+            cell = i->binding->ref_slot(i->module, import);
+            if (!wasmext_cell_set_once((void *volatile *)cell, e->address))
+                return wasmext_instance_link_fail_(i, m, "is a tag that this program has linked to another tag already (wasm2c reads an imported tag from a global: one for the process)", "");
+            break;
+        }
         default:
-            return WASMEXT_INST_UNSUPPORTED; /* a tag: step 7 */
+            return WASMEXT_INST_UNSUPPORTED;
     }
     i->bound[import] = 1;
     i->owners[import] = e->owner;
@@ -882,6 +919,85 @@ static inline int wasmext_instance_host_funcref(wasmext_instance *i, const uint8
     out->ref.module_instance = h;
     out->store = i->store;
     return 0;
+}
+
+/* ---- exceptions (docs/step7_tags.md) ---- */
+
+/* The exception that nothing caught, as the runtime of wasm2c keeps it for the thread (it is the answer of a call WASM_RT_TRAP_UNCAUGHT_EXCEPTION): the tag (its identity, as a record of an
+   exported tag says it in `address`), which tag of this module's binding it is (`tag_index`, or -1: the module neither exports nor imports it; an exception of a tag that the module keeps to
+   itself is told by this), the values if the tag is known and none of them is a reference (`n_values`), and the bytes as they are (`size`, at most 256: the limit of the runtime). */
+#define WASMEXT_EXC_VALUES 16
+#define WASMEXT_EXC_RAW 256
+typedef struct {
+    const void *tag;
+    int tag_index;
+    uint32_t n_values;
+    wasmext_val values[WASMEXT_EXC_VALUES];
+    uint32_t size;
+    uint8_t raw[WASMEXT_EXC_RAW];
+} wasmext_exception;
+
+/* The active exception of the calling thread, to be asked right after the call that ended with it: a later throw replaces it, and a caught one stays there until then. WASMEXT_INST_NO_EXCEPTION
+   when this thread has had none. */
+static inline int wasmext_instance_exception(const wasmext_instance *i, wasmext_exception *out) {
+    const void *tag = wasm_rt_exception_tag();
+    uint32_t size = wasm_rt_exception_size();
+    memset(out, 0, sizeof *out);
+    out->tag_index = -1;
+    if (tag == NULL) return WASMEXT_INST_NO_EXCEPTION;
+    out->tag = tag;
+    out->size = size > WASMEXT_EXC_RAW ? WASMEXT_EXC_RAW : size;
+    memcpy(out->raw, wasm_rt_exception(), out->size);
+    for (uint32_t k = 0; k < i->binding->n_tags; k++) {
+        const wasmext_tag_binding *t = &i->binding->tags[k];
+        if (i->module == NULL || t->identity(i->module) != tag) continue;
+        out->tag_index = (int)k;
+        if (t->decode != NULL && t->type.n_params <= WASMEXT_EXC_VALUES && t->size == size) {
+            t->decode(out->raw, out->values);
+            out->n_values = t->type.n_params;
+        }
+        break;
+    }
+    return 0;
+}
+
+/* A host function throws an exception: it makes it here (the tag as the record of an exported tag has it, one that the module exports or imports, else WASMEXT_INST_UNDECLARED_TYPE; the values
+   of the types of the tag, else WASMEXT_INST_BAD_ARGS, with no references among them) and answers WASMEXT_HOST_THROW. The call that reaches the function then unwinds as `throw` does: a `catch`
+   of the tag in the module catches it, and if none does the call ends with WASM_RT_TRAP_UNCAUGHT_EXCEPTION. Answering WASMEXT_HOST_THROW with nothing made here is a failure of the host. */
+#define WASMEXT_HOST_THROW 0x10000
+extern WASM_RT_THREAD_LOCAL struct wasmext_pending_throw_s_ { const void *tag; uint32_t size; uint8_t bytes[WASMEXT_EXC_RAW]; } wasmext_pending_throw_;
+#ifdef WASMEXT_DEFINE_THREAD_STATE
+WASM_RT_THREAD_LOCAL struct wasmext_pending_throw_s_ wasmext_pending_throw_;
+#endif
+static inline int wasmext_instance_throw(const wasmext_instance *i, const void *tag, const wasmext_val *values, uint32_t n) {
+    if (tag == NULL || i->module == NULL) return WASMEXT_INST_BAD_ARGS;
+    for (uint32_t k = 0; k < i->binding->n_tags; k++) {
+        const wasmext_tag_binding *t = &i->binding->tags[k];
+        if (t->identity(i->module) != tag) continue;
+        if (t->encode == NULL || t->size > WASMEXT_EXC_RAW || t->type.n_params != n) return WASMEXT_INST_BAD_ARGS;
+        for (uint32_t j = 0; j < n; j++)
+            if (values[j].type != t->type.params[j]) return WASMEXT_INST_BAD_ARGS;
+        memset(wasmext_pending_throw_.bytes, 0, sizeof wasmext_pending_throw_.bytes);
+        if (t->encode(values, wasmext_pending_throw_.bytes) != 0) return WASMEXT_INST_BAD_ARGS;
+        wasmext_pending_throw_.tag = tag;
+        wasmext_pending_throw_.size = t->size;
+        return 0;
+    }
+    return WASMEXT_INST_UNDECLARED_TYPE;
+}
+
+/* in the generated function of an import, when its host function answered WASMEXT_HOST_THROW: throws what was made, or traps if nothing was */
+WASM_RT_NO_RETURN static inline void wasmext_throw_pending_(void) {
+    if (wasmext_pending_throw_.tag == NULL) wasm_rt_trap(WASMEXT_TRAP_HOST);
+    {
+        const void *tag = wasmext_pending_throw_.tag;
+        uint32_t size = wasmext_pending_throw_.size;
+        uint8_t copy[WASMEXT_EXC_RAW];
+        memcpy(copy, wasmext_pending_throw_.bytes, size);
+        wasmext_pending_throw_.tag = NULL;
+        wasm_rt_load_exception(tag, size, copy);
+    }
+    wasm_rt_throw();
 }
 
 /* How the last call ended the WASI program of the module: WASMEXT_END_NONE, WASMEXT_END_EXIT (`*value` is the code of proc_exit) or WASMEXT_END_SIGNAL (the number of

@@ -259,6 +259,20 @@ static inline int wasmext_store_find_kind(wasmext_store *s, const void *key, int
     return rc;
 }
 
+/* Sets `*slot` from NULL to `value`, once (for a process-wide cell that is written at a link and read by running code): 1 if it was NULL (now `value`) or was `value` already, else 0. */
+static inline int wasmext_cell_set_once(void *volatile *slot, void *value) {
+#if defined(_WIN32)
+    void *old = _InterlockedCompareExchangePointer((void *volatile *)slot, value, NULL);
+#elif defined(__GNUC__) || defined(__clang__)
+    void *old = NULL;
+    __atomic_compare_exchange_n(slot, &old, value, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+#else
+    void *old = *slot;
+    if (old == NULL) *slot = value;
+#endif
+    return old == NULL || old == value;
+}
+
 /* The object of a handle: WASMEXT_STORE_OK, WASMEXT_STORE_WRONG (a handle of another store) or WASMEXT_STORE_STALE (of a member that is gone). */
 static inline int wasmext_store_member(wasmext_store *s, wasmext_owner owner, void **object) {
     int rc;

@@ -246,6 +246,54 @@ REF_GLOBAL_MODULES = {
   (func $s ref.func $h global.set $gf unreachable)
   (start $s))""",
 }
+TAG_MODULES = {
+    "ta": """(module
+  (type $f (func))
+  (tag $t (param i32 i64))
+  (table $tab (export "tab") 2 funcref)
+  (export "t" (tag $t))
+  (func $thrower (type $f) i32.const 7 i64.const 9 throw $t)
+  (elem (i32.const 0) $thrower)
+  (func (export "call_slot") (param i32) local.get 0 call_indirect (type $f)))""",
+    "tb": """(module
+  (type $f (func))
+  (import "tgx" "t" (tag $t (param i32 i64)))
+  (import "tgy" "tab" (table $tab 2 funcref))
+  (func (export "catch_slot") (param i32) (result i32 i64)
+    (block $h (result i32 i64)
+      (try_table (catch $t $h)
+        local.get 0 call_indirect (type $f))
+      i32.const -1 i64.const -1))
+  (func (export "call_slot") (param i32) local.get 0 call_indirect (type $f)))""",
+    "tc": """(module
+  (type $f (func))
+  (import "tgyc" "tab" (table $tab 2 funcref))
+  (tag $t (param i32 i64))
+  (export "t" (tag $t))
+  (func (export "catch_slot") (param i32) (result i32 i64)
+    (block $h (result i32 i64)
+      (try_table (catch $t $h)
+        local.get 0 call_indirect (type $f))
+      i32.const -1 i64.const -1))
+  (tag $priv)
+  (func (export "throw_priv") throw $priv)
+  (func (export "self_catch") (result i32)
+    (block $h (result i32 i64)
+      (try_table (catch $t $h) i32.const 11 i64.const 1 throw $t)
+      i32.const -1 i64.const -1)
+    drop))""",
+    "th": """(module
+  (import "tenv" "h" (func $h))
+  (tag $t (param i32 i64))
+  (export "t" (tag $t))
+  (func (export "run") (result i32 i64)
+    (block $b (result i32 i64)
+      (try_table (catch $t $b) call $h)
+      i32.const -1 i64.const -1))
+  (func (export "plain") call $h))""",
+    "td": """(module (tag $t (param i32 i64)) (export "t" (tag $t)) (func (export "f")))""",
+    "te": """(module (import "tgz" "t" (tag (param i32))) (func (export "f")))""",
+}
 START_TRAP = """(module (func $s unreachable) (start $s) (func (export "f") (result i32) i32.const 1))"""
 
 
@@ -341,7 +389,6 @@ def test_function_imports_under_sanitizers(build: Callable[..., Path]) -> None:
 @pytest.mark.parametrize(
     ("wat", "host", "message"),
     [
-        ('(module (import "env" "e" (tag (param i32))) (func (export "f")))', "wasm32", "step 7"),
         (
             '(module (import "wasi:cli/exit@0.2.0" "exit" (func (param i32))) (memory (export "memory") 1) (func (export "f")))',
             "wasm32-wasip2",
@@ -364,7 +411,6 @@ def test_function_imports_under_sanitizers(build: Callable[..., Path]) -> None:
         ),
     ],
     ids=[
-        "tag",
         "wasi-0.2-no-realloc",
         "no-memory",
         "unknown-call",
@@ -537,6 +583,24 @@ def test_globals_of_references_under_sanitizers(build: Callable[..., Path]) -> N
             REF_GLOBAL_MODULES,
             "rg",
             "test_ref_globals.c",
+            flags=["-fsanitize=address,undefined", "-fno-sanitize-recover=all", "-g"],
+        )
+    )
+
+
+def test_tags_shared_between_instances(build: Callable[..., Path]) -> None:
+    _run(build(TAG_MODULES, "tags", "test_tags.c"))
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="the sanitizers are checked on Linux")
+def test_tags_under_sanitizers(build: Callable[..., Path]) -> None:
+    if SANITIZED or not supports_flag("-fsanitize=address,undefined"):
+        pytest.skip("no sanitizers, or one is on for the whole run")
+    _run(
+        build(
+            TAG_MODULES,
+            "tags",
+            "test_tags.c",
             flags=["-fsanitize=address,undefined", "-fno-sanitize-recover=all", "-g"],
         )
     )

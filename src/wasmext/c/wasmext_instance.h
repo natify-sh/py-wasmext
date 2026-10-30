@@ -62,6 +62,10 @@ enum {
    is the export of another instance answers WASMEXT_TRAP_LINKED + the code of a trap of that instance, and the trap goes through with that code. */
 typedef int (*wasmext_host_fn)(void *user, const wasmext_val *args, wasmext_val *results);
 
+/* checks of the references that come in (defined below, where the rest of the references are) */
+static inline int wasmext_funcref_check_(wasmext_store *store, const wasmext_funcref *f);
+static inline int wasmext_extern_check_(wasmext_store *store, const void *e);
+
 /* A function type that the module declares (its type section) and can call an element of: wasm2c's type (the pointer it compares first, then the 256-bit hash, as `call_indirect`
    does, so a function of another module with the same type matches), the adapter, and the signature. */
 typedef struct {
@@ -113,7 +117,7 @@ typedef struct wasmext_instance_s_ {
     void *module; /* the structure of wasm2c (and, after it, the slots of the imports) */
     unsigned char *bound; /* for each import of the descriptor: 1 once it has a host function */
     void **owners;          /* for each import of the descriptor: the `owner` of the record it was linked to (what keeps the exporter alive: the host's business) */
-    uint64_t (*values)[2];  /* for each import of the descriptor: room for the value of an immutable global that the host gives (16 bytes) */
+    uint64_t (*values)[4];  /* for each import of the descriptor: room for the value of an immutable global that the host gives (32 bytes: a funcref is four words) */
     wasm_rt_funcref_t *refs; /* for each export of the descriptor (a function): the element of a table that stands for it, filled when the instance is made */
     wasmext_counter *pins;  /* for each export of the descriptor (a memory): how many pins it has */
     uint64_t *saved_max;    /* ... and the maximum it had before the first pin */
@@ -183,7 +187,7 @@ static inline wasmext_instance *wasmext_instance_new(wasmext_store *store, const
     i->bound = (unsigned char *)calloc(binding->descriptor->n_imports ? binding->descriptor->n_imports : 1, 1);
     if (i->bound == NULL) { free(i->module); free(i); *error = ENOMEM; return NULL; }
     i->owners = (void **)calloc(binding->descriptor->n_imports ? binding->descriptor->n_imports : 1, sizeof(void *));
-    i->values = (uint64_t (*)[2])calloc(binding->descriptor->n_imports ? binding->descriptor->n_imports : 1, sizeof(uint64_t[2]));
+    i->values = (uint64_t (*)[4])calloc(binding->descriptor->n_imports ? binding->descriptor->n_imports : 1, sizeof(uint64_t[4]));
     i->pins = (wasmext_counter *)calloc(binding->descriptor->n_exports ? binding->descriptor->n_exports : 1, sizeof(wasmext_counter));
     i->saved_max = (uint64_t *)calloc(binding->descriptor->n_exports ? binding->descriptor->n_exports : 1, sizeof(uint64_t));
     i->refs = (wasm_rt_funcref_t *)calloc(binding->descriptor->n_exports ? binding->descriptor->n_exports : 1, sizeof(wasm_rt_funcref_t));
@@ -322,7 +326,6 @@ static inline int wasmext_instance_export_record(wasmext_instance *i, uint32_t i
         }
         case WASMEXT_DESC_GLOBAL: {
             const wasmext_global_desc *g = &d->globals[d->exports[index].index];
-            if (g->type == 0x70 || g->type == 0x6F) return WASMEXT_INST_UNSUPPORTED;
             out->kind = WASMEXT_GLOBAL;
             out->type = g->type;
             out->flags = g->is_mutable ? 1u : 0u;
@@ -456,7 +459,6 @@ static inline int wasmext_instance_bind_global_value(wasmext_instance *i, uint32
     m = &d->imports[import];
     g = &d->globals[m->index];
     if (g->is_mutable) return WASMEXT_INST_IMMUTABLE; /* a mutable global is the global of another instance */
-    if (g->type == 0x70 || g->type == 0x6F) return WASMEXT_INST_UNSUPPORTED;
     if (v->type != g->type) return WASMEXT_INST_BAD_ARGS;
     cell = i->values[import];
     switch (g->type) {
@@ -464,6 +466,20 @@ static inline int wasmext_instance_bind_global_value(wasmext_instance *i, uint32
         case 0x7E: *(uint64_t *)cell = (uint64_t)v->as.i64; break;
         case 0x7D: *(float *)cell = v->as.f32; break;
         case 0x7C: *(double *)cell = v->as.f64; break;
+        case 0x70: { /* `as.ref` is a wasmext_funcref of the store, or NULL for a null funcref */
+            const wasmext_funcref *f = (const wasmext_funcref *)v->as.ref;
+            int rc = wasmext_funcref_check_(i->store, f);
+            if (rc != 0) return rc;
+            if (f == NULL) memset(cell, 0, sizeof(wasm_rt_funcref_t));
+            else memcpy(cell, &f->ref, sizeof(wasm_rt_funcref_t));
+            break;
+        }
+        case 0x6F: { /* `as.ref` is a reference of the store, or NULL */
+            int rc = wasmext_extern_check_(i->store, v->as.ref);
+            if (rc != 0) return rc;
+            *(void **)cell = v->as.ref;
+            break;
+        }
         default: memcpy(cell, v->as.v128, 16); break;
     }
     *i->binding->ref_slot(i->module, import) = cell;
@@ -503,6 +519,13 @@ static inline void wasmext_instance_scrub_tables_(wasmext_instance *i) {
     const char *lo = (const char *)i->module, *hi = lo + i->binding->instance_size;
     for (uint32_t k = 0; k < d->n_imports; k++) {
         wasm_rt_funcref_table_t *tab;
+        if (d->imports[k].kind == WASMEXT_DESC_GLOBAL && i->bound[k] && i->binding->ref_slot != NULL && d->globals[d->imports[k].index].type == 0x70 && d->globals[d->imports[k].index].is_mutable) {
+            /* a mutable global of funcref that the instance shares: its start function may have put a function of its own in it */
+            wasm_rt_funcref_t *g = (wasm_rt_funcref_t *)*i->binding->ref_slot(i->module, k);
+            const char *mi = g != NULL ? (const char *)g->module_instance : NULL;
+            if (g != NULL && g->func != NULL && mi >= lo && mi < hi) memset(g, 0, sizeof *g);
+            continue;
+        }
         if (d->imports[k].kind != WASMEXT_DESC_TABLE || d->tables[d->imports[k].index].elem != 0x70 || !i->bound[k] || i->binding->ref_slot == NULL) continue; /* the elements of an externref table are not functions */
         tab = (wasm_rt_funcref_table_t *)*i->binding->ref_slot(i->module, k);
         for (uint32_t e = 0; tab != NULL && e < tab->size; e++) {
@@ -946,22 +969,35 @@ static inline int wasmext_instance_global_check_(const wasmext_instance *i, uint
     const wasmext_descriptor *d = i->binding->descriptor;
     if (index >= d->n_exports || d->exports[index].kind != WASMEXT_DESC_GLOBAL || i->binding->exports[index].address == NULL) return WASMEXT_INST_BAD_EXPORT;
     *desc = &d->globals[d->exports[index].index];
-    if ((*desc)->type == 0x70 || (*desc)->type == 0x6F) return WASMEXT_INST_UNSUPPORTED;
     if (!i->instantiated) return WASMEXT_INST_NOT_INSTANTIATED;
     if (wasmext_store_closed(i->store)) return (int)WASMEXT_TRAP_CLOSED;
     *address = i->binding->exports[index].address(i->module);
     return 0;
 }
 
-/* Reads an exported global into `out` (with its type). */
+/* Reads an exported global into `out` (with its type). A global of funcref is written where the caller points `out->as.ref` (at a `wasmext_funcref`, NULL is WASMEXT_INST_BAD_ARGS); a
+   global of externref gives its reference (NULL when it is null). */
 static inline int wasmext_instance_global_get(wasmext_instance *i, uint32_t index, wasmext_val *out) {
     void *p;
     const wasmext_global_desc *g;
     int rc = wasmext_instance_global_check_(i, index, &p, &g);
     if (rc != 0) return rc;
+    if (g->type == 0x70) {
+        wasmext_funcref *f = (wasmext_funcref *)out->as.ref;
+        if (f == NULL) return WASMEXT_INST_BAD_ARGS;
+        f->ref = *(const wasm_rt_funcref_t *)p;
+        f->store = i->store;
+        f->owner = 0;
+        if (f->ref.func != NULL && wasmext_store_find(i->store, f->ref.module_instance, &f->owner) != WASMEXT_STORE_OK) return WASMEXT_TAB_STALE;
+        memset(out, 0, sizeof *out);
+        out->type = 0x70;
+        out->as.ref = f;
+        return 0;
+    }
     memset(out, 0, sizeof *out);
     out->type = g->type;
     switch (g->type) {
+        case 0x6F: out->as.ref = *(void **)p; break;
         case 0x7F: out->as.i32 = (int32_t)*(uint32_t *)p; break;
         case 0x7E: out->as.i64 = (int64_t)*(uint64_t *)p; break;
         case 0x7D: out->as.f32 = *(float *)p; break;
@@ -984,6 +1020,19 @@ static inline int wasmext_instance_global_set(wasmext_instance *i, uint32_t inde
         case 0x7E: *(uint64_t *)p = (uint64_t)value->as.i64; break;
         case 0x7D: *(float *)p = value->as.f32; break;
         case 0x7C: *(double *)p = value->as.f64; break;
+        case 0x70: { /* a funcref of the store, or NULL */
+            const wasmext_funcref *f = (const wasmext_funcref *)value->as.ref;
+            rc = wasmext_funcref_check_(i->store, f);
+            if (rc != 0) return rc;
+            if (f == NULL) memset(p, 0, sizeof(wasm_rt_funcref_t));
+            else memcpy(p, &f->ref, sizeof(wasm_rt_funcref_t));
+            break;
+        }
+        case 0x6F: /* a reference of the store, or NULL */
+            rc = wasmext_extern_check_(i->store, value->as.ref);
+            if (rc != 0) return rc;
+            *(void **)p = value->as.ref;
+            break;
         default: memcpy(p, value->as.v128, 16); break;
     }
     return 0;

@@ -212,10 +212,6 @@ def generate_binding(model: ModuleModel) -> str:
             raise GenError(
                 f"{model.name}: the import {imp.module}.{imp.name} is a 64-bit or a shared table; only the tables of 32 bits that are not shared are carried"
             )
-        if isinstance(imp.type, GlobalType) and imp.type.type in _REFS:
-            raise GenError(
-                f"{model.name}: the import {imp.module}.{imp.name} is a global of {imp.type.type}; that is step 5 or 6 of docs/step3_instances.md"
-            )
     last = model.last
     prefix = module_prefix(model.name)
     inst_t = f"w2c_{prefix}"

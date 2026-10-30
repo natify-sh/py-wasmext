@@ -215,6 +215,37 @@ EXTERN_MODULES = {
     "xs": '(module (import "xsown" "t" (table 8 externref)) (func (export "f")))',
     "xc": '(module (import "xcown" "t" (table 1 2 externref)) (func (export "f")))',
 }
+REF_GLOBAL_MODULES = {
+    "rg": """(module
+  (type $t0 (func (result i32)))
+  (table $t 1 funcref)
+  (global $gx (export "gx") (mut externref) (ref.null extern))
+  (global $gf (export "gf") (mut funcref) (ref.null func))
+  (func $f (export "f") (result i32) i32.const 5)
+  (func (export "setgf") ref.func $f global.set $gf)
+  (func (export "callgf") (result i32) i32.const 0 global.get $gf table.set $t i32.const 0 call_indirect (type $t0))
+  (func (export "getgx") (result externref) global.get $gx)
+  (func (export "setgx") (param externref) local.get 0 global.set $gx))""",
+    "ri": """(module
+  (type $t0 (func (result i32)))
+  (import "gown" "gx" (global $gx (mut externref)))
+  (import "gown" "gf" (global $gf (mut funcref)))
+  (import "genv" "ix" (global $ix externref))
+  (import "genv" "if" (global $if funcref))
+  (table $t 1 funcref)
+  (func $g (export "g") (result i32) i32.const 7)
+  (func (export "getgx") (result externref) global.get $gx)
+  (func (export "setgx") (param externref) local.get 0 global.set $gx)
+  (func (export "setgf") ref.func $g global.set $gf)
+  (func (export "callgf") (result i32) i32.const 0 global.get $gf table.set $t i32.const 0 call_indirect (type $t0))
+  (func (export "getix") (result externref) global.get $ix)
+  (func (export "getif") (result funcref) global.get $if))""",
+    "rt": """(module
+  (import "gtown" "gf" (global $gf (mut funcref)))
+  (func $h (export "h") (result i32) i32.const 9)
+  (func $s ref.func $h global.set $gf unreachable)
+  (start $s))""",
+}
 START_TRAP = """(module (func $s unreachable) (start $s) (func (export "f") (result i32) i32.const 1))"""
 
 
@@ -331,11 +362,6 @@ def test_function_imports_under_sanitizers(build: Callable[..., Path]) -> None:
             "wasm32-wasip1",
             "fd_close is",
         ),
-        (
-            '(module (import "env" "g" (global externref)) (func (export "f")))',
-            "wasm32",
-            "global of externref",
-        ),
     ],
     ids=[
         "tag",
@@ -343,7 +369,6 @@ def test_function_imports_under_sanitizers(build: Callable[..., Path]) -> None:
         "no-memory",
         "unknown-call",
         "wrong-signature",
-        "externref-global",
     ],
 )
 def test_what_the_binding_does_not_carry_yet(wabt: Path, tmp_path: Path, wat: str, host: str, message: str) -> None:
@@ -497,3 +522,21 @@ def test_externref_under_sanitizers(build: Callable[..., Path]) -> None:
         )
     )
     _run(build(EXTERN_MODULES, "xr", "test_externref.c", flags=["-fsanitize=thread", "-g"]))
+
+
+def test_globals_of_references(build: Callable[..., Path]) -> None:
+    _run(build(REF_GLOBAL_MODULES, "rg", "test_ref_globals.c"))
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="the sanitizers are checked on Linux")
+def test_globals_of_references_under_sanitizers(build: Callable[..., Path]) -> None:
+    if SANITIZED or not supports_flag("-fsanitize=address,undefined"):
+        pytest.skip("no sanitizers, or one is on for the whole run")
+    _run(
+        build(
+            REF_GLOBAL_MODULES,
+            "rg",
+            "test_ref_globals.c",
+            flags=["-fsanitize=address,undefined", "-fno-sanitize-recover=all", "-g"],
+        )
+    )

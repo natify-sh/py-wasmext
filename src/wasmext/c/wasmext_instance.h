@@ -53,7 +53,8 @@ enum {
     WASMEXT_TAB_BOUNDS = -30,       /* an index outside the table */
     WASMEXT_TAB_FULL = -31,         /* the table cannot grow that much (its maximum, or memory) */
     WASMEXT_TAB_WRONG_STORE = -32,  /* the function is of another store, or is not a function of one */
-    WASMEXT_TAB_STALE = -33         /* the element is a function that no member of the store stands behind */
+    WASMEXT_TAB_STALE = -33,        /* the element is a function that no member of the store stands behind */
+    WASMEXT_TAB_WRONG_ELEM = -34    /* an operation on the elements of a funcref table, on a table of externref, or the other way */
 };
 
 /* The host function of an import, one shape for every import: `args` and `results` are arrays of the counts and the types of its signature (the descriptor
@@ -330,9 +331,10 @@ static inline int wasmext_instance_export_record(wasmext_instance *i, uint32_t i
         }
         case WASMEXT_DESC_TABLE: {
             const wasmext_table_desc *t = &d->tables[d->exports[index].index];
-            if (t->elem != 0x70 || t->limits.is64 || t->limits.shared || b->address == NULL) return WASMEXT_INST_UNSUPPORTED; /* externref: step 6 */
+            if ((t->elem != 0x70 && t->elem != 0x6F) || t->limits.is64 || t->limits.shared || b->address == NULL) return WASMEXT_INST_UNSUPPORTED;
             out->kind = WASMEXT_TABLE;
-            out->type = (uint32_t)sizeof(wasm_rt_funcref_table_t);
+            out->type = (uint32_t)sizeof(wasm_rt_funcref_table_t); /* the same size for externref */
+            if (t->elem == 0x6F) out->flags |= 32u; /* the elements are externref */
             out->address = b->address(i->module);
             break;
         }
@@ -409,22 +411,30 @@ static inline int wasmext_instance_bind_export(wasmext_instance *i, uint32_t imp
         }
         case WASMEXT_DESC_TABLE: {
             const wasmext_table_desc *t = &d->tables[m->index];
-            const wasm_rt_funcref_table_t *tab = (const wasm_rt_funcref_table_t *)e->address;
-            if (t->elem != 0x70 || t->limits.is64 || t->limits.shared) return WASMEXT_INST_UNSUPPORTED; /* externref: step 6 */
-            if (e->kind != WASMEXT_TABLE || tab == NULL) return wasmext_instance_link_fail_(i, m, "is a table: the export given is not", "");
+            uint32_t size, max_size;
+            if ((t->elem != 0x70 && t->elem != 0x6F) || t->limits.is64 || t->limits.shared) return WASMEXT_INST_UNSUPPORTED;
+            if (e->kind != WASMEXT_TABLE || e->address == NULL) return wasmext_instance_link_fail_(i, m, "is a table: the export given is not", "");
             if (e->type != sizeof(wasm_rt_funcref_table_t)) return wasmext_instance_link_fail_(i, m, ": the table is from an incompatible runtime of wasm2c", "");
-            if (tab->size < t->limits.min) {
+            if (((e->flags >> 5) & 1u) != (t->elem == 0x6F ? 1u : 0u)) return wasmext_instance_link_fail_(i, m, ": the elements of the table are not of the type the module needs (funcref or externref)", "");
+            if (t->elem == 0x70) {
+                size = ((const wasm_rt_funcref_table_t *)e->address)->size;
+                max_size = ((const wasm_rt_funcref_table_t *)e->address)->max_size;
+            } else {
+                size = ((const wasm_rt_externref_table_t *)e->address)->size;
+                max_size = ((const wasm_rt_externref_table_t *)e->address)->max_size;
+            }
+            if (size < t->limits.min) {
                 char detail[120];
-                snprintf(detail, sizeof detail, ": the table has %lu elements, the module needs at least %llu", (unsigned long)tab->size, (unsigned long long)t->limits.min);
+                snprintf(detail, sizeof detail, ": the table has %lu elements, the module needs at least %llu", (unsigned long)size, (unsigned long long)t->limits.min);
                 return wasmext_instance_link_fail_(i, m, "", detail);
             }
-            if (t->limits.has_max && tab->max_size > t->limits.max) {
+            if (t->limits.has_max && max_size > t->limits.max) {
                 char detail[120];
-                snprintf(detail, sizeof detail, ": the table may grow to %lu elements, the module allows %llu", (unsigned long)tab->max_size, (unsigned long long)t->limits.max);
+                snprintf(detail, sizeof detail, ": the table may grow to %lu elements, the module allows %llu", (unsigned long)max_size, (unsigned long long)t->limits.max);
                 return wasmext_instance_link_fail_(i, m, "", detail);
             }
             if (i->binding->ref_slot == NULL) return WASMEXT_INST_BAD_IMPORT;
-            *i->binding->ref_slot(i->module, import) = (void *)tab;
+            *i->binding->ref_slot(i->module, import) = e->address;
             break;
         }
         default:
@@ -493,7 +503,7 @@ static inline void wasmext_instance_scrub_tables_(wasmext_instance *i) {
     const char *lo = (const char *)i->module, *hi = lo + i->binding->instance_size;
     for (uint32_t k = 0; k < d->n_imports; k++) {
         wasm_rt_funcref_table_t *tab;
-        if (d->imports[k].kind != WASMEXT_DESC_TABLE || !i->bound[k] || i->binding->ref_slot == NULL) continue;
+        if (d->imports[k].kind != WASMEXT_DESC_TABLE || d->tables[d->imports[k].index].elem != 0x70 || !i->bound[k] || i->binding->ref_slot == NULL) continue; /* the elements of an externref table are not functions */
         tab = (wasm_rt_funcref_table_t *)*i->binding->ref_slot(i->module, k);
         for (uint32_t e = 0; tab != NULL && e < tab->size; e++) {
             const char *mi = (const char *)tab->data[e].module_instance;

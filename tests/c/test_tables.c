@@ -118,9 +118,9 @@ static void test_host_table(void) {
     wasmext_funcref f;
     uint32_t size, maximum, previous;
     int error = -1;
-    CHECK(wasmext_tab_new(NULL, 1, 1, &error) == NULL && error == EINVAL);
-    CHECK(wasmext_tab_new(s, 3, 2, &error) == NULL && error == EINVAL); /* initial above maximum */
-    t = wasmext_tab_new(s, 4, WASMEXT_TABLE_NO_MAXIMUM, &error);
+    CHECK(wasmext_tab_new(NULL, 0x70, 1, 1, &error) == NULL && error == EINVAL);
+    CHECK(wasmext_tab_new(s, 0x70, 3, 2, &error) == NULL && error == EINVAL); /* initial above maximum */
+    t = wasmext_tab_new(s, 0x70, 4, WASMEXT_TABLE_NO_MAXIMUM, &error);
     CHECK(t != NULL && error == 0);
     CHECK(wasmext_tab_size(t, &size, &maximum) == 0 && size == 4 && maximum == WASMEXT_TABLE_NO_MAXIMUM);
     CHECK(wasmext_instance_instantiate(owner) == 0);
@@ -141,7 +141,7 @@ static void test_host_table(void) {
     CHECK(wasmext_tab_grow(t, 1, NULL) == (int)WASMEXT_TRAP_CLOSED && wasmext_tab_size(t, NULL, NULL) == (int)WASMEXT_TRAP_CLOSED);
     CHECK(wasmext_tab_record(t, NULL, &rec) == (int)WASMEXT_TRAP_CLOSED);
     CHECK(wasmext_instance_table_get(owner, 0, 0, &f) != 0);
-    CHECK(wasmext_tab_new(s, 1, 1, &error) == NULL && error == EBADF);
+    CHECK(wasmext_tab_new(s, 0x70, 1, 1, &error) == NULL && error == EBADF);
     wasmext_store_free(s);
 }
 
@@ -550,7 +550,7 @@ static void test_threads(void) {
     enum { N = 4 };
     wasmext_store *s = wasmext_store_new();
     wasmext_instance *owner = wasmext_instance_new(s, &owner_binding, NULL);
-    wasmext_tab *t = wasmext_tab_new(s, 4, WASMEXT_TABLE_NO_MAXIMUM, NULL);
+    wasmext_tab *t = wasmext_tab_new(s, 0x70, 4, WASMEXT_TABLE_NO_MAXIMUM, NULL);
     work_t w[N];
     thread_t th[N];
     uint32_t size;

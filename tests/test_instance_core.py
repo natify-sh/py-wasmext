@@ -199,7 +199,21 @@ EXTERN_MODULES = {
   (func (export "pair") (param externref externref) (result externref externref) local.get 1 local.get 0)
   (func (export "isnull") (param externref) (result i32) local.get 0 ref.is_null)
   (func (export "via") (param externref) (result externref) local.get 0 call $visit)
-  (func (export "mixed") (param i32 externref f64) (result f64 externref) local.get 2 local.get 1))""",
+  (func (export "mixed") (param i32 externref f64) (result f64 externref) local.get 2 local.get 1)
+  (table $t (export "t") 4 8 externref)
+  (func (export "tget") (param i32) (result externref) local.get 0 table.get $t)
+  (func (export "tset") (param i32 externref) local.get 0 local.get 1 table.set $t)
+  (func (export "tsize") (result i32) table.size $t)
+  (func (export "tgrow") (param i32) (result i32) ref.null extern local.get 0 table.grow $t))""",
+    "xu": """(module
+  (import "xown" "t" (table $t 2 externref))
+  (func (export "tget") (param i32) (result externref) local.get 0 table.get $t)
+  (func (export "tset") (param i32 externref) local.get 0 local.get 1 table.set $t)
+  (func (export "tsize") (result i32) table.size $t))""",
+    "xt": '(module (import "xtown" "t" (table 2 externref)) (func $boom unreachable) (start $boom))',
+    "xf": '(module (import "xfown" "t" (table 1 funcref)) (func (export "f")))',
+    "xs": '(module (import "xsown" "t" (table 8 externref)) (func (export "f")))',
+    "xc": '(module (import "xcown" "t" (table 1 2 externref)) (func (export "f")))',
 }
 START_TRAP = """(module (func $s unreachable) (start $s) (func (export "f") (result i32) i32.const 1))"""
 
@@ -296,7 +310,6 @@ def test_function_imports_under_sanitizers(build: Callable[..., Path]) -> None:
 @pytest.mark.parametrize(
     ("wat", "host", "message"),
     [
-        ('(module (import "env" "t" (table 1 externref)) (func (export "g")))', "wasm32", "externref is step 6"),
         ('(module (import "env" "e" (tag (param i32))) (func (export "f")))', "wasm32", "step 7"),
         (
             '(module (import "wasi:cli/exit@0.2.0" "exit" (func (param i32))) (memory (export "memory") 1) (func (export "f")))',
@@ -325,7 +338,6 @@ def test_function_imports_under_sanitizers(build: Callable[..., Path]) -> None:
         ),
     ],
     ids=[
-        "externref-table",
         "tag",
         "wasi-0.2-no-realloc",
         "no-memory",

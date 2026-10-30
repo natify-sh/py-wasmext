@@ -1,6 +1,6 @@
 # Step 6 of layer 1: `externref` (and the globals of both kinds of reference)
 
-Status: **6a built 2026-10-30 (6b and 6c are not);** written 2026-10-30; the owner accepted the order of [layers.md](layers.md) and the globals of `funcref` and `externref` in this step (they were refused since step 3 and step 5 did not touch them).** On top of steps 3 to 5. Order inside the step, one commit each, CI between: **6a** the value and the signatures, **6b** tables of `externref`, **6c** globals of `funcref` and `externref`.
+Status: **6a and 6b built 2026-10-30 (6c is not);** written 2026-10-30; the owner accepted the order of [layers.md](layers.md) and the globals of `funcref` and `externref` in this step (they were refused since step 3 and step 5 did not touch them).** On top of steps 3 to 5. Order inside the step, one commit each, CI between: **6a** the value and the signatures, **6b** tables of `externref`, **6c** globals of `funcref` and `externref`.
 
 ## What there is
 
@@ -31,3 +31,7 @@ Why the host cannot count the references: WebAssembly copies an `externref` wher
 ## 6a built
 
 `wasmext_extern_new/user`, `wasmext_extern_check_`, `wasmext_extern_result_` in `wasmext_instance.h`; the binding carries `externref` in the signatures of exports, imports, `call_ref` and the host functions of a table (the adapters, the forwarders and the trampolines; the tables of C types, letters of multi results and types of wasm2c in `_binding.py` have the `externref` that the old glue lacks). A `wasmext_val` of type 0x6F has the pointer to the record in `as.ref`. `tests/c/test_externref.c` (ASan/UBSan, TSan; mutations of the membership check, of the check of a host answer and of its type, of the release, of the check of an argument, of the refusal of the typed shape, of the adapter and of the registration are caught).
+
+## 6b built
+
+`wasmext_tab_new(store, elem, initial, maximum, error)` takes the element type (0x70 or 0x6F; the signature changed from 5a, the ABI is free in alpha); `wasmext_tab_get_extern/set_extern` and, for a table an instance exports, `wasmext_instance_table_get_extern/set_extern`; `grow` and `size` follow the element type; the operations of the other kind answer `WASMEXT_TAB_WRONG_ELEM`. The record of a table says its element type in bit 5 of `flags`, and `bind_export` refuses a table of the other type (and keeps the limits as before). The take-back of a failed start is for funcref tables only (the elements of an externref table are not functions of the instance). The binding carries imports of `externref` tables. `tests/c/test_externref.c`, `test_tables`: the table a module exports, shared with an importer, a table of the host, what goes in, the other element type, the limits, the failed start; mutations of the check of what goes in, of the bounds, of the element type of each operation, of the flag of the record, of the size and growth, and (under LeakSanitizer and ASan) of the free at the close and of the take-back are caught.

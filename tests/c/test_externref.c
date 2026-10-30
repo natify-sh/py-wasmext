@@ -4,7 +4,7 @@
 #include <stdio.h>
 #include "wasmext_table.h"
 
-extern const wasmext_binding xr_binding;
+extern const wasmext_binding xr_binding, xu_binding, xf_binding, xs_binding, xc_binding, xt_binding;
 
 #ifdef _WIN32
 #include <process.h>
@@ -154,6 +154,127 @@ static void test_values(void) {
     }
 }
 
+/* tables of externref: one that a module exports and another imports, one of the host, the checks of what goes in, the element type that an import needs, and the limits */
+static uint32_t table_import(wasmext_instance *i) {
+    const wasmext_descriptor *d = i->binding->descriptor;
+    for (uint32_t k = 0; k < d->n_imports; k++)
+        if (d->imports[k].kind == WASMEXT_DESC_TABLE) return k;
+    return 0xFFFFFFFFu;
+}
+static int bind_table(wasmext_instance *importer, const wasmext_export *rec) { return wasmext_instance_bind_export(importer, table_import(importer), rec); }
+static void test_tables(void) {
+    wasmext_store *s = wasmext_store_new(), *other = wasmext_store_new();
+    wasmext_instance *x = wasmext_instance_new(s, &xr_binding, NULL), *u = wasmext_instance_new(s, &xu_binding, NULL), *u2 = wasmext_instance_new(s, &xu_binding, NULL);
+    wasmext_instance *xf = wasmext_instance_new(s, &xf_binding, NULL), *xs = wasmext_instance_new(s, &xs_binding, NULL), *xc = wasmext_instance_new(s, &xc_binding, NULL);
+    item_t a1 = {0, 1}, a2 = {0, 2}, b1 = {0, 3};
+    wasmext_extern *e1, *e2, *foreign;
+    wasmext_val a[2], r[1];
+    wasmext_export rec;
+    wasmext_tab *ht, *ft;
+    visit_t v;
+    void *p = (void *)1;
+    uint32_t size, maximum, previous, T;
+    char text[WASMEXT_STORE_ERROR_SIZE];
+    memset(&v, 0, sizeof v);
+    CHECK(wasmext_instance_bind_func(x, (uint32_t)import_of(x, "xenv", "visit"), visit, &v) == 0 && wasmext_instance_instantiate(x) == 0);
+    e1 = give(s, &a1); e2 = give(s, &a2); foreign = give(other, &b1);
+    T = (uint32_t)export_of(x, "t", WASMEXT_DESC_TABLE);
+    /* the table that the module exports: the host and the module write and read the same slots */
+    CHECK(wasmext_instance_table_size(x, T, &size, &maximum) == 0 && size == 4 && maximum == 8);
+    CHECK(wasmext_instance_table_set_extern(x, T, 0, e1) == 0);
+    a[0] = I32(0);
+    CHECK(call(x, "tget", a, 1, r, 1) == 0 && r[0].type == 0x6F && r[0].as.ref == e1);
+    a[0] = I32(1); a[1] = XREF(e2);
+    CHECK(call(x, "tset", a, 2, NULL, 0) == 0 && wasmext_instance_table_get_extern(x, T, 1, &p) == 0 && p == e2);
+    CHECK(wasmext_instance_table_get_extern(x, T, 2, &p) == 0 && p == NULL); /* empty */
+    CHECK(wasmext_instance_table_set_extern(x, T, 1, NULL) == 0 && wasmext_instance_table_get_extern(x, T, 1, &p) == 0 && p == NULL);
+    CHECK(wasmext_instance_table_get_extern(x, T, 4, &p) == WASMEXT_TAB_BOUNDS && wasmext_instance_table_set_extern(x, T, 4, e1) == WASMEXT_TAB_BOUNDS);
+    /* what goes in is a reference of the store: a value of another store, a pointer that this API did not make */
+    CHECK(wasmext_instance_table_set_extern(x, T, 2, foreign) == WASMEXT_TAB_WRONG_STORE);
+    CHECK(wasmext_instance_table_set_extern(x, T, 2, (char *)e1 + 1) == WASMEXT_TAB_WRONG_STORE);
+    CHECK(wasmext_instance_table_get_extern(x, T, 2, &p) == 0 && p == NULL);
+    a[0] = I32(2); a[1] = XREF(foreign);
+    CHECK(call(x, "tset", a, 2, NULL, 0) == WASMEXT_TAB_WRONG_STORE);
+    /* the operations of the other kind are refused */
+    {
+        wasmext_funcref f;
+        CHECK(wasmext_instance_table_get(x, T, 0, &f) == WASMEXT_TAB_WRONG_ELEM && wasmext_instance_table_set(x, T, 0, NULL) == WASMEXT_TAB_WRONG_ELEM);
+    }
+    /* growth is seen by both, and the maximum is kept by both */
+    a[0] = I32(2);
+    CHECK(call(x, "tgrow", a, 1, r, 1) == 0 && r[0].as.i32 == 4 && wasmext_instance_table_size(x, T, &size, NULL) == 0 && size == 6);
+    CHECK(wasmext_instance_table_grow(x, T, 1, &previous) == 0 && previous == 6);
+    CHECK(wasmext_instance_table_grow(x, T, 2, &previous) == WASMEXT_TAB_FULL);
+    a[0] = I32(9);
+    CHECK(call(x, "tgrow", a, 1, r, 1) == 0 && r[0].as.i32 == -1);
+    /* another instance imports the table of the module: it is one table */
+    CHECK(wasmext_instance_export_record(x, T, NULL, &rec) == 0 && rec.kind == WASMEXT_TABLE && (rec.flags & 32u) != 0 && rec.store == s);
+    CHECK(bind_table(u, &rec) == 0 && wasmext_instance_instantiate(u) == 0);
+    a[0] = I32(3); a[1] = XREF(e1);
+    CHECK(call(u, "tset", a, 2, NULL, 0) == 0 && wasmext_instance_table_get_extern(x, T, 3, &p) == 0 && p == e1);
+    CHECK(call(u, "tget", a, 1, r, 1) == 0 && r[0].as.ref == e1);
+    CHECK(call(u, "tsize", NULL, 0, r, 1) == 0 && r[0].as.i32 == 7);
+    a[0] = I32(20);
+    CHECK(call(u, "tget", a, 1, r, 1) == (int)WASM_RT_TRAP_OOB); /* a trap of the module; the instances stay */
+    CHECK(call(x, "tsize", NULL, 0, r, 1) == 0 && r[0].as.i32 == 7);
+    /* an instance that fails to start and imports the table: the references in the table are not functions of it, and are all still there (the take-back of a failed start is for funcref tables) */
+    {
+        wasmext_instance *bad = wasmext_instance_new(s, &xt_binding, NULL);
+        void *q = NULL;
+        CHECK(wasmext_instance_export_record(x, T, NULL, &rec) == 0 && bind_table(bad, &rec) == 0);
+        CHECK(wasmext_instance_instantiate(bad) == (int)WASM_RT_TRAP_UNREACHABLE);
+        CHECK(wasmext_instance_table_get_extern(x, T, 3, &q) == 0 && q == e1);
+        wasmext_instance_free(bad);
+    }
+    /* a table of the host */
+    ht = wasmext_tab_new(s, 0x6F, 4, WASMEXT_TABLE_NO_MAXIMUM, NULL);
+    ft = wasmext_tab_new(s, 0x70, 2, WASMEXT_TABLE_NO_MAXIMUM, NULL);
+    CHECK(ht != NULL && ft != NULL && wasmext_tab_size(ht, &size, &maximum) == 0 && size == 4 && maximum == WASMEXT_TABLE_NO_MAXIMUM);
+    CHECK(wasmext_tab_record(ht, NULL, &rec) == 0 && (rec.flags & 32u) != 0);
+    CHECK(bind_table(u2, &rec) == 0 && wasmext_instance_instantiate(u2) == 0);
+    a[0] = I32(0); a[1] = XREF(e2);
+    CHECK(call(u2, "tset", a, 2, NULL, 0) == 0 && wasmext_tab_get_extern(ht, 0, &p) == 0 && p == e2);
+    CHECK(wasmext_tab_set_extern(ht, 1, e1) == 0 && call(u2, "tget", &a[0], 1, r, 1) == 0 && r[0].as.ref == e2);
+    a[0] = I32(1);
+    CHECK(call(u2, "tget", a, 1, r, 1) == 0 && r[0].as.ref == e1);
+    CHECK(wasmext_tab_set_extern(ht, 1, foreign) == WASMEXT_TAB_WRONG_STORE && wasmext_tab_set_extern(ht, 9, e1) == WASMEXT_TAB_BOUNDS && wasmext_tab_get_extern(ht, 9, &p) == WASMEXT_TAB_BOUNDS);
+    CHECK(wasmext_tab_grow(ht, 3, &previous) == 0 && previous == 4 && call(u2, "tsize", NULL, 0, r, 1) == 0 && r[0].as.i32 == 7);
+    {
+        wasmext_funcref f;
+        CHECK(wasmext_tab_get(ht, 0, &f) == WASMEXT_TAB_WRONG_ELEM && wasmext_tab_set(ht, 0, NULL) == WASMEXT_TAB_WRONG_ELEM);
+        CHECK(wasmext_tab_get_extern(ft, 0, &p) == WASMEXT_TAB_WRONG_ELEM && wasmext_tab_set_extern(ft, 0, NULL) == WASMEXT_TAB_WRONG_ELEM);
+    }
+    /* the element type an import needs: an externref table for a funcref import, and the other way, are refused; so are the limits */
+    CHECK(wasmext_instance_export_record(x, T, NULL, &rec) == 0);
+    CHECK(bind_table(xf, &rec) == WASMEXT_INST_LINK_FAILED);
+    wasmext_store_error(s, text, sizeof text);
+    CHECK(strstr(text, "not of the type") != NULL);
+    CHECK(wasmext_tab_record(ft, NULL, &rec) == 0 && (rec.flags & 32u) == 0);
+    CHECK(bind_table(u, &rec) == WASMEXT_INST_TOO_LATE); /* u is made already */
+    {
+        wasmext_instance *u3 = wasmext_instance_new(s, &xu_binding, NULL);
+        CHECK(bind_table(u3, &rec) == WASMEXT_INST_LINK_FAILED);
+        wasmext_store_error(s, text, sizeof text);
+        CHECK(strstr(text, "not of the type") != NULL);
+        wasmext_instance_free(u3);
+    }
+    CHECK(wasmext_instance_export_record(x, T, NULL, &rec) == 0);
+    CHECK(bind_table(xs, &rec) == WASMEXT_INST_LINK_FAILED);
+    wasmext_store_error(s, text, sizeof text);
+    CHECK(strstr(text, "needs at least 8") != NULL);
+    CHECK(bind_table(xc, &rec) == WASMEXT_INST_LINK_FAILED);
+    wasmext_store_error(s, text, sizeof text);
+    CHECK(strstr(text, "allows 2") != NULL);
+    /* the close releases each value once, and the tables answer the code of a closed store */
+    CHECK(a1.released == 0 && a2.released == 0);
+    CHECK(wasmext_store_close(s) == WASMEXT_STORE_OK);
+    CHECK(a1.released == 1 && a2.released == 1);
+    CHECK(wasmext_tab_get_extern(ht, 0, &p) == (int)WASMEXT_TRAP_CLOSED && wasmext_tab_set_extern(ht, 0, NULL) == (int)WASMEXT_TRAP_CLOSED && wasmext_tab_grow(ht, 1, NULL) == (int)WASMEXT_TRAP_CLOSED);
+    CHECK(wasmext_instance_table_get_extern(x, T, 0, &p) == (int)WASMEXT_TRAP_CLOSED);
+    wasmext_store_free(s);
+    wasmext_store_free(other);
+}
+
 /* many threads give the store values at once: each is a member, each is released at the close */
 typedef struct { wasmext_store *s; item_t *items; int n; int failed; } work_t;
 static THREAD_RESULT worker(void *arg) {
@@ -186,6 +307,7 @@ static void test_threads(void) {
 
 int main(void) {
     test_values();
+    test_tables();
     test_threads();
     if (failures) { fprintf(stderr, "%d failed\n", failures); return 1; }
     puts("ok");

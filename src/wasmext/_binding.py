@@ -208,11 +208,9 @@ def generate_binding(model: ModuleModel) -> str:
             raise GenError(
                 f"{model.name}: the import {imp.module}.{imp.name} is a tag; that is step 7 of docs/step3_instances.md"
             )
-        if isinstance(imp.type, TableType) and (
-            imp.type.elem != "funcref" or imp.type.limits.is64 or imp.type.limits.shared
-        ):
+        if isinstance(imp.type, TableType) and (imp.type.limits.is64 or imp.type.limits.shared):
             raise GenError(
-                f"{model.name}: the import {imp.module}.{imp.name} is a table of {imp.type.elem} (or 64-bit, or shared); only funcref tables are carried (externref is step 6 of docs/layers.md)"
+                f"{model.name}: the import {imp.module}.{imp.name} is a 64-bit or a shared table; only the tables of 32 bits that are not shared are carried"
             )
         if isinstance(imp.type, GlobalType) and imp.type.type in _REFS:
             raise GenError(
@@ -289,7 +287,7 @@ def generate_binding(model: ModuleModel) -> str:
             if isinstance(imp.type, GlobalType):
                 ctype = _CTYPE[imp.type.type]
             elif isinstance(imp.type, TableType):
-                ctype = "wasm_rt_funcref_table_t"
+                ctype = "wasm_rt_externref_table_t" if imp.type.elem == "externref" else "wasm_rt_funcref_table_t"
             else:
                 assert isinstance(imp.type, Limits)
                 ctype = "wasm_rt_memory_t"

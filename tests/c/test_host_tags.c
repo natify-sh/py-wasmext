@@ -12,12 +12,14 @@ extern const wasmext_binding ha_binding, hb_binding, hh_binding, hs_binding, hx_
 #include <process.h>
 typedef HANDLE thread_t;
 #define THREAD_RESULT unsigned __stdcall
+typedef unsigned(__stdcall *thread_fn)(void *);
 static void thread_start(thread_t *t, unsigned (__stdcall *f)(void *), void *arg) { *t = (HANDLE)_beginthreadex(NULL, 0, f, arg, 0, NULL); }
 static void thread_join(thread_t t) { WaitForSingleObject(t, INFINITE); CloseHandle(t); }
 #else
 #include <pthread.h>
 typedef pthread_t thread_t;
 #define THREAD_RESULT void *
+typedef void *(*thread_fn)(void *);
 static void thread_start(thread_t *t, THREAD_RESULT (*f)(void *), void *arg) { pthread_create(t, NULL, f, arg); }
 static void thread_join(thread_t t) { pthread_join(t, NULL); }
 #endif
@@ -243,7 +245,7 @@ static THREAD_RESULT close_it(void *arg) {
     return 0;
 }
 /* two threads that start together on the flag: `first` and the close of r->s */
-static void race_with_close(THREAD_RESULT (*first)(void *), round_t *r) {
+static void race_with_close(thread_fn first, round_t *r) {
     thread_t a, b;
     wasmext_atomic_store(&go_, 0);
     thread_start(&a, first, r);

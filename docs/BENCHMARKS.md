@@ -34,3 +34,20 @@ Reading the table:
 - Each case calls a function of one or two instructions, so the numbers are the cost of the path, not of the work.
 
 Files: `tools/bench_calls.py` (build, calibration, table), `tests/c/bench_calls.c` (the six cases, selected by an argument).
+
+## Baseline for step 8b (2026-11-01, commit db92ac4)
+
+The first table was taken on another machine (Xeon at 2.80 GHz); after a restart of the container the machine is a Xeon at 2.10 GHz, which is about 25 percent faster on these cases. Numbers of different machines are not compared: step 8b is measured on ONE machine, in one session, the commit before the step (db92ac4) against the commit after it, three runs each.
+
+Command: `uv run python tools/bench_calls.py` (gcc 13.3.0, `-O2 -DNDEBUG`, no sanitizers, Linux 6.18, Python 3.11). Medians of 5 repetitions, three runs; ns per call:
+
+| # | case | run 1 | run 2 | run 3 |
+|---|---|---|---|---|
+| 1 | `wasmext_instance_call` of `add` | 38.5 | 39.4 | 42.3 |
+| 2 | through a link (typed shim) | 87.1 | 80.1 | 79.2 |
+| 3 | import answered by a uniform host function | 54.9 | 55.3 | 56.0 |
+| 4 | import answered by a typed host function | 46.3 | 46.4 | 46.8 |
+| 5 | `call_indirect` through a shared table to another instance | 41.7 | 42.3 | 40.8 |
+| 6 | reference: `w2c_ops_add` in `ENTER_PLAIN`/`LEAVE_PLAIN` | 4.8 | 4.5 | 5.3 |
+
+Rule of 8b (S0008): a change over 10 percent on case 1 or 2 against this baseline, on the same machine, repeated in two runs, is a regression and stops the sub-step; the noise inside one run is up to 10 to 35 percent, so the comparison is of medians over three runs.

@@ -140,3 +140,10 @@ Traps found on the way, with the rule. Newest last.
 * Rule: a test that builds two copies must build them with the product's flags (`signal_build_flags`) and must not trap across them until the store has one trap state (8b); the copies of a store are made ready on a thread, and let go of, together.
 * Where found: independent review of step 8a-1, `docs/specs/S0008-shared-store.md` ("Known limit of 8a-1"), `tests/test_artifacts.py`.
 
+
+### A macro with a calling convention is not a return type
+* What happened: a test declared `static void race_with_close(THREAD_RESULT (*first)(void *), ...)`, where `THREAD_RESULT` is `unsigned __stdcall` on Windows and `void *` elsewhere.
+* Symptom: MSVC C2059/C2146 "syntax error: '*'", only on windows-latest (Pre-commit and Python versions); gcc, clang and macOS compiled it.
+* Cause: the calling convention must stand inside the parentheses of a function pointer type, so the macro expands to an invalid declarator.
+* Rule: give a function pointer type a `typedef` (`thread_fn`) per platform and use that name everywhere; never write `MACRO (*f)(...)` with a macro that may hold a calling convention. A test that is new for threads is not trusted on Windows until the Windows jobs ran it.
+* Where found: step 8a-3 review fixes, commit 3f46918, `tests/c/test_host_tags.c`.

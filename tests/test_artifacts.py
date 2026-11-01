@@ -25,6 +25,7 @@ from wasmext._natify import (
     _portable,
     _repair_imported_elements,
     _repair_tail_calls,
+    fusedwasi_version_macro,
     signal_build_flags,
 )
 from wasmext._toolchain import find_toolchain
@@ -106,6 +107,12 @@ TAGA = """(module
 TAGB = TAGA.replace("hgna", "hgnb")
 
 
+def _product_version() -> list[tuple[str, str]]:
+    """The macro of the version of fusedwasi that the product's build passes (the host layout hashes it)."""
+    macro = fusedwasi_version_macro()
+    return [] if macro is None else [macro]
+
+
 def _library(
     wabt: Path,
     out: Path,
@@ -149,7 +156,7 @@ def _library(
     library = out / f"libartifact_{name}{'.dylib' if sys.platform == 'darwin' else '.so'}"
     subprocess.run(
         [
-            cc, "-shared", "-fPIC", *(["-fvisibility=hidden"] if hidden else []), "-w", "-pthread", *flags, f"-DARTIFACT_NAME={name}", *(f"-D{k}={v}" for k, v in chain_macros), *(f"-D{x}" for x in defines), *chain_link,
+            cc, "-shared", "-fPIC", *(["-fvisibility=hidden"] if hidden else []), "-w", "-pthread", *flags, f"-DARTIFACT_NAME={name}", *(f"-D{k}={v}" for k, v in [*chain_macros, *_product_version()]), *(f"-D{x}" for x in defines), *chain_link,
             *(f"-I{p}" for p in (d, C_DIR, WASMEXT_C, Path(get_include()), toolchain.runtime, *simde)),
             *map(str, sources), "-lm", "-o", str(library),
         ],
@@ -295,7 +302,7 @@ def test_two_swaps_in_two_structs_do_not_cancel(tmp_path: Path, pair: tuple[str,
 
 def test_the_layout_hash_follows_the_host(tmp_path: Path) -> None:
     """The host of the store is read by the binding of another artifact; its layout has a word of its own in the head of the store: its fields, the size and the preopen of fusedwasi, and the
-    switches of the build that change what fusedwasi reads (the descriptors of 0.1). The version of fusedwasi is not there: its headers say none."""
+    switches of the build that change what fusedwasi reads (the descriptors of 0.1), and the version of fusedwasi (a macro the product's build passes: its headers say none)."""
     base = _layout(tmp_path)
     clock = (
         "wasmext_host.h",
@@ -309,6 +316,39 @@ def test_the_layout_hash_follows_the_host(tmp_path: Path) -> None:
     )
     assert _layout(tmp_path, defines=["WASMEXT_HOST_P1"])[1] != base[1], (
         "-DWASMEXT_HOST_P1 left WASMEXT_HOST_LAYOUT as it was"
+    )
+    one = _layout(tmp_path, defines=["WASMEXT_FUSEDWASI_VERSION=1"])[1]
+    two = _layout(tmp_path, defines=["WASMEXT_FUSEDWASI_VERSION=2"])[1]
+    assert len({base[1], one, two}) == 3, (
+        f"the version of fusedwasi is not in WASMEXT_HOST_LAYOUT: undefined {base[1]}, 1 {one}, 2 {two}"
+    )
+    assert _layout(tmp_path, defines=["WASMEXT_HOST_P1", "WASMEXT_FUSEDWASI_VERSION=1"])[1] != one
+
+
+def test_the_product_build_passes_the_version_of_fusedwasi_to_the_artifacts(wabt: Path, tmp_path: Path) -> None:
+    """An artifact built with the product's flags has the host layout of the headers with the version macro, not the one without it; two artifacts have the same word."""
+    macro = fusedwasi_version_macro()
+    assert macro is not None
+    with_version = _layout(tmp_path, defines=[f"{macro[0]}={macro[1]}"])[1]
+    assert with_version != _layout(tmp_path)[1]
+    if sys.platform == "win32" or find_cc() is None:
+        pytest.skip("shared libraries with hidden visibility and pthreads: Linux and macOS with a cc")
+    words: list[int] = []
+    for name in ("a", "b"):
+        library = _library(wabt, tmp_path, name, {"liba": LIBA}, [])
+        exe = tmp_path / f"host_word_{name}"
+        compile_c(
+            [C_DIR / "host_word.c", library],
+            exe,
+            include_dirs=[C_DIR, WASMEXT_C, Path(get_include()), find_toolchain().runtime],
+            flags=[f"-Wl,-rpath,{tmp_path}"],
+            defines=[f"ARTIFACT_NAME={name}"],
+            strict=False,
+            std=None,
+        )
+        words.append(int(subprocess.run([str(exe)], capture_output=True, text=True, check=True).stdout))
+    assert words == [with_version, with_version], (
+        f"host layout of the artifacts {words}, with the version macro {with_version}"
     )
 
 

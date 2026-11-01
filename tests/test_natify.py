@@ -766,3 +766,70 @@ def test_the_guard_page_can_be_asked_for_instead_of_the_check_of_the_stack_and_i
     monkeypatch.setenv("WASMEXT_STACK_CHECK", "fast")
     with pytest.raises(ValueError, match="WASMEXT_STACK_CHECK"):
         signal_build_flags()
+
+
+def test_the_version_of_fusedwasi_becomes_a_stable_number_for_the_host_layout(monkeypatch: pytest.MonkeyPatch) -> None:
+    import importlib.metadata
+
+    from wasmext._natify import fusedwasi_version_macro
+
+    real = fusedwasi_version_macro()
+    assert real is not None and real[0] == "WASMEXT_FUSEDWASI_VERSION"
+    assert real == fusedwasi_version_macro() and 0 < int(real[1]) < 2**32
+
+    def say(version: str) -> None:
+        def read(_name: str) -> str:
+            return version
+
+        monkeypatch.setattr(importlib.metadata, "version", read)
+
+    numbers: set[str] = set()
+    for version in ("0.1.0a1", "0.1.0a2", "0.2.0"):
+        say(version)
+        macro = fusedwasi_version_macro()
+        assert macro is not None and macro == fusedwasi_version_macro()
+        numbers.add(macro[1])
+    assert len(numbers) == 3
+    say("1")
+    assert fusedwasi_version_macro() == (
+        "WASMEXT_FUSEDWASI_VERSION",
+        "873244444",
+    )  # FNV-1a of "1": the same on every machine
+
+    def missing(_name: str) -> str:
+        raise importlib.metadata.PackageNotFoundError(_name)
+
+    monkeypatch.setattr(importlib.metadata, "version", missing)
+    assert fusedwasi_version_macro() is None
+
+
+class _Stop(Exception):
+    pass
+
+
+def test_the_product_builds_pass_the_version_of_fusedwasi(project: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`natify()` and `build_shared` give the compiler the macro that the host layout hashes; with no readable version neither defines it."""
+    import wasmext._exe as exe
+    import wasmext._natify as nat
+
+    def shared_macros() -> list[tuple[str, str | None]]:
+        seen: list[list[tuple[str, str | None]]] = []
+
+        def stop(_sources: object, _prepared: object, _out: object, *, optimize: bool, flags: exe.BuildFlags) -> None:
+            seen.append(list(flags.define_macros))
+            raise _Stop
+
+        monkeypatch.setattr(exe, "_compile_sources", stop)
+        with pytest.raises(_Stop):
+            exe.build_shared(project / "pkg" / "add.wasm", project / "libadd.so", name="add", quiet=True)
+        return seen[0]
+
+    macro = nat.fusedwasi_version_macro()
+    assert macro is not None
+    [ext] = natify("pkg/*.wasm", quiet=True)
+    assert macro in ext.define_macros, "natify() did not pass WASMEXT_FUSEDWASI_VERSION"
+    assert macro in shared_macros(), "build_shared did not pass WASMEXT_FUSEDWASI_VERSION"
+    monkeypatch.setattr(nat, "fusedwasi_version_macro", lambda: None)
+    monkeypatch.setattr(exe, "fusedwasi_version_macro", lambda: None)
+    [bare] = natify("pkg/*.wasm", quiet=True)
+    assert all(m[0] != macro[0] for m in bare.define_macros) and all(m[0] != macro[0] for m in shared_macros())

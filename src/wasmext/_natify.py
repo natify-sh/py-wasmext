@@ -461,6 +461,19 @@ def signal_build_flags() -> tuple[list[tuple[str, str]], list[str]]:
     return macros, (["-Wl,-z,now"] if platform.startswith("linux") else [])
 
 
+def fusedwasi_version_macro() -> tuple[str, str] | None:
+    """`("WASMEXT_FUSEDWASI_VERSION", "<uint32>")`: the installed fusedwasi, which the host layout of the core hashes (wasmext_host.h; its headers have no version macro). The number is
+    FNV-1a (32 bits) of the version string, so it is the same on every machine. `None` when the version cannot be read: the macro is then not defined and the layout hashes 0 for it."""
+    try:
+        version = importlib.metadata.version("fusedwasi")
+    except importlib.metadata.PackageNotFoundError:
+        return None
+    h = 0x811C9DC5
+    for byte in version.encode("utf-8"):
+        h = ((h ^ byte) * 0x01000193) & 0xFFFFFFFF
+    return "WASMEXT_FUSEDWASI_VERSION", str(h)
+
+
 def _portable_off_x64(c_source: bytes) -> bytes:
     return _MSVC_ADDCARRY.sub(_MSVC_X64_ONLY, c_source)
 
@@ -971,6 +984,8 @@ def _natify(
             ext.define_macros = [*ext.define_macros, ("WASM_RT_USE_MMAP", "0")]
         chain_macros, chain_link = signal_build_flags()
         ext.define_macros = [*ext.define_macros, *chain_macros]
+        if (fused := fusedwasi_version_macro()) is not None:
+            ext.define_macros = [*ext.define_macros, fused]
         if chain_link:
             ext.extra_link_args = [*(ext.extra_link_args or []), *chain_link]
         if prepared.glue.trap_handler:  # the module shares tables with other instances

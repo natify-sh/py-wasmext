@@ -70,7 +70,13 @@ typedef struct wasmext_host {
    (`wasmext_store_set_host`), and the first call that touches the host (`wasmext_instance_instantiate` of a module that uses it) compares it with the layout its binding was built with. */
 /* The structs of fusedwasi that the host holds (the state, the stream, the preopen) are another library's: a field of theirs is not listed here, so what is hashed of them is their size,
    the fields of the preopen (it is the one the host fills), and the switches of the build that change what fusedwasi reads: WASMEXT_HOST_P1 (the descriptors of 0.1), and the
-   bits of a handle. The version of fusedwasi is not in the hash: its headers have no macro that says it (fusedwasi.h names a <fusedwasi/version.h> that the installed tree lacks). */
+   bits of a handle. The version of fusedwasi is in the hash as `WASMEXT_FUSEDWASI_VERSION`, a number that the Python package passes to the compiler (`fusedwasi_version_macro` in _natify.py):
+   the headers have no macro that says it (fusedwasi.h names a <fusedwasi/version.h> that the installed tree lacks). A build without the macro (plain C) hashes 0 for it. */
+#ifdef WASMEXT_FUSEDWASI_VERSION
+#define WASMEXT_HOST_VERSION_ (0x5F3A9C21u ^ (uint32_t)(WASMEXT_FUSEDWASI_VERSION))
+#else
+#define WASMEXT_HOST_VERSION_ 0u
+#endif
 #ifdef WASMEXT_HOST_P1
 #define WASMEXT_HOST_SWITCHES_ (0x7A5B3C1Du ^ (uint32_t)FUSEDWASI_P2__INDEX_BITS * 977u)
 #else
@@ -85,7 +91,7 @@ typedef struct fusedwasi_p2_preopen wasmext_preopen_; /* a name for the hash to 
     WASMEXT_LF_(10, wasmext_host, no_udp) ^ WASMEXT_LF_(11, wasmext_host, http_all) ^ WASMEXT_LF_(12, wasmext_host, user) ^ WASMEXT_LF_(13, wasmext_host, args_v) ^ \
     WASMEXT_LF_(14, wasmext_host, env_n) ^ WASMEXT_LF_(15, wasmext_host, env_v) ^ WASMEXT_LF_(16, wasmext_host, nargs_v) ^ WASMEXT_LF_(17, wasmext_host, nenv_v) ^ \
     WASMEXT_LF_(18, wasmext_host, preopens) ^ WASMEXT_LF_(19, wasmext_host, npreopens) ^ WASMEXT_LF_(20, wasmext_host, streams) ^ WASMEXT_LF_(21, wasmext_host, message) ^ \
-    WASMEXT_LF_(22, wasmext_host, wait) ^ WASMEXT_LF_(23, wasmext_host, lock) ^ WASMEXT_LAYOUT_BITS_ ^ WASMEXT_HOST_SWITCHES_ ^ \
+    WASMEXT_LF_(22, wasmext_host, wait) ^ WASMEXT_LF_(23, wasmext_host, lock) ^ WASMEXT_LAYOUT_BITS_ ^ WASMEXT_HOST_SWITCHES_ ^ WASMEXT_HOST_VERSION_ ^ \
     WASMEXT_LS_(59u, fusedwasi_p2_state) ^ WASMEXT_LS_(61u, fusedwasi_p2_stream) ^ WASMEXT_LS_(67u, wasmext_preopen_) ^ \
     WASMEXT_LF_(0, wasmext_preopen_, path) ^ WASMEXT_LF_(1, wasmext_preopen_, name) ^ WASMEXT_LF_(2, wasmext_preopen_, writable)))
 #undef WASMEXT_HOST_LAYOUT_ID

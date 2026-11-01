@@ -40,6 +40,7 @@ typedef struct {
     wasmext_extern *(*extern_make)(wasmext_store *s, void *user); /* an externref of the store holding `user`, made by this copy (NULL on failure) */
     int (*tag_new)(wasmext_store *s, const uint8_t *types, uint32_t n, wasmext_export *out); /* a tag of the host, made by this copy */
     void *volatile *(*tag_cell)(wasmext_instance *i); /* the global that the (first) tag import of the instance is read from: its address does not need the instance (8a-3) */
+    uint32_t host_layout;                /* WASMEXT_HOST_LAYOUT as this copy was built */
 } artifact_api;
 
 /* in artifact_store_only.c: the file that includes only wasmext_store.h */

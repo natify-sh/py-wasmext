@@ -27,6 +27,7 @@ from wasmext._natify import (
     _repair_imported_elements,  # pyright: ignore[reportPrivateUsage]
     _repair_tail_calls,  # pyright: ignore[reportPrivateUsage]
     _stack_limit_prologue,  # pyright: ignore[reportPrivateUsage]
+    fusedwasi_version_macro,
     write_shared_headers,
 )
 
@@ -147,6 +148,8 @@ def build_extension(wabt: Path, tmp_path_factory: pytest.TempPathFactory) -> Cal
                 "-DWASMEXT_STACK_LIMIT=1",
                 "-DWASM_RT_NONCONFORMING_UNCHECKED_STACK_EXHAUSTION=1",
             ]
+        if (fused := fusedwasi_version_macro()) is not None:  # as natify() does: the host layout of the core hashes it
+            extra = [*extra, f"-D{fused[0]}={fused[1]}"]
         link_extra = ["-Wl,-z,now"] if chain and sys.platform.startswith("linux") else []
         glue_object = out / f"{name}_py.o"
         # The glue is ours, so it is built strictly: GCC 14 makes these errors (older ones warn), and the manylinux and

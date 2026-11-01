@@ -207,6 +207,8 @@ def _build_by_setuptools(name: str, out: Path, runtime: Path, abi3: bool, define
     macros = [(d.partition("=")[0], d.partition("=")[2] or None) for d in defines]
     if abi3:
         macros.append(("Py_LIMITED_API", "0x030B0000"))
+    if (fused := fusedwasi_version_macro()) is not None:  # as natify() does
+        macros.append(fused)
     # as natify() does: the runtime is copied beside the C of the module and the sources are relative, so that the objects of MSVC are not under a
     # copy of the whole path of each source (past the 260 characters of Windows in the directory of a test)
     for runtime_file in ("wasm-rt-impl.c", "wasm-rt-mem-impl.c", "wasm-rt-exceptions-impl.c"):

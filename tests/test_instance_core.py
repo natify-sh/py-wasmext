@@ -24,6 +24,7 @@ from wasmext._natify import (  # pyright: ignore[reportPrivateUsage]
     _portable,
     _repair_imported_elements,
     _repair_tail_calls,
+    fusedwasi_version_macro,
 )
 from wasmext._toolchain import find_toolchain  # pyright: ignore[reportPrivateUsage]
 
@@ -436,12 +437,13 @@ def build(wabt: Path, tmp_path_factory: pytest.TempPathFactory) -> Callable[...,
             out
             / f"{name}_{Path(test).stem}{'_' + ''.join(c for c in ''.join(flags) if c.isalnum()) if flags else ''}{EXE}"
         )
+        fused = fusedwasi_version_macro()  # as natify() passes it: the host layout of the core hashes it
         compile_c(
             [*sources, *wrapped],
             exe,
             include_dirs=[WASMEXT_C, Path(get_include()), runtime, out, *simde],
             flags=flags,
-            defines=[f"MODULE={name}", *defines],
+            defines=[f"MODULE={name}", *([f"{fused[0]}={fused[1]}"] if fused else []), *defines],
             strict=False,
             std=None,
             threads=True,
@@ -458,6 +460,12 @@ def _run(exe: Path) -> None:
     )  # a lock that a trap did not let go would hang here
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "ok"
+
+
+def test_the_build_passes_the_version_of_fusedwasi(build: Callable[..., Path]) -> None:
+    result = subprocess.run([str(build(OPS, "ops", "version_macro.c"))], check=True, capture_output=True, text=True)
+    fused = fusedwasi_version_macro()
+    assert result.stdout.strip() == (fused[1] if fused else "undefined")
 
 
 def test_calls_of_an_instance(build: Callable[..., Path]) -> None:

@@ -6,7 +6,7 @@ status: implemented
 superseded_by:
 related: []
 owner: maintainer
-updated: 2026-10-30
+updated: 2026-11-02
 ---
 
 # S0007 Tags and exceptions
@@ -16,6 +16,8 @@ This is step 7 of layer 1 (see `docs/layers.md`). It sits on top of steps 3 to 6
 A tag that a module exports can be imported by another instance of the store, so an exception thrown by one is caught by the other.
 The host can read an exception that nothing caught, and a host function can throw one.
 The part across separately built artifacts is for step 8.
+
+> **8b: draft, waits for the maintainer's approval.** Step 8b ([S0008](S0008-shared-store.md), 8b-5) changes two things of this spec: a link re-throws an exception that nothing caught in the exporter, and the exception state is the one of the runtime of the store, so it works across separately built artifacts. This spec is changed first, as S0008 says; the lines marked "(8b draft)" below and the section "8b" under Semantics are the change. Nothing here is built.
 
 Status: built 2026-10-30 (7a, 7b, 7c in one commit; 7d, the repairs of the build in the tests and the table of the tags, in the next).
 The owner accepted the plan of 2026-10-30: a tag of a module is shared with another instance of the store; the host reads an exception that nothing caught; a host function throws; the part across separately built artifacts is for step 8.
@@ -29,7 +31,7 @@ The owner accepted the plan of 2026-10-30: a tag of a module is shared with anot
 * `wasm_rt_load_exception(tag, size, bytes)` and `wasm_rt_throw()` throw.
 * The runtime keeps the active exception (tag, size, at most 256 bytes) for the thread: `wasm_rt_exception_tag/size/exception`.
 * A throw with no `catch` in the module goes to the unwind target of the entry, and the call answers `WASM_RT_TRAP_UNCAUGHT_EXCEPTION`.
-* A function that another instance calls through a link (a typed shim) is entered with its own entry, so an exception that it does not catch comes back as a trap, not as an exception.
+* A function that another instance calls through a link (a typed shim) is entered with its own entry, so an exception that it does not catch comes back as a trap, not as an exception. (8b draft: that is the 7 behaviour; 8b-5 turns it into a re-throw in the importer, see "8b" under Semantics.)
 * An exception unwinds into the caller only where the code runs on the caller's native stack: a function reached through a shared table (steps 5 and 6). That is the case tags are for.
 
 ## Goals / Non-goals
@@ -42,7 +44,7 @@ The owner accepted the plan of 2026-10-30: a tag of a module is shared with anot
   * One tag per import name per process. An importer reads a symbol, so the program holds one tag for each import name.
   * No tag made by the host (not a tag of a module) in this step. Done in step 8a-3 (D39): it belongs to the store.
   * `exnref` (the exception as a value), `throw_ref`, `catch_ref`: not carried. `exnref` is step 12 of the order, "not before a real module that uses it exists".
-  * Exceptions across separately built artifacts: step 8.
+  * Exceptions across separately built artifacts: step 8. (8b draft: closed by 8b-5. With one runtime for a store, a `throw` in one copy goes to the innermost `try` of any copy on the thread.)
   * A reference among the values of a tag: the payload is not read or made (`decode` and `encode` are NULL).
 
 ## Interface
@@ -113,6 +115,7 @@ WASM_RT_NO_RETURN static inline void wasmext_throw_pending_(void);
 * `_tag_payload` makes, for a signature of values, a struct of the natural layout and the functions `<name>_dec` and `<name>_enc`. None when a reference is among the values.
 * For a tag import: the binding defines the global the module reads. The header declares it `const`; the generated file renames the declaration (`#define <c> wasmext_declared_<c>`, then `#undef`), defines `wasm_rt_tag_t <c>;`, and `{last}_ref_slot` returns its address.
 * The export row of a tag is `{0, 0, {last}_tag{n}, 0, "<signature>", 0}`.
+* (8b draft: `_slot_call` also emits, before the trap, `if (trapped == WASMEXT_TRAP_LINKED + WASM_RT_TRAP_UNCAUGHT_EXCEPTION) wasm_rt_throw();` in the typed shape and the same for `rc` in the uniform shape; see "8b" under Semantics.)
 * `_slot_call` emits `if (trapped == WASMEXT_HOST_THROW) wasmext_throw_pending_();` (typed shape) and `if (rc == WASMEXT_HOST_THROW) wasmext_throw_pending_();` (uniform shape).
 * Build repairs the tests now use: `_repair_imported_elements`, `_portable`, `_repair_tail_calls`, `_export_tags`; the runtime through `_RUNTIME_WRAPPERS` (see Semantics, 7d).
 
@@ -152,6 +155,15 @@ WASM_RT_NO_RETURN static inline void wasmext_throw_pending_(void);
 * A memory that cannot be had: `instantiate` answers `NO_MEMORY`. With the raw runtime the process aborts, so `test_nomemory.c` does test the wrapper.
 * An exception of a tag the module keeps to itself is read with its values (`tag_index` is its place).
 
+### 8b: several copies of the runtime, and a link that re-throws (draft)
+* **The exception state is the one of the runtime of the store.** The seven functions of the exceptions file (`load_exception`, `throw`, `get_unwind_target`, `set_unwind_target`, `exception_tag`, `exception_size`, `exception`) are forwarded to the active runtime of the thread (S0008, D-6); the active exception (tag, size, bytes) and the unwind target are therefore ONE for all the copies of the artifacts that share a store. A `throw` in the code of any copy goes to the innermost `try` of any copy on the thread; a `try` in B catches a throw from A, which the stock runtime (a `static` thread-local per copy) cannot do.
+* **A link re-throws.** The shim of the exporter enters its store with its own entry, so an exception that nothing caught in the exporter ends at that entry as `WASM_RT_TRAP_UNCAUGHT_EXCEPTION`, and the shim answers `WASMEXT_TRAP_LINKED + WASM_RT_TRAP_UNCAUGHT_EXCEPTION`. The generated function of the importer, seeing that answer, calls `wasm_rt_throw()` instead of `wasm_rt_trap`: the exception state is still in the runtime of the store, the unwind target is the one that `leave` of the shim restored (the target saved at its `enter`), so a `catch` of the importer catches it, and if none does the call of the importer ends as 7b describes. Any other trap through a link stays a trap (LINKED + code). This applies to a link between two instances of one artifact too (it was a trap before). The tag must be the same tag by identity: the importer imports the exporter's tag (7a), as before.
+* **A host function throws (7c) and several copies.** `wasmext_pending_throw_` is a per-copy thread-local (`wasmext_instance.h:1174-1176`): `wasmext_instance_throw` writes the one of the copy it is compiled in, and `wasmext_throw_pending_` of the copy whose import is running reads it. So the host passes to `wasmext_instance_throw` the instance whose import is running, through the copy of that artifact. Proposed: an instance of another artifact than the caller's copy is refused (`WASMEXT_INST_BAD_ARGS`, the reason in the text of the store), instead of the silent `WASMEXT_TRAP_HOST` that a pending exception left in the wrong copy would give. (S0008, open questions 5 and 6 name the other design: the pending exception kept in the runtime of the store.)
+* **Reading an exception (7b).** `wasmext_instance_exception` calls the forwarded `exception_tag`/`size`/`exception`; it takes an activation scope of the store of the instance, so the state it reads is the runtime's even when it is called after the entry has left. Ask right after the call, as before.
+* **7c with a re-throw.** A host function that throws in a function reached through a link is caught as before; one that nothing catches reaches the outermost entry as an uncaught exception, which the host reads with 7b.
+* **Tests** (S0008, 8b-5): e1 to e7. Mutations: the re-throw removed, the unwind target not restored at `leave`, `instance_throw` writing the wrong copy's variable.
+* **LESSONS** "An exception does not cross a link" becomes obsolete when 8b-5 is built and is corrected then.
+
 ## Test plan
 Commands:
 ```
@@ -182,7 +194,7 @@ These were not recorded as run; see Open questions.
 * `exnref` (the exception as a value) and `throw_ref`.
   Why not: not carried. The runtime of wasm2c has the type (`wasm_rt_exnref_t`, payload inline), but the parser of the project (`_wasm.py`, `ValType`) does not know it. It needs the parser, the binding and a real module that uses it. Step 12, not before one exists.
 * Exceptions across separately built artifacts.
-  Why not: step 8.
+  Why not: step 8. (8b draft: done in 8b-5, because a store has one runtime and so one exception state.)
 * A slot in the instance for an imported tag.
   Why not: wasm2c has no slot; the import is a global that the module reads. The binding defines the global and the core writes it once for the process.
 * Mixing two tags for one import name.
@@ -209,3 +221,4 @@ These were not recorded as run; see Open questions.
   The table is added to the C of wasm2c by `_export_tags`. So an exception of a tag the module keeps to itself is read with its values, and the host can throw it by the identity it learned from the exception.
 * 2026-10-30, 8a-3 (S0008, D39): a tag made by the host (`wasmext_tag_new`) belongs to the store and is imported through the same `bind_export` of kind `WASMEXT_TAG`; the cell of D34 is cleared (compare-and-swap) when that store closes, and a second tag for a name that a live store holds is `WASMEXT_INST_TAG_HELD` with the reason. The tag of an exporting instance needs no clearing: its identity is static data of the module's artifact. "One tag per import name per process" stands while a store holds it.
 * 2026-10-30, 8a-3 review: a tag import that holds another tag already is `WASMEXT_INST_TAG_HELD` (-12) from `bind_export`, for a host tag and for the tag of a module alike (the module case was `WASMEXT_INST_LINK_FAILED`); the cell is set under the lock of the store; the record of a closed store is `WASMEXT_TRAP_CLOSED`.
+* 2026-11-02, 8b (S0008, DRAFT, waits for the maintainer's approval): a link re-throws an uncaught exception of the exporter in the importer; the exception state is the one of the runtime of the store, so exceptions cross separately built artifacts; `wasmext_pending_throw_` rule for several copies. Nothing built.

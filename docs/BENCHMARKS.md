@@ -51,3 +51,5 @@ Command: `uv run python tools/bench_calls.py` (gcc 13.3.0, `-O2 -DNDEBUG`, no sa
 | 6 | reference: `w2c_ops_add` in `ENTER_PLAIN`/`LEAVE_PLAIN` | 4.8 | 4.5 | 5.3 |
 
 Rule of 8b (S0008): a change over 10 percent on case 1 or 2 against this baseline, on the same machine, repeated in two runs, is a regression and stops the sub-step; the noise inside one run is up to 10 to 35 percent, so the comparison is of medians over three runs.
+
+Cases 7 and 8 (8b draft, S0008): two position-independent shared libraries built apart: 7 is `wasmext_instance_call` of `add` of an instance made by artifact B in a store made by artifact A, 8 is the same `add` reached through a link from an instance of A. They are written in 8b-1 and baselined by applying only the benchmark files to a checkout of db92ac4, three runs, on the machine of the table above; until then there is no baseline for them.

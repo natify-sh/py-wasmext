@@ -6,7 +6,7 @@ status: implemented
 superseded_by:
 related: []
 owner: maintainer
-updated: 2026-10-30
+updated: 2026-11-02
 ---
 
 # S0003 Instances
@@ -92,6 +92,8 @@ typedef struct { uint8_t *base; uint64_t size; uint64_t pages; uint64_t max_page
 ```
 
 Thread set-up, one flag for the artifact: `wasmext_thread_ready()`, `wasmext_thread_free()`. Exactly one file of an artifact defines `WASMEXT_DEFINE_THREAD_STATE` before it includes the header.
+
+> **8b: draft, waits for the maintainer's approval** ([S0008](S0008-shared-store.md), Step 8b). The next four Semantics items marked "(8b draft)" change the entry; nothing of it is built. In 8b the flag is the `ready` word of the hidden per-copy `wasmext_tls`: bit 1 "inline state synchronised" (the stack limit, the depth counters), bit 2 "runtime initialised" (`wasm_rt_init`). Only the runtime of the store sets bit 2 on a thread (S0008, D-7); a copy that is not the runtime of the store has bit 1 only. `wasmext_thread_free` frees what bit 2 says was initialised.
 
 The instance (fields by the order in the header):
 ```c
@@ -209,9 +211,11 @@ Read by the core: `wasmext_descriptor` (`version`, `size`, `flags`, `imports`, `
 
 ### Calls and the store
 * Every call enters the store (`wasmext_store_enter`/`leave`). A call into a closed store answers `WASMEXT_TRAP_CLOSED`. `close` of a store refuses while a call is in flight.
+* (8b draft) Every call also *enters the runtime of the store*: `WASMEXT_ENTER_STORE(CODE, FAIL)` / `WASMEXT_LEAVE_STORE()` replace `WASMEXT_ENTER_REENTRANT/PLAIN` in the adapters, in `instantiate` and in the shim (`_binding.py`); the legacy `WASMEXT_ENTER_SHARED` (`wasmext_glue.h:353`) serves the old layer 3 only and keeps its name. The entry takes the runtime from `store->head.rt`, makes it the active runtime of the thread in this copy and in the other copies of the store (fan-out through the store's list of artifacts), pushes an entry `{buf, prev, saved_unwind}` on the stack of the runtime of the store, sets the unwind target, and `setjmp`s. Fast path (the store runs on this copy's own runtime, nothing is active, the thread is ready, one artifact): direct calls, no fan-out. `leave` and the trap path restore the previous active runtime, the saved unwind target (not `prev->buf`) and, on depth-count platforms, the saved depth. Paths that call a runtime function outside an entry (`memory_grow`, the table, extern and tag functions, the close of a member, `wasmext_instance_exception`) take an activation scope: the same without a jump buffer.
 * A call checks the index and kind (`BAD_EXPORT`), the counts and types of arguments (`BAD_ARGS`, nothing is called), then `NOT_INSTANTIATED`. A trap leaves the instance usable, as in WebAssembly.
 * `status` holds the answer of the last call. It is atomic. With calls from several threads it is the answer of one of them: use the result of the call. (ThreadSanitizer found a real race on `status`.)
 * Each thread that calls into a module sets up the runtime once (`wasmext_thread_ready`). The flag is one for the artifact: one file defines `WASMEXT_DEFINE_THREAD_STATE`. `wasm_rt_is_initialized` does not do: a sanitizer installs an alternate stack in every thread and the runtime would take the thread for set up.
+* (8b draft) `wasmext_thread_ready` also sets the stack limit of the thread (`WASMEXT_STACK_LIMIT`) and installs, once per copy, the chain handler of SIGSEGV/SIGBUS; the core has both since 8b-3a (S0008, D-1), copied from `_gen.py:879-906` and `:797-865`. Another copy of a store is made ready only in its inline state (S0008, D-7).
 
 ### Instantiate
 * `instantiate` runs the start function. A trap in it is the returned code. The instance is then not usable and can only be freed. Instances whose instantiation failed take their own functions out of the shared tables (`scrub_tables`).
@@ -224,11 +228,13 @@ Read by the core: `wasmext_descriptor` (`version`, `size`, `flags`, `imports`, `
 * `bind_typed` cannot check the signature; the descriptor has it. (A reference in the signature is refused with `UNSUPPORTED` by the typed shape since S0005 and S0006; the uniform shape carries it.)
 * A failing host keeps its own error. The call traps with `WASMEXT_TRAP_HOST`. A trap of another instance goes through as LINKED + code.
 * Reentrant calls (a host function calls back into the module) are supported.
+* (8b draft) A reentrant call is a nested `WASMEXT_ENTER_STORE`: it saves and restores the active runtime, the unwind target and the saved depth of the outer call. The entry no longer depends on whether the module has imports (the choice REENTRANT or PLAIN in `_binding.py:221` goes away). A call that passes through instances of two stores (a host function in between) has one active runtime at a time, each store its own stack of entries.
 * `bind_global_value` gives an immutable global a value of the host. A mutable global is `WASMEXT_INST_IMMUTABLE` (it is the global of another instance). A wrong type is `BAD_ARGS`.
 * `import_owner` returns the `owner` of the record an import was linked to (what keeps the exporter alive; the host's business), or NULL.
 
 ### Record of an export and links
 * `export_record` fills a `wasmext_export` for a function, a memory or a global. The record is valid as long as the instance is. A closed store answers `WASMEXT_TRAP_CLOSED`; before `instantiate`, `NOT_INSTANTIATED`; a function without a shim, `UNSUPPORTED`. For a function it sets `address` to a typed shim that enters the exporter's store and answers a trap as `WASMEXT_TRAP_LINKED` + its code.
+  (8b draft) The shim is entered with `wasmext_instance_begin_` (`wasmext_instance.h:699`: the store, the readiness of the thread, the host lock level) and `WASMEXT_ENTER_STORE`; `wasmext_instance_end_` (`:710`) lets go of the lock level and the store. The importer's forwarder turns `LINKED + UNCAUGHT_EXCEPTION` into a re-throw, any other `LINKED + code` into a trap of its own (S0007, Step 8b).
 * `bind_export` gives an import such a record. The checks are those that the old glue wrote for each import, once, from the descriptor. All refuse with `WASMEXT_INST_LINK_FAILED` and a reason in the text of the store, except a closed store of the record (`WASMEXT_TRAP_CLOSED`, answered before any record is read) and a tag import whose cell is already held by another tag (`WASMEXT_INST_TAG_HELD`, S0007, S0008):
   * the record version (`wasmext_export_ok`);
   * the record is of this store (S0004);
@@ -308,3 +314,4 @@ Mutations (each was caught when the step was built): four in 3b1, three in 3b2a,
 * 2026-10-30: extended by S0005 (tables, funcref), S0006 (externref), S0007 (tags and exceptions). Their additions to the structs above are marked in Interface.
 * 2026-10-30: rewritten from `docs/step3_instances.md` into the spec format, status `implemented`. Interface and Semantics describe the code as it is now.
 * 2026-10-30: 8a-2 (S0008): letters `F` and `E` in `signature`; a function with a reference in its signature has a shim and is linked.
+* 2026-11-02: 8b (S0008, DRAFT, waits for the maintainer's approval): the entry macros, the reentrant call, the readiness of a thread and the shim are rewritten for the runtime of the store (items marked "8b draft" in Interface and Semantics). Nothing built; the text above stays true of the code until 8b is built.

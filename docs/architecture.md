@@ -58,7 +58,7 @@ Today it is `src/wasmext/c/wasmext_glue.h` and what `_shared.py` writes into `<n
 | **Memory** | the pin counters, `memory.grow`, views | counters in each front end [to be gathered] |
 | **Host (WASI)** | the config of a store (`--dir`, `--env`, streams) in one builder; the binding of fusedwasi to an instance (`Guest` bound to its memory) | built per front end; one builder [planned] |
 | **Tags, `externref`** | one identity of a tag in a store; `externref` owned by the arena | [planned, C6, C5] |
-| **Shared runtime across artifacts** | a store made by one artifact used by an instance of another, through the versioned record `wasmext_store`; the state of WASI never crosses (opaque) | [planned, C7] |
+| **Shared runtime across artifacts** | a store made by one artifact used by an instance of another, through the versioned record `wasmext_store`; the host (the state of WASI) is shared through the store, which one runtime serves (S0008, D40, D41; the older words "never crosses (opaque)" are superseded; 8b is a draft) | [planned, C7] |
 | **Lazy collector** | frees members nothing reaches; hot reload | [planned, C8, later] |
 
 ### [4] The front ends (thin)
@@ -136,7 +136,7 @@ py-wasmhost/
 2. **No run-time dependency of a built module on wasmext or fusedwasi.**
 3. **One logic, in the core; the front ends only convert.** A new feature is written once; each front end adds the conversion of its values.
 4. **The core knows no Python.** It takes *retain/release*, *host call* and *describe error* from the front end.
-5. **The state of the host never crosses artifacts.** What crosses is a versioned record of function pointers (`abi`, `floor`, `size`).
+5. **The host is shared through the store (S0008, D41; 8b is a draft).** What crosses artifacts is the store and a versioned record checked at `attach` (`abi`, `floor`, `size`, `layout`, `runtime`, `host_layout`), not an opaque state: the instances of every artifact in a store use the one host and the one runtime of that store. (Before 2026-11-02 this rule said the state of the host never crosses artifacts.)
 6. **The store owns its members until `close`;** a lazy collector is a later addition, not a requirement.
 7. **No guessing the host from names:** the `host` setting says what answers the imports.
 8. **A feature the engine or the target cannot do is refused with a message, not faked.**

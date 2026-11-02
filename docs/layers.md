@@ -139,6 +139,9 @@ A step builds the new thing in the static core and leaves the old generated copy
 | which import is answered by the host, and by which function of fusedwasi | `_P2_FUNCS`, `_p2_cname`, `_WASI_SIGNATURES`, `_WASI_UNSTABLE_OWN` and the loops in `_gen.py` | `ImportFact` in `_model.py` | layer 3 (extension) | `tests/test_model_wasi_mapping.py` (3b2) |
 | the table of the host and the operations on it | `wasmext_table_new/free/grow/export`, `wasmext_function_export` in `wasmext_glue.h`; `<last>_link_table<j>`, `_scrub_tables`, `_glue_funcref` in `_gen.py` | `wasmext_table.h`, `wasmext_instance.h` (`wasmext_tab_*`, `wasmext_instance_funcref`) | layer 2, the extension step (the old functions are used by the new ones until then) | `tests/c/test_tables.c` |
 | the descriptive facts of a module (`_Import*`, `ApiModel`, `BuildFlags`) | `_gen.py`, `_shared.py`, `_exe.py` | `_model.py` | layers 2 and 3 | - |
+| the stack limit of a thread (8b draft, S0008 D-1) | `wasmext_stack_limit_init_` in `_gen.py:879-906`, under `WASMEXT_STACK_LIMIT` | `wasmext_runtime.h`, `wasmext_thread_ready` (8b-3a) | layer 3, when it moves onto the core | the variant tests of 8b-3a/3b (planned) |
+| the chain handler of SIGSEGV/SIGBUS (8b draft, S0008 D-1) | `wasmext_chain_handler_`, `wasmext_chain_install_` in `_gen.py:797-865` | `wasmext_runtime.h` (8b-3a) | layer 3, when it moves onto the core | the variant tests of 8b-3a (planned) |
+| the stack of entries and the entry macros (8b draft, S0008 D-2) | `wasmext_traps`, `WASMEXT_ENTER_REENTRANT/PLAIN/SHARED` in `wasmext_glue.h:239-362`, and the wrappers without `WASMEXT_STORE_RUNTIME` in `_natify.py` `_RUNTIME_WRAPPERS` | `wasmext_runtime.h`, `WASMEXT_ENTER_STORE`/`LEAVE_STORE`, the forwarding wrappers (8b-1, 8b-2); the macro `WASMEXT_STORE_RUNTIME` is the transition switch | layer 3, when it moves onto the core (the macro goes with it) | `tests/c/test_artifacts.c` (8b-2, planned) |
 
 ## Risks and what is not known
 

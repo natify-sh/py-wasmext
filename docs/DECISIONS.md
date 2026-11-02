@@ -2,7 +2,7 @@
 title: Decisions
 kind: log
 status: current
-updated: 2026-10-30
+updated: 2026-11-02
 ---
 
 # Decisions
@@ -211,3 +211,33 @@ Source: CLAUDE.md, "Read first" and "How work is organised"; the w2py reference:
 Status: accepted · Date: 2026-10-30 · Supersedes: — · Amends: D34 · Evidence: tests/c/test_host_tags.c, tests/c/test_artifacts.c (`test_host_tags`)
 D34 left a tag made by the host to step 8. `wasmext_tag_new(store, types, n, &record)` makes it as a member of the store (kind `WASMEXT_KIND_TAG`), freed at close, as a Tag is made in a Store and dies with it in Wasmtime; it is not immortal. The process-global cell of an imported tag (D34) is still set once by compare-and-swap, and the store that holds the tag clears it at close (compare-and-swap from this tag to empty, so a cell that another store holds is left alone). While a store holds the tag, a second tag for the same import name is refused with `WASMEXT_INST_TAG_HELD` (negative: the positive `WASMEXT_STORE_INCOMPATIBLE`, 8, collides with a wasm2c trap code) and the reason; this is a limit of wasm2c (one global symbol per import name), said in the text and in the spec. A tag of a module needs no clearing: its identity is static data of the program.
 Source: docs/specs/S0008-shared-store.md, "Decisions" item 3
+
+### D40. A store has one runtime: the runtime of the store serves every artifact in it
+Status: accepted · Date: 2026-11-02 · Supersedes: D29 · Amends: D2 · Evidence: — (8b is a draft; the tests are planned in docs/specs/S0008-shared-store.md, "Sub-steps of 8b")
+D29 left the trap state across artifacts to step 8. Decided: the copy of the runtime of wasm2c that belongs to the artifact that made a store is the **runtime of the store**. Every runtime function that generated code or the core can call (trap, the seven exception functions, allocate/grow/free of memories, shared memories and funcref, externref and exnref tables) is renamed `wasmext_own_*` in each copy and the real `wasm_rt_*` names forward to the active runtime of the thread, so a trap or a throw in any copy reaches the innermost entry or `try`, and nothing is allocated in one heap and released in another. The active runtime reaches the other copies by fan-out through the store's list of artifacts, a fixed array of 8 entries `{identity, activate, deactivate}` with an atomically published count; the list does not hold a second runtime, it synchronises the small inline state that generated code reads without a call (the stack limit, the depth counters). D2's condition for a shared runtime ("a mode where one party owns the traps of a group") is met by the store. D1 stands: every artifact still carries its own copy and a module alone needs nothing outside itself; the store only picks which copy is in use. Rejected: design 2 (fan-out of the unwind target only; exceptions do not cross), design 3 (no shared trap state; links only through shims).
+Source: docs/specs/S0008-shared-store.md, "Decisions of 8b" D-4, D-5, D-6 and "Decisions" items 1 and 2
+
+### D41. The host is shared through the store
+Status: accepted · Date: 2026-11-02 · Supersedes: the line "the state of WASI never crosses (opaque)" of docs/architecture.md (rows "Shared runtime across artifacts" and rule 5, edited to point at S0008) · Evidence: — (8b-7 plans the test)
+The model is that of Wasmtime: the runtime, the host (the state of WASI: descriptors, arguments, environment, preopens, hooks) and the state of the members live in the store, and the instances of every artifact in it share all three. A WASI module of artifact B runs on a host made by artifact A; what `attach` checks is the layout of the structs the copies read inline, including the host (`host_layout`, the switches of the build, the version of fusedwasi). The host lock stays recursive (D20).
+Source: docs/specs/S0008-shared-store.md, Semantics (the paragraph on the model of Wasmtime) and "Decisions" item 8
+
+### D42. Forwarding is unconditional for the core; `WASMEXT_STORE_RUNTIME` is a transition switch for the old layer 3
+Status: accepted · Date: 2026-11-02 · Supersedes: — · Amends: D6 (the manner of the wrappers) · Evidence: — (8b-1)
+In every build that uses the core (the core tests, the core artifacts, the product builds of the core) the wrappers of `_natify.py` rename the runtime functions and define the forwarders; the core has no option to leave them out. The build macro `WASMEXT_STORE_RUNTIME` stays only so that the OLD layer 3 (`_gen.py`, `_shared.py`, `_exe.py`, with `wasmext_traps` and `WASMEXT_ENTER_REENTRANT/PLAIN/SHARED`) is built with the wrappers as before, and it disappears when layer 3 moves onto the core. The entry macros of the core are `WASMEXT_ENTER_STORE` / `WASMEXT_LEAVE_STORE` (not `..._SHARED`: that name is in the legacy glue). The wrappers stay outside the toolchain files, a wrapper in the manner of D6 (state the cause, a test that fails without it, tied to the WABT version).
+Source: docs/specs/S0008-shared-store.md, "Decisions of 8b" D-2; open question 7 there
+
+### D43. The core carries the signal handler and the stack limit
+Status: accepted · Date: 2026-11-02 · Supersedes: — · Amends: D2 · Evidence: — (8b-3a)
+The layer-1 core gets its own copy of the chain handler of SIGSEGV/SIGBUS (`_gen.py:797-865`) and of the stack-limit initialisation (`_gen.py:879-906`, under `WASMEXT_STACK_LIMIT`), because it must work with no Python and no layer 3 (D13). Layer 3 keeps its copy until it moves onto the core; the pair is in the register of duplicates of `docs/layers.md`. D2's choice (a chain of handlers and a stack check in the prologue, no shared runtime library) is kept; only the place moves down.
+Source: docs/specs/S0008-shared-store.md, "Decisions of 8b" D-1
+
+### D44. Only the runtime of the store is initialised on a thread
+Status: accepted · Date: 2026-11-02 · Supersedes: — · Evidence: — (8b-3b)
+`wasm_rt_init`, `wasm_rt_init_thread` and the alternate stack of signals (where the mode has one) are done on a thread by the runtime of the store only. A copy that is not the runtime of the store has its inline state synchronised (the stack limit variable, the depth counters) and calls neither function, so there is no second alternate stack and no leak. This replaces the idea of re-installing each copy's stack. The leak found in 8a-1 exists only in the `stock` and `guard` modes, where two copies were both initialised; the default `limit` mode allocates no alternate stack. Known gap: a thread that enters stores of two different runtimes in those modes still initialises two copies.
+Source: docs/specs/S0008-shared-store.md, "Decisions of 8b" D-7 and "Corrections of the text of 8a"
+
+### D45. Serials of stores: a counter per runtime, seeded from the address of its table
+Status: accepted · Date: 2026-11-02 · Supersedes: — · Amends: D25 · Evidence: — (8b-1)
+The per-artifact counter of 8a (it starts at 0, so the first store of every artifact has serial 1) is replaced by a counter of the runtime whose start value is derived from the address of the runtime's table. Stores of one runtime never share a serial (until the 16 bits wrap); stores of different runtimes may (about 1 in 65536 per pair), which matters only when a host hands a handle to the wrong store and gets an answer instead of `WRONG`. Layer 3 will give a process-wide counter through its capsule. The test fixes the seeds with a hook so that it is deterministic. D25 (16-bit serial) stands.
+Source: docs/specs/S0008-shared-store.md, "Decisions of 8b" D-3

@@ -25,6 +25,7 @@ from wasmext._natify import (
     _portable,
     _repair_imported_elements,
     _repair_tail_calls,
+    core_build_macros,
     fusedwasi_version_macro,
     signal_build_flags,
 )
@@ -107,12 +108,6 @@ TAGA = """(module
 TAGB = TAGA.replace("hgna", "hgnb")
 
 
-def _product_version() -> list[tuple[str, str]]:
-    """The macro of the version of fusedwasi that the product's build passes (the host layout hashes it)."""
-    macro = fusedwasi_version_macro()
-    return [] if macro is None else [macro]
-
-
 def _library(
     wabt: Path,
     out: Path,
@@ -156,7 +151,7 @@ def _library(
     library = out / f"libartifact_{name}{'.dylib' if sys.platform == 'darwin' else '.so'}"
     subprocess.run(
         [
-            cc, "-shared", "-fPIC", *(["-fvisibility=hidden"] if hidden else []), "-w", "-pthread", *flags, f"-DARTIFACT_NAME={name}", *(f"-D{k}={v}" for k, v in [*chain_macros, *_product_version()]), *(f"-D{x}" for x in defines), *chain_link,
+            cc, "-shared", "-fPIC", *(["-fvisibility=hidden"] if hidden else []), "-w", "-pthread", *flags, f"-DARTIFACT_NAME={name}", *(f"-D{k}={v}" for k, v in [*chain_macros, *core_build_macros()]), *(f"-D{x}" for x in defines), *chain_link,
             *(f"-I{p}" for p in (d, C_DIR, WASMEXT_C, Path(get_include()), toolchain.runtime, *simde)),
             *map(str, sources), "-lm", "-o", str(library),
         ],
@@ -192,7 +187,7 @@ def _run(wabt: Path, tmp_path: Path, flags: Sequence[str] = (), defines: Sequenc
         exe,
         include_dirs=[C_DIR, WASMEXT_C, Path(get_include()), find_toolchain().runtime],
         flags=[*flags, f"-Wl,-rpath,{tmp_path}"],
-        defines=defines,
+        defines=[*defines, "WASMEXT_STORE_RUNTIME=1"],  # the host reads the headers of the core: they stop without it
         threads=True,
         strict=False,
         std=None,
@@ -243,7 +238,7 @@ def _layout(
         (d / name).write_text("\n".join(lines), encoding="utf-8")
     exe = d / "layout_hash"
     subprocess.run(
-        [cc, "-O2", "-w", *(f"-D{x}" for x in defines), f"-I{d}", f"-I{Path(get_include())}", f"-I{find_toolchain().runtime}", str(C_DIR / "layout_hash.c"), "-lm", "-pthread", "-o", str(exe)],
+        [cc, "-O2", "-w", "-DWASMEXT_STORE_RUNTIME=1", *(f"-D{x}" for x in defines), f"-I{d}", f"-I{Path(get_include())}", f"-I{find_toolchain().runtime}", str(C_DIR / "layout_hash.c"), "-lm", "-pthread", "-o", str(exe)],
         check=True,
     )  # fmt: skip
     core, host = subprocess.run([str(exe)], capture_output=True, text=True, check=True).stdout.split()
@@ -271,6 +266,22 @@ _SWAPS = {
     "tab-elem-live": ("wasmext_instance.h", "int elem;", 0, "int live;", 0),
     "funcref-store-owner": ("wasmext_instance.h", "const void *store;", 0, "wasmext_owner owner;", 0),
     "host-tag-store-cells": ("wasmext_instance.h", "wasmext_store *store;", 1, "void **cells;", 0),
+    # 8b-1: the structs of the runtime of the store (the head of its table and an entry of the list are in wasmext_store.h, the table in wasmext_runtime.h)
+    "runtime-head-version-layout": ("wasmext_store.h", "uint32_t version;", 0, "uint32_t layout;", 1),
+    "artifact-entry-identity-activate": (
+        "wasmext_store.h",
+        "const void *identity;",
+        0,
+        "const void *(*activate)(const void *rt);",
+        0,
+    ),
+    "runtime-trap-load-exception": (
+        "wasmext_runtime.h",
+        "void (*trap)(wasm_rt_trap_t code);",
+        0,
+        "void (*load_exception)(wasm_rt_tag_t tag, uint32_t size, const void *values);",
+        0,
+    ),
 }
 
 
@@ -342,7 +353,7 @@ def test_the_product_build_passes_the_version_of_fusedwasi_to_the_artifacts(wabt
             exe,
             include_dirs=[C_DIR, WASMEXT_C, Path(get_include()), find_toolchain().runtime],
             flags=[f"-Wl,-rpath,{tmp_path}"],
-            defines=[f"ARTIFACT_NAME={name}"],
+            defines=[f"ARTIFACT_NAME={name}", "WASMEXT_STORE_RUNTIME=1"],
             strict=False,
             std=None,
         )

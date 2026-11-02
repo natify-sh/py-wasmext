@@ -90,14 +90,8 @@ typedef struct {
     char pad_[64 - sizeof(wasmext_counter)];
 } wasmext_store_line_;
 
-/* The serial of a store: one for the artifact, taken from a counter that exactly one file defines (WASMEXT_DEFINE_THREAD_STATE, as for the set-up of the thread). */
-extern wasmext_counter wasmext_store_serial_;
-#ifdef WASMEXT_DEFINE_THREAD_STATE
-wasmext_counter wasmext_store_serial_;
-#endif
-
 /* The identity of an artifact (one shared library, extension or executable, which has its own copy of the code of the core and of the runtime of wasm2c): the address of a variable
-   that exactly one file of the artifact defines, as for the serial above. A store knows the artifacts that made or attached to it (S0008). It is hidden where the compiler can
+   that exactly one file of the artifact defines (WASMEXT_DEFINE_THREAD_STATE, as for the set-up of the thread). A store knows the artifacts that made or attached to it (S0008). It is hidden where the compiler can
    say so (as `wasmext_stack_limit` is): with the default visibility the dynamic linker would let one library's variable stand for another's, and two artifacts would have one identity. */
 #if (defined(__GNUC__) || defined(__clang__)) && !defined(_WIN32)
 extern char wasmext_artifact_ __attribute__((visibility("hidden")));
@@ -117,10 +111,28 @@ typedef struct {
     uint32_t floor;   /* the lowest WASMEXT_ABI of a reader that can use the store */
     uint32_t layout;  /* WASMEXT_CORE_LAYOUT of that artifact: the sizes and offsets of the structs of the core */
     uint32_t runtime; /* WASMEXT_RUNTIME of that artifact: the layout of the structs and of the jump buffer of wasm2c */
-    uint32_t flags;   /* none yet */
+    uint32_t flags;   /* none yet (the mode of the stack check is in the flags of the runtime, `rt`) */
     uint32_t host_layout; /* WASMEXT_HOST_LAYOUT of the artifact that set the host (0: none, or set from a file that does not know the host): checked by the first call that touches the host */
-    void *rt;         /* reserved for the runtime of the store (S0008, 8b): NULL */
+    void *rt;         /* the runtime of the store (S0008, 8b): the table `wasmext_runtime` of the artifact that made it (NULL for a store made by a file that includes this header alone) */
 } wasmext_store_head;
+
+/* The first bytes of the table of the runtime of a store (`wasmext_runtime`, wasmext_runtime.h, which has the wasm2c part): what this file reads without wasm2c. `next_serial` gives the
+   serial of a new store (the counter of the runtime); `flags` is the mode of the stack check of the build (WASMEXT_RT_FLAG_*, wasmext_runtime.h). */
+typedef struct {
+    uint32_t size;    /* sizeof(wasmext_runtime) of the artifact that made it */
+    uint32_t version; /* WASMEXT_RUNTIME_VERSION */
+    uint32_t layout;  /* WASMEXT_CORE_LAYOUT of that artifact */
+    uint32_t flags;   /* the mode of the stack check */
+    uint32_t (*next_serial)(void);
+} wasmext_runtime_head;
+
+/* An artifact in the list of a store. `activate(rt)` makes the active runtime of the thread in that copy `rt` and answers the one it was; `deactivate(saved)` puts it back (wasmext_runtime.h). */
+typedef struct {
+    const void *identity; /* WASMEXT_ARTIFACT */
+    const void *(*activate)(const void *rt);
+    void (*deactivate)(const void *saved);
+} wasmext_artifact_entry;
+#define WASMEXT_MAX_ARTIFACTS 8
 
 typedef struct {
     wasmext_store_head head; /* first */
@@ -133,8 +145,8 @@ typedef struct {
     wasmext_registry registry;
     void *host;      /* the host of WASI (wasmext_host.h), opaque here: set once; the store owns it through the arena */
     void *host_lock; /* its lock (wasmext_rlock.h), for the code that calls into the host from the instance */
-    const void **artifacts; /* the artifacts that made the store or attached to it: only their instances may be made in it */
-    uint32_t n_artifacts, cap_artifacts;
+    wasmext_artifact_entry artifacts[WASMEXT_MAX_ARTIFACTS]; /* the artifacts that made the store or attached to it: only their instances may be made in it. Entries below `n_artifacts` never change */
+    wasmext_counter n_artifacts; /* published after the entry is written (a reader that sees the count sees the entry); written under the lock */
     char error[WASMEXT_STORE_ERROR_SIZE];
 } wasmext_store;
 
@@ -151,6 +163,8 @@ typedef struct {
 #define WASMEXT_SALT_wasmext_slot 3624381081u
 #define WASMEXT_SALT_wasmext_owner_ops 2870177451u
 #define WASMEXT_SALT_wasmext_arena_node 1274126177u
+#define WASMEXT_SALT_wasmext_runtime_head 1911338231u
+#define WASMEXT_SALT_wasmext_artifact_entry 2860486313u
 #define WASMEXT_LS_(k, T) ((uint32_t)sizeof(T) * (k))
 
 /* What the head of a store says, for the artifact that makes or attaches: the ABI, the floor, the layout of the core and the layout of the runtime of wasm2c. This file does not know
@@ -162,7 +176,11 @@ typedef struct {
     WASMEXT_LS_(7u, wasmext_store) ^ WASMEXT_LF_(0, wasmext_store, head) ^ WASMEXT_LF_(1, wasmext_store, lines) ^ WASMEXT_LF_(2, wasmext_store, closing) ^ \
     WASMEXT_LF_(3, wasmext_store, closed) ^ WASMEXT_LF_(4, wasmext_store, mutex) ^ WASMEXT_LF_(5, wasmext_store, arena) ^ WASMEXT_LF_(6, wasmext_store, adopted) ^ \
     WASMEXT_LF_(7, wasmext_store, registry) ^ WASMEXT_LF_(8, wasmext_store, host) ^ WASMEXT_LF_(9, wasmext_store, host_lock) ^ WASMEXT_LF_(10, wasmext_store, artifacts) ^ \
-    WASMEXT_LF_(11, wasmext_store, n_artifacts) ^ WASMEXT_LF_(12, wasmext_store, cap_artifacts) ^ WASMEXT_LF_(13, wasmext_store, error) ^ \
+    WASMEXT_LF_(11, wasmext_store, n_artifacts) ^ WASMEXT_LF_(12, wasmext_store, error) ^ \
+    WASMEXT_LS_(61u, wasmext_runtime_head) ^ WASMEXT_LF_(0, wasmext_runtime_head, size) ^ WASMEXT_LF_(1, wasmext_runtime_head, version) ^ WASMEXT_LF_(2, wasmext_runtime_head, layout) ^ \
+    WASMEXT_LF_(3, wasmext_runtime_head, flags) ^ WASMEXT_LF_(4, wasmext_runtime_head, next_serial) ^ \
+    WASMEXT_LS_(67u, wasmext_artifact_entry) ^ WASMEXT_LF_(0, wasmext_artifact_entry, identity) ^ WASMEXT_LF_(1, wasmext_artifact_entry, activate) ^ \
+    WASMEXT_LF_(2, wasmext_artifact_entry, deactivate) ^ \
     WASMEXT_LS_(11u, wasmext_registry) ^ WASMEXT_LF_(0, wasmext_registry, version) ^ WASMEXT_LF_(1, wasmext_registry, size) ^ WASMEXT_LF_(2, wasmext_registry, serial) ^ \
     WASMEXT_LF_(3, wasmext_registry, slots) ^ WASMEXT_LF_(4, wasmext_registry, count) ^ WASMEXT_LF_(5, wasmext_registry, capacity) ^ WASMEXT_LF_(6, wasmext_registry, free_head) ^ \
     WASMEXT_LF_(7, wasmext_registry, sequence) ^ WASMEXT_LF_(8, wasmext_registry, table) ^ WASMEXT_LF_(9, wasmext_registry, table_capacity) ^ WASMEXT_LF_(10, wasmext_registry, deleted) ^ \
@@ -183,25 +201,32 @@ typedef struct {
 #define WASMEXT_LAYOUT_MSC_ 0u
 #endif
 #define WASMEXT_LAYOUT_BITS_ (WASMEXT_LAYOUT_NO_THREADS_ ^ WASMEXT_LAYOUT_MSC_)
-#define WASMEXT_CORE_IDENT 0u, 0u, WASMEXT_STORE_LAYOUT_, 0u
+#define WASMEXT_CORE_IDENT 0u, 0u, WASMEXT_STORE_LAYOUT_, 0u, NULL, NULL, NULL
 
-static inline int wasmext_store_add_artifact_(wasmext_store *s, const void *artifact) {
-    uint32_t i;
-    for (i = 0; i < s->n_artifacts; i++)
-        if (s->artifacts[i] == artifact) return WASMEXT_STORE_OK;
-    if (s->n_artifacts == s->cap_artifacts) {
-        uint32_t cap = s->cap_artifacts ? s->cap_artifacts * 2 : 4u;
-        const void **list = (const void **)realloc((void *)s->artifacts, cap * sizeof(void *));
-        if (list == NULL) return WASMEXT_STORE_NOMEM;
-        s->artifacts = list;
-        s->cap_artifacts = cap;
-    }
-    s->artifacts[s->n_artifacts++] = artifact;
+/* Adds this artifact to the list (under the lock, or while the store is private to its maker): OK if it is there already or was added; INCOMPATIBLE if the list is full (WASMEXT_MAX_ARTIFACTS).
+   The entry is written before the count is published, so `wasmext_store_has_artifact` reads the list without the lock. */
+static inline int wasmext_store_add_artifact_(wasmext_store *s, const void *(*activate)(const void *), void (*deactivate)(const void *)) {
+    long i, n = (long)wasmext_atomic_load(&s->n_artifacts);
+    for (i = 0; i < n; i++)
+        if (s->artifacts[i].identity == WASMEXT_ARTIFACT) return WASMEXT_STORE_OK;
+    if (n >= WASMEXT_MAX_ARTIFACTS) return WASMEXT_STORE_INCOMPATIBLE;
+    s->artifacts[n].identity = WASMEXT_ARTIFACT;
+    s->artifacts[n].activate = activate;
+    s->artifacts[n].deactivate = deactivate;
+    wasmext_atomic_store(&s->n_artifacts, n + 1);
     return WASMEXT_STORE_OK;
 }
 
-/* Makes a store of this artifact: `wasmext_store_new()` (a macro, to put the identity of the core in the head). */
-static inline wasmext_store *wasmext_store_new_(uint32_t abi, uint32_t since, uint32_t layout, uint32_t runtime) {
+/* The serial of a store made by a file that includes this header alone (no runtime to take it from): one counter for each such file. */
+static inline uint32_t wasmext_store_serial_alone_(void) {
+    static wasmext_counter next_;
+    return (uint32_t)wasmext_atomic_add(&next_, 1);
+}
+
+/* Makes a store of this artifact: `wasmext_store_new()` (a macro, to put the identity of the core in the head). `rt` is the table of the runtime of this artifact (NULL: none), where the serial
+   comes from; the store points at it. */
+static inline wasmext_store *wasmext_store_new_(uint32_t abi, uint32_t since, uint32_t layout, uint32_t runtime, const wasmext_runtime_head *rt, const void *(*activate)(const void *),
+                                                void (*deactivate)(const void *)) {
     wasmext_store *s = (wasmext_store *)calloc(1, sizeof(wasmext_store));
     if (s != NULL) {
         s->head.size = (uint32_t)sizeof(wasmext_store);
@@ -209,9 +234,10 @@ static inline wasmext_store *wasmext_store_new_(uint32_t abi, uint32_t since, ui
         s->head.floor = since;
         s->head.layout = layout;
         s->head.runtime = runtime;
+        s->head.rt = (void *)rt;
         WASMEXT_MUTEX_INIT(&s->mutex);
-        wasmext_registry_init(&s->registry, (uint32_t)wasmext_atomic_add(&wasmext_store_serial_, 1));
-        if (wasmext_store_add_artifact_(s, WASMEXT_ARTIFACT) != WASMEXT_STORE_OK) {
+        wasmext_registry_init(&s->registry, rt != NULL ? rt->next_serial() : wasmext_store_serial_alone_());
+        if (wasmext_store_add_artifact_(s, activate, deactivate) != WASMEXT_STORE_OK) {
             WASMEXT_MUTEX_DESTROY(&s->mutex);
             wasmext_registry_destroy(&s->registry);
             free(s);
@@ -223,23 +249,24 @@ static inline wasmext_store *wasmext_store_new_(uint32_t abi, uint32_t since, ui
 #define wasmext_store_new() wasmext_store_new_(WASMEXT_CORE_IDENT)
 
 /* Whether this artifact made the store or attached to it. A store whose head is not that of this copy (the size, the layout of the core and the runtime of wasm2c that the
-   caller says are its own: `wasmext_instance.h` gives the full ones, a store-only layout is not enough) is not looked into, before the lock or anything else past the head is read:
-   its other fields may be elsewhere. It is not attached. */
+   caller says are its own: `wasmext_instance.h` gives the full ones, a store-only layout is not enough) is not looked into, before anything else past the head is read:
+   its other fields may be elsewhere. It is not attached. The list is read without the lock (the count is read first). */
 static inline int wasmext_store_has_artifact(wasmext_store *s, uint32_t layout, uint32_t runtime) {
-    uint32_t i;
-    int found = 0;
+    long i, n;
     if (s->head.size != (uint32_t)sizeof(wasmext_store) || s->head.layout != layout || s->head.runtime != runtime) return 0;
-    WASMEXT_LOCK(&s->mutex);
-    for (i = 0; i < s->n_artifacts; i++) found |= s->artifacts[i] == WASMEXT_ARTIFACT;
-    WASMEXT_UNLOCK(&s->mutex);
-    return found;
+    n = (long)wasmext_atomic_load(&s->n_artifacts);
+    for (i = 0; i < n && i < WASMEXT_MAX_ARTIFACTS; i++)
+        if (s->artifacts[i].identity == WASMEXT_ARTIFACT) return 1;
+    return 0;
 }
 
 /* An artifact that did not make the store joins it: `wasmext_store_attach(s, why, cap)` (a macro, as above). WASMEXT_STORE_OK, or WASMEXT_STORE_INCOMPATIBLE with the reason in `why`
-   (the caller's buffer: the store may be of a layout that this copy cannot read) when the x of the ABI differs, the reader is below the floor, or the size, the layout of the core or
-   the runtime of wasm2c differ; WASMEXT_STORE_CLOSED when the store is closed. The artifact must stay loaded until `wasmext_store_free` returns: the store calls the functions of the
+   (the caller's buffer: the store may be of a layout that this copy cannot read) when the x of the ABI differs, the reader is below the floor, the size, the layout of the core or
+   the runtime of wasm2c differ, the store has no runtime (`rt` is NULL) though this copy has one, the mode of the stack check of its runtime is not this copy's, or the list holds
+   WASMEXT_MAX_ARTIFACTS artifacts already; WASMEXT_STORE_CLOSED when the store is closed. The artifact must stay loaded until `wasmext_store_free` returns: the store calls the functions of the
    artifacts that added members, whichever copy closes it. */
-static inline int wasmext_store_attach_(wasmext_store *s, uint32_t abi, uint32_t since, uint32_t layout, uint32_t runtime, char *why, size_t cap) {
+static inline int wasmext_store_attach_(wasmext_store *s, uint32_t abi, uint32_t since, uint32_t layout, uint32_t runtime, const wasmext_runtime_head *rt,
+                                        const void *(*activate)(const void *), void (*deactivate)(const void *), char *why, size_t cap) {
     int rc;
 #define WASMEXT_WHY_(...) do { if (why != NULL && cap > 0) snprintf(why, cap, __VA_ARGS__); } while (0)
     (void)since;
@@ -264,12 +291,24 @@ static inline int wasmext_store_attach_(wasmext_store *s, uint32_t abi, uint32_t
         WASMEXT_WHY_("the layout of the runtime of wasm2c differs (the store 0x%08x, this copy 0x%08x)", (unsigned)s->head.runtime, (unsigned)runtime);
         return WASMEXT_STORE_INCOMPATIBLE;
     }
+    if (rt != NULL) { /* this copy has a runtime: the store needs one, and of the same mode of the stack check */
+        const wasmext_runtime_head *theirs = (const wasmext_runtime_head *)s->head.rt;
+        if (theirs == NULL) {
+            WASMEXT_WHY_("the store has no runtime (rt is NULL)");
+            return WASMEXT_STORE_INCOMPATIBLE;
+        }
+        if (theirs->flags != rt->flags) {
+            WASMEXT_WHY_("the mode of the stack check of the runtime of the store differs (the store 0x%x, this copy 0x%x)", (unsigned)theirs->flags, (unsigned)rt->flags);
+            return WASMEXT_STORE_INCOMPATIBLE;
+        }
+    }
 #undef WASMEXT_WHY_
     WASMEXT_LOCK(&s->mutex);
     if (wasmext_atomic_load(&s->closing)) rc = WASMEXT_STORE_CLOSED;
-    else rc = wasmext_store_add_artifact_(s, WASMEXT_ARTIFACT);
+    else rc = wasmext_store_add_artifact_(s, activate, deactivate);
     WASMEXT_UNLOCK(&s->mutex);
     if (rc == WASMEXT_STORE_CLOSED && why != NULL && cap > 0) snprintf(why, cap, "the store is closed");
+    else if (rc == WASMEXT_STORE_INCOMPATIBLE && why != NULL && cap > 0) snprintf(why, cap, "the store has %d artifacts already, which is all it can hold", WASMEXT_MAX_ARTIFACTS);
     return rc;
 }
 #define wasmext_store_attach(S, WHY, CAP) wasmext_store_attach_((S), WASMEXT_CORE_IDENT, (WHY), (CAP))
@@ -595,7 +634,6 @@ static inline int wasmext_store_free(wasmext_store *s) {
     }
     wasmext_registry_destroy(&s->registry);
     WASMEXT_MUTEX_DESTROY(&s->mutex);
-    free((void *)s->artifacts);
     free(s);
     return WASMEXT_STORE_OK;
 }

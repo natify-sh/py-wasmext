@@ -52,4 +52,21 @@ Command: `uv run python tools/bench_calls.py` (gcc 13.3.0, `-O2 -DNDEBUG`, no sa
 
 Rule of 8b (S0008): a change over 10 percent on case 1 or 2 against this baseline, on the same machine, repeated in two runs, is a regression and stops the sub-step; the noise inside one run is up to 10 to 35 percent, so the comparison is of medians over three runs.
 
-Cases 7 and 8 (8b draft, S0008): two position-independent shared libraries built apart: 7 is `wasmext_instance_call` of `add` of an instance made by artifact B in a store made by artifact A, 8 is the same `add` reached through a link from an instance of A. They are written in 8b-1 and baselined by applying only the benchmark files to a checkout of db92ac4, three runs, on the machine of the table above; until then there is no baseline for them.
+Cases 7 and 8 (S0008, written in 8b-1): two position-independent shared libraries built apart (the test artifacts of `tests/test_artifacts.py`, hidden visibility, each with its own copy of the core and of the runtime): artifact A makes the store and B attaches. 7 is a call of `add` of an instance of B (`ops`) in the store of A; 8 is the call of `call_add` of B's `app`, whose import `libx.add` is answered by A's `lib` (a link across artifacts, typed shim). Both call by the NAME of the export through the table of artifact B (`B->call`: it has no call by index), so each includes a search of the exports and the cases are compared with each other and with the same case on another commit, not with cases 1 and 2. Baseline at db92ac4 is below, measured by applying only `tools/bench_calls.py` and `tests/c/bench_calls.c` to a checkout of that commit (with `core_build_macros` replaced by the fusedwasi macro alone, which is all the builders passed then).
+
+## Step 8b-1: the runtime table and the forwarders (2026-11-02, working tree on top of 534fb88)
+
+The entry is not touched in 8b-1 (the forwarders are off the path of a call), so cases 1 and 2 are expected to stay as they are. Same machine as the baseline above (Xeon at 2.10 GHz, 4 CPUs, gcc 13.3.0, `-O2 -DNDEBUG`, no sanitizers), `uv run python tools/bench_calls.py` (5 repetitions of about 1 s each, the cases alternating). Three runs of the working tree and three of db92ac4 (with only the benchmark files applied, see above) alternated in time: H1 B1 H2 B2 H3 B3. ns per call, one value per run, then the median of the three:
+
+| # | case | 8b-1 run 1 / 2 / 3 | median | db92ac4 run 1 / 2 / 3 | median |
+|---|---|---|---|---|---|
+| 1 | `wasmext_instance_call` of `add` | 40.4 / 39.1 / 38.1 | 39.1 | 40.5 / 38.7 / 39.8 | 39.8 |
+| 2 | through a link (typed shim) | 89.6 / 76.9 / 78.3 | 78.3 | 81.8 / 73.7 / 77.9 | 77.9 |
+| 3 | import answered by a uniform host function | 55.5 / 54.1 / 57.4 | 55.5 | 58.8 / 58.0 / 55.1 | 58.0 |
+| 4 | import answered by a typed host function | 51.6 / 48.0 / 46.8 | 48.0 | 47.1 / 50.3 / 46.3 | 47.1 |
+| 5 | `call_indirect` through a shared table | 52.4 / 38.2 / 41.4 | 41.4 | 39.4 / 40.1 / 40.9 | 40.1 |
+| 6 | reference: `w2c_ops_add` in `ENTER_PLAIN`/`LEAVE_PLAIN` | 4.7 / 5.1 / 5.0 | 5.0 | 4.9 / 4.5 / 4.7 | 4.7 |
+| 7 | B's `add` in A's store (two artifacts, by name) | 48.0 / 51.7 / 47.5 | 48.0 | 52.7 / 44.8 / 52.2 | 52.2 |
+| 8 | the same through a link (B's `app` to A's `lib`) | 98.9 / 91.0 / 90.3 | 91.0 | 104.4 / 87.7 / 91.4 | 91.4 |
+
+The medians of cases 1 and 2 differ from the baseline by 2 percent and 0.5 percent, inside the noise of the table (one run moves a case by 10 to 20 percent; the min..max of the 5 repetitions inside a run is wider still). Nothing here is a claim of a regression or of an improvement. The numbers of cases 7 and 8 at 8b-1 and at db92ac4 are the baseline for 8b-2, which changes the entry.

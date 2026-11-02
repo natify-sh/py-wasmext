@@ -24,6 +24,7 @@ from wasmext._natify import (  # pyright: ignore[reportPrivateUsage]
     _portable,
     _repair_imported_elements,
     _repair_tail_calls,
+    core_build_macros,
     fusedwasi_version_macro,
 )
 from wasmext._toolchain import find_toolchain  # pyright: ignore[reportPrivateUsage]
@@ -437,13 +438,12 @@ def build(wabt: Path, tmp_path_factory: pytest.TempPathFactory) -> Callable[...,
             out
             / f"{name}_{Path(test).stem}{'_' + ''.join(c for c in ''.join(flags) if c.isalnum()) if flags else ''}{EXE}"
         )
-        fused = fusedwasi_version_macro()  # as natify() passes it: the host layout of the core hashes it
         compile_c(
             [*sources, *wrapped],
             exe,
             include_dirs=[WASMEXT_C, Path(get_include()), runtime, out, *simde],
             flags=flags,
-            defines=[f"MODULE={name}", *([f"{fused[0]}={fused[1]}"] if fused else []), *defines],
+            defines=[f"MODULE={name}", *(f"{k}={v}" for k, v in core_build_macros()), *defines],
             strict=False,
             std=None,
             threads=True,

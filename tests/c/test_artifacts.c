@@ -45,7 +45,7 @@ static void test_attach(void) {
     CHECK(B->instance_new(s, "appb", &error) == NULL && error == EXDEV);
     CHECK(A->instance_new(s, "liba", &error) != NULL && error == 0);
     good = s->head;
-    CHECK(good.size == sizeof(wasmext_store) && good.rt == NULL && good.flags == 0);
+    CHECK(good.size == sizeof(wasmext_store) && good.rt == A->runtime_id() && good.flags == 0);
     /* each refusal has its text, in the buffer of the caller */
     s->head.abi = good.abi | 0x01000000u; /* another x */
     why[0] = 0;
@@ -97,6 +97,114 @@ static void test_attach(void) {
     CHECK(B->store_attach(s, why, sizeof why) == WASMEXT_STORE_OK);
     CHECK(B->instance_new(s, "appb", &error) != NULL && error == 0);
     CHECK(A->store_free(s) == WASMEXT_STORE_OK);
+}
+
+/* 8b-1: what `attach` says of the runtime of the store and of the list of artifacts */
+static void test_attach_runtime(void) {
+    wasmext_store *s = A->store_new();
+    wasmext_runtime fake;
+    wasmext_artifact_entry saved[WASMEXT_MAX_ARTIFACTS];
+    char why[200];
+    void *rt = s->head.rt;
+    long k;
+    CHECK(s != NULL && rt != NULL && s->head.rt == A->runtime_id());
+    CHECK(((const wasmext_runtime *)rt)->head.flags != 0 && ((const wasmext_runtime *)rt)->head.size == sizeof(wasmext_runtime));
+    /* a store with no runtime is refused, with its reason */
+    s->head.rt = NULL;
+    why[0] = 0;
+    CHECK(B->store_attach(s, why, sizeof why) == WASMEXT_STORE_INCOMPATIBLE && strstr(why, "no runtime") != NULL);
+    /* ... and so is one whose runtime checks the stack another way (the table is a copy of A's with another mode) */
+    memcpy(&fake, rt, sizeof fake);
+    fake.head.flags ^= 1u;
+    s->head.rt = &fake;
+    why[0] = 0;
+    CHECK(B->store_attach(s, why, sizeof why) == WASMEXT_STORE_INCOMPATIBLE && strstr(why, "mode of the stack check") != NULL);
+    s->head.rt = rt;
+    CHECK(wasmext_atomic_load(&s->n_artifacts) == 1); /* nothing was added by the refusals */
+    /* the list holds 8: a ninth is refused with its reason, nothing is added; the artifact that is in the list can attach again */
+    memcpy(saved, s->artifacts, sizeof saved);
+    for (k = 1; k < WASMEXT_MAX_ARTIFACTS; k++) s->artifacts[k].identity = (const void *)(uintptr_t)(0x1000 + k);
+    wasmext_atomic_store(&s->n_artifacts, WASMEXT_MAX_ARTIFACTS);
+    why[0] = 0;
+    CHECK(B->store_attach(s, why, sizeof why) == WASMEXT_STORE_INCOMPATIBLE && strstr(why, "8 artifacts") != NULL);
+    CHECK(wasmext_atomic_load(&s->n_artifacts) == WASMEXT_MAX_ARTIFACTS && s->artifacts[WASMEXT_MAX_ARTIFACTS - 1].identity == (const void *)(uintptr_t)(0x1000 + WASMEXT_MAX_ARTIFACTS - 1));
+    CHECK(A->store_attach(s, why, sizeof why) == WASMEXT_STORE_OK);
+    memcpy(s->artifacts, saved, sizeof saved);
+    wasmext_atomic_store(&s->n_artifacts, 1);
+    /* the good one: B is in the list with the functions of its copy */
+    CHECK(B->store_attach(s, why, sizeof why) == WASMEXT_STORE_OK && wasmext_atomic_load(&s->n_artifacts) == 2);
+    CHECK(s->artifacts[0].identity == A->id && s->artifacts[1].identity == B->id && s->artifacts[1].activate != NULL && s->artifacts[1].deactivate != NULL);
+    CHECK(A->store_free(s) == WASMEXT_STORE_OK);
+}
+
+/* 8b-1: the forwarders of a copy reach the table of the runtime it is told to, and the functions of its own when none is */
+static void test_forwarders_across_copies(void) {
+    static const uint8_t bytes[8] = {1, 2, 3, 4, 5, 6, 7, 8};
+    wasmext_store *s = A->store_new();
+    const void *tag = (const void *)&bytes, *was;
+    CHECK(B->store_attach(s, NULL, 0) == WASMEXT_STORE_OK);
+    A->exception_load(tag, 5, bytes); /* each copy on its own table: the state of the exception is the copy's */
+    CHECK(A->exception_size() == 5 && B->exception_size() == 0);
+    CHECK(B->set_tls_rt(NULL) == NULL);
+    /* B told to use A's table: B's wasm_rt_load_exception and wasm_rt_exception_size are A's */
+    CHECK(B->set_tls_rt(A->runtime_id()) == NULL);
+    B->exception_load(tag, 3, bytes);
+    CHECK(A->exception_size() == 3 && B->exception_size() == 3);
+    CHECK(B->set_tls_rt(NULL) == A->runtime_id());
+    CHECK(B->exception_size() == 0 && A->exception_size() == 3); /* B's own state was not touched */
+    /* the entries of the list do the same (what the entry of a call will use): B's activate, with A's table */
+    was = s->artifacts[1].activate(A->runtime_id());
+    CHECK(was == NULL);
+    B->exception_load(tag, 2, bytes);
+    CHECK(A->exception_size() == 2);
+    s->artifacts[1].deactivate(was);
+    CHECK(B->exception_size() == 0);
+    /* an entry told its own table leaves the copy on its own functions (tls.rt NULL) */
+    was = s->artifacts[0].activate(A->runtime_id());
+    CHECK(A->set_tls_rt(NULL) == NULL && was == NULL);
+    CHECK(A->store_free(s) == WASMEXT_STORE_OK);
+}
+
+/* 8b-1, D45: the serials of the stores of one runtime differ; two runtimes may share one, and the registry then answers for the wrong store (the stated limit) */
+static void test_serials(void) {
+    static unsigned char seen[65536];
+    uint32_t first = 0;
+    long k;
+    wasmext_store *a, *b;
+    wasmext_owner o, p;
+    void *object = NULL;
+    for (k = 0; k < 65536; k++) {
+        wasmext_store *s = A->store_new();
+        uint32_t serial = s->registry.serial;
+        if (k == 0) first = serial;
+        CHECK(serial < 65536u && !seen[serial]);
+        seen[serial & 0xFFFFu] = 1;
+        CHECK(A->store_free(s) == WASMEXT_STORE_OK);
+    }
+    {
+        wasmext_store *s = A->store_new(); /* the 65537th: the 16 bits wrap */
+        CHECK(s->registry.serial == first);
+        CHECK(A->store_free(s) == WASMEXT_STORE_OK);
+    }
+    /* two runtimes with fixed seeds: the serial is seed + 1, and a handle of B's store given to A's is WRONG */
+    A->fix_seed(100);
+    B->fix_seed(200);
+    a = A->store_new();
+    b = B->store_new();
+    CHECK(a->registry.serial == 101 && b->registry.serial == 201);
+    CHECK(A->register_object(a, &o) == WASMEXT_STORE_OK && B->register_object(b, &p) == WASMEXT_STORE_OK);
+    CHECK(wasmext_store_member(a, p, &object) == WASMEXT_STORE_WRONG);
+    CHECK(wasmext_store_member(a, o, &object) == WASMEXT_STORE_OK);
+    CHECK(B->store_free(b) == WASMEXT_STORE_OK);
+    /* ... and when the seeds are equal the handle is taken for A's own: the limit, said in the spec */
+    B->fix_seed(100);
+    b = B->store_new();
+    CHECK(b->registry.serial == 101);
+    CHECK(B->register_object(b, &p) == WASMEXT_STORE_OK);
+    CHECK(wasmext_store_member(a, p, &object) == WASMEXT_STORE_OK);
+    CHECK(A->store_free(a) == WASMEXT_STORE_OK && B->store_free(b) == WASMEXT_STORE_OK);
+    A->fix_seed(1000);
+    B->fix_seed(2000);
 }
 
 /* host functions of the guard cases: one answers the funcref it is given as its `user`; one is a function of the type () -> i32 */
@@ -421,6 +529,9 @@ int main(void) {
     B = artifact_b();
     test_two_copies();
     test_attach();
+    test_attach_runtime();
+    test_forwarders_across_copies();
+    test_serials();
     test_store_only();
     test_one_store();
     test_the_other_way();

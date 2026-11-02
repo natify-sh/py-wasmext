@@ -41,6 +41,13 @@ typedef struct {
     int (*tag_new)(wasmext_store *s, const uint8_t *types, uint32_t n, wasmext_export *out); /* a tag of the host, made by this copy */
     void *volatile *(*tag_cell)(wasmext_instance *i); /* the global that the (first) tag import of the instance is read from: its address does not need the instance (8a-3) */
     uint32_t host_layout;                /* WASMEXT_HOST_LAYOUT as this copy was built */
+    /* 8b-1: the runtime of the store */
+    const void *(*runtime_id)(void);     /* the address of the table of the runtime of this copy (wasmext_runtime_own_) */
+    const void *(*set_tls_rt)(const void *rt); /* sets the active runtime of the calling thread in this copy (what the forwarders of this copy send to); answers the one it was */
+    void (*exception_load)(const void *tag, uint32_t size, const void *values); /* this copy's wasm_rt_load_exception */
+    uint32_t (*exception_size)(void);    /* this copy's wasm_rt_exception_size */
+    void (*fix_seed)(uint32_t seed);     /* fixes the start of the serials of this copy's runtime */
+    int (*register_object)(wasmext_store *s, wasmext_owner *out); /* registers a new object of this copy in the store: its handle */
 } artifact_api;
 
 /* in artifact_store_only.c: the file that includes only wasmext_store.h */

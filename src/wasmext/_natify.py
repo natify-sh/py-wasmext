@@ -398,28 +398,76 @@ _MSVC_X64_ONLY = rb"#elif defined(_MSC_VER) && defined(_M_X64)\1"
 # The runtime of wasm2c is not copied: the files of the tree include the ones of the toolchain (found by -I), the original sources
 # stay as they are. The only change is that wasm_rt_allocate_memory traps (NO_MEMORY) where it would abort(): the file that
 # includes wasm-rt-mem-impl.c turns the abort() called from it into that trap.
+#
+# Under WASMEXT_STORE_RUNTIME (every build of the core: `core_build_macros`; S0008, D42) the wrappers also do this: every function of the runtime that generated code or the core can call is
+# renamed `wasmext_own_<name>` in this copy, by a `#define` before the file is included (the names and the `static` helpers are those of wasm2c 1.0.42, D6: a name that the runtime does not
+# have is an error in the build, and tests/test_runtime.py says so), and the real names are defined after it as forwarders to the runtime of the store (wasmext_runtime.h). 23 functions in three
+# files: `wasm_rt_trap` and the funcref and externref tables in wasm-rt-impl.c; the exception state and the exnref tables in wasm-rt-exceptions-impl.c (its `g_unwind_target` is `static`, so
+# the accessors must be defined in that file); memories and shared memories in wasm-rt-mem-impl.c. Without the macro (the old layer 3: _gen.py, _shared.py, _exe.py, with `wasmext_traps`) the text is as it was.
+_RENAMED = {
+    "impl": ["trap", *(f"{op}_{kind}_table" for kind in ("funcref", "externref") for op in ("allocate", "grow", "free"))],
+    "exceptions": [
+        "load_exception", "throw", "get_unwind_target", "set_unwind_target", "exception_tag", "exception_size", "exception",
+        *(f"{op}_exnref_table" for op in ("allocate", "grow", "free")),
+    ],
+    "mem": [f"{op}_memory{suffix}" for suffix in ("", "_shared") for op in ("allocate", "grow", "free")],
+}  # fmt: skip
+
+
+def _rename(key: str) -> tuple[str, str]:
+    """The `#define`s that rename the functions of the file `key` for the copy, and the `#undef`s that end it."""
+    names = [f"wasm_rt_{n}" for n in _RENAMED[key]]
+    return (
+        "".join(f"#define {n} wasmext_own_{n}\n" for n in names),
+        "".join(f"#undef {n}\n" for n in names),
+    )
+
+
+def _with_forwarders(key: str, group: str, middle: str) -> str:
+    """The wrapper `middle` (the text of the old wrapper from the first include of the runtime file to its end) with, under WASMEXT_STORE_RUNTIME, the renaming before it and the forwarders after."""
+    define, undef = _rename(key)
+    return (
+        f'#ifdef WASMEXT_STORE_RUNTIME\n#include "wasmext_runtime.h"\n{define}#endif\n'
+        + middle
+        + f'#ifdef WASMEXT_STORE_RUNTIME\n{undef}#define WASMEXT_RT_FORWARD_{group}\n#include "wasmext_runtime.h"\n#endif\n'
+    )
+
+
 _RUNTIME_WRAPPERS = {
     # a module that shares tables is built as an extension with WASMEXT_TRAP_HANDLER (wasmext_glue.h): its traps do not `longjmp` by themselves
-    "impl": "#ifdef WASMEXT_TRAP_HANDLER\n#define WASM_RT_TRAP_HANDLER WASMEXT_TRAP_HANDLER\n#endif\n"
-    # WASMEXT_CHAIN: the runtime sets up the alternate stack of a thread, but installs no handler of signals (the Python layer installs a link of a chain, see _gen.py)
-    "#ifdef WASMEXT_CHAIN\n#include <signal.h>\n"
-    "static inline int wasmext_noop_sigaction_(int sig, const void *act, void *old) { (void)sig; (void)act; (void)old; return 0; }\n"
-    "#define sigaction(a, b, c) wasmext_noop_sigaction_((a), (b), (c))\n#endif\n"
-    "#ifdef WASMEXT_STACK_LIMIT\n#include <stdint.h>\n"
-    '__thread uintptr_t wasmext_stack_limit __attribute__((visibility("hidden")));\n#endif\n'
-    "#include <wasm-rt-impl.c>\n",
-    "exceptions": "#include <wasm-rt-exceptions-impl.c>\n",
-    "mem": """#include <stdlib.h>
+    "impl": _with_forwarders(
+        "impl",
+        "IMPL",
+        "#ifdef WASMEXT_TRAP_HANDLER\n#define WASM_RT_TRAP_HANDLER WASMEXT_TRAP_HANDLER\n#endif\n"
+        # WASMEXT_CHAIN: the runtime sets up the alternate stack of a thread, but installs no handler of signals (the Python layer installs a link of a chain, see _gen.py)
+        "#ifdef WASMEXT_CHAIN\n#include <signal.h>\n"
+        "static inline int wasmext_noop_sigaction_(int sig, const void *act, void *old) { (void)sig; (void)act; (void)old; return 0; }\n"
+        "#define sigaction(a, b, c) wasmext_noop_sigaction_((a), (b), (c))\n#endif\n"
+        "#ifdef WASMEXT_STACK_LIMIT\n#include <stdint.h>\n"
+        '__thread uintptr_t wasmext_stack_limit __attribute__((visibility("hidden")));\n#endif\n'
+        "#include <wasm-rt-impl.c>\n",
+    ),
+    "exceptions": _with_forwarders("exceptions", "EXC", "#include <wasm-rt-exceptions-impl.c>\n"),
+    # the allocation of a memory traps (NO_MEMORY) where the runtime would abort(): it tests the name of the function it is in, which the renaming changed
+    "mem": _with_forwarders(
+        "mem",
+        "MEM",
+        """#include <stdlib.h>
 #include <string.h>
 #include <wasm-rt.h>
 static void wasmext_abort_in(const char *where) {
+#ifdef WASMEXT_STORE_RUNTIME
+  if (strncmp(where, "wasmext_own_wasm_rt_allocate_memory", 35) == 0) wasm_rt_trap((wasm_rt_trap_t)0x7001);
+#else
   if (strncmp(where, "wasm_rt_allocate_memory", 23) == 0) wasm_rt_trap((wasm_rt_trap_t)0x7001);
+#endif
   abort();
 }
 #define abort() wasmext_abort_in(__func__)
 #include <wasm-rt-mem-impl.c>
 #undef abort
 """,
+    ),
 }
 _RUNTIME_WRAPPERS_TEXT = "\0".join(_RUNTIME_WRAPPERS.values())
 # wasm2c 1.0.42 writes the C of a function that has locals and ends in `return_call` with the first group of locals cut in
@@ -472,6 +520,13 @@ def fusedwasi_version_macro() -> tuple[str, str] | None:
     for byte in version.encode("utf-8"):
         h = ((h ^ byte) * 0x01000193) & 0xFFFFFFFF
     return "WASMEXT_FUSEDWASI_VERSION", str(h)
+
+
+def core_build_macros() -> list[tuple[str, str]]:
+    """The macros that every build of the static core (layer 1) passes: `WASMEXT_STORE_RUNTIME`, which makes the wrappers of the runtime rename its functions and forward them to the runtime of the store (D42; the headers of
+    the core stop with an #error without it), and the version of fusedwasi that the host layout hashes. The old layer 3 builds (natify, build_shared, the executable) do not use it."""
+    fused = fusedwasi_version_macro()
+    return [("WASMEXT_STORE_RUNTIME", "1"), *([fused] if fused is not None else [])]
 
 
 def _portable_off_x64(c_source: bytes) -> bytes:

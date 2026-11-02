@@ -12,6 +12,7 @@
 #include "wasmext_glue.h"
 #include "wasmext_rlock.h"
 #include "wasmext_store.h"
+#include "wasmext_runtime.h"
 #include "wasmext_descriptor.h"
 
 /* A value of WebAssembly: its type is a byte of the binary format (0x7F i32, 0x7E i64, 0x7D f32, 0x7C f64, 0x7B v128, 0x70 funcref, 0x6F externref). Passed by
@@ -1420,12 +1421,30 @@ typedef struct wasmext_tab_s_ {
     WASMEXT_LS_(43u, wasmext_tab) ^ WASMEXT_LF_(0, wasmext_tab, elem) ^ WASMEXT_LF_(1, wasmext_tab, table) ^ WASMEXT_LF_(2, wasmext_tab, etable) ^ WASMEXT_LF_(3, wasmext_tab, store) ^ \
     WASMEXT_LF_(4, wasmext_tab, artifact) ^ WASMEXT_LF_(5, wasmext_tab, owner) ^ WASMEXT_LF_(6, wasmext_tab, mutex) ^ WASMEXT_LF_(7, wasmext_tab, live) ^ \
     WASMEXT_LS_(59u, wasmext_host_tag) ^ WASMEXT_LF_(0, wasmext_host_tag, id) ^ WASMEXT_LF_(1, wasmext_host_tag, store) ^ WASMEXT_LF_(2, wasmext_host_tag, cells) ^ \
-    WASMEXT_LF_(3, wasmext_host_tag, n_cells) ^ WASMEXT_LF_(4, wasmext_host_tag, cap_cells) ^ WASMEXT_LF_(5, wasmext_host_tag, signature)))
+    WASMEXT_LF_(3, wasmext_host_tag, n_cells) ^ WASMEXT_LF_(4, wasmext_host_tag, cap_cells) ^ WASMEXT_LF_(5, wasmext_host_tag, signature) ^ \
+    WASMEXT_RUNTIME_LAYOUT_))
 static inline uint32_t wasmext_core_layout_(void) { return WASMEXT_CORE_LAYOUT; }
 static inline uint32_t wasmext_core_runtime_(void) { return (uint32_t)WASMEXT_RUNTIME; }
 #undef WASMEXT_CORE_CHECK
 #define WASMEXT_CORE_CHECK WASMEXT_CORE_LAYOUT, WASMEXT_RUNTIME
 #undef WASMEXT_CORE_IDENT
-#define WASMEXT_CORE_IDENT WASMEXT_ABI, WASMEXT_SINCE_STORE, WASMEXT_CORE_LAYOUT, WASMEXT_RUNTIME
+#define WASMEXT_CORE_IDENT WASMEXT_ABI, WASMEXT_SINCE_STORE, WASMEXT_CORE_LAYOUT, WASMEXT_RUNTIME, &wasmext_runtime_own_.head, wasmext_activate_, wasmext_deactivate_
+
+/* The runtime of this artifact (wasmext_runtime.h): the functions are those the wrappers of the runtime renamed; the table is defined here because it names the layout of the core. */
+#ifdef WASMEXT_DEFINE_THREAD_STATE
+const wasmext_runtime wasmext_runtime_own_ = {
+    {(uint32_t)sizeof(wasmext_runtime), WASMEXT_RUNTIME_VERSION, WASMEXT_CORE_LAYOUT, WASMEXT_RT_FLAGS, wasmext_runtime_next_serial_},
+    wasmext_own_wasm_rt_trap, wasmext_own_wasm_rt_load_exception, wasmext_own_wasm_rt_throw, wasmext_own_wasm_rt_get_unwind_target, wasmext_own_wasm_rt_set_unwind_target,
+    wasmext_own_wasm_rt_exception_tag, wasmext_own_wasm_rt_exception_size, wasmext_own_wasm_rt_exception,
+    wasmext_own_wasm_rt_allocate_memory, wasmext_own_wasm_rt_grow_memory, wasmext_own_wasm_rt_free_memory,
+#ifdef WASM_RT_C11_AVAILABLE
+    wasmext_own_wasm_rt_allocate_memory_shared, wasmext_own_wasm_rt_grow_memory_shared, wasmext_own_wasm_rt_free_memory_shared,
+#else
+    NULL, NULL, NULL,
+#endif
+    wasmext_own_wasm_rt_allocate_funcref_table, wasmext_own_wasm_rt_grow_funcref_table, wasmext_own_wasm_rt_free_funcref_table,
+    wasmext_own_wasm_rt_allocate_externref_table, wasmext_own_wasm_rt_grow_externref_table, wasmext_own_wasm_rt_free_externref_table,
+    wasmext_own_wasm_rt_allocate_exnref_table, wasmext_own_wasm_rt_grow_exnref_table, wasmext_own_wasm_rt_free_exnref_table};
+#endif
 
 #endif

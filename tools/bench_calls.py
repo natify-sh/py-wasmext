@@ -24,6 +24,7 @@ from fusedwasi import get_include
 
 from tests.c_build import compile_c, find_cc
 from tests.conftest import _wabt_dir  # pyright: ignore[reportPrivateUsage]
+from tests.test_artifacts import _library  # pyright: ignore[reportPrivateUsage]
 from wasmext import parse
 from wasmext._binding import generate_binding
 from wasmext._descriptor import generate_descriptor
@@ -35,12 +36,13 @@ from wasmext._natify import (  # pyright: ignore[reportPrivateUsage]
     _portable,
     _repair_imported_elements,
     _repair_tail_calls,
+    core_build_macros,
 )
 from wasmext._toolchain import find_toolchain  # pyright: ignore[reportPrivateUsage]
 
 WASMEXT_C = ROOT / "src" / "wasmext" / "c"
 BENCH_C = ROOT / "tests" / "c" / "bench_calls.c"
-# the smallest modules that make the six cases (the shapes of LINK_MODULES, TABLE_MODULES and IMPORTS of tests/test_instance_core.py)
+# the smallest modules that make the eight cases (the shapes of LINK_MODULES, TABLE_MODULES and IMPORTS of tests/test_instance_core.py)
 MODULES = {
     "ops": '(module (func (export "add") (param i32 i32) (result i32) local.get 0 local.get 1 i32.add))',
     "lib": '(module (func (export "add") (param i32 i32) (result i32) local.get 0 local.get 1 i32.add))',
@@ -68,7 +70,11 @@ CASES = {
     4: "wasm calls an import answered by a typed host function",
     5: "call_indirect through a shared table to a function of another instance",
     6: "reference: w2c_ops_add inside ENTER_PLAIN/LEAVE_PLAIN (no store)",
+    7: "B's add in A's store (two artifacts, shared libraries; by name through B's table)",
+    8: "the same through a link (B's app calls A's lib: typed shim across artifacts)",
 }
+# the artifacts of cases 7 and 8 (position-independent shared libraries built as tests/test_artifacts.py builds them): A makes the store and answers the import, B attaches
+ARTIFACTS = {"a": ["lib"], "b": ["ops", "app"]}
 
 
 def build(out: Path, cflags: list[str]) -> Path:
@@ -94,6 +100,9 @@ def build(out: Path, cflags: list[str]) -> Path:
         (out / f"{module}_descriptor.c").write_text(generate_descriptor(model), encoding="utf-8")
         (out / f"{module}_binding.c").write_text(generate_binding(model), encoding="utf-8")
         sources += [out / f"{module}_binding.c", out / f"{module}_descriptor.c", out / f"{module}_w2c.c"]
+    libraries = [
+        _library(wabt, out, name, {m: MODULES[m] for m in modules}, cflags) for name, modules in ARTIFACTS.items()
+    ]
     wrapped: list[Path] = []
     for key in ("impl", "mem", "exceptions"):
         path = out / f"rt_{key}.c"
@@ -101,10 +110,11 @@ def build(out: Path, cflags: list[str]) -> Path:
         wrapped.append(path)
     exe = out / "bench_calls"
     compile_c(
-        [*sources, *wrapped],
+        [*sources, *wrapped, *libraries],
         exe,
-        include_dirs=[WASMEXT_C, Path(get_include()), toolchain.runtime, out, *simde],
-        flags=cflags,
+        include_dirs=[WASMEXT_C, BENCH_C.parent, Path(get_include()), toolchain.runtime, out, *simde],
+        flags=[*cflags, f"-Wl,-rpath,{out}"],
+        defines=[f"{k}={v}" for k, v in core_build_macros()],
         strict=False,
         std=None,
         threads=True,

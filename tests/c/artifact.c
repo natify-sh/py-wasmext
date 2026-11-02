@@ -118,9 +118,24 @@ static void *volatile *tag_cell_(wasmext_instance *i) {
     return NULL;
 }
 
+static const void *runtime_id_(void) { return (const void *)&wasmext_runtime_own_; }
+static const void *set_tls_rt_(const void *rt) {
+    const void *previous = (const void *)wasmext_tls_.rt;
+    wasmext_tls_.rt = (const wasmext_runtime *)rt;
+    return previous;
+}
+static void exception_load_(const void *tag, uint32_t size, const void *values) { wasm_rt_load_exception((wasm_rt_tag_t)tag, size, values); }
+static uint32_t exception_size_(void) { return wasm_rt_exception_size(); }
+static int register_object_(wasmext_store *s, wasmext_owner *out) {
+    static char objects_[8];
+    static int used_;
+    return used_ < 8 ? wasmext_store_register(s, &objects_[used_++], NULL, NULL, out) : -1;
+}
+
 static const artifact_api api_ = {
     (const void *)&wasmext_artifact_, trap_address_, store_new_, store_attach_, store_close_, store_free_, store_own_, releases_, store_error_, instance_new_, instantiate_, call_,
-    export_record_, bind_, funcref_, table_set_, global_set_funcref_, tab_new_, tab_set_, tab_get_, wasmext_thread_free, call_ref_, bind_host_, bind_global_funcref_, host_funcref_, extern_new_, store_misc_, artifact_so_new, artifact_so_attach, extern_make_, tag_new_, tag_cell_, WASMEXT_HOST_LAYOUT};
+    export_record_, bind_, funcref_, table_set_, global_set_funcref_, tab_new_, tab_set_, tab_get_, wasmext_thread_free, call_ref_, bind_host_, bind_global_funcref_, host_funcref_, extern_new_, store_misc_, artifact_so_new, artifact_so_attach, extern_make_, tag_new_, tag_cell_, WASMEXT_HOST_LAYOUT,
+    runtime_id_, set_tls_rt_, exception_load_, exception_size_, wasmext_runtime_fix_seed_, register_object_};
 
 #define ARTIFACT_CAT_(a, b) a##b
 #define ARTIFACT_CAT(a, b) ARTIFACT_CAT_(a, b)

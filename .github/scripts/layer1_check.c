@@ -1,5 +1,6 @@
 /* Check (a) of the "C first" plan for layer 1 (docs/layers.md): the static headers of the core are compiled strictly (-Wall -Wextra -Werror; the pytest builds have the warnings
    off, for the C of wasm2c) with no Python on the include path, every header that a front end includes. Extend it with each step. */
+#define WASMEXT_STORE_RUNTIME 1 /* every builder of the core defines it (core_build_macros() of _natify.py); the headers stop without it */
 #define WASMEXT_DEFINE_THREAD_STATE
 #include "wasmext_descriptor.h"
 #include "wasmext_errors.h"

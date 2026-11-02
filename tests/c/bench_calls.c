@@ -6,12 +6,17 @@
      4 the same import answered by a typed host function (wasmext_instance_bind_typed)
      5 owner.call(1): call_indirect through a table that owner and user share, slot 1 holds user.nine
      6 reference: w2c_ops_add called directly inside WASMEXT_ENTER_PLAIN / WASMEXT_LEAVE_PLAIN (no store)
-   Cases 3 to 5 include the call of the export that holds the import or the call_indirect, as every user-visible call does. */
+     7 two artifacts built apart (shared libraries, position independent, each with its own copy of the core and of the runtime): artifact A makes the store, B attaches and makes an instance of
+       `ops` in it; B's `add` is called by name through B's table (S0008, 8b-1; tests/c/artifact.c)
+     8 the same store: B's app calls the import libx.add that A's lib answers (a link across artifacts, typed shim)
+   Cases 3 to 5 include the call of the export that holds the import or the call_indirect, as every user-visible call does. Cases 7 and 8 call by the NAME of the export (the table of an artifact
+   has no call by index), which costs a search of the exports: compare them with each other and with the same case on another commit, not with cases 1 and 2. */
 #define WASMEXT_DEFINE_THREAD_STATE
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
 #include "wasmext_instance.h"
+#include "artifact.h"
 
 extern const wasmext_binding ops_binding, lib_binding, app_binding, bench_binding, owner_binding, user_binding;
 extern uint32_t w2c_ops_add(void *instance, uint32_t a, uint32_t b); /* the function of wasm2c (instance first, as the glue calls it) */
@@ -68,10 +73,54 @@ static double now(void) {
     return (double)t.tv_sec + (double)t.tv_nsec * 1e-9;
 }
 
+extern const artifact_api *artifact_a(void), *artifact_b(void);
+
+/* cases 7 and 8: the artifacts are the libraries of tests/test_artifacts.py (A: `lib`, B: `ops` and `app`) */
+static void artifacts_case(int which, long n) {
+    const artifact_api *A = artifact_a(), *B = artifact_b();
+    wasmext_store *s = A->store_new();
+    wasmext_instance *called, *lib;
+    wasmext_val a[2], r[1];
+    wasmext_export record;
+    const char *name = which == 7 ? "add" : "call_add";
+    char why[200];
+    int error = 0;
+    int32_t acc = 0;
+    double t0, t1;
+    MUST(s != NULL && B->store_attach(s, why, sizeof why) == 0);
+    if (which == 7) {
+        called = B->instance_new(s, "ops", &error);
+        MUST(called != NULL && B->instantiate(called) == 0);
+    } else {
+        lib = A->instance_new(s, "lib", &error);
+        MUST(lib != NULL && A->instantiate(lib) == 0);
+        called = B->instance_new(s, "app", &error);
+        MUST(called != NULL && A->export_record(lib, "add", WASMEXT_DESC_FUNC, &record) == 0 && B->bind(called, "libx", "add", &record) == 0 && B->instantiate(called) == 0);
+    }
+    a[0] = I32(1);
+    a[1] = I32(2);
+    MUST(B->call(called, name, a, 2, r, 1) == 0 && r[0].as.i32 == 3);
+    t0 = now();
+    for (long k = 0; k < n; k++) {
+        a[0] = I32((int32_t)k);
+        if (B->call(called, name, a, 2, r, 1) != 0) die("call failed", __LINE__);
+        acc += r[0].as.i32;
+    }
+    sink = acc;
+    t1 = now();
+    printf("%d %ld %.6f %.1f\n", which, n, t1 - t0, (double)n / (t1 - t0));
+}
+
 int main(int argc, char **argv) {
     int which = argc > 1 ? atoi(argv[1]) : 0;
     long n = argc > 2 ? atol(argv[2]) : 0;
-    wasmext_store *s = wasmext_store_new();
+    wasmext_store *s;
+    if (which == 7 || which == 8) {
+        MUST(n > 0);
+        artifacts_case(which, n);
+        return 0;
+    }
+    s = wasmext_store_new();
     wasmext_instance *main_i = NULL, *ops = NULL;
     uint32_t export_index = 0;
     wasmext_val a[2], r[1];

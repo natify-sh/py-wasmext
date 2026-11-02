@@ -111,35 +111,39 @@ typedef struct {
 #endif
 extern WASM_RT_THREAD_LOCAL wasmext_tls wasmext_tls_ WASMEXT_HIDDEN_;
 extern const wasmext_runtime wasmext_runtime_own_ WASMEXT_HIDDEN_;
-/* A test sets the start of the counter of serials of this copy (the first store then has serial seed + 1, modulo 65536) and restarts it, so that the serials are known. */
+#ifdef WASMEXT_TEST_HOOKS
+/* A test (defined by tests/c/artifact.c only) sets the start of the counter of serials of this copy (the first store then has serial seed + 1, modulo 65536) and restarts it, so that the serials are
+   known. Not thread safe, and not in the product: nothing but a test defines WASMEXT_TEST_HOOKS. */
 void wasmext_runtime_fix_seed_(uint32_t seed) WASMEXT_HIDDEN_;
-
-/* The functions of this copy, renamed by its wrappers (the real names are the forwarders) */
-WASM_RT_NO_RETURN void wasmext_own_wasm_rt_trap(wasm_rt_trap_t code);
-void wasmext_own_wasm_rt_load_exception(const wasm_rt_tag_t tag, uint32_t size, const void *values);
-WASM_RT_NO_RETURN void wasmext_own_wasm_rt_throw(void);
-WASM_RT_UNWIND_TARGET *wasmext_own_wasm_rt_get_unwind_target(void);
-void wasmext_own_wasm_rt_set_unwind_target(WASM_RT_UNWIND_TARGET *target);
-wasm_rt_tag_t wasmext_own_wasm_rt_exception_tag(void);
-uint32_t wasmext_own_wasm_rt_exception_size(void);
-void *wasmext_own_wasm_rt_exception(void);
-void wasmext_own_wasm_rt_allocate_memory(wasm_rt_memory_t *, uint64_t initial_pages, uint64_t max_pages, bool is64, uint32_t page_size);
-uint64_t wasmext_own_wasm_rt_grow_memory(wasm_rt_memory_t *, uint64_t pages);
-void wasmext_own_wasm_rt_free_memory(wasm_rt_memory_t *);
-#ifdef WASM_RT_C11_AVAILABLE
-void wasmext_own_wasm_rt_allocate_memory_shared(wasm_rt_shared_memory_t *, uint64_t initial_pages, uint64_t max_pages, bool is64, uint32_t page_size);
-uint64_t wasmext_own_wasm_rt_grow_memory_shared(wasm_rt_shared_memory_t *, uint64_t pages);
-void wasmext_own_wasm_rt_free_memory_shared(wasm_rt_shared_memory_t *);
 #endif
-void wasmext_own_wasm_rt_allocate_funcref_table(wasm_rt_funcref_table_t *, uint32_t elements, uint32_t max_elements);
-uint32_t wasmext_own_wasm_rt_grow_funcref_table(wasm_rt_funcref_table_t *, uint32_t delta, wasm_rt_funcref_t init);
-void wasmext_own_wasm_rt_free_funcref_table(wasm_rt_funcref_table_t *);
-void wasmext_own_wasm_rt_allocate_externref_table(wasm_rt_externref_table_t *, uint32_t elements, uint32_t max_elements);
-uint32_t wasmext_own_wasm_rt_grow_externref_table(wasm_rt_externref_table_t *, uint32_t delta, wasm_rt_externref_t init);
-void wasmext_own_wasm_rt_free_externref_table(wasm_rt_externref_table_t *);
-void wasmext_own_wasm_rt_allocate_exnref_table(wasm_rt_exnref_table_t *, uint32_t elements, uint32_t max_elements);
-uint32_t wasmext_own_wasm_rt_grow_exnref_table(wasm_rt_exnref_table_t *, uint32_t delta, wasm_rt_exnref_t init);
-void wasmext_own_wasm_rt_free_exnref_table(wasm_rt_exnref_table_t *);
+
+/* The functions of this copy, renamed by its wrappers (the real names are the forwarders). Hidden: the entries of the table `wasmext_runtime_own_` must bind to THIS copy's functions; exported, they would
+   be interposed by the first loaded copy of the same artifact (RTLD_GLOBAL) and two copies would share one runtime state. */
+WASMEXT_HIDDEN_ WASM_RT_NO_RETURN void wasmext_own_wasm_rt_trap(wasm_rt_trap_t code);
+WASMEXT_HIDDEN_ void wasmext_own_wasm_rt_load_exception(const wasm_rt_tag_t tag, uint32_t size, const void *values);
+WASMEXT_HIDDEN_ WASM_RT_NO_RETURN void wasmext_own_wasm_rt_throw(void);
+WASMEXT_HIDDEN_ WASM_RT_UNWIND_TARGET *wasmext_own_wasm_rt_get_unwind_target(void);
+WASMEXT_HIDDEN_ void wasmext_own_wasm_rt_set_unwind_target(WASM_RT_UNWIND_TARGET *target);
+WASMEXT_HIDDEN_ wasm_rt_tag_t wasmext_own_wasm_rt_exception_tag(void);
+WASMEXT_HIDDEN_ uint32_t wasmext_own_wasm_rt_exception_size(void);
+WASMEXT_HIDDEN_ void *wasmext_own_wasm_rt_exception(void);
+WASMEXT_HIDDEN_ void wasmext_own_wasm_rt_allocate_memory(wasm_rt_memory_t *, uint64_t initial_pages, uint64_t max_pages, bool is64, uint32_t page_size);
+WASMEXT_HIDDEN_ uint64_t wasmext_own_wasm_rt_grow_memory(wasm_rt_memory_t *, uint64_t pages);
+WASMEXT_HIDDEN_ void wasmext_own_wasm_rt_free_memory(wasm_rt_memory_t *);
+#ifdef WASM_RT_C11_AVAILABLE
+WASMEXT_HIDDEN_ void wasmext_own_wasm_rt_allocate_memory_shared(wasm_rt_shared_memory_t *, uint64_t initial_pages, uint64_t max_pages, bool is64, uint32_t page_size);
+WASMEXT_HIDDEN_ uint64_t wasmext_own_wasm_rt_grow_memory_shared(wasm_rt_shared_memory_t *, uint64_t pages);
+WASMEXT_HIDDEN_ void wasmext_own_wasm_rt_free_memory_shared(wasm_rt_shared_memory_t *);
+#endif
+WASMEXT_HIDDEN_ void wasmext_own_wasm_rt_allocate_funcref_table(wasm_rt_funcref_table_t *, uint32_t elements, uint32_t max_elements);
+WASMEXT_HIDDEN_ uint32_t wasmext_own_wasm_rt_grow_funcref_table(wasm_rt_funcref_table_t *, uint32_t delta, wasm_rt_funcref_t init);
+WASMEXT_HIDDEN_ void wasmext_own_wasm_rt_free_funcref_table(wasm_rt_funcref_table_t *);
+WASMEXT_HIDDEN_ void wasmext_own_wasm_rt_allocate_externref_table(wasm_rt_externref_table_t *, uint32_t elements, uint32_t max_elements);
+WASMEXT_HIDDEN_ uint32_t wasmext_own_wasm_rt_grow_externref_table(wasm_rt_externref_table_t *, uint32_t delta, wasm_rt_externref_t init);
+WASMEXT_HIDDEN_ void wasmext_own_wasm_rt_free_externref_table(wasm_rt_externref_table_t *);
+WASMEXT_HIDDEN_ void wasmext_own_wasm_rt_allocate_exnref_table(wasm_rt_exnref_table_t *, uint32_t elements, uint32_t max_elements);
+WASMEXT_HIDDEN_ uint32_t wasmext_own_wasm_rt_grow_exnref_table(wasm_rt_exnref_table_t *, uint32_t delta, wasm_rt_exnref_t init);
+WASMEXT_HIDDEN_ void wasmext_own_wasm_rt_free_exnref_table(wasm_rt_exnref_table_t *);
 
 /* What the list of a store holds for this copy (wasmext_artifact_entry): `activate` makes `rt` the active runtime of this copy on the calling thread (NULL when it is the copy's own) and answers
    the one it was, `deactivate` puts that back. The entry of a call calls them for every other copy of the store (8b-2). */
@@ -157,6 +161,7 @@ WASM_RT_THREAD_LOCAL wasmext_tls wasmext_tls_;
 /* The serials of the stores of this runtime: `seed + n` for the n-th store, modulo 2^16 (the handle keeps 16 bits), so two stores of this runtime never share one until 65536 are made. The seed
    comes from the address of the table (D45): two runtimes in a process start at places that differ by chance, and collide with a chance of 1 in 65536. */
 static wasmext_counter wasmext_serial_count_;
+#ifdef WASMEXT_TEST_HOOKS
 static uint32_t wasmext_serial_seed_;
 static int wasmext_serial_fixed_;
 void wasmext_runtime_fix_seed_(uint32_t seed) {
@@ -164,12 +169,13 @@ void wasmext_runtime_fix_seed_(uint32_t seed) {
     wasmext_serial_fixed_ = 1;
     wasmext_atomic_store(&wasmext_serial_count_, 0);
 }
+#endif
 static uint32_t wasmext_runtime_next_serial_(void) {
-    uint32_t seed = wasmext_serial_seed_;
-    if (!wasmext_serial_fixed_) {
-        uint64_t a = (uint64_t)(uintptr_t)&wasmext_runtime_own_;
-        seed = (uint32_t)((a >> 4) ^ (a >> 20) ^ (a >> 36));
-    }
+    uint64_t a = (uint64_t)(uintptr_t)&wasmext_runtime_own_;
+    uint32_t seed = (uint32_t)((a >> 4) ^ (a >> 20) ^ (a >> 36));
+#ifdef WASMEXT_TEST_HOOKS
+    if (wasmext_serial_fixed_) seed = wasmext_serial_seed_;
+#endif
     return (seed + (uint32_t)wasmext_atomic_add(&wasmext_serial_count_, 1)) & 0xFFFFu;
 }
 #endif

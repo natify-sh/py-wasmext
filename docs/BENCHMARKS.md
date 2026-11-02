@@ -56,7 +56,7 @@ Cases 7 and 8 (S0008, written in 8b-1): two position-independent shared librarie
 
 ## Step 8b-1: the runtime table and the forwarders (2026-11-02, working tree on top of 534fb88)
 
-The entry is not touched in 8b-1 (the forwarders are off the path of a call), so cases 1 and 2 are expected to stay as they are. Same machine as the baseline above (Xeon at 2.10 GHz, 4 CPUs, gcc 13.3.0, `-O2 -DNDEBUG`, no sanitizers), `uv run python tools/bench_calls.py` (5 repetitions of about 1 s each, the cases alternating). Three runs of the working tree and three of db92ac4 (with only the benchmark files applied, see above) alternated in time: H1 B1 H2 B2 H3 B3. ns per call, one value per run, then the median of the three:
+The entry is not touched in 8b-1, but the forwarders ARE on the path of a call: every adapter, shim and `instantiate` calls `wasm_rt_set_unwind_target` (a forwarder now), a generated `try` calls get/set, and in a position-independent build a forwarder adds a `__tls_get_addr` call. So cases 1 and 2 are not expected to stay as they are by argument; the measurement below says they stayed within noise, and that is all it says. The entry of 8b-2 will do the unwind slot inline. Same machine as the baseline above (Xeon at 2.10 GHz, 4 CPUs, gcc 13.3.0, `-O2 -DNDEBUG`, no sanitizers), `uv run python tools/bench_calls.py` (5 repetitions of about 1 s each, the cases alternating). Three runs of the working tree and three of db92ac4 (with only the benchmark files applied, see above) alternated in time: H1 B1 H2 B2 H3 B3. ns per call, one value per run, then the median of the three:
 
 | # | case | 8b-1 run 1 / 2 / 3 | median | db92ac4 run 1 / 2 / 3 | median |
 |---|---|---|---|---|---|

@@ -99,6 +99,19 @@ static void test_attach(void) {
     CHECK(A->store_free(s) == WASMEXT_STORE_OK);
 }
 
+/* D45: the counter of a runtime starts at a value derived from the address of its table (`(a >> 4) ^ (a >> 20) ^ (a >> 36)`), so the FIRST store of an artifact has serial seed + 1. Run before any other
+   store is made. The seeds themselves are not compared with each other: they come from addresses, so such a check would fail by chance (about 1 in 65536 per run). */
+static uint32_t seed_of(const artifact_api *api) {
+    uint64_t a = (uint64_t)(uintptr_t)api->runtime_id();
+    return (uint32_t)((a >> 4) ^ (a >> 20) ^ (a >> 36));
+}
+static void test_seeds(void) {
+    wasmext_store *a = A->store_new(), *b = B->store_new();
+    CHECK(a->registry.serial == ((seed_of(A) + 1u) & 0xFFFFu));
+    CHECK(b->registry.serial == ((seed_of(B) + 1u) & 0xFFFFu));
+    CHECK(A->store_free(a) == WASMEXT_STORE_OK && B->store_free(b) == WASMEXT_STORE_OK);
+}
+
 /* 8b-1: what `attach` says of the runtime of the store and of the list of artifacts */
 static void test_attach_runtime(void) {
     wasmext_store *s = A->store_new();
@@ -527,6 +540,7 @@ static void test_host_tags_threads(void) {
 int main(void) {
     A = artifact_a();
     B = artifact_b();
+    test_seeds();
     test_two_copies();
     test_attach();
     test_attach_runtime();

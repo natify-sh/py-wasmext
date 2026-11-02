@@ -26,6 +26,9 @@ static uint64_t seen[3]; /* the arguments of the last call that were not pointer
 static const void *seen_pointer;
 static wasm_rt_jmp_buf stub_jmp;
 static char marker; /* an address the stub hands back */
+static char marks[4]; /* addresses the test passes as the `init` of a grow */
+static wasm_rt_funcref_t seen_funcref; /* the `init` the stub received */
+static wasm_rt_exnref_t seen_exnref;
 
 static void stub_trap(wasm_rt_trap_t code) { hits[F_TRAP]++; seen[0] = (uint64_t)code; WASM_RT_LONGJMP(stub_jmp, 77); }
 static void stub_load(wasm_rt_tag_t tag, uint32_t size, const void *values) { hits[F_LOAD]++; seen_pointer = tag; seen[0] = size; seen[1] = (uint64_t)(uintptr_t)values; }
@@ -42,13 +45,13 @@ static void stub_alloc_shm(wasmext_shared_memory_t_ *m, uint64_t initial, uint64
 static uint64_t stub_grow_shm(wasmext_shared_memory_t_ *m, uint64_t pages) { hits[F_GROW_SHM]++; seen_pointer = m; seen[0] = pages; return 1002; }
 static void stub_free_shm(wasmext_shared_memory_t_ *m) { hits[F_FREE_SHM]++; seen_pointer = m; }
 static void stub_alloc_ft(wasm_rt_funcref_table_t *t, uint32_t n, uint32_t max) { hits[F_ALLOC_FT]++; seen_pointer = t; seen[0] = n; seen[1] = max; }
-static uint32_t stub_grow_ft(wasm_rt_funcref_table_t *t, uint32_t delta, wasm_rt_funcref_t init) { hits[F_GROW_FT]++; seen_pointer = t; seen[0] = delta; seen[1] = (uint64_t)(uintptr_t)init.module_instance; return 1003; }
+static uint32_t stub_grow_ft(wasm_rt_funcref_table_t *t, uint32_t delta, wasm_rt_funcref_t init) { hits[F_GROW_FT]++; seen_pointer = t; seen[0] = delta; seen_funcref = init; return 1003; }
 static void stub_free_ft(wasm_rt_funcref_table_t *t) { hits[F_FREE_FT]++; seen_pointer = t; }
 static void stub_alloc_et(wasm_rt_externref_table_t *t, uint32_t n, uint32_t max) { hits[F_ALLOC_ET]++; seen_pointer = t; seen[0] = n; seen[1] = max; }
 static uint32_t stub_grow_et(wasm_rt_externref_table_t *t, uint32_t delta, wasm_rt_externref_t init) { hits[F_GROW_ET]++; seen_pointer = t; seen[0] = delta; seen[1] = (uint64_t)(uintptr_t)init; return 1004; }
 static void stub_free_et(wasm_rt_externref_table_t *t) { hits[F_FREE_ET]++; seen_pointer = t; }
 static void stub_alloc_xt(wasm_rt_exnref_table_t *t, uint32_t n, uint32_t max) { hits[F_ALLOC_XT]++; seen_pointer = t; seen[0] = n; seen[1] = max; }
-static uint32_t stub_grow_xt(wasm_rt_exnref_table_t *t, uint32_t delta, wasm_rt_exnref_t init) { hits[F_GROW_XT]++; seen_pointer = t; seen[0] = delta; seen[1] = init.size; return 1005; }
+static uint32_t stub_grow_xt(wasm_rt_exnref_table_t *t, uint32_t delta, wasm_rt_exnref_t init) { hits[F_GROW_XT]++; seen_pointer = t; seen[0] = delta; seen_exnref = init; return 1005; }
 static void stub_free_xt(wasm_rt_exnref_table_t *t) { hits[F_FREE_XT]++; seen_pointer = t; }
 
 static wasmext_runtime stub;
@@ -160,13 +163,17 @@ static void run(int which, int stubbed) {
         if (which != F_ALLOC_FT) wasm_rt_allocate_funcref_table(&ft, 2, 8);
         begin(stubbed);
         if (which == F_ALLOC_FT) wasm_rt_allocate_funcref_table(&ft, 3, 6);
-        else if (which == F_GROW_FT) seen[2] = wasm_rt_grow_funcref_table(&ft, 1, wasm_rt_funcref_null_value);
+        else if (which == F_GROW_FT) {
+            wasm_rt_funcref_t init = {(wasm_rt_func_type_t)&marks[0], NULL, {NULL}, &marks[1]};
+            init.func = (wasm_rt_function_ptr_t)(uintptr_t)&marks[2]; /* a marked, non-null value in every field: a dropped or replaced `init` shows */
+            seen[2] = wasm_rt_grow_funcref_table(&ft, 1, stubbed ? init : wasm_rt_funcref_null_value);
+        }
         else wasm_rt_free_funcref_table(&ft);
         end();
         if (stubbed) {
             CHECK(seen_pointer == &ft, n);
             if (which == F_ALLOC_FT) CHECK(seen[0] == 3 && seen[1] == 6, n);
-            if (which == F_GROW_FT) CHECK(seen[0] == 1 && seen[2] == 1003, n);
+            if (which == F_GROW_FT) CHECK(seen[0] == 1 && seen[2] == 1003 && seen_funcref.func_type == (wasm_rt_func_type_t)&marks[0] && seen_funcref.module_instance == &marks[1] && (uintptr_t)seen_funcref.func == (uintptr_t)&marks[2], n);
         } else {
             if (which == F_ALLOC_FT) { CHECK(ft.size == 3 && ft.max_size == 6 && ft.data != NULL, n); wasm_rt_free_funcref_table(&ft); }
             if (which == F_GROW_FT) { CHECK(seen[2] == 2 && ft.size == 3, n); wasm_rt_free_funcref_table(&ft); }
@@ -176,13 +183,13 @@ static void run(int which, int stubbed) {
         if (which != F_ALLOC_ET) wasm_rt_allocate_externref_table(&et, 2, 8);
         begin(stubbed);
         if (which == F_ALLOC_ET) wasm_rt_allocate_externref_table(&et, 3, 6);
-        else if (which == F_GROW_ET) seen[2] = wasm_rt_grow_externref_table(&et, 1, wasm_rt_externref_null_value);
+        else if (which == F_GROW_ET) seen[2] = wasm_rt_grow_externref_table(&et, 1, stubbed ? (wasm_rt_externref_t)&marks[3] : wasm_rt_externref_null_value);
         else wasm_rt_free_externref_table(&et);
         end();
         if (stubbed) {
             CHECK(seen_pointer == &et, n);
             if (which == F_ALLOC_ET) CHECK(seen[0] == 3 && seen[1] == 6, n);
-            if (which == F_GROW_ET) CHECK(seen[0] == 1 && seen[2] == 1004, n);
+            if (which == F_GROW_ET) CHECK(seen[0] == 1 && seen[2] == 1004 && seen[1] == (uint64_t)(uintptr_t)&marks[3], n);
         } else {
             if (which == F_ALLOC_ET) { CHECK(et.size == 3 && et.max_size == 6 && et.data != NULL, n); wasm_rt_free_externref_table(&et); }
             if (which == F_GROW_ET) { CHECK(seen[2] == 2 && et.size == 3, n); wasm_rt_free_externref_table(&et); }
@@ -192,13 +199,19 @@ static void run(int which, int stubbed) {
         if (which != F_ALLOC_XT) wasm_rt_allocate_exnref_table(&xt, 2, 8);
         begin(stubbed);
         if (which == F_ALLOC_XT) wasm_rt_allocate_exnref_table(&xt, 3, 6);
-        else if (which == F_GROW_XT) seen[2] = wasm_rt_grow_exnref_table(&xt, 1, wasm_rt_exnref_null_value);
+        else if (which == F_GROW_XT) {
+            wasm_rt_exnref_t init = wasm_rt_exnref_null_value;
+            init.tag = (wasm_rt_tag_t)&marks[0];
+            init.size = 7;
+            init.data[0] = 5;
+            seen[2] = wasm_rt_grow_exnref_table(&xt, 1, stubbed ? init : wasm_rt_exnref_null_value);
+        }
         else wasm_rt_free_exnref_table(&xt);
         end();
         if (stubbed) {
             CHECK(seen_pointer == &xt, n);
             if (which == F_ALLOC_XT) CHECK(seen[0] == 3 && seen[1] == 6, n);
-            if (which == F_GROW_XT) CHECK(seen[0] == 1 && seen[2] == 1005, n);
+            if (which == F_GROW_XT) CHECK(seen[0] == 1 && seen[2] == 1005 && seen_exnref.tag == (wasm_rt_tag_t)&marks[0] && seen_exnref.size == 7 && seen_exnref.data[0] == 5, n);
         } else {
             if (which == F_ALLOC_XT) { CHECK(xt.size == 3 && xt.max_size == 6 && xt.data != NULL, n); wasm_rt_free_exnref_table(&xt); }
             if (which == F_GROW_XT) { CHECK(seen[2] == 2 && xt.size == 3, n); wasm_rt_free_exnref_table(&xt); }
@@ -229,13 +242,32 @@ static void test_forwarders(void) {
     }
 }
 
-/* the table of this copy: what a store made here points at */
+/* the table of this copy: what a store made here points at, and every slot holds the function of its name (a slot with another function, or two swapped, would send a forwarder to the wrong one) */
+#define SLOT(NAME, MEMBER) {"wasm_rt_" #NAME, (const void *)(uintptr_t)own->MEMBER, (const void *)(uintptr_t)&wasmext_own_wasm_rt_##NAME}
 static void test_own_table(void) {
     const wasmext_runtime *own = &wasmext_runtime_own_;
     wasmext_store *s = wasmext_store_new();
+    struct { const char *name; const void *slot, *function; } slots[] = {
+        SLOT(trap, trap), SLOT(load_exception, load_exception), SLOT(throw, throw_exception), SLOT(get_unwind_target, get_unwind_target), SLOT(set_unwind_target, set_unwind_target),
+        SLOT(exception_tag, exception_tag), SLOT(exception_size, exception_size), SLOT(exception, exception_data),
+        SLOT(allocate_memory, allocate_memory), SLOT(grow_memory, grow_memory), SLOT(free_memory, free_memory),
+#ifdef WASM_RT_C11_AVAILABLE
+        SLOT(allocate_memory_shared, allocate_memory_shared), SLOT(grow_memory_shared, grow_memory_shared), SLOT(free_memory_shared, free_memory_shared),
+#endif
+        SLOT(allocate_funcref_table, allocate_funcref_table), SLOT(grow_funcref_table, grow_funcref_table), SLOT(free_funcref_table, free_funcref_table),
+        SLOT(allocate_externref_table, allocate_externref_table), SLOT(grow_externref_table, grow_externref_table), SLOT(free_externref_table, free_externref_table),
+        SLOT(allocate_exnref_table, allocate_exnref_table), SLOT(grow_exnref_table, grow_exnref_table), SLOT(free_exnref_table, free_exnref_table)};
+    size_t k;
     CHECK(s != NULL && s->head.rt == (const void *)own, "the store points at the runtime table of the copy");
     CHECK(own->head.size == sizeof(wasmext_runtime) && own->head.version == WASMEXT_RUNTIME_VERSION && own->head.layout == WASMEXT_CORE_LAYOUT && own->head.flags == WASMEXT_RT_FLAGS, "the head of the table");
-    CHECK(own->trap == wasmext_own_wasm_rt_trap && own->allocate_memory == wasmext_own_wasm_rt_allocate_memory && own->free_exnref_table == wasmext_own_wasm_rt_free_exnref_table, "the table holds the renamed functions");
+    CHECK(sizeof slots / sizeof slots[0] == F_COUNT - (
+#ifdef WASM_RT_C11_AVAILABLE
+        0
+#else
+        3
+#endif
+        ), "all the slots of the table are compared");
+    for (k = 0; k < sizeof slots / sizeof slots[0]; k++) CHECK(slots[k].slot == slots[k].function, slots[k].name);
     CHECK(wasmext_store_free(s) == WASMEXT_STORE_OK, "free");
 }
 

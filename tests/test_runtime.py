@@ -18,7 +18,7 @@ import pytest
 from wasmext._natify import _RENAMED, _RUNTIME_WRAPPERS
 from wasmext._toolchain import find_toolchain
 
-from .c_build import find_cc
+from .c_build import compile_c, find_cc
 from .test_artifacts import LIBA, WASMEXT_C, _library
 from .test_instance_core import OPS, _run, build  # noqa: F401  # pyright: ignore[reportUnusedImport]  (a fixture is found by name in the module that imports it)
 
@@ -135,11 +135,11 @@ def test_the_core_stops_without_the_macro(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="the dynamic symbols are read with nm on Linux")
-def test_a_library_defines_the_forwarders_and_the_own_functions_and_keeps_its_runtime_to_itself(
+def test_a_library_exports_the_forwarders_and_keeps_its_own_functions_and_runtime_to_itself(
     wabt: Path, tmp_path: Path
 ) -> None:
-    """Built with the default visibility for everything else, a library defines every `wasm_rt_*` name (the forwarder) and every `wasmext_own_wasm_rt_*` (the function of the copy) at different addresses, and
-    keeps its table of the runtime and the thread record to itself: if either were exported, the dynamic linker could make one library's stand for another's."""
+    """Built with the default visibility for everything else, a library defines every `wasm_rt_*` name (the forwarder, as before) and exports no `wasmext_own_wasm_rt_*` (the function of the copy), and keeps
+    its table of the runtime and the thread record to itself: if any were exported, the dynamic linker could make one library's stand for another's."""
     nm = shutil.which("nm")
     if nm is None or find_cc() is None:
         pytest.skip("no nm, or no C compiler")
@@ -153,10 +153,72 @@ def test_a_library_defines_the_forwarders_and_the_own_functions_and_keeps_its_ru
             symbols[name] = address
     for name in _WRAPPED_NAMES:
         assert name in symbols, f"{name} (the forwarder) is not defined by the library"
-        assert f"wasmext_own_{name}" in symbols, f"wasmext_own_{name} is not defined by the library"
-        assert symbols[name] != symbols[f"wasmext_own_{name}"], f"{name} and wasmext_own_{name} are one function"
+        assert f"wasmext_own_{name}" not in symbols, (
+            f"wasmext_own_{name} is exported by a library built with the default visibility"
+        )
     everything = subprocess.run(
         [nm, "-D", "--defined-only", str(library)], capture_output=True, text=True, check=True
     ).stdout
     for hidden in ("wasmext_runtime_own_", "wasmext_tls_", "wasmext_artifact_", "wasmext_runtime_fix_seed_"):
         assert hidden not in everything, f"{hidden} is exported by a library built with the default visibility"
+
+
+def _members(text: str, struct: str) -> list[str]:
+    """The member names of `typedef struct { ... } struct;` in the order they are written."""
+    body = re.search(r"typedef struct \{((?:(?!typedef struct).)*?)\} " + struct + r";", text, re.DOTALL)
+    assert body is not None, f"no `typedef struct {{ ... }} {struct};` in the headers"
+    clean = re.sub(r"/\*.*?\*/", " ", body.group(1), flags=re.DOTALL)
+    names: list[str] = []
+    for declaration in clean.split(";"):
+        if not declaration.strip():
+            continue
+        pointer = re.search(r"\(\*\s*(\w+)\s*\)", declaration)
+        if pointer:
+            names.append(pointer.group(1))
+        else:
+            names += re.findall(r"(\w+)\s*(?:\[[^\]]*\])?\s*(?:,|$)", declaration.strip())
+    return names
+
+
+@pytest.mark.parametrize(
+    "struct", ["wasmext_runtime", "wasmext_runtime_head", "wasmext_artifact_entry", "wasmext_store"]
+)
+def test_the_layout_hash_names_every_member_of_the_structs_of_the_runtime_in_order(struct: str) -> None:
+    """The swap tests see the fields they swap; this one sees all: the `WASMEXT_LF_(k, T, m)` terms of a struct are its members, in the order of the struct, numbered 0, 1, 2, ...
+    (`wasmext_tls` is not in the hash: only the copy that owns it reads it.)"""
+    text = "\n".join(h.read_text(encoding="utf-8") for h in sorted(WASMEXT_C.glob("wasmext_*.h")))
+    terms = re.findall(r"WASMEXT_LF_\(\s*(\d+),\s*" + struct + r",\s*(\w+)\)", text)
+    members = _members(text, struct)
+    assert [m for _, m in terms] == members, (
+        f"the hash of {struct} lists {[m for _, m in terms]}, the struct has {members}"
+    )
+    assert [int(k) for k, _ in terms] == list(range(len(members))), (
+        f"the terms of {struct} are not numbered 0..{len(members) - 1}"
+    )
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="dlopen of two copies of a library: Linux")
+@pytest.mark.parametrize("mode", ["global", "local"])
+def test_two_loaded_copies_of_one_library_run_on_their_own_functions(wabt: Path, tmp_path: Path, mode: str) -> None:
+    """A library built with the default visibility, loaded twice (two paths, RTLD_GLOBAL or RTLD_LOCAL): the table of the runtime of each copy holds that copy's functions in all its slots, not the first copy's."""
+    from fusedwasi import get_include
+
+    if find_cc() is None:
+        pytest.skip("no C compiler of the cc kind")
+    library = _library(wabt, tmp_path, "a", {"liba": LIBA}, [], hidden=False)
+    copies: list[str] = []
+    for n in (1, 2):
+        (tmp_path / f"copy{n}").mkdir()
+        copies.append(str(shutil.copy(library, tmp_path / f"copy{n}" / library.name)))
+    exe = tmp_path / "dl_copies"
+    compile_c(
+        [Path(__file__).parent / "c" / "dl_copies.c"],
+        exe,
+        include_dirs=[Path(__file__).parent / "c", WASMEXT_C, Path(get_include()), find_toolchain().runtime],
+        defines=["WASMEXT_STORE_RUNTIME=1"],
+        flags=["-ldl"],
+        strict=False,
+        std=None,
+    )
+    done = subprocess.run([str(exe), *copies, mode], capture_output=True, text=True, check=False)
+    assert done.returncode == 0 and done.stdout.strip() == "ok", done.stderr

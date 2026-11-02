@@ -1432,6 +1432,10 @@ static inline uint32_t wasmext_core_runtime_(void) { return (uint32_t)WASMEXT_RU
 
 /* The runtime of this artifact (wasmext_runtime.h): the functions are those the wrappers of the runtime renamed; the table is defined here because it names the layout of the core. */
 #ifdef WASMEXT_DEFINE_THREAD_STATE
+#if defined(__GNUC__) || defined(__clang__) /* a function of the wrong type in a slot is an error, in builds that switch the warnings off (-w) too */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic error "-Wincompatible-pointer-types"
+#endif
 const wasmext_runtime wasmext_runtime_own_ = {
     {(uint32_t)sizeof(wasmext_runtime), WASMEXT_RUNTIME_VERSION, WASMEXT_CORE_LAYOUT, WASMEXT_RT_FLAGS, wasmext_runtime_next_serial_},
     wasmext_own_wasm_rt_trap, wasmext_own_wasm_rt_load_exception, wasmext_own_wasm_rt_throw, wasmext_own_wasm_rt_get_unwind_target, wasmext_own_wasm_rt_set_unwind_target,
@@ -1445,6 +1449,9 @@ const wasmext_runtime wasmext_runtime_own_ = {
     wasmext_own_wasm_rt_allocate_funcref_table, wasmext_own_wasm_rt_grow_funcref_table, wasmext_own_wasm_rt_free_funcref_table,
     wasmext_own_wasm_rt_allocate_externref_table, wasmext_own_wasm_rt_grow_externref_table, wasmext_own_wasm_rt_free_externref_table,
     wasmext_own_wasm_rt_allocate_exnref_table, wasmext_own_wasm_rt_grow_exnref_table, wasmext_own_wasm_rt_free_exnref_table};
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
 #endif
 
 #endif

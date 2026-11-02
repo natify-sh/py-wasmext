@@ -1,6 +1,7 @@
 /* One artifact of tests/test_artifacts.py: this file, the modules of `modules.inc` (MODULE(name) lines, made by the test) and a copy of the runtime of wasm2c, built as a shared
    library. `ARTIFACT_NAME` names the function that returns the table of the copy. */
 #define WASMEXT_DEFINE_THREAD_STATE
+#define WASMEXT_TEST_HOOKS /* wasmext_runtime_fix_seed_ */
 #include "wasmext_table.h"
 #include "wasmext_host.h" /* the host layout word of this copy (WASMEXT_HOST_LAYOUT) is what test_artifacts.py compares with the product's */
 #include "artifact.h"

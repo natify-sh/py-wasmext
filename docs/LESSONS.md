@@ -147,3 +147,10 @@ Traps found on the way, with the rule. Newest last.
 * Cause: the calling convention must stand inside the parentheses of a function pointer type, so the macro expands to an invalid declarator.
 * Rule: give a function pointer type a `typedef` (`thread_fn`) per platform and use that name everywhere; never write `MACRO (*f)(...)` with a macro that may hold a calling convention. A test that is new for threads is not trusted on Windows until the Windows jobs ran it.
 * Where found: step 8a-3 review fixes, commit 3f46918, `tests/c/test_host_tags.c`.
+
+### A preprocessor directive inside the arguments of a macro
+* What happened: a test wrote `CHECK(n == F_COUNT - (\n#ifdef X\n 0\n#else\n 3\n#endif\n), "...")`.
+* Symptom: MSVC C2146/C2059 at that line, only on windows-latest (Python versions); gcc and clang compiled it without a word.
+* Cause: directives inside the arguments of a macro invocation are undefined behaviour in the standard; GCC and Clang accept them, MSVC does not.
+* Rule: compute the value in a variable before the macro (`#ifndef X` / `expected -= 3;` / `#endif`), never put `#if` between the parentheses of a macro call. The Windows jobs are the only check; a new C test is not trusted on Windows until they ran it.
+* Where found: step 8b-1 review fixes, commit de2d452, `tests/c/test_runtime.c`.

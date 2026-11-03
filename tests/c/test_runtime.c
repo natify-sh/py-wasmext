@@ -260,13 +260,11 @@ static void test_own_table(void) {
     size_t k;
     CHECK(s != NULL && s->head.rt == (const void *)own, "the store points at the runtime table of the copy");
     CHECK(own->head.size == sizeof(wasmext_runtime) && own->head.version == WASMEXT_RUNTIME_VERSION && own->head.layout == WASMEXT_CORE_LAYOUT && own->head.flags == WASMEXT_RT_FLAGS, "the head of the table");
-    CHECK(sizeof slots / sizeof slots[0] == F_COUNT - (
-#ifdef WASM_RT_C11_AVAILABLE
-        0
-#else
-        3
+    size_t expected = F_COUNT; /* the shared-memory slots exist only with C11 atomics; a directive inside the arguments of a macro is not allowed (MSVC refuses it) */
+#ifndef WASM_RT_C11_AVAILABLE
+    expected -= 3;
 #endif
-        ), "all the slots of the table are compared");
+    CHECK(sizeof slots / sizeof slots[0] == expected, "all the slots of the table are compared");
     for (k = 0; k < sizeof slots / sizeof slots[0]; k++) CHECK(slots[k].slot == slots[k].function, slots[k].name);
     CHECK(wasmext_store_free(s) == WASMEXT_STORE_OK, "free");
 }

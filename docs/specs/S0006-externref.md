@@ -6,7 +6,7 @@ status: implemented
 superseded_by:
 related: []
 owner: maintainer
-updated: 2026-10-30
+updated: 2026-11-04
 ---
 
 # S0006 externref and globals of references
@@ -17,7 +17,7 @@ The core carries `externref` everywhere: in signatures, in tables and in globals
 
 The host gives the store a value it wants WebAssembly to hold (in Python: any object).
 The store owns what it is given: it keeps the value until it is closed, then releases it once.
-The collector that would free a value earlier is step 9.
+The collector that would free a value earlier is step 9, deferred by D46 (2026-11-04) until a consumer with a long-lived store appears.
 
 Order inside the step, one commit each, CI between: 6a the value and the signatures, 6b tables of `externref`, 6c globals of `funcref` and `externref`.
 Status: 6a, 6b and 6c built 2026-10-30. The step is complete. The owner accepted the order of `docs/layers.md` and the globals of both kinds of reference in this step.
@@ -134,6 +134,7 @@ The binding carries `externref` in the signatures of exports, imports, `call_ref
 * The store keeps every record until it is closed. Then it calls `release(user)` once (in Python: the decref).
   `release` is not called again when the store is freed (the `released` flag).
 * This is Wasmtime's model (the value lives in the store) without its collector.
+* D46 (2026-11-04): the store holds the Python object (one reference) until close and releases it then; the front end keeps nothing, and an externref that comes back from wasm gives the SAME Python object. The lazy collector of step 9 is deferred, not dropped: an externref per call in a long-lived store grows without end.
 * Errors of `extern_new`: NULL `store` or `out` is `WASMEXT_INST_BAD_ARGS`; a closed store is `WASMEXT_TRAP_CLOSED`; no memory is `WASMEXT_INST_NOMEM`.
 
 ### What crosses, and the checks
@@ -205,7 +206,7 @@ Mutations that must fail the tests (done on 2026-10-30, each caught):
   Why not: they were refused since step 3, and step 5 did not touch them; the owner accepted them in this step.
 
 ## Open questions
-* The collector (step 9): when does a value leave a long-lived store before it is closed?
+* The collector (step 9): when does a value leave a long-lived store before it is closed? Deferred by D46 until a consumer with a long-lived store appears.
 * A function with a reference in its signature is linked across instances of one store (8a-2, S0008): the letter is `E`, and the shim checks the externref as it comes in.
 
 ## Changes
@@ -228,3 +229,4 @@ Mutations that must fail the tests (done on 2026-10-30, each caught):
 * 2026-10-30, after 6c, found in review: the members have a kind. The registry of step 4 records the kind of a member in its ops (`wasmext_owner_ops.kind`, `WASMEXT_KIND_INSTANCE`, `TABLE`, `EXTERN`, `HOST_FUNC`), and `wasmext_store_find_kind` finds a member only as the kind it claims.
   `test_registry.c` (`test_kinds`) and the wrong-place cases of `test_externref.c` were added.
 * 2026-10-30: 8a-2 (S0008): a function with a funcref or an externref in its signature has a record, a shim and is linked; typed host functions with references stay refused.
+* 2026-11-04: D46: the store holds the Python object until close and the same object comes back; the collector of step 9 is deferred. No code changed.

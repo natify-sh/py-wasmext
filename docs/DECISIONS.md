@@ -2,7 +2,7 @@
 title: Decisions
 kind: log
 status: current
-updated: 2026-11-02
+updated: 2026-11-04
 ---
 
 # Decisions
@@ -241,3 +241,29 @@ Source: docs/specs/S0008-shared-store.md, "Decisions of 8b" D-7 and "Corrections
 Status: accepted · Date: 2026-11-02 · Supersedes: — · Amends: D25 · Evidence: — (8b-1)
 The per-artifact counter of 8a (it starts at 0, so the first store of every artifact has serial 1) is replaced by a counter of the runtime whose start value is derived from the address of the runtime's table. Stores of one runtime never share a serial (until the 16 bits wrap); stores of different runtimes may (about 1 in 65536 per pair), which matters only when a host hands a handle to the wrong store and gets an answer instead of `WRONG`. Layer 3 will give a process-wide counter through its capsule. The test fixes the seeds with a hook so that it is deterministic. D25 (16-bit serial) stands.
 Source: docs/specs/S0008-shared-store.md, "Decisions of 8b" D-3
+
+### D46. The store is the sole owner of its members; a front end holds the store and addresses
+Status: accepted · Date: 2026-11-04 · Supersedes: the part of D24 about owners that are front-end objects (`owner_t` with retain/release, the registry mapping `module_instance` to an owner); NOT the registry itself · Amends: D32 (the lazy collector of step 9 is deferred), D27 (the cycle through Python), D25 and D33 (kept) · Evidence: — (a design decision; the tests come with layer 2 and layer 3)
+Decided by the maintainer (his accepted proposal), after the design of layer 3 showed that front-end objects owning members repeats the chains of keep-alives that S0004 removed.
+1. **One owner.** The store owns every member (instances, functions, tables, memories, globals, tags, host functions, externref records, the host, the attached artifacts) until `close`. No member is owned by a front-end object. The registry no longer maps members to front-end owners; it keeps its mapping from the `module_instance` pointer of a funcref to a member, with the kind checked (D33).
+2. **A front end holds the store and addresses.** It holds the store (one strong reference, closed by `close` or `with`, D27) and addresses. `Instance`, `Function`, `Table`, `Memory`, `Global` and `Tag` of a front end are views `(store, address)`. Dropping a view does nothing. A view used after the store is closed gets the existing closed-store error (`WASMEXT_TRAP_CLOSED`), never a dangling pointer.
+3. **The address is the registry handle of D25** (16 bits of the serial of the store, 24 of the slot index, 24 of the generation): KEPT, and the kinds of D33 are kept. The generation still protects against the case of an instance freed before `instantiate` and against rollback; removing it would save nothing. An exported function, memory, table or global is named by (instance handle, export index of the descriptor); a host-made member (a table, a tag, a host function, an externref record) by its own handle.
+4. **What the host gives to the store is owned by the store.** A host function and an externref value (`wasmext_extern_new`, `wasmext_host_func`): the store holds the Python object (one reference) and releases it at close (the `release(user)` of D32). The front end keeps nothing. An externref that comes back from wasm returns the SAME Python object.
+5. **The store keeps the code it runs.** An artifact attached to a store stays loaded until the store is freed: `attach` takes a reference on the artifact, which the store drops after the last member is freed. For a Python extension this costs nothing (the extension module stays imported). For a C host it needs an unload-hook parameter in `wasmext_store_attach`, built after 8b as a separate small step, recorded as "S0008 8c". This closes the open question of `docs/layers.md` (a library unloaded while another holds its functions).
+6. **Between stores only values, bytes and host functions** (D26, D28).
+7. **Views are recoverable:** by the name given at instantiate (as `Linker.define` does), by enumeration, and by a value that comes back from wasm (a funcref is mapped to the member by the registry with its kind checked; an externref is the same Python object). Two views of one member are equal by `(store, address)`.
+
+What a front end holds:
+
+| view | what it stores |
+|---|---|
+| `Store` | the pointer to the native store |
+| `Instance` | store + handle (or the name given at instantiate) |
+| exported function, memory, table, global | store + instance handle + export index |
+| host-made table or tag | store + its handle |
+| `externref` | the pointer to the store's record (the record holds the Python object) |
+| host function | nothing (the store holds the object) |
+| funcref that comes from wasm | mapped by the registry from the `module_instance` pointer, the kind checked |
+
+Consequences. The memory of members is returned only at close, as in Wasmtime (short-lived stores). A cycle through Python (store, Python object, view, store) is released by `close()` or by the cyclic collector if the `Store` type takes part in it (`tp_traverse`, through `wasmext_store_each`): this is a requirement for layer 3. The lazy collector of step 9 (D32) is DEFERRED until a consumer with a long-lived store appears; it is not dropped, because an externref per call in a long-lived store grows without end. Objects of the GC proposal are the one future exception: a collector inside the heap of the store with a root table, never in Python. Layer 2 functions take an address (a handle) and not a raw pointer for the objects of a store: one registry lookup per call. That cost is to be MEASURED in layer 2 before the rule is decided as final (open point).
+Source: maintainer, 2026-11-04 (the proposal accepted); docs/specs/S0004-owners-registry.md, docs/specs/S0006-externref.md, docs/specs/S0008-shared-store.md, docs/layers.md

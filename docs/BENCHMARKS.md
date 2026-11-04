@@ -2,7 +2,7 @@
 title: Benchmarks
 kind: log
 status: current
-updated: 2026-10-30
+updated: 2026-11-04
 ---
 
 # Benchmarks
@@ -106,5 +106,7 @@ A third before-set of the commit before the step (`git stash`, same session, thr
 | (a)(b)(c) + (d), bench build only | 41.0 / 39.3 / 39.0 (39.3) | 69.2 | 6.3 | 51.6 / 48.7 / 51.0 (51.0) | 81.4 / 82.6 / 86.0 (82.6) |
 
 (a) did not move anything beyond the noise and is NOT kept (it needed a marker value in the answer of `activate`). (b) is kept: it moves nothing alone, it is the base of (c). (c) is kept: case 6 (the entry alone) goes from 8.1 to 6.2 ns, case 7 from 62.7 to 58.7, case 8 from 117.7 to 97.9. Against the before-set: case 1 +3.7 percent, case 2 -15 percent (the shim of 8b-2 is not designed to be faster; noise of this machine), **case 7 +24 percent and case 8 +13 percent: both still over 10 percent.** Against db92ac4 (39.4 / 80.1): case 1 +0.8 percent, case 2 -18 percent.
+
+The gate on cases 7 and 8 was accepted by the maintainer on 2026-11-04 as an exception, for these reasons: the path is new (before 8b-2 a trap across copies was an abort, so no old number exists), the remaining cost is the dynamic TLS model of a position-independent library, and cases 1 and 2 are inside the rule (see S0008, D-8).
 
 Where the rest of cases 7 and 8 goes: with (d) the same code costs +7 percent (case 7) and -4 percent (case 8). So what is left is the dynamic TLS model of a position-independent library: an access to a thread-local variable of the library is a call of `__tls_get_addr` (about 1.6 ns here: the 11 ns of case 7 over about 7 accesses). The slow path of case 7 makes seven: the activation of the entering copy (1), `activate` of the other copy (1), the enter and the leave in the entering copy (1 + 1) and in the runtime's copy through the table (1 + 1), the deactivation (1); case 8 does it twice, with the shim. These are counted from the code and divided into the measured difference, not measured one by one (no `perf` here). (d) cannot be assumed by a product build: a library loaded with `dlopen` (a Python extension) may not use the initial-exec model unless the static TLS block has room, so it is not part of the product flags in this step. The choices left to the maintainer: accept the cost of the cross-artifact slow path (a new capability: before 8b-2 a trap across copies was an abort, so there is no old number), or have the other copy's `enter`/`leave` do their TLS access once (a single call that does activate, enter and the unwind save for the pair, about 3 accesses less), or keep the thread record of each copy reachable from the store per thread.

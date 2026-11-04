@@ -6,10 +6,12 @@ status: implemented
 superseded_by:
 related: []
 owner: maintainer
-updated: 2026-10-30
+updated: 2026-11-04
 ---
 
 # S0004 Registry of owners
+
+> **Amended by D46 (2026-11-04).** The owners are the store: it owns every member until `close`, and no member is owned by a front-end object. The registry stays and keeps its mapping from a pointer (`key`, the `module_instance` of a funcref) to a member, and the kinds of S0006 (D33). Front ends hold no members: they hold the store and addresses (the handle of this spec, or an instance handle and an export index). So the plan for front ends below is withdrawn: the `retain` and `release` of `wasmext_owner_ops` are not to be filled by a front end to keep a member alive (a front end gives the store only what the host gives it, an object released once at close: D32, D46 rule 4), `wasmext_store_each` is for the cyclic collector only, and layer 2 has no `owner_t` with retain/release. The layout of the handle is kept (16/24/24, D25). The lazy collector (step 9) is deferred (D46). The text below is otherwise as built.
 
 ## Summary
 A `funcref` of wasm2c is `{ func_type, func, func_tailcallee, module_instance }`: the code and a pointer to the instance it belongs to. For us that pointer is the block of [S0003](S0003-instances.md): `wasmext_instance.module`. Nothing says who keeps that instance alive. If a function of A is in a table that B uses and A is freed, B calls into freed memory.
@@ -193,3 +195,4 @@ Mutations caught: of the generation, of the serial of the store, of the key chec
 * 2026-10-30: found in review after step 6c ([step6_externref.md](S0006-externref.md)): the members have a kind. The checks of 6a accepted any pointer that was a member of the store, and the members are of several kinds (instances, tables, host functions, references). A pointer of an instance would have passed as an `externref`, and `wasmext_extern_user` would have read an instance as a `wasmext_extern`; a reference would have passed as the `module_instance` of a funcref. The registry now records the kind of a member in its ops (`wasmext_owner_ops.kind`: `WASMEXT_KIND_INSTANCE`, `TABLE`, `EXTERN`, `HOST_FUNC`) and `wasmext_store_find_kind` finds a member only as the kind it claims (a member of no kind is not found by kind at all). A reference must be an `EXTERN`; the `module_instance` of a funcref an `INSTANCE` or a `HOST_FUNC`. This is a change to step 4 code, made there because it is a hole in what 6a built on it, not a side patch. `test_registry.c` (`test_kinds`) and the cases of `test_externref.c` cover it; the mutations of the two kind checks are caught.
 * 2026-10-30: extended by S0005 (tables, host functions as members), S0006 (externref, kinds), S0007 (tags and exceptions).
 * 2026-10-30: rewritten from `docs/step4_owners.md` into the spec format, status `implemented`.
+* 2026-11-04: amended by D46 (the note at the top): the store is the sole owner of its members; the registry keeps pointer to member and kinds and the handle layout; front ends hold the store and addresses, not members; step 9 deferred. No code changed.

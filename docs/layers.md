@@ -19,10 +19,10 @@ Status: **written 2026-10-28, for the owner's review; nothing of it is built.** 
           (C, no Python)     store, instance, imports by index, exports, memory, tables, globals, tags,
               |              owners, errors, traps, host config. Built into the extension, or a shared library.
  LAYER 1  wasmext glue       the module and its runtime: wasm2c output, the link functions it needs,
-          (C, no Python)     the shipped core (records, traps, tables, owners, store), fusedwasi (WASI)
+          (C, no Python)     the shipped core (records, traps, tables, the registry of members, store), fusedwasi (WASI)
 ```
 
-**One rule: a layer calls only the layer below it.** The core knows nothing of Python: it takes from a front end *retain/release* for an owner, *call a host function*, *describe an error*. The three front ends differ in nothing else than how they convert values, keep their own objects alive and map a code to their own exception.
+**One rule: a layer calls only the layer below it.** The core knows nothing of Python: it takes from a front end *call a host function*, *release a value the host gave it* (once, at close) and *describe an error*. (D46, 2026-11-04: the store is the sole owner of its members; no front-end object owns a member, so there is no retain/release for an owner.) The three front ends differ in nothing else than how they convert values, hold the store and addresses, and map a code to their own exception.
 
 ## The model of a module (one input for every emitter)
 
@@ -44,14 +44,14 @@ Today each generator re-reads the parsed module and decides again what is export
 | store | `store_new(config)`, `store_close`, `store_free`, `store_closed`, one `config` builder (`dirs`, `env`, `args`, streams, clocks) validated in the core |
 | instance | `new(store)`, `bind_import(m, index, kind, host_fn, user)` / `link_import(m, index, export_record)`, `instantiate`, `free`, `unlink` on failure |
 | exports | `export_count/at/find`; `call(m, index, args[], results[])` (generic) and, generated, typed entries `call_<i>` for the hot path |
-| memory, table, global, tag | `memory_*` (size, grow, pin/unpin), `table_*` (new, get, set with its rules, grow, owner), `global_*`, `tag_*` |
-| owners | `owner_t` = an opaque handle; the front end gives `retain`/`release`; the registry `module_instance -> owner` is inside |
+| memory, table, global, tag | `memory_*` (size, grow, pin/unpin), `table_*` (new, get, set with its rules, grow), `global_*`, `tag_*`; a member is named by (store, handle) or by (instance handle, export index) |
+| members | the handle of the registry (D25) is the address of a member; no `owner_t`, no `retain`/`release` for members (D46); the registry `module_instance -> member` with the kind is inside; a function takes an address, not a raw pointer: one registry lookup per call, to be measured in layer 2 (open point of D46) |
 | errors, traps | `error_describe(code)` -> kind, text, exit value, signal, whether it is an exception of WebAssembly; the cell for the error of a host function; one rule for who holds the lock when a host function is called |
 | host calls | one uniform callback `host_fn(user, args[], results[])` for every import, and `call` the same way, with typed fast paths kept (the hot path of the benchmark of `context_concept.md` is the criterion) |
 
 **Rules for the header of layer 2 (so that a standard binding generator, `bindgen`, `cbindgen`, `ffigen`, ctypes, can read it with no hand edits):**
 
-- opaque handle types for store, instance, owner; no pointer to an internal struct in a signature;
+- opaque handle types for store and members (the registry handle, D46); no pointer to an internal struct in a signature;
 - plain structs; a value is a tagged `wasmext_val { type; union { i32, i64, f32, f64, v128[16], ref } }`, and **a union (or a struct that holds one) is passed only by pointer or in an array, never by value**; `v128` the same;
 - no variadic functions: a call takes `args[]`/`results[]` with their counts (the arity of a function is its signature, read from the descriptor);
 - no macros in signatures; error codes as return values, no exception, `longjmp` or trap across the API;
@@ -65,8 +65,8 @@ The descriptor removes the generated tables from the wrapper and the per-import 
 
 | Front end | Emits | Does |
 | --- | --- | --- |
-| **pyglue** (CPython extension) | a small `<name>_py.c` from the model + the static `wasmext_pyext.h` | converts Python values, keeps Python objects as owners (retain/release = INCREF/DECREF), calls a Python host function, maps the code of the core to its exception, `tp_traverse` through the owner list of the core; abi3 or native; later free-threaded |
-| **ctypes glue** | one **static** `wasmext_ctypes.py` + a small stub with the names | the same through `dlopen`; the library is loaded with `CDLL` (never `PyDLL`: the GIL is released during a call, as the free-threaded work needs); a release of an owner that needs the interpreter is done by the front end taking the GIL itself (`PyGILState_Ensure`) or by the core queuing the release |
+| **pyglue** (CPython extension) | a small `<name>_py.c` from the model + the static `wasmext_pyext.h` | converts Python values, holds the store and addresses (its `Instance`, `Function`, `Table`, `Memory`, `Global`, `Tag` are views `(store, address)`, D46), gives the store the Python objects it hands over (a host function, an externref value: the store holds them until close, the release is a DECREF), calls a Python host function, maps the code of the core to its exception, `tp_traverse` of the `Store` type through `wasmext_store_each` (required, D46); abi3 or native; later free-threaded |
+| **ctypes glue** | one **static** `wasmext_ctypes.py` + a small stub with the names | the same through `dlopen`; the library is loaded with `CDLL` (never `PyDLL`: the GIL is released during a call, as the free-threaded work needs); a release of a value at close that needs the interpreter is done by the front end taking the GIL itself (`PyGILState_Ensure`) or by the core queuing the release |
 | **exe glue** | `<name>_main.c` | options, the store made through the API |
 
 The extension does **not** reimplement what layer 2 has: it links `<name>_shared.c` into the module. (Whether this compiles as it is, with the extension's flags, on all platforms, is not yet tried.)
@@ -78,7 +78,7 @@ The extension does **not** reimplement what layer 2 has: it links `<name>_shared
 | all WebAssembly features wasm2c has (MVP, multi-value, bulk, reference types, SIMD, tail calls, multi-memory, memory64, exceptions, branch hinting...) | 1, in the output of wasm2c | unchanged; what wasm2c lacks (relaxed SIMD, typed function references, GC, wide arithmetic) is refused with a message |
 | exports of functions, memories, globals, tables | 2 `export_*`, 3 only converts | generic and typed entries |
 | imports of functions, globals, memories, tables | 2 `bind_import`/`link_import` by index | no per-module entry points |
-| `Table`, `Function`, `funcref` and `externref` in signatures | 2 `table_*`, owners | **begun, refused today:** finished here, once |
+| `Table`, `Function`, `funcref` and `externref` in signatures | 2 `table_*`, the registry | **begun, refused today:** finished here, once |
 | tags and exceptions across instances | 2 `tag_*`, the store | begun in part |
 | traps, uncaught exceptions, `proc_exit` | 2 `error_describe`, 1 trap stack | one table, one place |
 | memory views that do not move under a `memoryview` (pin) | 2 `memory_pin` | one counter in the core |
@@ -100,12 +100,12 @@ From `FEATURES.md`, `TABLES_PLAN.md` and the plans: `funcref` in an import and `
    1. **Model and descriptor**: the data every later step reads.
    2. **Store**: arena, `close`, config (WASI from fusedwasi), error codes and description, trap stack (C2a part 1 exists).
    3. **Instances**: exports of functions, memories, globals; imports by index; one host-callback shape; `memory_pin`.
-   4. **Registry of owners** (C2b/C2c): opaque handle with retain/release.
+   4. **Registry of owners** (C2b/C2c): opaque handle with a generation. (D46: the owner of every member is the store; the handle is the address a front end holds.)
    5. **Tables and `funcref`** (C4): `funcref` in imports and parameters, `Function`, host functions in tables.
    6. **`externref`** (C5): rests on the owners of step 4.
    7. **Tags and exceptions across instances** (C6): one identity of a tag in a store.
    8. **Shared store across separately built modules** (C7, decision 6): after 4-7, so that the layout of the record is not changed twice.
-   9. **Lazy collector** (C8): last; needs the registry and the shared store.
+   9. **Lazy collector** (C8): last; needs the registry and the shared store. **DEFERRED by D46 (2026-11-04)** until a consumer with a long-lived store appears (not dropped: an externref per call in a long-lived store grows without end).
 
    10. **Custom page sizes**: at the end of layer 1 (the owner, 2026-10-28).
    11. **Threads and atomics**: after 10, same.
@@ -116,8 +116,8 @@ From `FEATURES.md`, `TABLES_PLAN.md` and the plans: `funcref` in an import and `
 
    Removed from the plans: `.wat` as a source, other build backends. **Android arm64** and **Pyodide** already build in CI; Android is to be tested in an emulator in CI (a task of the front-end phase). All tested from C against small `.wat` modules.
 
-2. **Shared glue (layer 2): one C API, the same for every module, FFI-neutral** (no Python types, no callbacks that need a GIL, plain structs and function pointers, owners as opaque handles with retain/release). The descriptor of the module is read at run time. Tested from C; this API is the product for every host language.
-3. **Front ends (layer 3)**, one after another over the finished API: ctypes glue (a static `wasmext_ctypes.py`), the executable, the extension. Old logic of the generators is deleted in the same step.
+2. **Shared glue (layer 2): one C API, the same for every module, FFI-neutral** (no Python types, no callbacks that need a GIL, plain structs and function pointers, members addressed by an opaque handle, no `owner_t` and no retain/release, D46). The descriptor of the module is read at run time. Tested from C; this API is the product for every host language.
+3. **Front ends (layer 3)**, one after another over the finished API: ctypes glue (a static `wasmext_ctypes.py`), the executable, the extension. Old logic of the generators is deleted in the same step. They hold views only, `(store, address)` (D46): the review of each front end checks that no front-end object owns a member.
 
 **Rule (the owner): existing code is not patched on the side.** If something already built needs a change, it is not fixed in passing or half-way; it is taken when the plan reaches its step and done there once. The same goes for the known bugs of the old layers (`Function.__call__` and `_pending`, the GIL `Trap` between the extension and ctypes): they are not fixed in the old shape, they disappear or are fixed in the step that owns them.
 
@@ -147,7 +147,8 @@ A step builds the new thing in the static core and leaves the old generated copy
 
 - Whether the extension can link the shared glue statically, with its flags, on Windows (MSVC), macOS, Pyodide, Android: **not tried**; test it when step 3 starts.
 - Speed of the generic `call`/host callback against the typed paths: **not measured**; measure from the C harness.
-- Free-threaded builds and sub-interpreters with owners held by the core: **not tried**.
+- Free-threaded builds and sub-interpreters with members owned by the store: **not tried**.
+- Layer 2 takes an address (a handle) for the objects of a store: one registry lookup per call (D46); to be MEASURED in layer 2 before the rule is final.
 - A rework of this size touches most of the generator; the tests of the old shape have to be ported, not skipped.
 - The thin-glue stage 1 on the branch `thin-glue` is superseded by this rework and is not to be merged.
 
@@ -158,4 +159,4 @@ A step builds the new thing in the static core and leaves the old generated copy
 3. The descriptor: the library describes itself at run time; imports bound by index with one callback shape; typed fast paths kept for exports.
 4. The list of "begun and not finished": for each, finish or remove.
 5. The acceptance numbers: size of the front-end glue, allowed loss on the hot path.
-6. **A shared store across separately built modules, explicit and without Python.** The store is explicit; one module makes it and gives out the versioned record `wasmext_store` (`store_handle`), another module built apart takes it (`store_attach`) and makes its instances in it, as two extensions do through a capsule. The record carries a layout version (a mismatch is refused) and a count of attached modules; the store lives while one is attached. In CPython/ctypes a capsule only carries the same pointer. No process-global rendezvous. Open: a library unloaded while another holds its functions in a table (the registry of owners must keep it loaded).
+6. **A shared store across separately built modules, explicit and without Python.** The store is explicit; one module makes it and gives out the versioned record `wasmext_store` (`store_handle`), another module built apart takes it (`store_attach`) and makes its instances in it, as two extensions do through a capsule. The record carries a layout version (a mismatch is refused) and a count of attached modules; the store lives while one is attached. In CPython/ctypes a capsule only carries the same pointer. No process-global rendezvous. A library unloaded while another holds its functions in a table: closed by D46 rule 5 (an attached artifact stays loaded until the store is freed; the unload hook of a C host is step 8c of S0008).

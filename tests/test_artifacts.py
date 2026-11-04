@@ -310,6 +310,11 @@ def test_two_artifacts_share_one_store(wabt: Path, tmp_path: Path) -> None:
 @pytest.mark.parametrize("mode", ["guard", "stock"])
 def test_two_artifacts_in_the_other_modes_of_the_stack_check(wabt: Path, tmp_path: Path, mode: str) -> None:
     """`guard` (the guard page and an alternate stack, the chain handler) and `stock` (the runtime's own handler: the signal cases of two copies are not run there, see test_artifacts.c and test_signals.py)."""
+    if SANITIZED and mode == "guard":
+        pytest.skip(
+            "under a sanitizer for the whole run a signal in `guard` mode overflows the 8 KiB alternate stack of the runtime of wasm2c: the handler of the core calls a noreturn function and the "
+            "sanitizer's __asan_handle_no_return runs on that stack (tests/test_signals.py)"
+        )
     _run(wabt, tmp_path, mode=mode)
 
 

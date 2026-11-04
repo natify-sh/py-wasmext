@@ -182,3 +182,10 @@ Traps found on the way, with the rule. Newest last.
 * Cause: TSan's own handler faults when the stack of the thread runs out (probably its shadow call stack overflowing on a deep recursion; not verified). In `struct sigaction` `sa_handler` and `sa_sigaction` are one union, so calling `old->sa_handler(sig)` for a handler with `SA_SIGINFO` still calls the same function.
 * Rule: under TSan run the guard-page cases and skip the recursions with the reason (`tests/test_signals.py`, `TEST_NO_RECURSION`); a mutation of the chain replaces the whole block (`signal(sig, SIG_DFL)`), not one condition. Read the message of every mutation.
 * Where found: step 8b-3a, `tests/test_signals.py`, `src/wasmext/c/wasmext_signals.h`.
+
+### A sanitizer for the whole run cannot trap a signal on the 8 KiB alternate stack of wasm2c
+* What happened: CI Sanitizers (`WASMEXT_TEST_CFLAGS=-fsanitize=address,undefined`) failed 11 tests, all in the `guard` and `stock` modes, never in `limit`.
+* Symptom: the process dies of SIGSEGV with no message; gdb shows the handler of the core calling `__asan_handle_no_return` and a second fault just below the alternate stack.
+* Cause: those modes make `wasm_rt_init_thread` install its own 8 KiB `sigaltstack` over the sanitizer's; the instrumented handler needs more.
+* Rule: tests of signals in `guard` and `stock` skip when `SANITIZED`, with that reason; `limit` has no alternate stack. Reproduce CI with the workflow's environment variable before deciding.
+* Where found: CI of 8b-3a (f13fa86); `tests/test_signals.py` (`_ALTSTACK`), `tests/test_artifacts.py`.

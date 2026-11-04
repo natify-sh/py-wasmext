@@ -57,6 +57,9 @@ typedef struct {
     int (*exception_of)(wasmext_instance *i, const void **tag); /* wasmext_instance_exception: its answer, and the tag of the active exception */
     /* 8b-3a: makes this copy ready on the calling thread (its stack limit, its handler of signals once). Until 8b-3b a copy that the thread never entered has no limit on that thread. */
     void (*thread_ready)(void);
+    /* 8b-3a, for a message when a recursion does not end in a trap: this copy's stack limit on the calling thread (0 where the build has none), the bounds of the thread's stack as the pthread library
+       reports them (low end and size; 0 if it does not say) and a frame address here */
+    void (*stack_info)(uintptr_t *limit, uintptr_t *low, uintptr_t *size, uintptr_t *here);
 } artifact_api;
 
 /* in artifact_store_only.c: the file that includes only wasmext_store.h */

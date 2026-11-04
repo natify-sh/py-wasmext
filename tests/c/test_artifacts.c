@@ -781,7 +781,19 @@ static void test_traps_across_copies(void) {
 #endif
 /* the answer of a recursion: EXHAUSTION where the limit sees it and on the main thread; on another thread the guard page of the stack is a mapped page without access, which a handler of the guard
    mode reports as OOB (docs/experiments/stack_limit/README.md) */
-static int is_stack_trap(int rc, int main_thread) { return rc == (int)WASM_RT_TRAP_EXHAUSTION || (!LIMIT_MODE && !main_thread && rc == (int)WASM_RT_TRAP_OOB); }
+static int is_stack_trap(int rc, int main_thread) {
+    int ok = rc == (int)WASM_RT_TRAP_EXHAUSTION || (!LIMIT_MODE && !main_thread && rc == (int)WASM_RT_TRAP_OOB);
+    if (!ok) { /* say what happened: the answer, the thread, the mode, and for each copy the limit it computed and the stack of the thread */
+        const artifact_api *copies[2] = {A, B};
+        fprintf(stderr, "a recursion answered %d (EXHAUSTION is %d, OOB %d); main_thread=%d mode=%s\n", rc, (int)WASM_RT_TRAP_EXHAUSTION, (int)WASM_RT_TRAP_OOB, main_thread, LIMIT_MODE ? "limit" : "guard");
+        for (int k = 0; k < 2; k++) {
+            uintptr_t limit, low, size, here;
+            copies[k]->stack_info(&limit, &low, &size, &here);
+            fprintf(stderr, "  copy %c: limit=%#lx stack low=%#lx size=%#lx (top %#lx) frame here=%#lx\n", k ? 'B' : 'A', (unsigned long)limit, (unsigned long)low, (unsigned long)size, (unsigned long)(low + size), (unsigned long)here);
+        }
+    }
+    return ok;
+}
 static void signal_cases(struct pair *p, int main_thread) {
     cstate a0 = state_of(A), b0 = state_of(B);
     const int oob = (int)WASM_RT_TRAP_OOB;

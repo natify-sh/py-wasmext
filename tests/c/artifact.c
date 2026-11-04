@@ -152,10 +152,44 @@ static int exception_of_(wasmext_instance *i, const void **tag) {
     return rc;
 }
 
+#ifdef WASMEXT_STACK_LIMIT
+extern __thread uintptr_t wasmext_stack_limit WASMEXT_HIDDEN_;
+#endif
+#ifndef __APPLE__
+extern int pthread_getattr_np(pthread_t, pthread_attr_t *);
+#endif
+static void stack_info_(uintptr_t *limit, uintptr_t *low, uintptr_t *size, uintptr_t *here) {
+    *limit = *low = *size = 0;
+#ifdef WASMEXT_STACK_LIMIT
+    *limit = wasmext_stack_limit;
+#endif
+#if defined(__APPLE__)
+    {
+        pthread_t self = pthread_self();
+        *size = (uintptr_t)pthread_get_stacksize_np(self);
+        *low = (uintptr_t)pthread_get_stackaddr_np(self) - *size;
+    }
+#else
+    {
+        pthread_attr_t attr;
+        if (pthread_getattr_np(pthread_self(), &attr) == 0) {
+            void *addr = NULL;
+            size_t length = 0;
+            if (pthread_attr_getstack(&attr, &addr, &length) == 0) {
+                *low = (uintptr_t)addr;
+                *size = (uintptr_t)length;
+            }
+            pthread_attr_destroy(&attr);
+        }
+    }
+#endif
+    *here = (uintptr_t)__builtin_frame_address(0);
+}
+
 static const artifact_api api_ = {
     (const void *)&wasmext_artifact_, trap_address_, store_new_, store_attach_, store_close_, store_free_, store_own_, releases_, store_error_, instance_new_, instantiate_, call_,
     export_record_, bind_, funcref_, table_set_, global_set_funcref_, tab_new_, tab_set_, tab_get_, wasmext_thread_free, call_ref_, bind_host_, bind_global_funcref_, host_funcref_, extern_new_, store_misc_, artifact_so_new, artifact_so_attach, extern_make_, tag_new_, tag_cell_, WASMEXT_HOST_LAYOUT,
-    runtime_id_, set_tls_rt_, exception_load_, exception_size_, wasmext_runtime_fix_seed_, register_object_, state_, tab_make_, tab_grow_, mem_grow_, exception_of_, wasmext_thread_ready};
+    runtime_id_, set_tls_rt_, exception_load_, exception_size_, wasmext_runtime_fix_seed_, register_object_, state_, tab_make_, tab_grow_, mem_grow_, exception_of_, wasmext_thread_ready, stack_info_};
 
 #define ARTIFACT_CAT_(a, b) a##b
 #define ARTIFACT_CAT(a, b) ARTIFACT_CAT_(a, b)

@@ -263,7 +263,7 @@ static inline int wasmext_store_has_artifact(wasmext_store *s, uint32_t layout, 
 /* An artifact that did not make the store joins it: `wasmext_store_attach(s, why, cap)` (a macro, as above). WASMEXT_STORE_OK, or WASMEXT_STORE_INCOMPATIBLE with the reason in `why`
    (the caller's buffer: the store may be of a layout that this copy cannot read) when the x of the ABI differs, the reader is below the floor, the size, the layout of the core or
    the runtime of wasm2c differ, the store has no runtime (`rt` is NULL) though this copy has one, the mode of the stack check of its runtime is not this copy's, or the list holds
-   WASMEXT_MAX_ARTIFACTS artifacts already; WASMEXT_STORE_CLOSED when the store is closed. The artifact must stay loaded until `wasmext_store_free` returns: the store calls the functions of the
+   WASMEXT_MAX_ARTIFACTS artifacts already; WASMEXT_STORE_BUSY when a call is in flight on the store (the artifact would not be activated for it); WASMEXT_STORE_CLOSED when the store is closed. The artifact must stay loaded until `wasmext_store_free` returns: the store calls the functions of the
    artifacts that added members, whichever copy closes it. */
 static inline int wasmext_store_attach_(wasmext_store *s, uint32_t abi, uint32_t since, uint32_t layout, uint32_t runtime, const wasmext_runtime_head *rt,
                                         const void *(*activate)(const void *), void (*deactivate)(const void *), char *why, size_t cap) {
@@ -305,9 +305,22 @@ static inline int wasmext_store_attach_(wasmext_store *s, uint32_t abi, uint32_t
 #undef WASMEXT_WHY_
     WASMEXT_LOCK(&s->mutex);
     if (wasmext_atomic_load(&s->closing)) rc = WASMEXT_STORE_CLOSED;
-    else rc = wasmext_store_add_artifact_(s, activate, deactivate);
+    else {
+        /* a call in flight took the list of artifacts when it began and would never activate the new one: its trap would find no entry. Publish, then count the calls (a call that begins after the
+           publication sees the artifact; one that began before is counted, as `close` counts them) and take the entry back if there is one */
+        long before = (long)wasmext_atomic_load(&s->n_artifacts), sum = 0, k;
+        rc = wasmext_store_add_artifact_(s, activate, deactivate);
+        if (rc == WASMEXT_STORE_OK && (long)wasmext_atomic_load(&s->n_artifacts) != before) {
+            for (k = 0; k < WASMEXT_STORE_LINES; k++) sum += (long)wasmext_atomic_load(&s->lines[k].active);
+            if (sum != 0) {
+                wasmext_atomic_store(&s->n_artifacts, before);
+                rc = WASMEXT_STORE_BUSY;
+            }
+        }
+    }
     WASMEXT_UNLOCK(&s->mutex);
-    if (rc == WASMEXT_STORE_CLOSED && why != NULL && cap > 0) snprintf(why, cap, "the store is closed");
+    if (rc == WASMEXT_STORE_BUSY && why != NULL && cap > 0) snprintf(why, cap, "a call is in flight on the store");
+    else if (rc == WASMEXT_STORE_CLOSED && why != NULL && cap > 0) snprintf(why, cap, "the store is closed");
     else if (rc == WASMEXT_STORE_INCOMPATIBLE && why != NULL && cap > 0) snprintf(why, cap, "the store has %d artifacts already, which is all it can hold", WASMEXT_MAX_ARTIFACTS);
     return rc;
 }

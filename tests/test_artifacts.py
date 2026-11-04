@@ -138,6 +138,8 @@ TRAPC = """(module
   (func (export "call_boom") (result i32) call $boom)
   (func (export "call_div") (param i32 i32) (result i32) local.get 0 local.get 1 call $div))"""
 
+MEMB = """(module (memory (export "mem") 1 4))"""
+
 
 def _nest(imp: str) -> str:
     """`rec(n)` traps (unreachable) at 0 and calls the host function `cb(n)` otherwise; the host function of the test calls back into the store (a nested entry) or fails."""
@@ -246,6 +248,7 @@ def _run(wabt: Path, tmp_path: Path, flags: Sequence[str] = (), defines: Sequenc
             "trapc": TRAPC,
             "nestb": _nest("nb"),
             "tryb": _try("yb"),
+            "memb": MEMB,
         },
         flags,
         defines,
@@ -255,11 +258,7 @@ def _run(wabt: Path, tmp_path: Path, flags: Sequence[str] = (), defines: Sequenc
         [C_DIR / "test_artifacts.c", a, b],
         exe,
         include_dirs=[C_DIR, WASMEXT_C, Path(get_include()), find_toolchain().runtime],
-        flags=[
-            *flags,
-            "-O1",
-            f"-Wl,-rpath,{tmp_path}",
-        ],  # -O1: the core is in the libraries; the host must not emit the inline functions that touch their thread state
+        flags=[*flags, f"-Wl,-rpath,{tmp_path}"],
         defines=[*defines, "WASMEXT_STORE_RUNTIME=1"],  # the host reads the headers of the core: they stop without it
         threads=True,
         strict=False,
@@ -440,7 +439,7 @@ def test_the_product_build_passes_the_version_of_fusedwasi_to_the_artifacts(wabt
             [C_DIR / "host_word.c", library],
             exe,
             include_dirs=[C_DIR, WASMEXT_C, Path(get_include()), find_toolchain().runtime],
-            flags=["-O1", f"-Wl,-rpath,{tmp_path}"],
+            flags=[f"-Wl,-rpath,{tmp_path}"],
             defines=[f"ARTIFACT_NAME={name}", "WASMEXT_STORE_RUNTIME=1"],
             strict=False,
             std=None,

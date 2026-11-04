@@ -765,33 +765,108 @@ static void test_traps_across_copies(void) {
     }
 }
 
-/* 8b-2: the close of a member frees its memory and tables through the runtime of the store, whichever copy made the member. The runtime of the store is a copy of A's table whose free functions count
-   (and call A's); B's instance with a table is made in the store and the store is closed. */
-static int table_frees, memory_frees;
+/* 8b-2: the runtime functions that the core calls outside a call of WebAssembly code (memory_grow, the table functions, the close of a member) go through the runtime of the store, whichever copy
+   calls them. The runtime of the store is a copy of A's table whose functions count (and call A's); the operations are made by B, the copy that is not the runtime. */
+enum { N_FREE_TABLE, N_FREE_MEMORY, N_GROW_MEMORY, N_ALLOC_TABLE, N_GROW_TABLE, N_ALLOC_XTABLE, N_GROW_XTABLE, N_FREE_XTABLE, N_COUNTERS };
+static int hits[N_COUNTERS];
+static wasmext_runtime counting_rt;
 static void (*real_free_table)(wasm_rt_funcref_table_t *);
 static void (*real_free_memory)(wasm_rt_memory_t *);
-static void counting_free_table(wasm_rt_funcref_table_t *t) { table_frees++; real_free_table(t); }
-static void counting_free_memory(wasm_rt_memory_t *m) { memory_frees++; real_free_memory(m); }
-static wasmext_runtime counting_rt;
-static void test_close_scope(void) {
+static uint64_t (*real_grow_memory)(wasm_rt_memory_t *, uint64_t);
+static void (*real_alloc_table)(wasm_rt_funcref_table_t *, uint32_t, uint32_t);
+static uint32_t (*real_grow_table)(wasm_rt_funcref_table_t *, uint32_t, wasm_rt_funcref_t);
+static void (*real_alloc_xtable)(wasm_rt_externref_table_t *, uint32_t, uint32_t);
+static uint32_t (*real_grow_xtable)(wasm_rt_externref_table_t *, uint32_t, wasm_rt_externref_t);
+static void (*real_free_xtable)(wasm_rt_externref_table_t *);
+static void c_free_table(wasm_rt_funcref_table_t *t) { hits[N_FREE_TABLE]++; real_free_table(t); }
+static void c_free_memory(wasm_rt_memory_t *m) { hits[N_FREE_MEMORY]++; real_free_memory(m); }
+static uint64_t c_grow_memory(wasm_rt_memory_t *m, uint64_t p) { hits[N_GROW_MEMORY]++; return real_grow_memory(m, p); }
+static void c_alloc_table(wasm_rt_funcref_table_t *t, uint32_t e, uint32_t x) { hits[N_ALLOC_TABLE]++; real_alloc_table(t, e, x); }
+static uint32_t c_grow_table(wasm_rt_funcref_table_t *t, uint32_t d, wasm_rt_funcref_t i) { hits[N_GROW_TABLE]++; return real_grow_table(t, d, i); }
+static void c_alloc_xtable(wasm_rt_externref_table_t *t, uint32_t e, uint32_t x) { hits[N_ALLOC_XTABLE]++; real_alloc_xtable(t, e, x); }
+static uint32_t c_grow_xtable(wasm_rt_externref_table_t *t, uint32_t d, wasm_rt_externref_t i) { hits[N_GROW_XTABLE]++; return real_grow_xtable(t, d, i); }
+static void c_free_xtable(wasm_rt_externref_table_t *t) { hits[N_FREE_XTABLE]++; real_free_xtable(t); }
+/* a store of A whose runtime is the counting one, and B attached */
+static wasmext_store *counting_store(void) {
     wasmext_store *s = A->store_new();
-    wasmext_instance *ownb, *la;
     char why[200];
-    int error = 0;
     memcpy(&counting_rt, A->runtime_id(), sizeof counting_rt);
-    real_free_table = counting_rt.free_funcref_table;
-    real_free_memory = counting_rt.free_memory;
-    counting_rt.free_funcref_table = counting_free_table;
-    counting_rt.free_memory = counting_free_memory;
+    real_free_table = counting_rt.free_funcref_table; counting_rt.free_funcref_table = c_free_table;
+    real_free_memory = counting_rt.free_memory; counting_rt.free_memory = c_free_memory;
+    real_grow_memory = counting_rt.grow_memory; counting_rt.grow_memory = c_grow_memory;
+    real_alloc_table = counting_rt.allocate_funcref_table; counting_rt.allocate_funcref_table = c_alloc_table;
+    real_grow_table = counting_rt.grow_funcref_table; counting_rt.grow_funcref_table = c_grow_table;
+    real_alloc_xtable = counting_rt.allocate_externref_table; counting_rt.allocate_externref_table = c_alloc_xtable;
+    real_grow_xtable = counting_rt.grow_externref_table; counting_rt.grow_externref_table = c_grow_xtable;
+    real_free_xtable = counting_rt.free_externref_table; counting_rt.free_externref_table = c_free_xtable;
+    memset(hits, 0, sizeof hits);
     s->head.rt = &counting_rt;
     CHECK(B->store_attach(s, why, sizeof why) == WASMEXT_STORE_OK);
+    return s;
+}
+
+static void test_close_scope(void) {
+    wasmext_store *s = counting_store();
+    wasmext_instance *ownb, *la;
+    int error = 0;
     ownb = B->instance_new(s, "ownb", &error);
     la = A->instance_new(s, "liba", &error);
     CHECK(ownb && la && B->instantiate(ownb) == 0 && A->instantiate(la) == 0);
-    CHECK(table_frees == 0 && memory_frees == 0);
+    CHECK(hits[N_FREE_TABLE] == 0 && hits[N_FREE_MEMORY] == 0);
     CHECK(A->store_close(s) == WASMEXT_STORE_OK);
     /* ownb has one table, liba one table and one memory: three frees, all through the runtime of the store, the instance of the other copy included */
-    CHECK(table_frees == 2 && memory_frees == 1);
+    CHECK(hits[N_FREE_TABLE] == 2 && hits[N_FREE_MEMORY] == 1);
+    CHECK(A->store_free(s) == WASMEXT_STORE_OK);
+}
+
+/* B grows a memory, makes and grows tables of both kinds, and the store is closed with them in it: each of these goes through the runtime of the store */
+static void test_scopes(void) {
+    wasmext_store *s = counting_store();
+    wasmext_instance *m;
+    wasmext_tab *ft, *xt;
+    int error = 0;
+    uint32_t before = 0;
+    m = B->instance_new(s, "memb", &error);
+    CHECK(m && B->instantiate(m) == 0);
+    CHECK(B->mem_grow(m, "mem", 1) == 1 && hits[N_GROW_MEMORY] == 1); /* the memory had 1 page */
+    ft = B->tab_make(s, 0x70, &error);
+    CHECK(ft != NULL && hits[N_ALLOC_TABLE] == 1);
+    xt = B->tab_make(s, 0x6F, &error);
+    CHECK(xt != NULL && hits[N_ALLOC_XTABLE] == 1);
+    CHECK(B->tab_grow(ft, 1, &before) == 0 && before == 2 && hits[N_GROW_TABLE] == 1);
+    CHECK(B->tab_grow(xt, 1, &before) == 0 && before == 2 && hits[N_GROW_XTABLE] == 1);
+    CHECK(hits[N_FREE_TABLE] == 0 && hits[N_FREE_XTABLE] == 0);
+    CHECK(A->store_close(s) == WASMEXT_STORE_OK);
+    CHECK(hits[N_FREE_TABLE] == 1 && hits[N_FREE_XTABLE] == 1 && hits[N_FREE_MEMORY] == 1); /* the host tables and the memory of the instance */
+    CHECK(A->store_free(s) == WASMEXT_STORE_OK);
+}
+
+/* attach during a call in flight is refused: the artifact would never be activated for that call (S0008); it works once the call has returned */
+struct attacher { wasmext_store *s; int rc; char why[200]; wasmext_counter seen; };
+static int host_attach(void *user, const wasmext_val *args, wasmext_val *results) {
+    struct attacher *a = (struct attacher *)user;
+    (void)args;
+    a->rc = B->store_attach(a->s, a->why, sizeof a->why);
+    results[0] = I32(1);
+    return 0;
+}
+static void test_attach_in_a_call(void) {
+    struct attacher at;
+    wasmext_store *s = A->store_new();
+    wasmext_instance *na, *tb;
+    wasmext_val a = I32(1), r = I32(0);
+    char why[200];
+    int error = 0;
+    memset(&at, 0, sizeof at);
+    at.s = s;
+    na = A->instance_new(s, "nesta", &error);
+    CHECK(na && A->bind_host(na, "na", "cb", host_attach, &at) == 0 && A->instantiate(na) == 0);
+    CHECK(A->call(na, "rec", &a, 1, &r, 1) == 0 && r.as.i32 == 1);
+    CHECK(at.rc == WASMEXT_STORE_BUSY && strstr(at.why, "a call is in flight") != NULL);
+    CHECK(wasmext_atomic_load(&s->n_artifacts) == 1 && B->instance_new(s, "trapb", &error) == NULL && error == EXDEV);
+    CHECK(B->store_attach(s, why, sizeof why) == WASMEXT_STORE_OK && wasmext_atomic_load(&s->n_artifacts) == 2);
+    tb = B->instance_new(s, "memb", &error);
+    CHECK(tb != NULL);
     CHECK(A->store_free(s) == WASMEXT_STORE_OK);
 }
 
@@ -812,6 +887,8 @@ int main(void) {
     test_host_tags_threads();
     test_traps_across_copies();
     test_close_scope();
+    test_scopes();
+    test_attach_in_a_call();
     if (failures) { fprintf(stderr, "%d failed\n", failures); return 1; }
     puts("ok");
     return 0;

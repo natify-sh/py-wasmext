@@ -161,3 +161,17 @@ Traps found on the way, with the rule. Newest last.
 * Cause: wasm2c turns a `throw` that stands lexically inside the `try_table` that catches it into a `goto` (see the `goto var_T1_catch` in the C of the function), so no `wasm_rt_throw` and no unwind target is involved.
 * Rule: to test the unwind target, throw from a called function (`call $throws`). And a core build that defines `WASM_RT_TRAP_HANDLER` has no `g_wasm_rt_jmp_buf`: a test or benchmark that sets it or uses the legacy `WASMEXT_ENTER_PLAIN/REENTRANT` does not link there; use `WASMEXT_ENTER_STORE`.
 * Where found: step 8b-2, `tests/test_artifacts.py` (`_try`), `tests/c/test_runtime.c`, `tests/c/bench_calls.c`.
+
+### A file-scope `static const` table in a header keeps what it names (gcc at -O0)
+* What happened: the table of operations of the instances and of the tables (`wasmext_instance_ops_`, `wasmext_tab_ops_`) was a file-scope `static const` in a header, naming the close functions. 8b-2 made those functions touch the thread state and the identity that only an artifact defines.
+* Symptom: a host built with gcc at `-O0` that only includes the headers stopped linking (undefined `wasmext_tls_`, `wasmext_runtime_own_`, `wasmext_artifact_`). The tests passed because their hosts were compiled `-O1`, which hid it.
+* Cause: gcc keeps an unused file-scope `static const` object (`-fkeep-static-consts`, on at `-O0`), and with it the functions it points to; clang at `-O0` does not.
+* Rule: a table that names functions of the core is a function with a local `static const` (emitted only where the function is), not a file-scope object; never hide a link error of a header with an optimisation flag of the test. `tests/test_core_headers_link.py` links a host at `-O0` and `-O2` and lists the undefined symbols.
+* Where found: independent review of 8b-2 (commit 5adf472); fixed in the working tree after it, `src/wasmext/c/wasmext_instance.h`, `wasmext_table.h`.
+
+### A call in flight keeps the list of artifacts it began with
+* What happened: a host function attached copy B to the store in the middle of a call of copy A, and then B's code was reached by that call.
+* Symptom: abort "wasmext: WebAssembly code trapped outside any call into a module".
+* Cause: the activation of a call fans out through the list of artifacts as it was when the call began; B was never activated for it.
+* Rule: `wasmext_store_attach` is refused (BUSY) while a call is in flight on the store.
+* Where found: independent review of 8b-2; `tests/c/test_artifacts.c` (`test_attach_in_a_call`).

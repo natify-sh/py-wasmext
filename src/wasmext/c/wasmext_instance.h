@@ -233,10 +233,12 @@ static inline void wasmext_deactivate_store_(wasmext_store *s, wasmext_activatio
 static inline void wasmext_instance_close_(void *object) {
     wasmext_instance *i = (wasmext_instance *)object;
     if (i->module != NULL) {
-        wasmext_activation act;
-        wasmext_activate_scope_(i->store, &act); /* the memories and tables are freed by the runtime of the store that allocated them (8b-2) */
-        if (i->instantiated) i->binding->release(i->module);
-        wasmext_deactivate_store_(i->store, &act);
+        if (i->instantiated) {
+            wasmext_activation act;
+            wasmext_activate_scope_(i->store, &act); /* the memories and tables are freed by the runtime of the store that allocated them (8b-2) */
+            i->binding->release(i->module);
+            wasmext_deactivate_store_(i->store, &act);
+        }
         free(i->module);
         i->module = NULL;
     }
@@ -253,7 +255,12 @@ static inline void wasmext_instance_wrapper_free_(void *object) {
     free(i->saved_max);
     free(i);
 }
-static const wasmext_owner_ops wasmext_instance_ops_ = {NULL, NULL, NULL, wasmext_instance_close_, WASMEXT_KIND_INSTANCE};
+/* A function with a local static, not a file-scope `static const`: gcc keeps an unused file-scope static const (-fkeep-static-consts at -O0) and so the close function it names, which reaches the
+   thread state and the identity that only an artifact defines; a host built at -O0 would not link. The local one is emitted only where the function is (tests/test_core_headers_link.py). */
+static inline const wasmext_owner_ops *wasmext_instance_ops_(void) {
+    static const wasmext_owner_ops ops = {NULL, NULL, NULL, wasmext_instance_close_, WASMEXT_KIND_INSTANCE};
+    return &ops;
+}
 
 /* the layout of the core and of the runtime of wasm2c of this copy, as the head of a store says them (defined at the end of the file, where the structs are all known) */
 static inline uint32_t wasmext_core_layout_(void);
@@ -826,7 +833,7 @@ static inline int wasmext_instance_instantiate(wasmext_instance *i) {
     if (rc != 0) wasmext_instance_scrub_tables_(i);
     if (rc == 0) {
         /* the store holds the instance from now until the close, and finds it by the pointer that its funcrefs carry */
-        int reg = wasmext_store_register_unchecked_(i->store, i->module, i, &wasmext_instance_ops_, &i->owner);
+        int reg = wasmext_store_register_unchecked_(i->store, i->module, i, wasmext_instance_ops_(), &i->owner);
         if (reg != WASMEXT_STORE_OK) {
             i->binding->release(i->module);
             wasmext_instance_scrub_tables_(i);

@@ -39,7 +39,10 @@ static inline void wasmext_tab_wrapper_free_(void *object) {
     WASMEXT_MUTEX_DESTROY(&t->mutex);
     free(t);
 }
-static const wasmext_owner_ops wasmext_tab_ops_ = {NULL, NULL, NULL, wasmext_tab_close_, WASMEXT_KIND_TABLE};
+static inline const wasmext_owner_ops *wasmext_tab_ops_(void) { /* local static: see wasmext_instance_ops_ */
+    static const wasmext_owner_ops ops = {NULL, NULL, NULL, wasmext_tab_close_, WASMEXT_KIND_TABLE};
+    return &ops;
+}
 
 /* Makes a table of `initial` elements (null) in `store`; `elem` is 0x70 (funcref) or 0x6F (externref); `maximum` is WASMEXT_TABLE_NO_MAXIMUM for none. NULL with `*error` (an errno: EINVAL,
    EBADF for a closed store, ENOMEM) when it cannot be made. */
@@ -79,7 +82,7 @@ static inline wasmext_tab *wasmext_tab_new(wasmext_store *store, int elem, uint3
         *error = ENOMEM;
         return NULL;
     }
-    if (wasmext_store_register_unchecked_(store, key, t, &wasmext_tab_ops_, &t->owner) != WASMEXT_STORE_OK) {
+    if (wasmext_store_register_unchecked_(store, key, t, wasmext_tab_ops_(), &t->owner) != WASMEXT_STORE_OK) {
         wasmext_store_unadopt(store, t);
         wasmext_tab_wrapper_free_(t);
         *error = wasmext_store_closed(store) ? EBADF : ENOMEM;

@@ -51,6 +51,9 @@ typedef struct {
     /* 8b-2: what this copy keeps for the calling thread: the active runtime (`tls.rt`, NULL outside a call), the innermost entry (`tls.top`, NULL outside a call) and the unwind target as this copy's
        wasm_rt_get_unwind_target answers it (the one of the active runtime) */
     void (*state)(const void **rt, const void **top, const void **unwind);
+    wasmext_tab *(*tab_make)(wasmext_store *s, int elem, int *error); /* a host table of 2 elements, funcref (0x70) or externref (0x6F) */
+    int (*tab_grow)(wasmext_tab *t, uint32_t delta, uint32_t *previous);
+    int64_t (*mem_grow)(wasmext_instance *i, const char *name, uint64_t delta); /* wasmext_instance_memory_grow of the exported memory `name` */
     int (*exception_of)(wasmext_instance *i, const void **tag); /* wasmext_instance_exception: its answer, and the tag of the active exception */
 } artifact_api;
 

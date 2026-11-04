@@ -848,6 +848,41 @@ static void *signals_toward_b(void *arg) {
     B->thread_free();
     return NULL;
 }
+/* A fresh process: the store is made by A, B attaches, and the thread calls only through B (an instance of `solob`, which imports nothing of A): A is never made ready on the thread, its handler is
+   never installed, and a fault in B's code reaches B's handler with `tls.rt` = A's table and `tls.top` NULL (the entry went into A's runtime): only the `rt` half of the condition traps it. */
+static wasmext_store *only_store;
+static wasmext_instance *only_inst;
+static void only_b_cases(int main_thread) {
+    wasmext_val r = I32(0);
+    cstate b0 = state_of(B);
+    CHECK(B->call(only_inst, "ld", (wasmext_val[]){I32(0)}, 1, &r, 1) == 0);
+    for (int k = 0; k < 3; k++) {
+        CHECK(B->call(only_inst, "ld", (wasmext_val[]){I32(1 << 20)}, 1, &r, 1) == (int)WASM_RT_TRAP_OOB);
+        CLEAN(B, b0);
+        if (RECURSION) CHECK(is_stack_trap(B->call(only_inst, "deep", (wasmext_val[]){I32(1)}, 1, &r, 1), main_thread));
+        CLEAN(B, b0);
+        CHECK(B->call(only_inst, "ld", (wasmext_val[]){I32(0)}, 1, &r, 1) == 0);
+    }
+}
+static void *only_b_thread(void *arg) {
+    (void)arg;
+    only_b_cases(0);
+    B->thread_free();
+    return NULL;
+}
+static void test_only_b(void) {
+    pthread_t t;
+    int error = 0;
+    char why[200];
+    only_store = A->store_new();
+    CHECK(only_store != NULL && B->store_attach(only_store, why, sizeof why) == WASMEXT_STORE_OK);
+    only_inst = B->instance_new(only_store, "solob", &error);
+    CHECK(only_inst != NULL && B->instantiate(only_inst) == 0);
+    only_b_cases(1);
+    pthread_create(&t, NULL, only_b_thread, NULL);
+    pthread_join(t, NULL);
+    CHECK(A->store_free(only_store) == WASMEXT_STORE_OK);
+}
 static void test_signals_across_copies(void) {
     for (int variant = 0; variant < 2; variant++) { /* the store made by A and then by B: the entry is the copy of the runtime of the store, and the copy that is not */
         struct pair p;
@@ -970,9 +1005,18 @@ static void test_attach_in_a_call(void) {
     CHECK(A->store_free(s) == WASMEXT_STORE_OK);
 }
 
-int main(void) {
+int main(int argc, char **argv) {
     A = artifact_a();
     B = artifact_b();
+#ifndef TEST_MODE_STOCK
+    if (argc > 1 && strcmp(argv[1], "only_b") == 0) { /* a process of its own: nothing here may make A ready on the thread */
+        test_only_b();
+        if (failures) { fprintf(stderr, "%d failed\n", failures); return 1; }
+        puts("ok");
+        return 0;
+    }
+#endif
+    (void)argc; (void)argv;
     test_seeds();
     test_two_copies();
     test_attach();

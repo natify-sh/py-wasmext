@@ -45,6 +45,12 @@ static inline void wasmext_stack_limit_init_(void) {
         if (pthread_attr_getstack(&attr, &addr, &length) == 0) {
             low = (uintptr_t)addr;
             size = (uintptr_t)length;
+            /* The main thread under `ulimit -s unlimited`: glibc reports the gap down to the previous mapping (tens of TiB) and a recursion would run until memory ends. The limit is measured from the
+               top of the stack over at most 64 MiB, which no thread stack of a normal size exceeds. (Only the `limit` mode has this: `guard` and `stock` see the guard page itself.) */
+            if (size > (uintptr_t)64 * 1024 * 1024) {
+                low = low + size - (uintptr_t)64 * 1024 * 1024;
+                size = (uintptr_t)64 * 1024 * 1024;
+            }
         }
         pthread_attr_destroy(&attr);
     }
@@ -89,7 +95,10 @@ static void wasmext_signals_install_once_(void) {
     sigemptyset(&sa.sa_mask);
     sa.sa_sigaction = wasmext_signal_handler_;
     if (sigaction(SIGSEGV, &sa, &wasmext_old_segv_) != 0 || sigaction(SIGBUS, &sa, &wasmext_old_bus_) != 0) return;
-    (void)*(volatile int *)&wasmext_tls_; /* the thread-local block is made now: the first access may allocate (macOS, lazy TLS), which a handler must not do */
+    /* The thread-local block of this thread is made now: the first access may allocate (macOS, lazy TLS), which a handler must not do. Known limit (copied from _gen.py, not a regression): this covers
+       the installing thread only. With glibc a thread that never touched this copy (a dlopen'ed library) gets its block made by `__tls_get_addr` on its first access, a malloc, which can happen inside the
+       handler; `-z now` does not prevent it. A thread that made the copy ready (`wasmext_thread_ready`) has it made already; 8b-3b (the copies made ready on the threads of a store) narrows the window. */
+    (void)*(volatile int *)&wasmext_tls_;
 }
 void wasmext_signals_install_(void) {
 #ifdef WASMEXT_NO_THREADS

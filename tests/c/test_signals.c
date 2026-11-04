@@ -135,51 +135,60 @@ static void case_threads(void) {
 /* A fault outside any call reaches the handler that was installed BEFORE the core's. The test's handler is in force before the first call (the core installs its link at the first `thread_ready`);
    it either jumps back (`chain`) or ends the process with its own status (`chain_exit`), which the test of Python reads. The calls before and after show the core's own link still works. */
 static sigjmp_buf back;
-static volatile sig_atomic_t chained;
-static void test_handler(int sig, siginfo_t *si, void *ctx) {
+static volatile sig_atomic_t chained, which;
+/* two different handlers, one for each signal (different jump values and exit statuses), so that a link that takes the saved action of the wrong signal is seen */
+static void test_handler(int sig, int id, int status) {
     static const char msg[] = "the handler of the test ran\n";
-    (void)si; (void)ctx;
     if (write(2, msg, sizeof msg - 1) < 0) _exit(1);
     chained = sig;
-    if (getenv("CHAIN_EXIT") != NULL) _exit(42);
+    which = id;
+    if (getenv("CHAIN_EXIT") != NULL) _exit(status);
     siglongjmp(back, 1);
 }
-static void install_test_handler(void) {
+static void test_handler_segv(int sig, siginfo_t *si, void *ctx) { (void)si; (void)ctx; test_handler(sig, 1, 42); }
+static void test_handler_bus(int sig, siginfo_t *si, void *ctx) { (void)si; (void)ctx; test_handler(sig, 2, 43); }
+static void install_test_handlers(void) {
     struct sigaction sa;
     memset(&sa, 0, sizeof sa);
-    sa.sa_sigaction = test_handler;
     sa.sa_flags = SA_SIGINFO | SA_NODEFER;
     sigemptyset(&sa.sa_mask);
-    CHECK(sigaction(SIGSEGV, &sa, NULL) == 0 && sigaction(SIGBUS, &sa, NULL) == 0);
+    sa.sa_sigaction = test_handler_segv;
+    CHECK(sigaction(SIGSEGV, &sa, NULL) == 0);
+    sa.sa_sigaction = test_handler_bus;
+    CHECK(sigaction(SIGBUS, &sa, NULL) == 0);
 }
-static void case_chain(void) {
+/* `bus`: raise SIGBUS in host code instead of touching address 8 (SIGSEGV) */
+static void case_chain(int bus) {
     int32_t v = 0;
-    install_test_handler();
-    setup(); /* the first call of this copy installs its link of the chain, over the test's handler */
+    install_test_handlers();
+    setup(); /* the first call of this copy installs its link of the chain, over the test's handlers */
     CHECK(call("ld", 1 << 20, &v) == (int)WASM_RT_TRAP_OOB && clean());
     for (int k = 0; k < 3; k++) {
         chained = 0;
+        which = 0;
         if (sigsetjmp(back, 1) == 0) {
-            *(volatile int *)8 = 1; /* host code, in no call: not a trap of the module */
+            if (bus) raise(SIGBUS); /* host code, in no call: not a trap of the module */
+            else *(volatile int *)8 = 1;
             fprintf(stderr, "the fault of the host did not happen\n");
             failures++;
         }
-        CHECK(chained == SIGSEGV || chained == SIGBUS);
+        CHECK(bus ? (chained == SIGBUS && which == 2) : (chained == SIGSEGV && which == 1));
         CHECK(call("ld", 1 << 20, &v) == (int)WASM_RT_TRAP_OOB && clean()); /* the link of the core still turns a fault in a call into a trap */
         CHECK(call("ok", 0, &v) == 0 && v == 7);
     }
 }
 
 int main(int argc, char **argv) {
-    const char *which = argc > 1 ? argv[1] : "";
-    if (strcmp(which, "recursion_thread") == 0) case_recursion_thread();
-    else if (strcmp(which, "recursion_main") == 0) case_recursion_main();
-    else if (strcmp(which, "oob") == 0) case_oob();
-    else if (strcmp(which, "after") == 0) case_after();
-    else if (strcmp(which, "threads") == 0) case_threads();
-    else if (strcmp(which, "threads_oob") == 0) { with_recursion = 0; case_threads(); } /* no recursion: ThreadSanitizer's own handler faults when a stack runs out (tests/test_signals.py) */
-    else if (strcmp(which, "chain") == 0 || strcmp(which, "chain_exit") == 0) case_chain();
-    else { fprintf(stderr, "no case %s\n", which); return 2; }
+    const char *name = argc > 1 ? argv[1] : "";
+    if (strcmp(name, "recursion_thread") == 0) case_recursion_thread();
+    else if (strcmp(name, "recursion_main") == 0) case_recursion_main();
+    else if (strcmp(name, "oob") == 0) case_oob();
+    else if (strcmp(name, "after") == 0) case_after();
+    else if (strcmp(name, "threads") == 0) case_threads();
+    else if (strcmp(name, "threads_oob") == 0) { with_recursion = 0; case_threads(); } /* no recursion: ThreadSanitizer's own handler faults when a stack runs out (tests/test_signals.py) */
+    else if (strcmp(name, "chain") == 0 || strcmp(name, "chain_exit") == 0) case_chain(0);
+    else if (strcmp(name, "chain_bus") == 0 || strcmp(name, "chain_bus_exit") == 0) case_chain(1);
+    else { fprintf(stderr, "no case %s\n", name); return 2; }
     if (failures) { fprintf(stderr, "%d failed\n", failures); return 1; }
     puts("ok");
     return 0;

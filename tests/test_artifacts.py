@@ -151,6 +151,11 @@ TRAPC = """(module
   (func (export "call_div") (param i32 i32) (result i32) local.get 0 local.get 1 call $div))"""
 
 MEMB = """(module (memory (export "mem") 1 4))"""
+# 8b-3a: a module of B that needs nothing of A (no import), with a memory and a recursion: the store is A's, the thread goes only through B, and A is never made ready on it
+SOLOB = """(module
+  (memory (export "mem") 1 1)
+  (func (export "ld") (param i32) (result i32) local.get 0 i32.load8_u)
+  (func $deep (export "deep") (param i32) (result i32) local.get 0 call $deep local.get 0 call $deep i32.add))"""
 
 
 def _nest(imp: str) -> str:
@@ -265,6 +270,7 @@ def _run(
             "nestb": _nest("nb"),
             "tryb": _try("yb"),
             "memb": MEMB,
+            "solob": SOLOB,
         },
         flags,
         defines,
@@ -289,6 +295,12 @@ def _run(
     result = subprocess.run([str(exe)], check=False, capture_output=True, text=True, timeout=300, env=env)
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "ok"
+    if mode != "stock":
+        # a fresh process: the store is A's and the thread goes only through B, so A is never made ready on it and its handler is never installed; the handler of B must trap by `tls.rt` alone
+        result = subprocess.run([str(exe), "only_b"], check=False, capture_output=True, text=True, timeout=300, env=env)
+        assert result.returncode == 0 and result.stdout.strip() == "ok", (
+            f"only_b: exit {result.returncode}; stderr: {result.stderr[-600:]}"
+        )
 
 
 def test_two_artifacts_share_one_store(wabt: Path, tmp_path: Path) -> None:

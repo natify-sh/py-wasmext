@@ -64,20 +64,54 @@ def test_a_signal_in_a_call_is_a_trap(build: Callable[..., Path], mode: str, cas
 
 
 @pytest.mark.parametrize("mode", ["limit", "guard"])
-def test_a_fault_outside_a_call_reaches_the_handler_that_was_before(build: Callable[..., Path], mode: str) -> None:  # noqa: F811
-    """A deliberate SIGSEGV in host code (no call in flight) goes to the handler that the test installed before the core's: it jumps back, and the core's link still works for the calls around it."""
+@pytest.mark.parametrize("case", ["chain", "chain_bus"])
+def test_a_fault_outside_a_call_reaches_the_handler_that_was_before(
+    build: Callable[..., Path],  # noqa: F811
+    mode: str,
+    case: str,
+) -> None:
+    """A deliberate SIGSEGV (and a SIGBUS) in host code (no call in flight) goes to the handler that the test installed before the core's, a different one for each signal: it jumps back, and the core's link still works for the calls around it."""
     exe = build(SIG, "sig", "test_signals.c", mode=mode)
-    result = _run_case(exe, "chain")
-    assert result.returncode == 0 and result.stdout.strip() == "ok", _verdict("chain", result)
+    result = _run_case(exe, case)
+    assert result.returncode == 0 and result.stdout.strip() == "ok", _verdict(case, result)
     assert "the handler of the test ran" in result.stderr
 
 
 @pytest.mark.parametrize("mode", ["limit", "guard"])
-def test_the_process_behaves_as_the_handler_before_says(build: Callable[..., Path], mode: str) -> None:  # noqa: F811
-    """The handler before ends the process with status 42: the fault is not a trap, and it is not swallowed."""
+@pytest.mark.parametrize(("case", "status"), [("chain_exit", 42), ("chain_bus_exit", 43)])
+def test_the_process_behaves_as_the_handler_before_says(
+    build: Callable[..., Path],  # noqa: F811
+    mode: str,
+    case: str,
+    status: int,
+) -> None:
+    """The handler before ends the process with its own status (42 for SIGSEGV, 43 for SIGBUS): the fault is not a trap, and it is not swallowed."""
     exe = build(SIG, "sig", "test_signals.c", mode=mode)
-    result = _run_case(exe, "chain_exit", {"CHAIN_EXIT": "1"})
-    assert result.returncode == 42 and "the handler of the test ran" in result.stderr, _verdict("chain_exit", result)
+    result = _run_case(exe, case, {"CHAIN_EXIT": "1"})
+    assert result.returncode == status and "the handler of the test ran" in result.stderr, _verdict(case, result)
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="the size of the main stack is read from glibc here")
+def test_a_main_stack_of_unlimited_size_is_capped(build: Callable[..., Path]) -> None:  # noqa: F811
+    """Under `ulimit -s unlimited` glibc reports the main thread's stack as the gap to the previous mapping (tens of TiB); the limit of the `limit` mode is measured over at most 64 MiB, so the recursion on the main thread
+    is EXHAUSTION and not a run until memory ends (`guard` and `stock` are not covered by the cap: they see the guard page). Without the cap the child gets the timeout, reported as "not trapped within"."""
+    import resource
+
+    _, hard = resource.getrlimit(resource.RLIMIT_STACK)
+    if hard != resource.RLIM_INFINITY:
+        pytest.skip("the hard limit of the stack is not unlimited here")
+    exe = build(SIG, "sig", "test_signals.c")
+
+    def unlimited() -> None:
+        resource.setrlimit(resource.RLIMIT_STACK, (resource.RLIM_INFINITY, resource.RLIM_INFINITY))
+
+    try:
+        result = subprocess.run(
+            [str(exe), "recursion_main"], capture_output=True, text=True, timeout=15, check=False, preexec_fn=unlimited
+        )
+    except subprocess.TimeoutExpired:
+        pytest.fail("recursion_main: not trapped within 15 s (the stack of unlimited size is not capped)")
+    assert result.returncode == 0 and result.stdout.strip() == "ok", _verdict("recursion_main", result)
 
 
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="the sanitizers are checked on Linux")
@@ -86,7 +120,7 @@ def test_the_process_behaves_as_the_handler_before_says(build: Callable[..., Pat
 def test_signals_under_sanitizers(build: Callable[..., Path], sanitizer: str, case: str) -> None:  # noqa: F811
     """The same in the default mode where the sanitizers can run it: a sanitizer installs handlers of SIGSEGV of its own, and the chain of the core goes on top of them. ThreadSanitizer does not run the
     recursions (found, not fixed: a stack that runs out ends in a fault inside its own handler, `nested bug in the same thread`, in 5 runs of 6 on the main thread; the access past a guard page runs
-    1000 times in a row), so there the cases without recursion run."""
+    1000 times in a row; the reason is probably the shadow call stack of TSan overflowing on a deep recursion, not verified), so there the cases without recursion run."""
     if SANITIZED or not supports_flag(f"-fsanitize={sanitizer}"):
         pytest.skip("no such sanitizer, or one is on for the whole run")
     recursive = case in ("after", "threads", "recursion_thread", "recursion_main")

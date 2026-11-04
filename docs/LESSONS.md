@@ -179,6 +179,6 @@ Traps found on the way, with the rule. Newest last.
 ### ThreadSanitizer cannot run a recursion to stack exhaustion; a union hides a mutation
 * What happened: the tests of the signals of the core (8b-3a) ran a recursion with no end to get EXHAUSTION, also under ThreadSanitizer. A mutation of the chain (`if (old->sa_flags & SA_SIGINFO)` made `if (0)`) passed.
 * Symptom: under TSan the main-thread recursion died in 5 of 6 runs (`ThreadSanitizer: SEGV on unknown address ... nested bug in the same thread, aborting`); the access past a guard page ran 1000 times in a row without a word. The mutation was green because the call went on to the `else` branch.
-* Cause: TSan's own handler faults when the stack of the thread runs out. In `struct sigaction` `sa_handler` and `sa_sigaction` are one union, so calling `old->sa_handler(sig)` for a handler with `SA_SIGINFO` still calls the same function.
+* Cause: TSan's own handler faults when the stack of the thread runs out (probably its shadow call stack overflowing on a deep recursion; not verified). In `struct sigaction` `sa_handler` and `sa_sigaction` are one union, so calling `old->sa_handler(sig)` for a handler with `SA_SIGINFO` still calls the same function.
 * Rule: under TSan run the guard-page cases and skip the recursions with the reason (`tests/test_signals.py`, `TEST_NO_RECURSION`); a mutation of the chain replaces the whole block (`signal(sig, SIG_DFL)`), not one condition. Read the message of every mutation.
 * Where found: step 8b-3a, `tests/test_signals.py`, `src/wasmext/c/wasmext_signals.h`.

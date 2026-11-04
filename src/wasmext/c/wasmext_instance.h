@@ -169,22 +169,63 @@ typedef struct wasmext_instance_s_ {
    binding and the code that calls it would each set the thread up, and the runtime aborts on the second): exactly one file of an artifact defines it, by defining
    WASMEXT_DEFINE_THREAD_STATE before it includes this header (the file with the front end; a test defines it in its main file). (`wasm_rt_is_initialized` is not used: a
    sanitizer installs an alternate stack of its own in every thread and the runtime then takes the thread for set up.) */
-extern WASM_RT_THREAD_LOCAL int wasmext_thread_ready_;
-#ifdef WASMEXT_DEFINE_THREAD_STATE
-WASM_RT_THREAD_LOCAL int wasmext_thread_ready_;
-#endif
 static inline void wasmext_thread_ready(void) {
-    if (!wasmext_thread_ready_) {
+    if (!wasmext_tls_.ready) {
         wasm_rt_init();
-        wasmext_thread_ready_ = 1;
+        wasmext_tls_.ready = 1;
     }
 }
 /* the host calls it at the end of a thread that called into a module */
 static inline void wasmext_thread_free(void) {
-    if (wasmext_thread_ready_) {
+    if (wasmext_tls_.ready) {
         wasm_rt_free_thread();
-        wasmext_thread_ready_ = 0;
+        wasmext_tls_.ready = 0;
     }
+}
+
+/* The runtime of a store for the code of a call (S0008, 8b-2): before a call the core makes the runtime of the store the active one in this copy (`tls.rt`: NULL when it is the copy's own) and, for every
+   other copy of the store, in that copy (`activate` of the list, the value it replaced saved here for that copy alone); after the call it puts them back, in the reverse order, a trap included (the
+   adapter answers with the trap, it does not jump past this). The thread is made ready first (for a call). The fast path (the runtime of the store is this copy's, nothing is active, the thread is ready, one copy
+   in the store) has nothing to do and nothing to put back. A store made without a runtime (`rt` NULL) leaves this copy on its own. */
+typedef struct {
+    int active;                                    /* 0 on the fast path: nothing was changed */
+    long n;                                        /* how many entries of the list were activated */
+    const void *self;                              /* the active runtime of this copy before */
+    const void *peers[WASMEXT_MAX_ARTIFACTS];      /* ... and of each other copy, by its place in the list */
+} wasmext_activation;
+static inline void wasmext_activate_slow_(wasmext_store *s, wasmext_activation *a, int call, wasmext_tls *t) {
+    const void *rt = s->head.rt;
+    long k, n = (long)wasmext_atomic_load(&s->n_artifacts);
+    if (call) wasmext_thread_ready();
+    a->active = 1;
+    a->n = n;
+    a->self = wasmext_activate_in_(t, rt);
+    for (k = 0; k < n && k < WASMEXT_MAX_ARTIFACTS; k++)
+        if (s->artifacts[k].identity != WASMEXT_ARTIFACT) a->peers[k] = s->artifacts[k].activate(rt);
+}
+static inline void wasmext_activate_store_(wasmext_store *s, wasmext_activation *a) {
+    wasmext_tls *t = &wasmext_tls_; /* the address of a thread-local variable of a position-independent library is a call: once */
+    if (s->head.rt == (void *)&wasmext_runtime_own_ && t->rt == NULL && t->ready && wasmext_atomic_load(&s->n_artifacts) == 1) {
+        a->active = 0;
+        return;
+    }
+    wasmext_activate_slow_(s, a, 1, t);
+}
+/* ... the same for a runtime function that is called outside a call of WebAssembly code (a memory or a table grown, an exception read): no thread set-up, which such a thread may never free */
+static inline void wasmext_activate_scope_(wasmext_store *s, wasmext_activation *a) {
+    wasmext_tls *t = &wasmext_tls_;
+    if (s->head.rt == (void *)&wasmext_runtime_own_ && t->rt == NULL && wasmext_atomic_load(&s->n_artifacts) == 1) {
+        a->active = 0;
+        return;
+    }
+    wasmext_activate_slow_(s, a, 0, t);
+}
+static inline void wasmext_deactivate_store_(wasmext_store *s, wasmext_activation *a) {
+    long k;
+    if (!a->active) return;
+    for (k = a->n < WASMEXT_MAX_ARTIFACTS ? a->n : WASMEXT_MAX_ARTIFACTS; k-- > 0;)
+        if (s->artifacts[k].identity != WASMEXT_ARTIFACT) s->artifacts[k].deactivate(a->peers[k]);
+    wasmext_deactivate_(a->self);
 }
 
 /* What the store does with an instance. At the close it releases the structure of wasm2c (the wrapper `wasmext_instance` stays valid, closed, until the store is freed); the
@@ -192,7 +233,10 @@ static inline void wasmext_thread_free(void) {
 static inline void wasmext_instance_close_(void *object) {
     wasmext_instance *i = (wasmext_instance *)object;
     if (i->module != NULL) {
+        wasmext_activation act;
+        wasmext_activate_scope_(i->store, &act); /* the memories and tables are freed by the runtime of the store that allocated them (8b-2) */
         if (i->instantiated) i->binding->release(i->module);
+        wasmext_deactivate_store_(i->store, &act);
         free(i->module);
         i->module = NULL;
     }
@@ -697,20 +741,21 @@ static inline void *wasmext_instance_import_owner(const wasmext_instance *i, uin
 
 /* For the typed function of an export that another instance calls (<name>_binding.c): enter this instance's store and the host lock level; the answer is 0, or the trap code
    to give the caller (as WASMEXT_TRAP_LINKED + it). `wasmext_instance_end_` lets go of what a trap left. */
-static inline int wasmext_instance_begin_(wasmext_instance *i, int *line, long *level) {
+static inline int wasmext_instance_begin_(wasmext_instance *i, int *line, long *level, wasmext_activation *act) {
     wasmext_rlock *lock;
     if (!i->instantiated) return (int)WASMEXT_TRAP_HOST;
     *line = wasmext_store_enter(i->store);
     if (*line < 0) return (int)WASMEXT_TRAP_CLOSED;
-    wasmext_thread_ready();
+    wasmext_activate_store_(i->store, act);
     lock = (wasmext_rlock *)wasmext_store_host_lock(i->store);
     *level = lock != NULL ? wasmext_rlock_depth(lock) : 0;
     if (i->binding->call_begin != NULL) i->binding->call_begin(i->module);
     return 0;
 }
-static inline void wasmext_instance_end_(wasmext_instance *i, int line, long level) {
+static inline void wasmext_instance_end_(wasmext_instance *i, int line, long level, wasmext_activation *act) {
     wasmext_rlock *lock = (wasmext_rlock *)wasmext_store_host_lock(i->store);
     if (lock != NULL) wasmext_rlock_release_to(lock, level);
+    wasmext_deactivate_store_(i->store, act);
     wasmext_store_leave(i->store, line);
 }
 
@@ -742,6 +787,7 @@ static inline void wasmext_instance_scrub_tables_(wasmext_instance *i) {
    WASMEXT_TRAP_LINK_ERROR, before anything runs, with the name in the text of the store (`wasmext_store_error`): bind it and try again. */
 static inline int wasmext_instance_instantiate(wasmext_instance *i) {
     int line, rc;
+    wasmext_activation act;
     void *host = NULL;
     wasmext_rlock *lock;
     long level;
@@ -769,11 +815,12 @@ static inline int wasmext_instance_instantiate(wasmext_instance *i) {
     }
     line = wasmext_store_enter(i->store);
     if (line < 0) return (int)WASMEXT_TRAP_CLOSED;
-    wasmext_thread_ready();
+    wasmext_activate_store_(i->store, &act);
     lock = (wasmext_rlock *)wasmext_store_host_lock(i->store);
     level = lock != NULL ? wasmext_rlock_depth(lock) : 0;
     rc = i->binding->instantiate(i->module, host);
     if (lock != NULL) wasmext_rlock_release_to(lock, level); /* a trap left the unlocks of fusedwasi behind */
+    wasmext_deactivate_store_(i->store, &act);
     wasmext_store_leave(i->store, line);
     wasmext_atomic_store(&i->status, rc);
     if (rc != 0) wasmext_instance_scrub_tables_(i);
@@ -963,6 +1010,7 @@ static inline int wasmext_instance_call(wasmext_instance *i, uint32_t index, con
     const wasmext_export_desc *e;
     const wasmext_export_binding *b;
     int line, rc;
+    wasmext_activation act;
     wasmext_rlock *lock;
     long level;
     if (index >= d->n_exports || d->exports[index].kind != WASMEXT_DESC_FUNC) return WASMEXT_INST_BAD_EXPORT;
@@ -977,13 +1025,14 @@ static inline int wasmext_instance_call(wasmext_instance *i, uint32_t index, con
     if (rc != 0) return rc;
     line = wasmext_store_enter(i->store);
     if (line < 0) return (int)WASMEXT_TRAP_CLOSED;
-    wasmext_thread_ready();
+    wasmext_activate_store_(i->store, &act);
     lock = (wasmext_rlock *)wasmext_store_host_lock(i->store);
     level = lock != NULL ? wasmext_rlock_depth(lock) : 0;
     if (i->binding->call_begin != NULL) i->binding->call_begin(i->module);
     rc = b->adapter(i->module, b->function, args, results);
     if (lock != NULL) wasmext_rlock_release_to(lock, level); /* a trap left the unlocks of fusedwasi behind */
     if (rc == 0) rc = wasmext_call_fill_refs_(i->store, &e->type, results);
+    wasmext_deactivate_store_(i->store, &act);
     wasmext_store_leave(i->store, line);
     wasmext_atomic_store(&i->status, rc);
     return rc;
@@ -995,6 +1044,7 @@ static inline int wasmext_instance_call(wasmext_instance *i, uint32_t index, con
 static inline int wasmext_instance_call_ref(wasmext_instance *i, const wasmext_funcref *f, const wasmext_val *args, uint32_t n_args, wasmext_val *results, uint32_t n_results) {
     const wasmext_ref_type *rt = NULL;
     int line, rc;
+    wasmext_activation act;
     wasmext_rlock *lock;
     long level;
     if (!i->instantiated) return WASMEXT_INST_NOT_INSTANTIATED;
@@ -1016,13 +1066,14 @@ static inline int wasmext_instance_call_ref(wasmext_instance *i, const wasmext_f
     if (rc != 0) return rc;
     line = wasmext_store_enter(i->store);
     if (line < 0) return (int)WASMEXT_TRAP_CLOSED;
-    wasmext_thread_ready();
+    wasmext_activate_store_(i->store, &act);
     lock = (wasmext_rlock *)wasmext_store_host_lock(i->store);
     level = lock != NULL ? wasmext_rlock_depth(lock) : 0;
     if (i->binding->call_begin != NULL) i->binding->call_begin(i->module);
     rc = rt->adapter(f->ref.module_instance, (void *)(void (*)(void))f->ref.func, args, results);
     if (lock != NULL) wasmext_rlock_release_to(lock, level); /* a trap left the unlocks of fusedwasi behind */
     if (rc == 0) rc = wasmext_call_fill_refs_(i->store, &rt->sig, results);
+    wasmext_deactivate_store_(i->store, &act);
     wasmext_store_leave(i->store, line);
     wasmext_atomic_store(&i->status, rc);
     return rc;
@@ -1147,14 +1198,22 @@ typedef struct {
 /* The active exception of the calling thread, to be asked right after the call that ended with it: a later throw replaces it, and a caught one stays there until then. WASMEXT_INST_NO_EXCEPTION
    when this thread has had none. */
 static inline int wasmext_instance_exception(const wasmext_instance *i, wasmext_exception *out) {
-    const void *tag = wasm_rt_exception_tag();
-    uint32_t size = wasm_rt_exception_size();
+    wasmext_activation act;
+    const void *tag;
+    uint32_t size;
     memset(out, 0, sizeof *out);
     out->tag_index = -1;
-    if (tag == NULL) return WASMEXT_INST_NO_EXCEPTION;
+    wasmext_activate_scope_(i->store, &act); /* the exception is kept by the runtime of the store (8b-2) */
+    tag = wasm_rt_exception_tag();
+    size = wasm_rt_exception_size();
+    if (tag == NULL) {
+        wasmext_deactivate_store_(i->store, &act);
+        return WASMEXT_INST_NO_EXCEPTION;
+    }
     out->tag = tag;
     out->size = size > WASMEXT_EXC_RAW ? WASMEXT_EXC_RAW : size;
     memcpy(out->raw, wasm_rt_exception(), out->size);
+    wasmext_deactivate_store_(i->store, &act);
     for (uint32_t k = 0; k < i->binding->n_tags; k++) {
         const wasmext_tag_binding *t = &i->binding->tags[k];
         if (i->module == NULL || t->identity(i->module) != tag) continue;
@@ -1281,13 +1340,16 @@ static inline int wasmext_instance_memory_pin(wasmext_instance *i, uint32_t inde
 static inline int64_t wasmext_instance_memory_grow(wasmext_instance *i, uint32_t index, uint64_t delta) {
     int rc, line;
     uint64_t old;
+    wasmext_activation act;
     wasm_rt_memory_t *m = wasmext_instance_memory_of_(i, index, &rc);
     if (m == NULL) return rc;
     line = wasmext_store_enter(i->store);
     if (line < 0) return (int64_t)WASMEXT_TRAP_CLOSED;
+    wasmext_activate_scope_(i->store, &act);
     WASMEXT_LOCK(&i->pin_mutex);
     old = wasm_rt_grow_memory(m, delta);
     WASMEXT_UNLOCK(&i->pin_mutex);
+    wasmext_deactivate_store_(i->store, &act);
     wasmext_store_leave(i->store, line);
     return old == (uint64_t)-1 ? -1 : (int64_t)old;
 }
@@ -1448,7 +1510,8 @@ const wasmext_runtime wasmext_runtime_own_ = {
 #endif
     wasmext_own_wasm_rt_allocate_funcref_table, wasmext_own_wasm_rt_grow_funcref_table, wasmext_own_wasm_rt_free_funcref_table,
     wasmext_own_wasm_rt_allocate_externref_table, wasmext_own_wasm_rt_grow_externref_table, wasmext_own_wasm_rt_free_externref_table,
-    wasmext_own_wasm_rt_allocate_exnref_table, wasmext_own_wasm_rt_grow_exnref_table, wasmext_own_wasm_rt_free_exnref_table};
+    wasmext_own_wasm_rt_allocate_exnref_table, wasmext_own_wasm_rt_grow_exnref_table, wasmext_own_wasm_rt_free_exnref_table,
+    wasmext_rt_enter_, wasmext_rt_leave_};
 #if defined(__GNUC__) || defined(__clang__)
 #pragma GCC diagnostic pop
 #endif

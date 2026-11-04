@@ -106,6 +106,56 @@ TAGA = """(module
   (func (export "self_catch") (result i32)
     (block $h (result i32) (try_table (catch $t $h) i32.const 31 throw $t) i32.const -1)))"""
 TAGB = TAGA.replace("hgna", "hgnb")
+# 8b-2: traps across copies. TRAPA (artifact A) exports a table with its functions at 0 to 2 (`ok`, `boom`, `pa`); TRAPB (B) imports that table (the test hands the record to B with the artifact left
+# unsaid, the temporary guard of 8a would refuse it) and puts `pb` at 3. `pa` and `pb` call each other through the table, n times, and trap (`unreachable`) at 0.
+TRAPA = """(module
+  (type $t (func (result i32)))
+  (type $n (func (param i32) (result i32)))
+  (table $tab (export "tab") 4 8 funcref)
+  (func $ok (result i32) i32.const 7)
+  (func $boom (export "boom") (result i32) unreachable)
+  (func $pa (export "pa") (param i32) (result i32)
+    local.get 0 i32.eqz if unreachable end
+    local.get 0 i32.const 1 i32.sub i32.const 3 call_indirect (type $n))
+  (func (export "div") (param i32 i32) (result i32) local.get 0 local.get 1 i32.div_s)
+  (func (export "call") (param i32) (result i32) local.get 0 call_indirect (type $t))
+  (elem (i32.const 0) $ok $boom $pa))"""
+TRAPB = """(module
+  (type $t (func (result i32)))
+  (type $n (func (param i32) (result i32)))
+  (import "tt" "tab" (table 4 funcref))
+  (tag $e)
+  (func (export "thrower") throw $e)
+  (func $pb (export "pb") (param i32) (result i32)
+    local.get 0 i32.eqz if unreachable end
+    local.get 0 i32.const 1 i32.sub i32.const 2 call_indirect (type $n))
+  (func (export "call") (param i32) (result i32) local.get 0 call_indirect (type $t))
+  (elem (i32.const 3) $pb))"""
+# B imports the functions of TRAPA's instance (a link: the trap comes back as TRAP_LINKED + code and is raised again in B)
+TRAPC = """(module
+  (import "lk" "boom" (func $boom (result i32)))
+  (import "lk" "div" (func $div (param i32 i32) (result i32)))
+  (func (export "call_boom") (result i32) call $boom)
+  (func (export "call_div") (param i32 i32) (result i32) local.get 0 local.get 1 call $div))"""
+
+
+def _nest(imp: str) -> str:
+    """`rec(n)` traps (unreachable) at 0 and calls the host function `cb(n)` otherwise; the host function of the test calls back into the store (a nested entry) or fails."""
+    return f"""(module
+  (import "{imp}" "cb" (func $cb (param i32) (result i32)))
+  (func (export "rec") (param i32) (result i32) local.get 0 i32.eqz if unreachable end local.get 0 call $cb)
+  (func (export "noop") (result i32) i32.const 1))"""
+
+
+def _try(imp: str) -> str:
+    """`run` calls the host function `cb` (which enters the store again) inside a `try`, then calls a function that throws (the throw goes to the unwind target, not to a jump inside the function): the `try` must still be the unwind target, so the answer is 31."""
+    return f"""(module
+  (import "{imp}" "cb" (func $cb))
+  (tag $t)
+  (func $throws throw $t)
+  (func (export "run") (result i32)
+    (block $h (try_table (catch_all $h) call $cb call $throws) unreachable)
+    i32.const 31))"""
 
 
 def _library(
@@ -163,7 +213,22 @@ def _library(
 def _run(wabt: Path, tmp_path: Path, flags: Sequence[str] = (), defines: Sequence[str] = ()) -> None:
     if sys.platform == "win32" or find_cc() is None:
         pytest.skip("shared libraries with hidden visibility and pthreads: Linux and macOS with a cc")
-    a = _library(wabt, tmp_path, "a", {"liba": LIBA, "usea": USEA, "rlib": REFLIBA, "tha": TAGA}, flags, defines)
+    a = _library(
+        wabt,
+        tmp_path,
+        "a",
+        {
+            "liba": LIBA,
+            "usea": USEA,
+            "rlib": REFLIBA,
+            "tha": TAGA,
+            "trapa": TRAPA,
+            "nesta": _nest("na"),
+            "trya": _try("ya"),
+        },
+        flags,
+        defines,
+    )
     b = _library(
         wabt,
         tmp_path,
@@ -177,6 +242,10 @@ def _run(wabt: Path, tmp_path: Path, flags: Sequence[str] = (), defines: Sequenc
             "ifb": IFB,
             "rapp": REFAPPB,
             "thb": TAGB,
+            "trapb": TRAPB,
+            "trapc": TRAPC,
+            "nestb": _nest("nb"),
+            "tryb": _try("yb"),
         },
         flags,
         defines,
@@ -186,7 +255,11 @@ def _run(wabt: Path, tmp_path: Path, flags: Sequence[str] = (), defines: Sequenc
         [C_DIR / "test_artifacts.c", a, b],
         exe,
         include_dirs=[C_DIR, WASMEXT_C, Path(get_include()), find_toolchain().runtime],
-        flags=[*flags, f"-Wl,-rpath,{tmp_path}"],
+        flags=[
+            *flags,
+            "-O1",
+            f"-Wl,-rpath,{tmp_path}",
+        ],  # -O1: the core is in the libraries; the host must not emit the inline functions that touch their thread state
         defines=[*defines, "WASMEXT_STORE_RUNTIME=1"],  # the host reads the headers of the core: they stop without it
         threads=True,
         strict=False,
@@ -282,6 +355,21 @@ _SWAPS = {
         "void (*load_exception)(wasm_rt_tag_t tag, uint32_t size, const void *values);",
         0,
     ),
+    # 8b-2: the entry of a call (a copy that is not the runtime of the store pushes it through the table) and the two functions that do it
+    "rt-entry-prev-saved-unwind": (
+        "wasmext_runtime.h",
+        "struct wasmext_rt_entry_s_ *prev;",
+        0,
+        "WASM_RT_UNWIND_TARGET *saved_unwind;",
+        0,
+    ),
+    "runtime-enter-leave": (
+        "wasmext_runtime.h",
+        "void (*enter)(wasmext_rt_entry *entry);",
+        0,
+        "void (*leave)(wasmext_rt_entry *entry);",
+        0,
+    ),
 }
 
 
@@ -352,7 +440,7 @@ def test_the_product_build_passes_the_version_of_fusedwasi_to_the_artifacts(wabt
             [C_DIR / "host_word.c", library],
             exe,
             include_dirs=[C_DIR, WASMEXT_C, Path(get_include()), find_toolchain().runtime],
-            flags=[f"-Wl,-rpath,{tmp_path}"],
+            flags=["-O1", f"-Wl,-rpath,{tmp_path}"],
             defines=[f"ARTIFACT_NAME={name}", "WASMEXT_STORE_RUNTIME=1"],
             strict=False,
             std=None,

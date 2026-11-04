@@ -5,7 +5,7 @@
      3 bench.run calls an import that a uniform host function answers (wasmext_instance_bind_func)
      4 the same import answered by a typed host function (wasmext_instance_bind_typed)
      5 owner.call(1): call_indirect through a table that owner and user share, slot 1 holds user.nine
-     6 reference: w2c_ops_add called directly inside WASMEXT_ENTER_PLAIN / WASMEXT_LEAVE_PLAIN (no store)
+     6 reference: w2c_ops_add called directly inside WASMEXT_ENTER_STORE / WASMEXT_LEAVE_STORE (the entry alone, no store, no activation)
      7 two artifacts built apart (shared libraries, position independent, each with its own copy of the core and of the runtime): artifact A makes the store, B attaches and makes an instance of
        `ops` in it; B's `add` is called by name through B's table (S0008, 8b-1; tests/c/artifact.c)
      8 the same store: B's app calls the import libx.add that A's lib answers (a link across artifacts, typed shim)
@@ -168,9 +168,9 @@ int main(int argc, char **argv) {
         int32_t acc = 0;
         for (long k = 0; k < n; k++) {
             uint32_t res;
-            WASMEXT_ENTER_PLAIN(trap_, { die("trap", __LINE__); })
+            WASMEXT_ENTER_STORE(trap_, { die("trap", __LINE__); })
             res = w2c_ops_add(inst, (uint32_t)k, 2u);
-            WASMEXT_LEAVE_PLAIN();
+            WASMEXT_LEAVE_STORE();
             acc += (int32_t)res;
         }
         sink = acc;

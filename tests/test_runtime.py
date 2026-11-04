@@ -216,7 +216,10 @@ def test_two_loaded_copies_of_one_library_run_on_their_own_functions(wabt: Path,
         exe,
         include_dirs=[Path(__file__).parent / "c", WASMEXT_C, Path(get_include()), find_toolchain().runtime],
         defines=["WASMEXT_STORE_RUNTIME=1"],
-        flags=["-ldl"],
+        flags=[
+            "-ldl",
+            "-O1",
+        ],  # -O1: the host must not emit the inline functions of the core that touch the thread state of the libraries
         strict=False,
         std=None,
     )

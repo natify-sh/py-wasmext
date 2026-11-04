@@ -3,8 +3,8 @@
 
    Every artifact has a full copy of the wasm2c runtime. In a build of the core the wrappers of the runtime (`_RUNTIME_WRAPPERS` in _natify.py) rename the functions of that copy to
    `wasmext_own_wasm_rt_*` and define the real `wasm_rt_*` names as forwarders (the second inclusion of this file, below): a forwarder calls the function of the table `tls.rt` when
-   it is set, and the function of the copy itself when it is NULL. `tls` is one thread-local record for each copy. Nothing sets `tls.rt` yet (8b-2 does, at the entry of a call), so a
-   copy still runs on its own functions.
+   it is set, and the function of the copy itself when it is NULL. `tls` is one thread-local record for each copy. The core sets `tls.rt` at the entry of a call (`wasmext_activate_store_`, wasmext_instance.h)
+   and the entry macros of wasmext_glue.h push their entry on the runtime that is active.
 
    The table `wasmext_runtime_own_` is the runtime of the copy: one for each artifact, hidden, defined by the file that defines WASMEXT_DEFINE_THREAD_STATE (as the identity of the artifact
    is; the address of a `static const` of a header is not one object). Its address is the identity of the runtime. A store made by the copy points at it (`head.rt`). Fields are only added at the end.
@@ -20,6 +20,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include "wasm-rt.h"
 #include "wasm-rt-exceptions.h"
@@ -60,6 +61,14 @@ typedef struct { int unused_; } wasmext_shared_memory_t_;
 
 /* The functions of the runtime of wasm2c (1.0.42) that generated code or the core can call: 23. `wasm_rt_init`, `wasm_rt_free`, `wasm_rt_init_thread`, `wasm_rt_free_thread` (set-up of a thread:
    D44, 8b-3b), `wasm_rt_is_initialized` and `wasm_rt_strerror` are not in it. A feature added later adds its functions here in the same step (D-6). */
+/* The entry of a call into the code of a store (WASMEXT_ENTER_STORE, wasmext_glue.h): the jump buffer a trap comes back to, the entry it was made inside, and the unwind target it replaced (a `try` of
+   the code that called is still there after a nested entry, not the buffer of the outer entry). The runtime of the store keeps the innermost entry of each thread. */
+typedef struct wasmext_rt_entry_s_ {
+    wasm_rt_jmp_buf buf;
+    struct wasmext_rt_entry_s_ *prev;
+    WASM_RT_UNWIND_TARGET *saved_unwind;
+} wasmext_rt_entry;
+
 typedef struct {
     wasmext_runtime_head head; /* first */
     void (*trap)(wasm_rt_trap_t code);
@@ -85,9 +94,12 @@ typedef struct {
     void (*allocate_exnref_table)(wasm_rt_exnref_table_t *table, uint32_t elements, uint32_t max_elements);
     uint32_t (*grow_exnref_table)(wasm_rt_exnref_table_t *table, uint32_t delta, wasm_rt_exnref_t init);
     void (*free_exnref_table)(wasm_rt_exnref_table_t *table);
+    void (*enter)(wasmext_rt_entry *entry); /* 8b-2: push `entry` as the innermost of the thread and make its buffer the unwind target (the entry of a copy that is not the runtime of the store) */
+    void (*leave)(wasmext_rt_entry *entry); /* ... and the reverse: pop it and put the saved unwind target back */
 } wasmext_runtime;
 
 #define WASMEXT_SALT_wasmext_runtime 3141592653u
+#define WASMEXT_SALT_wasmext_rt_entry 2718281829u
 #define WASMEXT_RUNTIME_LAYOUT_ ( \
     WASMEXT_LS_(71u, wasmext_runtime) ^ WASMEXT_LF_(0, wasmext_runtime, head) ^ WASMEXT_LF_(1, wasmext_runtime, trap) ^ WASMEXT_LF_(2, wasmext_runtime, load_exception) ^ \
     WASMEXT_LF_(3, wasmext_runtime, throw_exception) ^ WASMEXT_LF_(4, wasmext_runtime, get_unwind_target) ^ WASMEXT_LF_(5, wasmext_runtime, set_unwind_target) ^ \
@@ -96,11 +108,17 @@ typedef struct {
     WASMEXT_LF_(12, wasmext_runtime, allocate_memory_shared) ^ WASMEXT_LF_(13, wasmext_runtime, grow_memory_shared) ^ WASMEXT_LF_(14, wasmext_runtime, free_memory_shared) ^ \
     WASMEXT_LF_(15, wasmext_runtime, allocate_funcref_table) ^ WASMEXT_LF_(16, wasmext_runtime, grow_funcref_table) ^ WASMEXT_LF_(17, wasmext_runtime, free_funcref_table) ^ \
     WASMEXT_LF_(18, wasmext_runtime, allocate_externref_table) ^ WASMEXT_LF_(19, wasmext_runtime, grow_externref_table) ^ WASMEXT_LF_(20, wasmext_runtime, free_externref_table) ^ \
-    WASMEXT_LF_(21, wasmext_runtime, allocate_exnref_table) ^ WASMEXT_LF_(22, wasmext_runtime, grow_exnref_table) ^ WASMEXT_LF_(23, wasmext_runtime, free_exnref_table))
+    WASMEXT_LF_(21, wasmext_runtime, allocate_exnref_table) ^ WASMEXT_LF_(22, wasmext_runtime, grow_exnref_table) ^ WASMEXT_LF_(23, wasmext_runtime, free_exnref_table) ^ \
+    WASMEXT_LF_(24, wasmext_runtime, enter) ^ WASMEXT_LF_(25, wasmext_runtime, leave) ^ \
+    WASMEXT_LS_(73u, wasmext_rt_entry) ^ WASMEXT_LF_(0, wasmext_rt_entry, buf) ^ WASMEXT_LF_(1, wasmext_rt_entry, prev) ^ WASMEXT_LF_(2, wasmext_rt_entry, saved_unwind))
 
-/* What a copy keeps for each thread, and nobody else reads (so it is not in the layout hash): `rt` is the table to which the forwarders of THIS copy send the call, NULL for the copy's own. */
+/* What a copy keeps for each thread. `rt` is the table to which the forwarders of THIS copy send the call, NULL for the copy's own; `top` is the innermost entry of the thread on this copy (where a
+   trap of the runtime of this copy comes back to). Another copy reads them only through the functions of the table (`enter`, `leave`, `trap`), so they are not in the layout hash. */
 typedef struct {
     const wasmext_runtime *rt;
+    wasmext_rt_entry *top;
+    WASM_RT_UNWIND_TARGET **unwind_slot; /* the address of `g_unwind_target` of this copy (NULL until the first entry): the entry saves and sets the unwind target without a call */
+    int ready;                           /* the runtime of this copy is set up on this thread (`wasmext_thread_ready`, once for each copy and thread: not one flag for each file) */
 } wasmext_tls;
 
 /* hidden where the compiler can say so (as `wasmext_artifact_` is): with the default visibility the dynamic linker would let one library's table or thread record stand for another's */
@@ -119,6 +137,7 @@ void wasmext_runtime_fix_seed_(uint32_t seed) WASMEXT_HIDDEN_;
 
 /* The functions of this copy, renamed by its wrappers (the real names are the forwarders). Hidden: the entries of the table `wasmext_runtime_own_` must bind to THIS copy's functions; exported, they would
    be interposed by the first loaded copy of the same artifact (RTLD_GLOBAL) and two copies would share one runtime state. */
+WASMEXT_HIDDEN_ WASM_RT_UNWIND_TARGET **wasmext_own_unwind_slot(void); /* defined by the `exceptions` wrapper, in the file that has the variable */
 WASMEXT_HIDDEN_ WASM_RT_NO_RETURN void wasmext_own_wasm_rt_trap(wasm_rt_trap_t code);
 WASMEXT_HIDDEN_ void wasmext_own_wasm_rt_load_exception(const wasm_rt_tag_t tag, uint32_t size, const void *values);
 WASMEXT_HIDDEN_ WASM_RT_NO_RETURN void wasmext_own_wasm_rt_throw(void);
@@ -147,17 +166,55 @@ WASMEXT_HIDDEN_ void wasmext_own_wasm_rt_free_exnref_table(wasm_rt_exnref_table_
 
 /* What the list of a store holds for this copy (wasmext_artifact_entry): `activate` makes `rt` the active runtime of this copy on the calling thread (NULL when it is the copy's own) and answers
    the one it was, `deactivate` puts that back. The entry of a call calls them for every other copy of the store (8b-2). */
-static inline const void *wasmext_activate_(const void *rt) {
-    const void *previous = wasmext_tls_.rt;
-    wasmext_tls_.rt = rt == (const void *)&wasmext_runtime_own_ ? NULL : (const wasmext_runtime *)rt;
+static inline const void *wasmext_activate_in_(wasmext_tls *t, const void *rt) {
+    const void *previous = t->rt;
+    t->rt = rt == (const void *)&wasmext_runtime_own_ ? NULL : (const wasmext_runtime *)rt;
     return previous;
 }
+static inline const void *wasmext_activate_(const void *rt) { return wasmext_activate_in_(&wasmext_tls_, rt); }
 static inline void wasmext_deactivate_(const void *saved) {
     wasmext_tls_.rt = (const wasmext_runtime *)saved;
 }
 
+/* The entry of the runtime of this copy: the innermost entry of the thread is `tls.top`, and the unwind target of this copy (the `throw` that nothing catches) is its buffer. A copy that is not the
+   runtime of the store calls these through the table (`enter`, `leave`). `wasmext_enter_` and `wasmext_leave_` are what the entry macros call: the inline path for the copy's own runtime. */
+static inline void wasmext_rt_enter_(wasmext_rt_entry *e) {
+    wasmext_tls *t = &wasmext_tls_;
+    WASM_RT_UNWIND_TARGET **slot = t->unwind_slot;
+    if (slot == NULL) slot = t->unwind_slot = wasmext_own_unwind_slot();
+    e->prev = t->top;
+    t->top = e;
+    e->saved_unwind = *slot;
+    *slot = &e->buf;
+}
+static inline void wasmext_rt_leave_(wasmext_rt_entry *e) {
+    wasmext_tls *t = &wasmext_tls_;
+    t->top = e->prev;
+    *t->unwind_slot = e->saved_unwind; /* what was saved at the enter, not the buffer of `prev` (a `try` of the caller may have set another) */
+}
+static inline void wasmext_enter_(wasmext_rt_entry *e) {
+    const wasmext_runtime *rt = wasmext_tls_.rt;
+    if (rt == NULL) wasmext_rt_enter_(e);
+    else rt->enter(e);
+}
+static inline void wasmext_leave_(wasmext_rt_entry *e) {
+    const wasmext_runtime *rt = wasmext_tls_.rt;
+    if (rt == NULL) wasmext_rt_leave_(e);
+    else rt->leave(e);
+}
+/* `WASM_RT_TRAP_HANDLER` of the runtime of this copy (the `impl` wrapper of _natify.py defines it): the trap of its code jumps to the innermost entry of the thread, whichever copy made it */
+WASMEXT_HIDDEN_ void wasmext_trap_forward(wasm_rt_trap_t code);
+
 #ifdef WASMEXT_DEFINE_THREAD_STATE
 WASM_RT_THREAD_LOCAL wasmext_tls wasmext_tls_;
+void wasmext_trap_forward(wasm_rt_trap_t code) {
+    wasmext_rt_entry *top = wasmext_tls_.top;
+    if (top == NULL) {
+        fputs("wasmext: WebAssembly code trapped outside any call into a module\n", stderr);
+        abort();
+    }
+    WASM_RT_LONGJMP(top->buf, code);
+}
 /* The serials of the stores of this runtime: `seed + n` for the n-th store, modulo 2^16 (the handle keeps 16 bits), so two stores of this runtime never share one until 65536 are made. The seed
    comes from the address of the table (D45): two runtimes in a process start at places that differ by chance, and collide with a chance of 1 in 65536. */
 static wasmext_counter wasmext_serial_count_;

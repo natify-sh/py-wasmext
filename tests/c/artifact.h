@@ -48,6 +48,10 @@ typedef struct {
     uint32_t (*exception_size)(void);    /* this copy's wasm_rt_exception_size */
     void (*fix_seed)(uint32_t seed);     /* fixes the start of the serials of this copy's runtime */
     int (*register_object)(wasmext_store *s, wasmext_owner *out); /* registers a new object of this copy in the store: its handle */
+    /* 8b-2: what this copy keeps for the calling thread: the active runtime (`tls.rt`, NULL outside a call), the innermost entry (`tls.top`, NULL outside a call) and the unwind target as this copy's
+       wasm_rt_get_unwind_target answers it (the one of the active runtime) */
+    void (*state)(const void **rt, const void **top, const void **unwind);
+    int (*exception_of)(wasmext_instance *i, const void **tag); /* wasmext_instance_exception: its answer, and the tag of the active exception */
 } artifact_api;
 
 /* in artifact_store_only.c: the file that includes only wasmext_store.h */

@@ -133,10 +133,23 @@ static int register_object_(wasmext_store *s, wasmext_owner *out) {
     return used_ < 8 ? wasmext_store_register(s, &objects_[used_++], NULL, NULL, out) : -1;
 }
 
+static void state_(const void **rt, const void **top, const void **unwind) {
+    *rt = (const void *)wasmext_tls_.rt;
+    *top = (const void *)wasmext_tls_.top;
+    *unwind = (const void *)wasm_rt_get_unwind_target();
+}
+
+static int exception_of_(wasmext_instance *i, const void **tag) {
+    wasmext_exception e;
+    int rc = wasmext_instance_exception(i, &e);
+    *tag = e.tag;
+    return rc;
+}
+
 static const artifact_api api_ = {
     (const void *)&wasmext_artifact_, trap_address_, store_new_, store_attach_, store_close_, store_free_, store_own_, releases_, store_error_, instance_new_, instantiate_, call_,
     export_record_, bind_, funcref_, table_set_, global_set_funcref_, tab_new_, tab_set_, tab_get_, wasmext_thread_free, call_ref_, bind_host_, bind_global_funcref_, host_funcref_, extern_new_, store_misc_, artifact_so_new, artifact_so_attach, extern_make_, tag_new_, tag_cell_, WASMEXT_HOST_LAYOUT,
-    runtime_id_, set_tls_rt_, exception_load_, exception_size_, wasmext_runtime_fix_seed_, register_object_};
+    runtime_id_, set_tls_rt_, exception_load_, exception_size_, wasmext_runtime_fix_seed_, register_object_, state_, exception_of_};
 
 #define ARTIFACT_CAT_(a, b) a##b
 #define ARTIFACT_CAT(a, b) ARTIFACT_CAT_(a, b)

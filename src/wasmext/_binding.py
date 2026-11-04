@@ -75,7 +75,7 @@ def _unpack(t: ValType, src: str, dst: str) -> str:
     return check + f"{dst} = {cast}{src}.as.{_FIELD[t]};"
 
 
-def _adapter(name: str, ft: FuncType, reentrant: bool) -> list[str]:
+def _adapter(name: str, ft: FuncType) -> list[str]:
     several = len(ft.results) > 1
     ret = _ret(ft)
     ptypes = "".join(f", {_CTYPE[t]}" for t in ft.params)
@@ -108,14 +108,10 @@ def _adapter(name: str, ft: FuncType, reentrant: bool) -> list[str]:
     out += [f"    {x}" for x in pre]
     if ft.results:
         out.append(f"    {ret} res;")
-    out.append(
-        "    WASMEXT_ENTER_REENTRANT(trap_, { return (int)trap_; })"
-        if reentrant
-        else "    WASMEXT_ENTER_PLAIN(trap_, { return (int)trap_; })"
-    )
+    out.append("    WASMEXT_ENTER_STORE(trap_, { return (int)trap_; })")
     call = f"(({ret} (*)(void *{ptypes}))fn)(inst{args})"
     out.append(f"    {'res = ' if ft.results else ''}{call};")
-    out.append("    WASMEXT_LEAVE_REENTRANT();" if reentrant else "    WASMEXT_LEAVE_PLAIN();")
+    out.append("    WASMEXT_LEAVE_STORE();")
     for j, t in enumerate(ft.results):
         out.append("    " + _pack(t, f"r[{j}]", f"res.{_MULTI_CODE[t]}{j}" if several else "res"))
     out += ["    return 0;", "}", ""]
@@ -218,7 +214,6 @@ def generate_binding(model: ModuleModel) -> str:
     last = model.last
     prefix = module_prefix(model.name)
     inst_t = f"w2c_{prefix}"
-    reentrant = bool(model.imports)
     core = [imp for imp in model.imports if imp.core]
     if core and not any(e.kind == "memory" and e.name == "memory" for e in model.exports):
         raise GenError(f"{model.name}: a module with WASI imports exports its memory as 'memory'; this one does not")
@@ -316,7 +311,7 @@ def generate_binding(model: ModuleModel) -> str:
             key = (ft.params, ft.results)
             if key not in adapters:
                 adapters[key] = f"{last}_adapt{len(adapters)}"
-                out += _adapter(adapters[key], ft, reentrant)
+                out += _adapter(adapters[key], ft)
     shims: dict[int, str] = {}
     for n, e in enumerate(model.exports):
         if e.kind == "func":
@@ -324,8 +319,8 @@ def generate_binding(model: ModuleModel) -> str:
             assert isinstance(ft, FuncType)
             shims[n] = f"{last}_shim{n}"
             out += _shim(shims[n], last, prefix, e.name, ft)
-    # the types of the type section that `call_ref` can call an element of: each with the type as wasm2c knows it (the hash that `call_indirect` compares), an adapter (always the reentrant
-    # one: the function is of any instance of the store, and the call may be made from inside a host function), and the signature
+    # the types of the type section that `call_ref` can call an element of: each with the type as wasm2c knows it (the hash that `call_indirect` compares), an adapter (the same entry
+    # as every adapter: the function is of any instance of the store, and the call may be made from inside a host function), and the signature
     ref_rows: list[str] = []
     seen_types: list[tuple[tuple[ValType, ...], tuple[ValType, ...]]] = []
     for ft in model.module.types:
@@ -334,7 +329,7 @@ def generate_binding(model: ModuleModel) -> str:
         k = len(seen_types)
         seen_types.append((ft.params, ft.results))
         types = "".join(f", {_RT_TYPE[t]}" for t in (*ft.params, *ft.results))
-        out += _adapter(f"{last}_radapt{k}", ft, True)
+        out += _adapter(f"{last}_radapt{k}", ft)
         out += _trampoline(f"{last}_tramp{k}", ft)
         out += [
             f"static const uint8_t {last}_rtp{k}[] = {{{', '.join(str(VALTYPE_BYTES[t]) for t in ft.params) or '0'}}};",
@@ -401,8 +396,8 @@ def generate_binding(model: ModuleModel) -> str:
             assert isinstance(e.type, FuncType)
             refs[n] = f"{last}_ref{n}"
             out += _ref_filler(refs[n], last, prefix, e.name, e.type)
-    enter = "WASMEXT_ENTER_REENTRANT" if reentrant else "WASMEXT_ENTER_PLAIN"
-    leave = "WASMEXT_LEAVE_REENTRANT" if reentrant else "WASMEXT_LEAVE_PLAIN"
+    enter = "WASMEXT_ENTER_STORE"
+    leave = "WASMEXT_LEAVE_STORE"
     wasm_args = "".join(f", &b->m{n}" for n in range(len(modules)))
     setup: list[str] = []
     if core:
@@ -490,7 +485,7 @@ def generate_binding(model: ModuleModel) -> str:
 
 def _shim(name: str, last: str, prefix: str, export: str, ft: FuncType) -> list[str]:
     """The typed function that another instance calls through the record of this export: it enters the store of this instance, catches a trap of its own module and answers
-    it as WASMEXT_TRAP_LINKED + its code, so the trap goes through the caller as one of its own (the buffer of the caller is put back: the entry is the reentrant one).
+    it as WASMEXT_TRAP_LINKED + its code, so the trap goes through the caller as one of its own (the entry is on the stack of the call: `WASMEXT_ENTER_STORE`).
     A funcref or an externref comes in by value (`wasm_rt_funcref_t`, `void *`) and is checked here, as a call of the host is: a reference that no member of the store stands behind, or a funcref of
     another artifact (the temporary guard of S0008, removed by 8b), is answered in `*trapped` (not as a trap of the callee)."""
     ret = _ret(ft)
@@ -503,6 +498,7 @@ def _shim(name: str, last: str, prefix: str, export: str, ft: FuncType) -> list[
         f"    struct {last}_block *b = (struct {last}_block *)self->module;",
         "    int line, rc;",
         "    long level;",
+        "    wasmext_activation act;",
     ]
     if ft.results:
         out += [f"    {ret} zero;", "    memset(&zero, 0, sizeof zero);"]
@@ -512,20 +508,20 @@ def _shim(name: str, last: str, prefix: str, export: str, ft: FuncType) -> list[
         elif t == "externref":
             out.append(f"    rc = wasmext_link_extern_(self, a{k}); if (rc) {{ *trapped = rc; {give} }}")
     out += [
-        "    rc = wasmext_instance_begin_(self, &line, &level);",
+        "    rc = wasmext_instance_begin_(self, &line, &level, &act);",
         f"    if (rc) {{ *trapped = (int)WASMEXT_TRAP_LINKED + rc; {give} }}",
-        f"    WASMEXT_ENTER_REENTRANT(trap_, {{ wasmext_instance_end_(self, line, level); *trapped = (int)WASMEXT_TRAP_LINKED + (int)trap_; {give} }})",
+        f"    WASMEXT_ENTER_STORE(trap_, {{ wasmext_instance_end_(self, line, level, &act); *trapped = (int)WASMEXT_TRAP_LINKED + (int)trap_; {give} }})",
     ]
     call = f"w2c_{prefix}_{mangle(export)}(&b->inst{args})"
     if ft.results:
         out += [
             f"    {ret} res = {call};",
-            "    WASMEXT_LEAVE_REENTRANT();",
-            "    wasmext_instance_end_(self, line, level);",
+            "    WASMEXT_LEAVE_STORE();",
+            "    wasmext_instance_end_(self, line, level, &act);",
             "    return res;",
         ]
     else:
-        out += [f"    {call};", "    WASMEXT_LEAVE_REENTRANT();", "    wasmext_instance_end_(self, line, level);"]
+        out += [f"    {call};", "    WASMEXT_LEAVE_STORE();", "    wasmext_instance_end_(self, line, level, &act);"]
     out += ["}", ""]
     return out
 

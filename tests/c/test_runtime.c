@@ -85,7 +85,7 @@ static void run(int which, int stubbed) {
     case F_TRAP:
         begin(stubbed);
         if (stubbed) { if (WASM_RT_SETJMP(stub_jmp) == 0) wasm_rt_trap(WASM_RT_TRAP_DIV_BY_ZERO); else code = 1; }
-        else { if (WASM_RT_SETJMP(g_wasm_rt_jmp_buf) == 0) wasm_rt_trap(WASM_RT_TRAP_DIV_BY_ZERO); else code = 1; }
+        else { wasmext_rt_entry entry; wasmext_rt_enter_(&entry); if (WASM_RT_SETJMP(entry.buf) == 0) wasm_rt_trap(WASM_RT_TRAP_DIV_BY_ZERO); else code = 1; wasmext_rt_leave_(&entry); } /* the trap of the copy comes back to the innermost entry (8b-2) */
         end();
         CHECK(code == 1, n);
         if (stubbed) CHECK(seen[0] == (uint64_t)WASM_RT_TRAP_DIV_BY_ZERO, n);

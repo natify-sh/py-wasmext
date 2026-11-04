@@ -362,4 +362,18 @@ static inline int wasmext_traps_use(const wasmext_traps *shared) {
 #define WASMEXT_LEAVE_SHARED() wasmext_traps_->leave(&entry_)
 #endif
 
+/* The entry of a call into the code of a store (S0008, 8b-2; the core, wasmext_runtime.h): the entry is on the stack of the call and is pushed on the runtime that is active for the thread (the one of
+   the store: the core sets it before it calls the adapter, `wasmext_activate_store_`), so a trap in the code of any copy of the store comes back here. `leave` puts back the unwind target that was
+   saved at the enter. No `PLAIN` form: a store can be entered from a copy that shares it. */
+#define WASMEXT_ENTER_STORE(CODE, FAIL) \
+    wasmext_rt_entry entry_; \
+    wasmext_enter_(&entry_); \
+    wasm_rt_trap_t CODE = (WASM_RT_SAVE_STACK_DEPTH(), (wasm_rt_trap_t)WASMEXT_TRY(entry_.buf)); \
+    if (CODE) { \
+        wasmext_leave_(&entry_); \
+        wasmext_unblock_fault_signals(); \
+        FAIL; \
+    }
+#define WASMEXT_LEAVE_STORE() wasmext_leave_(&entry_)
+
 #endif

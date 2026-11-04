@@ -154,3 +154,10 @@ Traps found on the way, with the rule. Newest last.
 * Cause: directives inside the arguments of a macro invocation are undefined behaviour in the standard; GCC and Clang accept them, MSVC does not.
 * Rule: compute the value in a variable before the macro (`#ifndef X` / `expected -= 3;` / `#endif`), never put `#if` between the parentheses of a macro call. The Windows jobs are the only check; a new C test is not trusted on Windows until they ran it.
 * Where found: step 8b-1 review fixes, commit de2d452, `tests/c/test_runtime.c`.
+
+### A `throw` written inside its own `try_table` never reaches the unwind target
+* What happened: a test of the unwind target after a nested entry put `call $cb throw $t` inside one `try_table`. The mutation "`leave` restores `prev->buf`" passed.
+* Symptom: the test was green with the bug in; the mutation was not a catch.
+* Cause: wasm2c turns a `throw` that stands lexically inside the `try_table` that catches it into a `goto` (see the `goto var_T1_catch` in the C of the function), so no `wasm_rt_throw` and no unwind target is involved.
+* Rule: to test the unwind target, throw from a called function (`call $throws`). And a core build that defines `WASM_RT_TRAP_HANDLER` has no `g_wasm_rt_jmp_buf`: a test or benchmark that sets it or uses the legacy `WASMEXT_ENTER_PLAIN/REENTRANT` does not link there; use `WASMEXT_ENTER_STORE`.
+* Where found: step 8b-2, `tests/test_artifacts.py` (`_try`), `tests/c/test_runtime.c`, `tests/c/bench_calls.c`.

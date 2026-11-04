@@ -438,7 +438,9 @@ _RUNTIME_WRAPPERS = {
     "impl": _with_forwarders(
         "impl",
         "IMPL",
-        "#ifdef WASMEXT_TRAP_HANDLER\n#define WASM_RT_TRAP_HANDLER WASMEXT_TRAP_HANDLER\n#endif\n"
+        # the core: a trap jumps to the innermost entry of the thread (wasmext_trap_forward, wasmext_runtime.h); the old layer 3 has its own stack of entries
+        "#ifdef WASMEXT_STORE_RUNTIME\n#define WASM_RT_TRAP_HANDLER wasmext_trap_forward\n"
+        "#elif defined(WASMEXT_TRAP_HANDLER)\n#define WASM_RT_TRAP_HANDLER WASMEXT_TRAP_HANDLER\n#endif\n"
         # WASMEXT_CHAIN: the runtime sets up the alternate stack of a thread, but installs no handler of signals (the Python layer installs a link of a chain, see _gen.py)
         "#ifdef WASMEXT_CHAIN\n#include <signal.h>\n"
         "static inline int wasmext_noop_sigaction_(int sig, const void *act, void *old) { (void)sig; (void)act; (void)old; return 0; }\n"
@@ -447,7 +449,13 @@ _RUNTIME_WRAPPERS = {
         '__thread uintptr_t wasmext_stack_limit __attribute__((visibility("hidden")));\n#endif\n'
         "#include <wasm-rt-impl.c>\n",
     ),
-    "exceptions": _with_forwarders("exceptions", "EXC", "#include <wasm-rt-exceptions-impl.c>\n"),
+    # the address of `g_unwind_target` (static in that file) for the entry of a call, which saves and sets it inline
+    "exceptions": _with_forwarders(
+        "exceptions",
+        "EXC",
+        "#include <wasm-rt-exceptions-impl.c>\n"
+        "#ifdef WASMEXT_STORE_RUNTIME\nWASM_RT_UNWIND_TARGET **wasmext_own_unwind_slot(void) { return &g_unwind_target; }\n#endif\n",
+    ),
     # the allocation of a memory traps (NO_MEMORY) where the runtime would abort(): it tests the name of the function it is in, which the renaming changed
     "mem": _with_forwarders(
         "mem",

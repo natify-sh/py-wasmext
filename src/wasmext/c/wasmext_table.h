@@ -21,12 +21,15 @@ typedef char wasmext_table_heads_[sizeof(wasm_rt_externref_table_t) == sizeof(wa
 static inline void wasmext_tab_close_(void *object) {
     wasmext_tab *t = (wasmext_tab *)object;
     if (t->live) {
+        wasmext_activation act;
+        wasmext_activate_scope_(t->store, &act); /* freed by the runtime of the store that allocated it (8b-2) */
         if (t->elem == 0x70) wasmext_table_free(&t->table);
         else {
             wasm_rt_free_externref_table(&t->etable);
             t->etable.data = NULL;
             t->etable.size = 0;
         }
+        wasmext_deactivate_store_(t->store, &act);
         t->live = 0;
     }
 }
@@ -52,10 +55,18 @@ static inline wasmext_tab *wasmext_tab_new(wasmext_store *store, int elem, uint3
     if (t == NULL) { *error = ENOMEM; return NULL; }
     t->elem = elem;
     if (elem == 0x70) {
-        if (wasmext_table_new(&t->table, initial, maximum) != 0) { free(t); *error = ENOMEM; return NULL; }
+        wasmext_activation act;
+        int made;
+        wasmext_activate_scope_(store, &act);
+        made = wasmext_table_new(&t->table, initial, maximum);
+        wasmext_deactivate_store_(store, &act);
+        if (made != 0) { free(t); *error = ENOMEM; return NULL; }
         key = &t->table;
     } else {
+        wasmext_activation act;
+        wasmext_activate_scope_(store, &act);
         wasm_rt_allocate_externref_table(&t->etable, initial, maximum);
+        wasmext_deactivate_store_(store, &act);
         if (initial > 0 && t->etable.data == NULL) { free(t); *error = ENOMEM; return NULL; }
         key = &t->etable;
     }
@@ -123,13 +134,16 @@ static inline int wasmext_tab_set_(wasmext_store *s, const void *artifact, WASME
 static inline int wasmext_tab_grow_(wasmext_store *s, WASMEXT_MUTEX_T *mutex, wasm_rt_funcref_table_t *t, uint32_t delta, uint32_t *previous) {
     int line, rc = 0;
     int64_t old;
+    wasmext_activation act;
     line = wasmext_store_enter(s);
     if (line < 0) return (int)WASMEXT_TRAP_CLOSED;
+    wasmext_activate_scope_(s, &act);
     WASMEXT_LOCK(mutex);
     old = wasmext_table_grow(t, delta);
     if (old < 0) rc = WASMEXT_TAB_FULL;
     else if (previous != NULL) *previous = (uint32_t)old;
     WASMEXT_UNLOCK(mutex);
+    wasmext_deactivate_store_(s, &act);
     wasmext_store_leave(s, line);
     return rc;
 }
@@ -188,13 +202,16 @@ static inline int wasmext_tab_xsize_(wasmext_store *s, WASMEXT_MUTEX_T *mutex, c
 static inline int wasmext_tab_xgrow_(wasmext_store *s, WASMEXT_MUTEX_T *mutex, wasm_rt_externref_table_t *t, uint32_t delta, uint32_t *previous) {
     int line, rc = 0;
     uint32_t old;
+    wasmext_activation act;
     line = wasmext_store_enter(s);
     if (line < 0) return (int)WASMEXT_TRAP_CLOSED;
+    wasmext_activate_scope_(s, &act);
     WASMEXT_LOCK(mutex);
     old = wasm_rt_grow_externref_table(t, delta, NULL);
     if (old == 0xFFFFFFFFu) rc = WASMEXT_TAB_FULL;
     else if (previous != NULL) *previous = old;
     WASMEXT_UNLOCK(mutex);
+    wasmext_deactivate_store_(s, &act);
     wasmext_store_leave(s, line);
     return rc;
 }

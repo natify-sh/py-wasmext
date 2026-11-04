@@ -537,6 +537,264 @@ static void test_host_tags_threads(void) {
     CHECK(w[0].bad == 0 && w[1].bad == 0);
 }
 
+/* ---- 8b-2: a trap in the code of any copy of a store comes back to the innermost entry of the thread (S0008). The store is made by `maker`, the other copy attaches; every case runs both ways, so the
+   entry is the copy of the runtime of the store and the copy that is not. Explicit traps only (`unreachable`, division by zero, a host function that fails): the signals are 8b-3. ---- */
+typedef struct { const void *rt, *top, *unwind; } cstate;
+static cstate state_of(const artifact_api *api) {
+    cstate c;
+    api->state(&c.rt, &c.top, &c.unwind);
+    return c;
+}
+/* after a call, however it ended: nothing is active, no entry is left, and the unwind target is what it was (checked in the line of the caller) */
+#define CLEAN(API, BEFORE) do { cstate now_ = state_of(API); CHECK(now_.rt == NULL && now_.top == NULL && now_.unwind == (BEFORE).unwind); } while (0)
+
+struct nest { const artifact_api *api; wasmext_instance *inst; const char *name; int depth_seen; int bad; };
+/* the host function of the nested cases: calls back into the store (`name` of `inst` through `api`) with n - 1, and passes the answer on; a failure of the callee is a failure of the host */
+static int host_nest(void *user, const wasmext_val *args, wasmext_val *results) {
+    struct nest *n = (struct nest *)user;
+    wasmext_val a, r;
+    cstate a0 = state_of(A), b0 = state_of(B), a1, b1;
+    int rc;
+    n->depth_seen++;
+    a = I32(args[0].as.i32 - 1);
+    memset(&r, 0, sizeof r);
+    rc = n->api->call(n->inst, n->name, &a, 1, &r, 1);
+    /* a nested call, whichever way it ended, leaves what each copy had: the active runtime (a different one in each copy: the copy that was entered has A's or B's table, the other has none), the innermost entry, the unwind target */
+    a1 = state_of(A);
+    b1 = state_of(B);
+    if (a1.rt != a0.rt || a1.top != a0.top || a1.unwind != a0.unwind || b1.rt != b0.rt || b1.top != b0.top || b1.unwind != b0.unwind) n->bad++;
+    if (rc != 0) return rc;
+    results[0] = r;
+    return 0;
+}
+static int host_fail(void *user, const wasmext_val *args, wasmext_val *results) { (void)user; (void)args; (void)results; return 1; }
+static int host_nop(void *user, const wasmext_val *args, wasmext_val *results) {
+    struct nest *n = (struct nest *)user;
+    wasmext_val r;
+    (void)args; (void)results;
+    memset(&r, 0, sizeof r);
+    return n->api->call(n->inst, n->name, NULL, 0, &r, 1) == 0 && r.as.i32 == 1 ? 0 : 1;
+}
+
+struct pair {
+    const artifact_api *maker, *other;
+    wasmext_store *s;
+    wasmext_instance *ta, *tb, *tc, *na, *nb, *ya, *yb;
+};
+static void pair_new(struct pair *p, const artifact_api *maker, const artifact_api *other) {
+    wasmext_export rec;
+    char why[200];
+    int error = 0;
+    memset(p, 0, sizeof *p);
+    p->maker = maker;
+    p->other = other;
+    p->s = maker->store_new();
+    CHECK(p->s != NULL && other->store_attach(p->s, why, sizeof why) == WASMEXT_STORE_OK);
+    p->ta = A->instance_new(p->s, "trapa", &error);
+    p->tb = B->instance_new(p->s, "trapb", &error);
+    p->tc = B->instance_new(p->s, "trapc", &error);
+    p->na = A->instance_new(p->s, "nesta", &error);
+    p->nb = B->instance_new(p->s, "nestb", &error);
+    p->ya = A->instance_new(p->s, "trya", &error);
+    p->yb = B->instance_new(p->s, "tryb", &error);
+    CHECK(p->ta && p->tb && p->tc && p->na && p->nb && p->ya && p->yb);
+    CHECK(A->instantiate(p->ta) == 0);
+    /* B takes the table of A: a raw table, the artifact left unsaid (the guard of 8a would refuse it) */
+    CHECK(A->export_record(p->ta, "tab", WASMEXT_DESC_TABLE, &rec) == 0);
+    rec.artifact = NULL;
+    CHECK(B->bind(p->tb, "tt", "tab", &rec) == 0 && B->instantiate(p->tb) == 0);
+    /* B's links to the functions of A */
+    CHECK(A->export_record(p->ta, "boom", WASMEXT_DESC_FUNC, &rec) == 0 && B->bind(p->tc, "lk", "boom", &rec) == 0);
+    CHECK(A->export_record(p->ta, "div", WASMEXT_DESC_FUNC, &rec) == 0 && B->bind(p->tc, "lk", "div", &rec) == 0);
+    CHECK(B->instantiate(p->tc) == 0);
+}
+
+/* c1, c2, c5: a trap in the code of the other copy, through a raw table, through a link, and in mutual recursion */
+static void trap_cases(struct pair *p) {
+    cstate a0 = state_of(A), b0 = state_of(B);
+    const int unreachable = (int)WASM_RT_TRAP_UNREACHABLE;
+    /* c1: B's entry, A's function (the table: slot 1 is `boom`) and A's entry, B's function through the table (`pb` is at 3, `pa` calls it) */
+    CHECK(call_i32(B, p->tb, "call", 0, 0, 1) == 7);
+    CHECK(B->call(p->tb, "call", (wasmext_val[]){I32(1)}, 1, (wasmext_val[]){I32(0)}, 1) == unreachable);
+    CLEAN(A, a0); CLEAN(B, b0);
+    CHECK(call_i32(A, p->ta, "call", 0, 0, 1) == 7); /* both are usable after the trap */
+    CHECK(call_i32(B, p->tb, "call", 0, 0, 1) == 7);
+    /* c2: through a link: A's shim answers LINKED + the trap, B raises it again, and the entry of B answers the code of the trap */
+    CHECK(B->call(p->tc, "call_boom", NULL, 0, (wasmext_val[]){I32(0)}, 1) == unreachable);
+    CLEAN(A, a0); CLEAN(B, b0);
+    CHECK(B->call(p->tc, "call_div", (wasmext_val[]){I32(5), I32(0)}, 2, (wasmext_val[]){I32(0)}, 1) == (int)WASM_RT_TRAP_DIV_BY_ZERO);
+    CLEAN(A, a0); CLEAN(B, b0);
+    CHECK(call_i32(B, p->tc, "call_div", 12, 4, 2) == 3);
+    /* c5: A and B call each other through the table n times and trap at 0, whichever copy the thread entered by; the depth is explicit, the stack is not exhausted */
+    for (int n = 0; n <= 300; n += (n < 5 ? 1 : 97)) {
+        wasmext_val a = I32(n), r = I32(0);
+        CHECK(A->call(p->ta, "pa", &a, 1, &r, 1) == unreachable);
+        CHECK(B->call(p->tb, "pb", &a, 1, &r, 1) == unreachable);
+        CLEAN(A, a0); CLEAN(B, b0);
+    }
+    CHECK(call_i32(A, p->ta, "div", 9, 3, 2) == 3 && call_i32(B, p->tb, "call", 0, 0, 1) == 7);
+    /* a throw that nothing catches ends the call as a trap, and the exception is the one of the runtime of the store: either copy reads it (the scope of `wasmext_instance_exception`) */
+    {
+        const void *tag_b = NULL, *tag_a = NULL;
+        CHECK(B->call(p->tb, "thrower", NULL, 0, NULL, 0) == (int)WASM_RT_TRAP_UNCAUGHT_EXCEPTION);
+        CLEAN(A, a0); CLEAN(B, b0);
+        CHECK(B->exception_of(p->tb, &tag_b) == 0 && tag_b != NULL && A->exception_of(p->ta, &tag_a) == 0 && tag_a == tag_b);
+        CLEAN(A, a0); CLEAN(B, b0);
+    }
+}
+
+/* c4 and c7: a host function that fails, one that calls back (a nested entry, of the same copy and of the other) and a trap deep inside; then the next call works and nothing is left active */
+static void nested_cases(struct pair *p) {
+    cstate a0 = state_of(A), b0 = state_of(B);
+    struct nest same = {B, p->nb, "rec", 0}, back = {B, p->nb, "rec", 0};
+    wasmext_val a = I32(5), r = I32(0);
+    /* c4: a host function of an instance of B fails: the trap is a trap of the host, and the same for A (both with the runtime of the store the other copy's) */
+    CHECK(B->bind_host(p->nb, "nb", "cb", host_fail, NULL) == 0 && B->instantiate(p->nb) == 0);
+    CHECK(A->bind_host(p->na, "na", "cb", host_fail, NULL) == 0 && A->instantiate(p->na) == 0);
+    CHECK(B->call(p->nb, "rec", &a, 1, &r, 1) == (int)WASMEXT_TRAP_HOST);
+    CHECK(A->call(p->na, "rec", &a, 1, &r, 1) == (int)WASMEXT_TRAP_HOST);
+    CLEAN(A, a0); CLEAN(B, b0);
+    /* c7: the host function of B's instance calls B again, n times, and `rec(0)` traps at the bottom; each level passes the failure up. The functions are bound after instantiate for the first
+       modules, so these are two more instances */
+    {
+        int error = 0;
+        wasmext_instance *n1 = B->instance_new(p->s, "nestb", &error), *n2 = A->instance_new(p->s, "nesta", &error);
+        CHECK(n1 && n2);
+        same.inst = n1;
+        back.api = A;
+        back.inst = n2;
+        CHECK(B->bind_host(n1, "nb", "cb", host_nest, &same) == 0 && B->instantiate(n1) == 0);
+        CHECK(A->bind_host(n2, "na", "cb", host_nest, &back) == 0 && A->instantiate(n2) == 0);
+        a = I32(6);
+        CHECK(B->call(n1, "rec", &a, 1, &r, 1) == (int)WASMEXT_TRAP_HOST && same.depth_seen == 6 && same.bad == 0); /* six host calls, the seventh call traps */
+        CLEAN(A, a0); CLEAN(B, b0);
+        back.depth_seen = 0;
+        CHECK(A->call(n2, "rec", &a, 1, &r, 1) == (int)WASMEXT_TRAP_HOST && back.depth_seen == 6 && back.bad == 0);
+        CLEAN(A, a0); CLEAN(B, b0);
+        /* the two copies take turns: B's host function calls A's instance, whose host function calls B's */
+        same.api = A;
+        same.inst = n2;
+        back.api = B;
+        back.inst = n1;
+        same.depth_seen = back.depth_seen = 0;
+        a = I32(7);
+        CHECK(B->call(n1, "rec", &a, 1, &r, 1) == (int)WASMEXT_TRAP_HOST && same.depth_seen + back.depth_seen == 7 && same.bad + back.bad == 0);
+        CLEAN(A, a0); CLEAN(B, b0);
+        /* the next call on the same thread works, with the result */
+        a = I32(1);
+        same.depth_seen = back.depth_seen = 0;
+        CHECK(B->call(n1, "rec", &a, 1, &r, 1) == (int)WASMEXT_TRAP_HOST);
+        CLEAN(A, a0); CLEAN(B, b0);
+        CHECK(call_i32(B, p->tb, "call", 0, 0, 1) == 7 && call_i32(A, p->ta, "call", 0, 0, 1) == 7);
+    }
+}
+
+/* the unwind target after a nested entry is the `try` of the code that called, not the buffer of the outer entry: the throw after the host function (which entered the store again) is caught by it */
+static void try_cases(struct pair *p) {
+    cstate a0 = state_of(A), b0 = state_of(B);
+    struct nest inner_b = {B, p->nb, "noop", 0}, inner_a = {A, p->na, "noop", 0};
+    wasmext_val r;
+    CHECK(B->bind_host(p->yb, "yb", "cb", host_nop, &inner_b) == 0 && B->instantiate(p->yb) == 0);
+    CHECK(A->bind_host(p->ya, "ya", "cb", host_nop, &inner_a) == 0 && A->instantiate(p->ya) == 0);
+    memset(&r, 0, sizeof r);
+    CHECK(B->call(p->yb, "run", NULL, 0, &r, 1) == 0 && r.as.i32 == 31);
+    CLEAN(A, a0); CLEAN(B, b0);
+    memset(&r, 0, sizeof r);
+    CHECK(A->call(p->ya, "run", NULL, 0, &r, 1) == 0 && r.as.i32 == 31);
+    CLEAN(A, a0); CLEAN(B, b0);
+}
+
+static void *first_entry(void *arg) {
+    struct pair *p = (struct pair *)arg;
+    cstate a0 = state_of(A), b0 = state_of(B);
+    /* c6: this thread never entered A (nor B); its first entry is B's, and the trap is in A's code */
+    CHECK(a0.rt == NULL && a0.top == NULL && b0.rt == NULL && b0.top == NULL);
+    CHECK(B->call(p->tb, "call", (wasmext_val[]){I32(1)}, 1, (wasmext_val[]){I32(0)}, 1) == (int)WASM_RT_TRAP_UNREACHABLE);
+    CLEAN(A, a0); CLEAN(B, b0);
+    CHECK(call_i32(B, p->tb, "call", 0, 0, 1) == 7);
+    A->thread_free();
+    B->thread_free();
+    return NULL;
+}
+
+/* c9: two threads on one store in opposite directions (one enters by B and traps in A, the other enters by A and traps in B), many traps each */
+static void *toward_a(void *arg) {
+    struct pair *p = (struct pair *)arg;
+    cstate a0 = state_of(A), b0 = state_of(B);
+    for (int k = 0; k < 400; k++) {
+        wasmext_val a = I32(1 + k % 3), r = I32(0);
+        CHECK(B->call(p->tb, "pb", &a, 1, &r, 1) == (int)WASM_RT_TRAP_UNREACHABLE);
+        CHECK(call_i32(B, p->tb, "call", 0, 0, 1) == 7);
+    }
+    CLEAN(A, a0); CLEAN(B, b0);
+    A->thread_free();
+    B->thread_free();
+    return NULL;
+}
+static void *toward_b(void *arg) {
+    struct pair *p = (struct pair *)arg;
+    cstate a0 = state_of(A), b0 = state_of(B);
+    for (int k = 0; k < 400; k++) {
+        wasmext_val a = I32(1 + k % 3), r = I32(0);
+        CHECK(A->call(p->ta, "pa", &a, 1, &r, 1) == (int)WASM_RT_TRAP_UNREACHABLE);
+        CHECK(call_i32(A, p->ta, "call", 0, 0, 1) == 7);
+    }
+    CLEAN(A, a0); CLEAN(B, b0);
+    A->thread_free();
+    B->thread_free();
+    return NULL;
+}
+
+static void test_traps_across_copies(void) {
+    for (int variant = 0; variant < 2; variant++) {
+        struct pair p;
+        pthread_t t[3];
+        pair_new(&p, variant ? B : A, variant ? A : B);
+        trap_cases(&p);
+        nested_cases(&p);
+        try_cases(&p);
+        /* c6, then c9 */
+        pthread_create(&t[0], NULL, first_entry, &p);
+        pthread_join(t[0], NULL);
+        pthread_create(&t[1], NULL, toward_a, &p);
+        pthread_create(&t[2], NULL, toward_b, &p);
+        pthread_join(t[1], NULL);
+        pthread_join(t[2], NULL);
+        /* c3, a guard page touched in the memory of A and reached from B, is not here: it needs the handler of signals in the core (8b-3a) */
+        CHECK(call_i32(B, p.tb, "call", 0, 0, 1) == 7 && A->store_free(p.s) == WASMEXT_STORE_OK);
+    }
+}
+
+/* 8b-2: the close of a member frees its memory and tables through the runtime of the store, whichever copy made the member. The runtime of the store is a copy of A's table whose free functions count
+   (and call A's); B's instance with a table is made in the store and the store is closed. */
+static int table_frees, memory_frees;
+static void (*real_free_table)(wasm_rt_funcref_table_t *);
+static void (*real_free_memory)(wasm_rt_memory_t *);
+static void counting_free_table(wasm_rt_funcref_table_t *t) { table_frees++; real_free_table(t); }
+static void counting_free_memory(wasm_rt_memory_t *m) { memory_frees++; real_free_memory(m); }
+static wasmext_runtime counting_rt;
+static void test_close_scope(void) {
+    wasmext_store *s = A->store_new();
+    wasmext_instance *ownb, *la;
+    char why[200];
+    int error = 0;
+    memcpy(&counting_rt, A->runtime_id(), sizeof counting_rt);
+    real_free_table = counting_rt.free_funcref_table;
+    real_free_memory = counting_rt.free_memory;
+    counting_rt.free_funcref_table = counting_free_table;
+    counting_rt.free_memory = counting_free_memory;
+    s->head.rt = &counting_rt;
+    CHECK(B->store_attach(s, why, sizeof why) == WASMEXT_STORE_OK);
+    ownb = B->instance_new(s, "ownb", &error);
+    la = A->instance_new(s, "liba", &error);
+    CHECK(ownb && la && B->instantiate(ownb) == 0 && A->instantiate(la) == 0);
+    CHECK(table_frees == 0 && memory_frees == 0);
+    CHECK(A->store_close(s) == WASMEXT_STORE_OK);
+    /* ownb has one table, liba one table and one memory: three frees, all through the runtime of the store, the instance of the other copy included */
+    CHECK(table_frees == 2 && memory_frees == 1);
+    CHECK(A->store_free(s) == WASMEXT_STORE_OK);
+}
+
 int main(void) {
     A = artifact_a();
     B = artifact_b();
@@ -552,6 +810,8 @@ int main(void) {
     test_references_through_links();
     test_host_tags();
     test_host_tags_threads();
+    test_traps_across_copies();
+    test_close_scope();
     if (failures) { fprintf(stderr, "%d failed\n", failures); return 1; }
     puts("ok");
     return 0;

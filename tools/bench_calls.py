@@ -69,7 +69,7 @@ CASES = {
     3: "wasm calls an import answered by a uniform host function",
     4: "wasm calls an import answered by a typed host function",
     5: "call_indirect through a shared table to a function of another instance",
-    6: "reference: w2c_ops_add inside ENTER_PLAIN/LEAVE_PLAIN (no store)",
+    6: "reference: w2c_ops_add inside ENTER_STORE/LEAVE_STORE (entry alone, no store)",
     7: "B's add in A's store (two artifacts, shared libraries; by name through B's table)",
     8: "the same through a link (B's app calls A's lib: typed shim across artifacts)",
 }

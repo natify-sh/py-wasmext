@@ -284,9 +284,11 @@ def _run(
         flags=[*flags, f"-Wl,-rpath,{tmp_path}"],
         defines=[
             *defines,
-            "WASMEXT_STORE_RUNTIME=1",
+            *(
+                f"{k}={v}" for k, v in core_build_macros(mode)
+            ),  # the macros of the libraries: on macOS the header of the runtime merges EXHAUSTION into OOB where the handler is on
             f"TEST_MODE_{mode.upper()}=1",
-        ],  # the host reads the headers of the core: they stop without it
+        ],  # the host reads the headers of the core: they stop without WASMEXT_STORE_RUNTIME (core_build_macros has it)
         threads=True,
         strict=False,
         std=None,

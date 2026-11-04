@@ -760,10 +760,110 @@ static void test_traps_across_copies(void) {
         pthread_create(&t[2], NULL, toward_b, &p);
         pthread_join(t[1], NULL);
         pthread_join(t[2], NULL);
-        /* c3, a guard page touched in the memory of A and reached from B, is not here: it needs the handler of signals in the core (8b-3a) */
         CHECK(call_i32(B, p.tb, "call", 0, 0, 1) == 7 && A->store_free(p.s) == WASMEXT_STORE_OK);
     }
 }
+
+/* ---- 8b-3a: a signal in the code of any copy of a store is a trap that reaches the innermost entry of the thread: c3, a guard page touched in the memory of A and reached from B (and the other way),
+   and a recursion that the stack cannot hold, in one copy and reached from the other. The handler is the core's (wasmext_signals.h): the one of the copy installed last runs and goes through the
+   forwarder, so it does not matter which copy that is. `stock` is not here: the handler of the runtime of each copy bypasses `tls.rt` (it calls its own trap), which is not a thing that two copies
+   in one process can do; the single copy of that mode is tests/test_signals.py. ---- */
+#ifndef TEST_MODE_STOCK
+#ifdef TEST_NO_RECURSION /* ThreadSanitizer: its own handler faults when a stack runs out (tests/test_signals.py), so there the signals are the guard-page accesses only */
+#define RECURSION 0
+#else
+#define RECURSION 1
+#endif
+#ifdef TEST_MODE_GUARD
+#define LIMIT_MODE 0
+#else
+#define LIMIT_MODE 1
+#endif
+/* the answer of a recursion: EXHAUSTION where the limit sees it and on the main thread; on another thread the guard page of the stack is a mapped page without access, which a handler of the guard
+   mode reports as OOB (docs/experiments/stack_limit/README.md) */
+static int is_stack_trap(int rc, int main_thread) { return rc == (int)WASM_RT_TRAP_EXHAUSTION || (!LIMIT_MODE && !main_thread && rc == (int)WASM_RT_TRAP_OOB); }
+static void signal_cases(struct pair *p, int main_thread) {
+    cstate a0 = state_of(A), b0 = state_of(B);
+    const int oob = (int)WASM_RT_TRAP_OOB;
+    wasmext_val r = I32(0);
+    /* this thread is ready in both copies (the limit of each): the readiness of the copy that is not the runtime of the store is 8b-3b */
+    A->thread_ready();
+    B->thread_ready();
+    for (int k = 0; k < 3; k++) {
+        /* c3: B's entry, A's `ld` (slot 4) through the raw table, and A's entry, B's `ld` (slot 7); the instances are usable after it */
+        CHECK(B->call(p->tb, "calln", (wasmext_val[]){I32(1 << 20), I32(4)}, 2, &r, 1) == oob);
+        CLEAN(A, a0); CLEAN(B, b0);
+        CHECK(A->call(p->ta, "calln", (wasmext_val[]){I32(1 << 20), I32(7)}, 2, &r, 1) == oob);
+        CLEAN(A, a0); CLEAN(B, b0);
+        CHECK(call_i32(A, p->ta, "call", 0, 0, 1) == 7 && call_i32(B, p->tb, "call", 0, 0, 1) == 7);
+        /* the same in one copy */
+        CHECK(A->call(p->ta, "ld", (wasmext_val[]){I32(1 << 20)}, 1, &r, 1) == oob);
+        CHECK(B->call(p->tb, "ld", (wasmext_val[]){I32((int32_t)0xFFFFFFF0u)}, 1, &r, 1) == oob);
+        CLEAN(A, a0); CLEAN(B, b0);
+        /* a recursion with no end: in A's code and in B's code, entered by its own copy and by the other (slot 5 is A's `deep`, slot 6 B's) */
+        if (RECURSION) {
+            CHECK(is_stack_trap(A->call(p->ta, "deep", (wasmext_val[]){I32(1)}, 1, &r, 1), main_thread));
+            CHECK(is_stack_trap(B->call(p->tb, "deep", (wasmext_val[]){I32(1)}, 1, &r, 1), main_thread));
+            CLEAN(A, a0); CLEAN(B, b0);
+            CHECK(is_stack_trap(B->call(p->tb, "calln", (wasmext_val[]){I32(1), I32(5)}, 2, &r, 1), main_thread));
+            CLEAN(A, a0); CLEAN(B, b0);
+            CHECK(is_stack_trap(A->call(p->ta, "calln", (wasmext_val[]){I32(1), I32(6)}, 2, &r, 1), main_thread));
+            CLEAN(A, a0); CLEAN(B, b0);
+        }
+        CHECK(call_i32(A, p->ta, "div", 9, 3, 2) == 3 && call_i32(B, p->tb, "call", 0, 0, 1) == 7);
+    }
+}
+static void *signals_fresh(void *arg) {
+    signal_cases((struct pair *)arg, 0);
+    A->thread_free();
+    B->thread_free();
+    return NULL;
+}
+/* two threads on one store, each trapping by signal, in opposite directions (one enters by B and faults in A, the other enters by A and faults in B), and recursion in turns */
+static void *signals_toward_a(void *arg) {
+    struct pair *p = (struct pair *)arg;
+    wasmext_val r = I32(0);
+    A->thread_ready();
+    B->thread_ready();
+    for (int k = 0; k < 150; k++) {
+        CHECK(B->call(p->tb, "calln", (wasmext_val[]){I32(1 << 20), I32(4)}, 2, &r, 1) == (int)WASM_RT_TRAP_OOB);
+        if (RECURSION && k % 25 == 0) CHECK(B->call(p->tb, "calln", (wasmext_val[]){I32(1), I32(5)}, 2, &r, 1) != 0);
+        CHECK(call_i32(B, p->tb, "call", 0, 0, 1) == 7);
+    }
+    A->thread_free();
+    B->thread_free();
+    return NULL;
+}
+static void *signals_toward_b(void *arg) {
+    struct pair *p = (struct pair *)arg;
+    wasmext_val r = I32(0);
+    A->thread_ready();
+    B->thread_ready();
+    for (int k = 0; k < 150; k++) {
+        CHECK(A->call(p->ta, "calln", (wasmext_val[]){I32(1 << 20), I32(7)}, 2, &r, 1) == (int)WASM_RT_TRAP_OOB);
+        if (RECURSION && k % 25 == 0) CHECK(A->call(p->ta, "calln", (wasmext_val[]){I32(1), I32(6)}, 2, &r, 1) != 0);
+        CHECK(call_i32(A, p->ta, "call", 0, 0, 1) == 7);
+    }
+    A->thread_free();
+    B->thread_free();
+    return NULL;
+}
+static void test_signals_across_copies(void) {
+    for (int variant = 0; variant < 2; variant++) { /* the store made by A and then by B: the entry is the copy of the runtime of the store, and the copy that is not */
+        struct pair p;
+        pthread_t t[2];
+        pair_new(&p, variant ? B : A, variant ? A : B);
+        signal_cases(&p, 1); /* the thread of the test is the main thread of the process (on it a stack overflow is EXHAUSTION in every mode) */
+        pthread_create(&t[0], NULL, signals_fresh, &p);
+        pthread_join(t[0], NULL);
+        pthread_create(&t[0], NULL, signals_toward_a, &p);
+        pthread_create(&t[1], NULL, signals_toward_b, &p);
+        pthread_join(t[0], NULL);
+        pthread_join(t[1], NULL);
+        CHECK(A->store_free(p.s) == WASMEXT_STORE_OK);
+    }
+}
+#endif
 
 /* 8b-2: the runtime functions that the core calls outside a call of WebAssembly code (memory_grow, the table functions, the close of a member) go through the runtime of the store, whichever copy
    calls them. The runtime of the store is a copy of A's table whose functions count (and call A's); the operations are made by B, the copy that is not the runtime. */
@@ -886,6 +986,9 @@ int main(void) {
     test_host_tags();
     test_host_tags_threads();
     test_traps_across_copies();
+#ifndef TEST_MODE_STOCK
+    test_signals_across_copies();
+#endif
     test_close_scope();
     test_scopes();
     test_attach_in_a_call();

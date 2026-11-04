@@ -108,10 +108,16 @@ TAGA = """(module
 TAGB = TAGA.replace("hgna", "hgnb")
 # 8b-2: traps across copies. TRAPA (artifact A) exports a table with its functions at 0 to 2 (`ok`, `boom`, `pa`); TRAPB (B) imports that table (the test hands the record to B with the artifact left
 # unsaid, the temporary guard of 8a would refuse it) and puts `pb` at 3. `pa` and `pb` call each other through the table, n times, and trap (`unreachable`) at 0.
+# 8b-3a: signals across copies. Each has a memory of one page (`ld` loads a byte: past the page it reaches a guard page) and `deep`, a recursion with no end (two calls of itself, or the C compiler may
+# make it a loop); the table has them at 4 (A's `ld`), 5 (A's `deep`), 6 (B's `deep`) and 7 (B's `ld`); `calln(x, i)` calls the function of the table at `i` with `x`.
 TRAPA = """(module
   (type $t (func (result i32)))
   (type $n (func (param i32) (result i32)))
-  (table $tab (export "tab") 4 8 funcref)
+  (table $tab (export "tab") 8 8 funcref)
+  (memory (export "mem") 1 1)
+  (func $ld (export "ld") (param i32) (result i32) local.get 0 i32.load8_u)
+  (func $deep (export "deep") (param i32) (result i32) local.get 0 call $deep local.get 0 call $deep i32.add)
+  (func (export "calln") (param i32 i32) (result i32) local.get 0 local.get 1 call_indirect (type $n))
   (func $ok (result i32) i32.const 7)
   (func $boom (export "boom") (result i32) unreachable)
   (func $pa (export "pa") (param i32) (result i32)
@@ -119,18 +125,24 @@ TRAPA = """(module
     local.get 0 i32.const 1 i32.sub i32.const 3 call_indirect (type $n))
   (func (export "div") (param i32 i32) (result i32) local.get 0 local.get 1 i32.div_s)
   (func (export "call") (param i32) (result i32) local.get 0 call_indirect (type $t))
-  (elem (i32.const 0) $ok $boom $pa))"""
+  (elem (i32.const 0) $ok $boom $pa)
+  (elem (i32.const 4) $ld $deep))"""
 TRAPB = """(module
   (type $t (func (result i32)))
   (type $n (func (param i32) (result i32)))
-  (import "tt" "tab" (table 4 funcref))
+  (import "tt" "tab" (table 8 funcref))
+  (memory (export "mem") 1 1)
+  (func $ld (export "ld") (param i32) (result i32) local.get 0 i32.load8_u)
+  (func $deep (export "deep") (param i32) (result i32) local.get 0 call $deep local.get 0 call $deep i32.add)
+  (func (export "calln") (param i32 i32) (result i32) local.get 0 local.get 1 call_indirect (type $n))
   (tag $e)
   (func (export "thrower") throw $e)
   (func $pb (export "pb") (param i32) (result i32)
     local.get 0 i32.eqz if unreachable end
     local.get 0 i32.const 1 i32.sub i32.const 2 call_indirect (type $n))
   (func (export "call") (param i32) (result i32) local.get 0 call_indirect (type $t))
-  (elem (i32.const 3) $pb))"""
+  (elem (i32.const 3) $pb)
+  (elem (i32.const 6) $deep $ld))"""
 # B imports the functions of TRAPA's instance (a link: the trap comes back as TRAP_LINKED + code and is raised again in B)
 TRAPC = """(module
   (import "lk" "boom" (func $boom (result i32)))
@@ -168,6 +180,7 @@ def _library(
     flags: Sequence[str],
     defines: Sequence[str] = (),
     hidden: bool = True,
+    mode: str = "limit",
 ) -> Path:
     """The artifact `name`: tests/c/artifact.c, the modules (built as the fixture `build` of test_instance_core.py builds them) and the runtime, as a shared library."""
     cc = find_cc()
@@ -197,13 +210,13 @@ def _library(
     for key in ("impl", "mem", "exceptions"):  # the runtime is the product's: wrapped
         (d / f"rt_{key}.c").write_text(_RUNTIME_WRAPPERS[key], encoding="utf-8")
         sources.append(d / f"rt_{key}.c")
-    chain_macros, chain_link = (
-        signal_build_flags()
-    )  # the product's: WASMEXT_CHAIN, the stack limit in place of the guard page, -z now
+    # the macros of the mode of the stack check are the product's (`core_build_macros`: `limit` is its default, WASMEXT_CHAIN and the stack limit in place of the guard page); a library of the
+    # first two modes is linked with -z now
+    chain_link = [] if mode == "stock" else signal_build_flags(mode, warn=False)[1]
     library = out / f"libartifact_{name}{'.dylib' if sys.platform == 'darwin' else '.so'}"
     subprocess.run(
         [
-            cc, "-shared", "-fPIC", *(["-fvisibility=hidden"] if hidden else []), "-w", "-pthread", *flags, f"-DARTIFACT_NAME={name}", *(f"-D{k}={v}" for k, v in [*chain_macros, *core_build_macros()]), *(f"-D{x}" for x in defines), *chain_link,
+            cc, "-shared", "-fPIC", *(["-fvisibility=hidden"] if hidden else []), "-w", "-pthread", *flags, f"-DARTIFACT_NAME={name}", *(f"-D{k}={v}" for k, v in core_build_macros(mode)), *(f"-D{x}" for x in defines), *chain_link,
             *(f"-I{p}" for p in (d, C_DIR, WASMEXT_C, Path(get_include()), toolchain.runtime, *simde)),
             *map(str, sources), "-lm", "-o", str(library),
         ],
@@ -212,7 +225,9 @@ def _library(
     return library
 
 
-def _run(wabt: Path, tmp_path: Path, flags: Sequence[str] = (), defines: Sequence[str] = ()) -> None:
+def _run(
+    wabt: Path, tmp_path: Path, flags: Sequence[str] = (), defines: Sequence[str] = (), mode: str = "limit"
+) -> None:
     if sys.platform == "win32" or find_cc() is None:
         pytest.skip("shared libraries with hidden visibility and pthreads: Linux and macOS with a cc")
     a = _library(
@@ -230,6 +245,7 @@ def _run(wabt: Path, tmp_path: Path, flags: Sequence[str] = (), defines: Sequenc
         },
         flags,
         defines,
+        mode=mode,
     )
     b = _library(
         wabt,
@@ -252,6 +268,7 @@ def _run(wabt: Path, tmp_path: Path, flags: Sequence[str] = (), defines: Sequenc
         },
         flags,
         defines,
+        mode=mode,
     )
     exe = tmp_path / "test_artifacts"
     compile_c(
@@ -259,7 +276,11 @@ def _run(wabt: Path, tmp_path: Path, flags: Sequence[str] = (), defines: Sequenc
         exe,
         include_dirs=[C_DIR, WASMEXT_C, Path(get_include()), find_toolchain().runtime],
         flags=[*flags, f"-Wl,-rpath,{tmp_path}"],
-        defines=[*defines, "WASMEXT_STORE_RUNTIME=1"],  # the host reads the headers of the core: they stop without it
+        defines=[
+            *defines,
+            "WASMEXT_STORE_RUNTIME=1",
+            f"TEST_MODE_{mode.upper()}=1",
+        ],  # the host reads the headers of the core: they stop without it
         threads=True,
         strict=False,
         std=None,
@@ -274,6 +295,12 @@ def test_two_artifacts_share_one_store(wabt: Path, tmp_path: Path) -> None:
     _run(wabt, tmp_path)
 
 
+@pytest.mark.parametrize("mode", ["guard", "stock"])
+def test_two_artifacts_in_the_other_modes_of_the_stack_check(wabt: Path, tmp_path: Path, mode: str) -> None:
+    """`guard` (the guard page and an alternate stack, the chain handler) and `stock` (the runtime's own handler: the signal cases of two copies are not run there, see test_artifacts.c and test_signals.py)."""
+    _run(wabt, tmp_path, mode=mode)
+
+
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="the sanitizers are checked on Linux")
 def test_two_artifacts_under_addresssanitizer(wabt: Path, tmp_path: Path) -> None:
     if SANITIZED or not supports_flag("-fsanitize=address,undefined"):
@@ -285,7 +312,9 @@ def test_two_artifacts_under_addresssanitizer(wabt: Path, tmp_path: Path) -> Non
 def test_two_artifacts_under_threadsanitizer(wabt: Path, tmp_path: Path) -> None:
     if SANITIZED or not supports_flag("-fsanitize=thread"):
         pytest.skip("no ThreadSanitizer, or another sanitizer is on for the whole run")
-    _run(wabt, tmp_path, ["-fsanitize=thread", "-g"])
+    _run(
+        wabt, tmp_path, ["-fsanitize=thread", "-g"], ["TEST_NO_RECURSION=1"]
+    )  # ThreadSanitizer cannot run a recursion to EXHAUSTION (tests/test_signals.py)
 
 
 def _layout(

@@ -55,6 +55,8 @@ typedef struct {
     int (*tab_grow)(wasmext_tab *t, uint32_t delta, uint32_t *previous);
     int64_t (*mem_grow)(wasmext_instance *i, const char *name, uint64_t delta); /* wasmext_instance_memory_grow of the exported memory `name` */
     int (*exception_of)(wasmext_instance *i, const void **tag); /* wasmext_instance_exception: its answer, and the tag of the active exception */
+    /* 8b-3a: makes this copy ready on the calling thread (its stack limit, its handler of signals once). Until 8b-3b a copy that the thread never entered has no limit on that thread. */
+    void (*thread_ready)(void);
 } artifact_api;
 
 /* in artifact_store_only.c: the file that includes only wasmext_store.h */

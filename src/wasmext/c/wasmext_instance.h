@@ -13,6 +13,7 @@
 #include "wasmext_rlock.h"
 #include "wasmext_store.h"
 #include "wasmext_runtime.h"
+#include "wasmext_signals.h"
 #include "wasmext_descriptor.h"
 
 /* A value of WebAssembly: its type is a byte of the binary format (0x7F i32, 0x7E i64, 0x7D f32, 0x7C f64, 0x7B v128, 0x70 funcref, 0x6F externref). Passed by
@@ -172,6 +173,7 @@ typedef struct wasmext_instance_s_ {
 static inline void wasmext_thread_ready(void) {
     if (!wasmext_tls_.ready) {
         wasm_rt_init();
+        wasmext_signals_thread_(); /* the handler of signals of this copy (once) and the stack limit of this thread (8b-3a) */
         wasmext_tls_.ready = 1;
     }
 }

@@ -408,6 +408,7 @@ def build(wabt: Path, tmp_path_factory: pytest.TempPathFactory) -> Callable[...,
         flags: Sequence[str] = (),
         host: str = "wasm32",
         defines: Sequence[str] = (),
+        mode: str = "limit",
     ) -> Path:
         modules = wat if isinstance(wat, dict) else {name: wat}
         sources = [C_DIR / test]
@@ -436,14 +437,14 @@ def build(wabt: Path, tmp_path_factory: pytest.TempPathFactory) -> Callable[...,
             wrapped.append(path)
         exe = (
             out
-            / f"{name}_{Path(test).stem}{'_' + ''.join(c for c in ''.join(flags) if c.isalnum()) if flags else ''}{EXE}"
+            / f"{name}_{Path(test).stem}{'_' + ''.join(c for c in ''.join(flags) if c.isalnum()) if flags else ''}{'_' + mode if mode != 'limit' else ''}{EXE}"
         )
         compile_c(
             [*sources, *wrapped],
             exe,
             include_dirs=[WASMEXT_C, Path(get_include()), runtime, out, *simde],
             flags=flags,
-            defines=[f"MODULE={name}", *(f"{k}={v}" for k, v in core_build_macros()), *defines],
+            defines=[f"MODULE={name}", *(f"{k}={v}" for k, v in core_build_macros(mode)), *defines],
             strict=False,
             std=None,
             threads=True,

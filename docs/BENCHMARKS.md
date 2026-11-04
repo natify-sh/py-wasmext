@@ -110,3 +110,16 @@ A third before-set of the commit before the step (`git stash`, same session, thr
 The gate on cases 7 and 8 was accepted by the maintainer on 2026-11-04 as an exception, for these reasons: the path is new (before 8b-2 a trap across copies was an abort, so no old number exists), the remaining cost is the dynamic TLS model of a position-independent library, and cases 1 and 2 are inside the rule (see S0008, D-8).
 
 Where the rest of cases 7 and 8 goes: with (d) the same code costs +7 percent (case 7) and -4 percent (case 8). So what is left is the dynamic TLS model of a position-independent library: an access to a thread-local variable of the library is a call of `__tls_get_addr` (about 1.6 ns here: the 11 ns of case 7 over about 7 accesses). The slow path of case 7 makes seven: the activation of the entering copy (1), `activate` of the other copy (1), the enter and the leave in the entering copy (1 + 1) and in the runtime's copy through the table (1 + 1), the deactivation (1); case 8 does it twice, with the shim. These are counted from the code and divided into the measured difference, not measured one by one (no `perf` here). (d) cannot be assumed by a product build: a library loaded with `dlopen` (a Python extension) may not use the initial-exec model unless the static TLS block has room, so it is not part of the product flags in this step. The choices left to the maintainer: accept the cost of the cross-artifact slow path (a new capability: before 8b-2 a trap across copies was an abort, so there is no old number), or have the other copy's `enter`/`leave` do their TLS access once (a single call that does activate, enter and the unwind save for the pair, about 3 accesses less), or keep the thread record of each copy reachable from the store per thread.
+
+## Step 8b-3a (2026-11-04): the stack limit and the chain handler in the core
+
+Same session, before (a worktree of 3471118) and after interleaved, three runs each, ns per call (`uv run python tools/bench_calls.py`, Xeon 2.10 GHz, gcc 13.3, `-O2 -DNDEBUG`). The core builders now default to the `limit` mode, so every function of a module has the stack-limit prologue.
+
+| case | before (3 runs) | after (3 runs) | median change |
+|---|---|---|---|
+| 1 | 38.8 / 39.8 / 39.8 | 40.8 / 37.8 / 41.3 | +2.5 percent |
+| 2 | 67.5 / 67.3 / 65.1 | 68.5 / 68.8 / 65.6 | +1.8 percent |
+| 7 | 59.7 / 64.7 / 61.0 | 61.2 / 61.2 / 63.7 | +0.3 percent |
+| 8 | 110.3 / 106.8 / 106.1 | 115.0 / 112.8 / 115.7 | +7.7 percent |
+
+Cases 1 and 2 are inside the rule of 10 percent (D-8). Cases 7 and 8 are under the exception accepted on 2026-11-04.

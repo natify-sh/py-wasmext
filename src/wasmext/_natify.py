@@ -490,28 +490,29 @@ _TAIL_CALL_LOCALS = re.compile(
 _TAIL_CALL_LOCALS_FIXED = rb"\2  \1 \3"
 
 
-def signal_build_flags() -> tuple[list[tuple[str, str]], list[str]]:
+def signal_build_flags(choice: str | None = None, *, warn: bool = True) -> tuple[list[tuple[str, str]], list[str]]:
     """The macros and link arguments of a build that does without a handler of signals of the runtime of wasm2c for the stack and shares the one for the memory (docs/patch_policy.md).
     `WASMEXT_CHAIN`: the runtime installs no handler of SIGSEGV/SIGBUS of its own, because the runtimes of several modules would replace each other's (see wasmext_glue.h).
     `WASMEXT_STACK_LIMIT`: the stack running out is seen by a comparison in each function (`_stack_limit_prologue`), so the runtime takes neither the counter of the depth nor the
     handler on an alternate stack. Not on Windows (it calls every vectored handler; the stack is the counter there) and not where there are no such signals or no thread stack to
     measure (Emscripten, WASI). The limit is a thread-local variable and the handler reads thread-local data, so on Linux the library is linked with `-z now`: with lazy binding the first
-    access resolves `__tls_get_addr` inside the handler, which hangs. `WASMEXT_STACK_CHECK=guard` in the environment of the build keeps the chain but sees the stack by the guard page (the handler on an alternate stack), which is faster (CoreMark 98% of native against 91%) and is warned about when asked for (see docs/experiments/stack_limit/). The target is read from `sysconfig.get_platform()`, which a cross build sets to the target and not the host."""
+    access resolves `__tls_get_addr` inside the handler, which hangs. `WASMEXT_STACK_CHECK=guard` in the environment of the build keeps the chain but sees the stack by the guard page (the handler on an alternate stack), which is faster (CoreMark 98% of native against 91%) and is warned about when asked for (see docs/experiments/stack_limit/). The target is read from `sysconfig.get_platform()`, which a cross build sets to the target and not the host. `choice` and `warn` are for the builders of the core (`core_build_macros`): the mode is given instead of read from the environment, and the warning of `guard` can be left out."""
     platform = sysconfig.get_platform().lower()
     if os.name == "nt" or platform.startswith("win") or any(t in platform for t in ("emscripten", "wasi")):
         return [], []
     macros = [("WASMEXT_CHAIN", "1")]
-    choice = os.environ.get("WASMEXT_STACK_CHECK", "limit").lower()
+    choice = (choice or os.environ.get("WASMEXT_STACK_CHECK", "limit")).lower()
     if choice not in ("limit", "guard"):
         raise ValueError(f"WASMEXT_STACK_CHECK is {choice!r}: it is 'limit' (the default) or 'guard'")
     if choice == "guard":
-        warnings.warn(
-            "WASMEXT_STACK_CHECK=guard: the stack running out is seen by the guard page and a handler of SIGSEGV on an alternate stack kept for every thread "
-            "(about 8% faster than the default on CoreMark, up to 1.8 times on a program that is all calls). A stack overflow in a thread other than "
-            "the main one is reported as an out-of-bounds access, and a thread that ends gives its stack back through the Python layer only. "
-            "See docs/experiments/stack_limit/README.md",
-            stacklevel=2,
-        )
+        if warn:
+            warnings.warn(
+                "WASMEXT_STACK_CHECK=guard: the stack running out is seen by the guard page and a handler of SIGSEGV on an alternate stack kept for every thread "
+                "(about 8% faster than the default on CoreMark, up to 1.8 times on a program that is all calls). A stack overflow in a thread other than "
+                "the main one is reported as an out-of-bounds access, and a thread that ends gives its stack back through the Python layer only. "
+                "See docs/experiments/stack_limit/README.md",
+                stacklevel=2,
+            )
     else:
         macros += [("WASMEXT_STACK_LIMIT", "1"), ("WASM_RT_NONCONFORMING_UNCHECKED_STACK_EXHAUSTION", "1")]
     return macros, (["-Wl,-z,now"] if platform.startswith("linux") else [])
@@ -530,11 +531,17 @@ def fusedwasi_version_macro() -> tuple[str, str] | None:
     return "WASMEXT_FUSEDWASI_VERSION", str(h)
 
 
-def core_build_macros() -> list[tuple[str, str]]:
+def core_build_macros(mode: str = "limit") -> list[tuple[str, str]]:
     """The macros that every build of the static core (layer 1) passes: `WASMEXT_STORE_RUNTIME`, which makes the wrappers of the runtime rename its functions and forward them to the runtime of the store (D42; the headers of
-    the core stop with an #error without it), and the version of fusedwasi that the host layout hashes. The old layer 3 builds (natify, build_shared, the executable) do not use it."""
+    the core stop with an #error without it), the version of fusedwasi that the host layout hashes, and the macros of the mode of the stack check (8b-3a): `limit` (the product's default: `WASMEXT_CHAIN`,
+    `WASMEXT_STACK_LIMIT`, no handler of the runtime), `guard` (`WASMEXT_CHAIN` only: the guard page and an alternate stack) and `stock` (none: the runtime installs its own handler; one copy per process). Where there is
+    no chain (Windows, Emscripten, WASI) the mode adds nothing. A Linux library of the first two is also linked with the second item of `signal_build_flags(mode)` (`-z now`). The old layer 3 builds
+    (natify, build_shared, the executable) do not use this."""
+    if mode not in ("limit", "guard", "stock"):
+        raise ValueError(f"the mode of the stack check is {mode!r}: it is 'limit', 'guard' or 'stock'")
     fused = fusedwasi_version_macro()
-    return [("WASMEXT_STORE_RUNTIME", "1"), *([fused] if fused is not None else [])]
+    signal = [] if mode == "stock" else signal_build_flags(mode, warn=False)[0]
+    return [("WASMEXT_STORE_RUNTIME", "1"), *([fused] if fused is not None else []), *signal]
 
 
 def _portable_off_x64(c_source: bytes) -> bytes:

@@ -94,7 +94,7 @@ def test_the_process_behaves_as_the_handler_before_says(
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="the size of the main stack is read from glibc here")
 def test_a_main_stack_of_unlimited_size_is_capped(build: Callable[..., Path]) -> None:  # noqa: F811
     """Under `ulimit -s unlimited` glibc reports the main thread's stack as the gap to the previous mapping (tens of TiB); the limit of the `limit` mode is measured over at most 64 MiB, so the recursion on the main thread
-    is EXHAUSTION and not a run until memory ends (`guard` and `stock` are not covered by the cap: they see the guard page). Without the cap the child gets the timeout, reported as "not trapped within"."""
+    is EXHAUSTION and not a run until memory ends (`guard` and `stock` are not covered by the cap: they see the guard page). Without the cap the child stacks memory until the timeout (4 s, short on purpose: a recursion over an unlimited stack grows memory at the speed of the machine), reported as "not trapped within". An RLIMIT_AS would stop it sooner but also forbids the reservation of the 4 GiB guard region of a module."""
     import resource
 
     _, hard = resource.getrlimit(resource.RLIMIT_STACK)
@@ -107,10 +107,10 @@ def test_a_main_stack_of_unlimited_size_is_capped(build: Callable[..., Path]) ->
 
     try:
         result = subprocess.run(
-            [str(exe), "recursion_main"], capture_output=True, text=True, timeout=15, check=False, preexec_fn=unlimited
+            [str(exe), "recursion_main"], capture_output=True, text=True, timeout=4, check=False, preexec_fn=unlimited
         )
     except subprocess.TimeoutExpired:
-        pytest.fail("recursion_main: not trapped within 15 s (the stack of unlimited size is not capped)")
+        pytest.fail("recursion_main: not trapped within 4 s (the stack of unlimited size is not capped)")
     assert result.returncode == 0 and result.stdout.strip() == "ok", _verdict("recursion_main", result)
 
 

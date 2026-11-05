@@ -438,7 +438,7 @@ dev = [
     { name = "setuptools", specifier = ">=84" },
     { name = "setuptools-scm", specifier = ">=8" },
 ]
-wasm = [{ name = "ziglang", specifier = ">=0.17.1,<0.18" }]
+wasm = [{ name = "ziglang", specifier = ">=0.17.1" }]
 
 [[package]]
 name = "ziglang"

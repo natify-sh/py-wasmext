@@ -420,7 +420,7 @@ wide-character ones: `CreateFileW` (with the same sharing as the C library, read
 (identity, size, times, link count, reparse tag), `FindFirstFileExW`, `MoveFileExW`, `CreateHardLinkW`, `CreateSymbolicLinkW`,
 `DeviceIoControl(FSCTL_GET_REPARSE_POINT)` for `readlink`, `SetFileTime`. Paths go as UTF-16 with the `\\?\` prefix. A name is resolved by
 hand below the directory; a link that leads out is found by comparing `GetFinalPathNameByHandleW` of what is used and of the directory (so the
-check and the use are two steps: what `openat` does not have, and what the `nt` variant of 3b is for). A link that leads nowhere is refused
+check and the use are two steps: what `openat` does not have, and what the `nt` variant of 3b is for; since 2026-11-05 that variant is option E of fusedwasi's S0015 (a walk by handle, `NtCreateFile` with a `RootDirectory`), and the C headers that this project includes are fusedwasi's, so it is done there and not here a second time. Until it is, on Windows a preopen is not a barrier against another process that can change the directory). A link that leads nowhere is refused
 when a name is to be made through it (where it would lead is not known).
 
 What was checked, and what was not:
@@ -550,7 +550,7 @@ of type i32, i64, f32 or f64 has `<name>_global_<g>(m)` and, when mutable, `<nam
 (`libm.lib`), so the CI of the three systems ran it on MSVC: **green** (02a841e; the first run found that a path of an object past 260 characters broke `cl`, now the objects are named by the stem); checked by hand before: the library cross-built by `zig cc` (MinGW) and run under wine answers an out-of-bounds trap, the end of a WASI program and a reactor.
 Because these tests compile `<name>_glue.h`, `<name>_api.h` and the core with no path to Python on each system, they are check (a) for those headers too (the dedicated workflow `core-without-python.yml` compiles them strictly too now: the glue, the C API and the `main()` of a few modules, made by `.github/scripts/glue_without_python.py`, with gcc, clang, macOS clang, MSVC and MinGW by `zig cc`; the strict build found `#pragma comment(lib)` of MSVC unknown to MinGW, and static functions of the glue header that clang warned of as unused, now `static inline`).
 
-**Left from the list below** (still open): the file-backend and naming deviations, 3b (`nt`) and the measure of hooks, ARM64 and x86 for the suite. Closed since: the link record is in the API, 6b and stage 7 are built, the 'as built' texts of 3a, 4 and 5 are refreshed.
+**Left from the list below** (still open): the file-backend and naming deviations, 3b (`nt`; moved to fusedwasi, S0015 option E) and the measure of hooks, ARM64 and x86 for the suite. Closed since: the link record is in the API, 6b and stage 7 are built, the 'as built' texts of 3a, 4 and 5 are refreshed.
 
 **In the plan and not there (as found; the hooks, `_initialize` and the globals are now there, see above)**: a reactor's `_initialize` is not called by `_instantiate`; the configuration has the hooks of stdin and stdout only (the core also has `clock`, `random`, `sleep`; the `wasi=` of Python has the user
 functions for the clock and the random bytes, so 6b needs them); exported globals have no accessor (the extension has them as attributes); the link record for linking instances is not in the API; Windows (MSVC)

@@ -195,6 +195,8 @@ A program is kept inside the directories it was given: `..` out of a directory, 
 `ENOTCAPABLE`. A directory the program opens is a capability for that directory only. A program built with an old libc finds a relative path
 only through a preopen named `"."`.
 
+What that promises is fusedwasi's to say, since the files are its code; its [S0015](https://github.com/natify-sh/fusedwasi/blob/v0.1.0b3/docs/specs/S0015.md) (a draft at 0.1.0b3, written from a question of the sister project wasmhost) reads it as follows, and we did not repeat it here: on POSIX a name is walked one element at a time from a descriptor that is already held, with `O_NOFOLLOW`, so a change of the tree under the walk does not lead out of the directory (one stress run on Linux with the Python twin, 8 s, no escape; not a proof; the C twin, which is what this project uses, was read and not run). A program can still plant a link that leads out in WASI 0.2 (`symlink-at` refuses only an absolute target; WASI 0.1 `path_symlink` refuses it), which the walk never follows but another process reading the same directory would. **On Windows a preopen is not a barrier against another process that can change the directory**: the check and the open are two steps there (see [DESIGN.md](docs/DESIGN.md), the Windows back end).
+
 What is there, of the 46 calls of the specification (WASI 0.1):
 
 - **42 work**: arguments, environment, clocks, random bytes, `proc_exit`, `proc_raise`, the standard streams, and files and directories: reading,

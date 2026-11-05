@@ -97,8 +97,7 @@ dev = [
 ]
 # only to make examples/coremark/src/coremark/_core.wasm again (build_wasm.py); not installed by `uv sync`/`uv run`
 wasm = [
-    # below 0.17: ziglang 0.17.0 (PyPI, 2026-10-08) has no wheel for Windows, so `uv sync` fails on windows-latest; 0.16.0 and the releases before it have win32, win_amd64 and win_arm64.
-    # Until a release has a Windows wheel again.
-    "ziglang>=0.16.0,<0.17",
+    # 0.17.1 or later: ziglang 0.17.0 (PyPI, 2026-10-08) had no wheel for Windows, so `uv sync` failed on windows-latest; it was yanked (pypi/support#12655, closed) and 0.17.0.post0 and 0.17.1 have win32, win_amd64 and win_arm64.
+    "ziglang>=0.17.1,<0.18",
 ]
 

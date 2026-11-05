@@ -136,11 +136,11 @@ toml = [
 
 [[package]]
 name = "fusedwasi"
-version = "0.1.0a1"
+version = "0.1.0b1"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/2d/e7/656d7b2541d5a8bf04fcc00aa1b52b681a7fb91a1087a1ea86be93175ef9/fusedwasi-0.1.0a1.tar.gz", hash = "sha256:173f34c7ade2a678ab593e1fe28f63f20ee2e97157094b2e8bcf46a2cfb39fe9", size = 560763, upload-time = "2026-10-28T10:29:23.816Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/03/96/a22b6b079bcb78fe73f4370535b88e6aea20e63ecb3f10735e4abd517a7b/fusedwasi-0.1.0b1.tar.gz", hash = "sha256:2aa49a71fe3b2af5af368669bf2ee737ec2ec65a189c52136b52900c57846201", size = 561120, upload-time = "2026-11-05T00:56:21.285Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/a9/e0/de8908b55ecc336fdaaeadd52529590e5a026899b943fdddf232712e984c/fusedwasi-0.1.0a1-py3-none-any.whl", hash = "sha256:600e24ca2e2166a450ff2504689d29ea2009f173fe2faccbda6bc640dbe52d1b", size = 220737, upload-time = "2026-10-28T10:29:22.478Z" },
+    { url = "https://files.pythonhosted.org/packages/44/d8/5e6f7534c12baff4bf144dfdb9523c73d8633950941c65aaa4078ae41fac/fusedwasi-0.1.0b1-py3-none-any.whl", hash = "sha256:70ed1bb2abe6ef5144d1d040abc4d95308b2ec2f50893a2f264e9d0c7dee7d5b", size = 220891, upload-time = "2026-11-05T00:56:19.282Z" },
 ]
 
 [[package]]
@@ -424,7 +424,7 @@ wasm = [
 
 [package.metadata]
 requires-dist = [
-    { name = "fusedwasi", specifier = ">=0.1.0a1" },
+    { name = "fusedwasi", specifier = ">=0.1.0b1" },
     { name = "setuptools", specifier = ">=84" },
     { name = "wabt-package", specifier = ">=1.0.42.0" },
 ]

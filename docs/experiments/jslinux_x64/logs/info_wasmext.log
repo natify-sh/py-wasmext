@@ -1,0 +1,13 @@
+[wasmext] instantiated in 0.00 s
+[wasmext] prompt: True, boot 3.1 s, timer callbacks 74, downloads 1
+$ uname -a
+Linux localhost 6.19.3 #17 PREEMPT_DYNAMIC Mon Mar  9 17:12:35 CET 2026 x86_64 Linux
+$ grep -m1 'model name' /proc/cpuinfo
+model name	: 05/04
+$ grep -m1 flags /proc/cpuinfo | tr ' ' '\n' | grep -E 'avx|apx|sse4|bmi' | tr '\n' ' '
+bmi' | tr '\n' ' '; echo __DO""NE__
+sse4_1 sse4_2 avx bmi1 avx2 bmi2 avx512f avx512dq avx512ifma avx512cd avx512bw avx512vl avx512vbmi avx512_vbmi2 avx512_vnni avx512_bitalg avx512_vpopcntdq apx
+$ free -m | head -2
+total        used        free      shared  buff/cache   available
+Mem:            235           7         228           0           1         224
+exit 0

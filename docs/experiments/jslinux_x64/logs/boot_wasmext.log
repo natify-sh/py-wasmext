@@ -1,0 +1,27 @@
+[wasmext] instantiated in 0.00 s
+[host] GET https://bellard.org/jslinux/alpine-x86_64.cfg -> 200 347
+[host] GET https://bellard.org/jslinux/kernel-x86_64-new.bin -> 200 21234688
+[host] GET https://vfsync.org/u/os/alpine-x86_64/head?nocache=1794605955751312 -> 200 120
+[host] GET https://vfsync.org/u/os/alpine-x86_64/files/000000000000416f -> 200 890047
+[host] GET https://vfsync.org/u/os/alpine-x86_64/files/0000000000001ca7 -> 200 5986
+[host] GET https://vfsync.org/u/os/alpine-x86_64/files/0000000000001ca3 -> 200 1844788
+[host] GET https://vfsync.org/u/os/alpine-x86_64/files/000000000000405b -> 200 1537
+[host] GET https://vfsync.org/u/os/alpine-x86_64/files/0000000000003cd9 -> 200 804616
+[host] GET https://vfsync.org/u/os/alpine-x86_64/files/0000000000003cde -> 200 843
+[host] GET https://vfsync.org/u/os/alpine-x86_64/files/00000000000040d3 -> 200 149
+[host] GET https://vfsync.org/u/os/alpine-x86_64/files/00000000000040c9 -> 200 548
+[host] GET https://vfsync.org/u/os/alpine-x86_64/files/000000000000224f -> 200 402
+[wasmext] prompt: False, boot 280.0 s, timer callbacks 71437, downloads 12
+---- console ----
+
+Welcome to JS/Linux (x86_64)
+
+Use 'vflogin username' to connect to your account.
+You can create a new account at https://vfsync.org/signup .
+Use 'export_file filename' to export a file to your computer.
+Imported files are written to the home directory.
+
+localhost:~# [6n
+---- stdio ----
+
+exit 1

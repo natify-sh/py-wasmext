@@ -1,0 +1,43 @@
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+[wasmtime] instantiated in 1.15 s
+[wasmtime] prompt: True, boot 4.8 s, timer callbacks 74, downloads 1
+$ uname -a
+Linux localhost 6.19.3 #17 PREEMPT_DYNAMIC Mon Mar  9 17:12:35 CET 2026 x86_64 Linux
+$ grep -m1 'model name' /proc/cpuinfo
+model name	: 05/04
+$ grep -m1 flags /proc/cpuinfo | tr ' ' '\n' | grep -E 'avx|apx|sse4|bmi' | tr '\n' ' '
+bmi' | tr '\n' ' '; echo __DO""NE__
+sse4_1 sse4_2 avx bmi1 avx2 bmi2 avx512f avx512dq avx512ifma avx512cd avx512bw avx512vl avx512vbmi avx512_vbmi2 avx512_vnni avx512_bitalg avx512_vpopcntdq apx
+$ free -m | head -2
+total        used        free      shared  buff/cache   available
+Mem:            235           7         227           0           1         224
+$ ls -l ~ | head -8
+total 800
+-rw-r--r--    1 root     root           114 Jan 12  2026 bench.py
+-rw-------    1 1000     root        800032 Nov 13 21:55 coremark
+-rw-r--r--    1 root     root            76 Jan 12  2026 hello.c
+-rw-r--r--    1 root     root            22 Jan 12  2026 hello.js
+-rw-r--r--    1 root     root           204 Mar 11  2026 readme.txt
+$ chmod +x ~/coremark
+
+$ ~/coremark 2>&1
+2K performance run parameters for coremark.
+CoreMark Size    : 666
+Total ticks      : 168964
+Total time (secs): 168.964000
+Iterations/Sec   : 23.673682
+Iterations       : 4000
+Compiler version : GCC13.3.0
+Compiler flags   : -O2 -O2 -DPERFORMANCE_RUN=1  -static
+Memory location  : Please put data memory location here
+			(e.g. code in flash, data on heap etc)
+seedcrc          : 0xe9f5
+[0]crclist       : 0xe714
+[0]crcmatrix     : 0x1fd7
+[0]crcstate      : 0x8e3a
+[0]crcfinal      : 0x65c5
+Correct operation validated. See README.md for run and reporting rules.
+CoreMark 1.0 : 23.673682 / GCC13.3.0 -O2 -O2 -DPERFORMANCE_RUN=1  -static / Heap
+[wasmtime] coremark wall time 12.1 s
+[wasmtime] GUEST COREMARK 23.67 iterations/s
+exit 0

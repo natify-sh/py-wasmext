@@ -1,0 +1,19 @@
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+[wasmtime] instantiated in 1.03 s
+[wasmtime] prompt: True, boot 3.3 s, timer callbacks 74, downloads 1
+[    4.4 s] $ uname -a
+Linux localhost 6.19.3 #17 PREEMPT_DYNAMIC Mon Mar  9 17:12:35 CET 2026 x86_64 Linux
+[    4.4 s] $ grep -m1 'model name' /proc/cpuinfo
+model name	: 05/04
+[    4.5 s] $ grep -m1 flags /proc/cpuinfo | tr ' ' '\n' | grep -E 'avx|apx|sse4|bmi' | tr '\n' ' '
+bmi' | tr '\n' ' '; echo __DO""NE__
+sse4_1 sse4_2 avx bmi1 avx2 bmi2 avx512f avx512dq avx512ifma avx512cd avx512bw avx512vl avx512vbmi avx512_vbmi2 avx512_vnni avx512_bitalg avx512_vpopcntdq apx
+[    4.6 s] $ free -m | head -2
+total        used        free      shared  buff/cache   available
+Mem:            235           7         227           0           1         224
+[wasmtime] clock check: host 3.1 s for `sleep 3` (1)); echo __DO""NE__
+guest-seconds 3)
+[wasmtime] import of 800032 bytes: 2.0 s
+[wasmtime] run 1: 4000 iterations, host wall 9.9 s -> 405.6 it/s by the host clock; guest clock says 9.760000 s -> 409.836066 it/s; validated: False
+[wasmtime] run 2: 4000 iterations, host wall 9.5 s -> 420.9 it/s by the host clock; guest clock says 9.410000 s -> 425.079702 it/s; validated: False
+exit 0

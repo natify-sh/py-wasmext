@@ -1,0 +1,20 @@
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+[wasm3] instantiated in 0.05 s
+[wasm3] prompt: True, boot 19.9 s, timer callbacks 74, downloads 1
+[   20.2 s] $ uname -a
+Linux localhost 6.19.3 #17 PREEMPT_DYNAMIC Mon Mar  9 17:12:35 CET 2026 x86_64 Linux
+[   20.5 s] $ grep -m1 'model name' /proc/cpuinfo
+model name	: 05/04
+[   21.1 s] $ grep -m1 flags /proc/cpuinfo | tr ' ' '\n' | grep -E 'avx|apx|sse4|bmi' | tr '\n' ' '
+bmi' | tr '\n' ' '; echo __DO""NE__
+sse4_1 sse4_2 avx bmi1 avx2 bmi2 avx512f avx512dq avx512ifma avx512cd avx512bw avx512vl avx512vbmi avx512_vbmi2 avx512_vnni avx512_bitalg avx512_vpopcntdq apx
+[   21.5 s] $ free -m | head -2
+total        used        free      shared  buff/cache   available
+Mem:            235           7         227           0           1         224
+[wasm3] clock check: host 3.5 s for `sleep 3` (1)); echo __DO""NE__
+guest-seconds 3)
+[wasm3] import of 800032 bytes: 2.0 s
+[wasm3] run 1: 700 iterations, host wall 16.4 s -> 42.8 it/s by the host clock; guest clock says 11.990000 s -> 58.381985 it/s; validated: True
+[wasm3] run 2: 700 iterations, host wall 16.2 s -> 43.1 it/s by the host clock; guest clock says 12.000000 s -> 58.333333 it/s; validated: True
+[wasm3] run 3: 700 iterations, host wall 16.3 s -> 42.9 it/s by the host clock; guest clock says 22.765000 s -> 30.748957 it/s; validated: True
+exit 0
